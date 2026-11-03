@@ -137,7 +137,7 @@ stream live state changes.
 | `0x3f10` | constant `0x7070` |
 | `0x3f50` | constant `0` |
 | `0x3d03` | DIM |
-| `0x3f9e` | monitor flags; bit 1 = MS processing |
+| `0x3f9e` | monitor flags; bit 0 = Talkback active, bit 1 = MS processing |
 | `0x0002`, `0x0102` | input stereo mode |
 | `0x0202`, `0x0302` | input stereo mode, second pair |
 | `0x1204`, `0x1304` | output stereo mode |
@@ -155,8 +155,8 @@ a linked pair and emit no state word.
 The state stream is sparse. It is not a full scene dump and it does not echo
 every writable register. It carries no observed word for 48 V, Inst, Level,
 reference level, the options word, EQ, dynamics or FX. The full mixer scene is
-written by the host at connect; gain, output volume, DIM and MS state are the
-only live controls read back from this stream.
+written by the host at connect; gain, output volume, DIM, Talkback and MS
+state are the live controls read back from this stream.
 
 ### 3.3 State readback
 
@@ -165,6 +165,7 @@ only live controls read back from this stream.
 | Input gain 1–4 | `0xNN07` state word |
 | Output volume | `0xNN00` state word |
 | DIM | `0x3d03` state word |
+| Talkback | `0x3f9e` bit 0 |
 | MS processing | `0x3f9e` bit 1 |
 | Stereo mode | `0xNN02` / `0xNN04` state word |
 | Fader records | `0x12a0` family |
@@ -286,7 +287,7 @@ The fader base is submix-dependent: the selected hardware output chooses the
 | `0x3d03` | DIM / Recall | 0/1 |
 | `0x3f00` | heartbeat / window | sequence |
 | `0x3f98` | monitor mask | — |
-| `0x3f9e` | monitor flags | — |
+| `0x3f9e` | monitor flags; bit 0 Talkback, bit 1 MS processing | — |
 
 Echo BPM is a host-side field: changing it rewrites `0x3c22`.
 
@@ -381,9 +382,13 @@ the affected sends:
   `gr*(sin-cos)/2` for L→L, R→L, L→R and R→R.  Mono inputs reject MS Proc.
 - **Talkback receive per output** and **No Trim** — host-side flags; they
   write nothing.  With a talkback source selected, enabling talkback on an
-  output injects that source as ordinary send words into the output, dims
-  the other sends by the Dim setting (measured -20 dB on a -20 dB setting),
-  and mutes Main's FX return (`0x1803`/`0x1903` = `0xFD76`).
+  output injects that source as ordinary send words into the output and dims
+  the other active sends by the Dim setting (measured -20 dB on a -20 dB
+  setting).  It also sets the FX-return level of each affected monitored
+  output to `0xFD76` (`-65.0 dB`); the Reverb and Echo processors remain
+  enabled.  The activation flag is a read-modify-write of `0x3f9e` bit 0,
+  preserving bit 1 (MS processing).  Releasing Talkback restores the prior
+  send and FX-return words.
 - **Trim** — a per-channel attenuation applied to every send (see
   `TUXMIX-SPEC.md`).
 
@@ -391,6 +396,32 @@ the affected sends:
 A fader drag writes `0x0000` to the send and restores the knob value when
 the drag ends; the send value itself is the knob value and does not track
 the fader.  The post-fader coupling is not expressed in `NN01`.
+
+### 6.2.1 Talkback activation
+
+Talkback is a host-driven rewrite of the monitored sends. For a hardware
+input at index `i`, the source fader records are `0x14e0 + i` and
+`0x15e0 + i`; the companion sends are `0x4080 + i` and `0x40c0 + i`.
+The source fader's level and pan determine the source send values, so the
+activation burst has no fixed length: captured ON bursts for one output
+ranged from 27 to 33 words depending on the source channel's current
+fader, pan and link state. The first source words are absent when the
+Listenback source is the same input as the Talkback source.
+
+The activation sequence also:
+
+- attenuates every active non-talkback send into each receiving output by
+  the configured Talkback Dim amount;
+- writes each affected output's FX-return level (`0x1203`, `0x1303`, …) to
+  `0xFD76` (`-65.0 dB`), without disabling the Reverb or Echo processors;
+- sets bit 0 of `0x3f9e` with a read-modify-write, preserving bit 1 (MS
+  processing).
+
+Deactivation restores the words captured before activation and clears bit 0.
+A source change while Talkback is inactive emits a separate cleanup burst for
+the old source under some transitions; a `None` source emits no activation
+burst. `0x3f98` is present in some source-change captures and is not yet
+assigned.
 
 ### 6.3 Mute, solo and stereo mode
 

@@ -308,7 +308,7 @@ The button stack, on one channel, has:
 
 - **dim** and **recall** (snapshot recall) and **speaker B**;
 - **mono**, **talkback**, **ext. input** and **mute FX**;
-- **assign** at the bottom.
+- **settings** and **assign** at the bottom.
 
 | Button | Effect |
 |---|---|
@@ -319,15 +319,33 @@ The button stack, on one channel, has:
 | `talkback` | sends the talkback source to the performers’ Phones outputs and dims the other Phones signals |
 | `ext. input` | replaces the Main mix with the selected stereo external input |
 | `mute FX` | removes Reverb and Echo from Main |
+| `settings` | opens the Control Room Settings dialog |
 | `assign` | assigns Main, Speaker B and Phones outputs and selects the Cue/PFL destination |
 
 Talkback and External Input are temporary listening states. Recall changes the
 underlying monitor level; it is not a second volume control that is restored
 on release.
 
-The Talkback source and Dim, Listenback source and Dim, Recall level, Main Dim
-and External Input settings are configured in TotalMix FX. TuxMix exposes the
-Control Room buttons and assignments that use them.
+### Control Room Settings
+
+The Talkback source and Dim, Listenback source and Dim, Recall level, Main Dim,
+External Input and Gain, and the Solo/PFL modes are set in the Control Room
+Settings dialog. Press `settings`, immediately above `assign`.
+
+The dialog has four sections:
+
+- **Talkback**: source and Dim.
+- **Listenback**: source and Dim.
+- **Main Out**: Recall, Dim, External Input and Gain.
+- **Solo / PFL Mode**: `Live Mode, PFL replaces Solo` and
+  `Exclusive Solo/PFL Mode`.
+
+The source lists start with `None` and then use the hardware input names. The
+five level controls cover `-65.0` to `0.0 dB` in `0.5 dB` steps. The settings
+are saved per device in TuxMix's own preferences, not in the mixer scene.
+
+`OK` applies and saves the values; `Cancel` and `Escape` discard the edits.
+The settings in the dialog are not written while it is open.
 
 `assign` opens the destination menu. The first level lists the destinations
 — the same names as the Control Room channels — plus `Cue/PFL to`, which

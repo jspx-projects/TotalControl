@@ -439,6 +439,22 @@ Inputs use `0x00..0x11`; outputs use `0x12..0x23`. Register values are 16-bit
 unless stated otherwise. `0x8000` in the address field is the odd-parity bit,
 not part of the address.
 
+Page-1 and page-2 fader values are normalized `0.0 .. 1.0`, using RME's
+documented fader curve, not a direct dB value:
+
+```text
+position = value * 1023
+if position >= 649:
+    dB = position * 0.0320855615 - 26.8235294118
+else:
+    dB = position^2 * (-1/11033) + position * 0.1497326203 - 65.0
+```
+
+The resulting dB is converted to the UCX fader-record tenths field. Sending
+a fader value is therefore not the same as sending a matrix coefficient or a
+literal dB value. The authoritative RME OSC table is
+`osc_table_totalmix_new.zip` from the RME downloads page.
+
 ### 12.1 Page 1 and page 2 channel controls
 
 | OSC path | Row | UCX target | Value |
@@ -511,11 +527,11 @@ not part of the address.
 | `/1/globalMute`, `/1/globalSolo` | none | host-side |
 | `/1/trim` | none | host-side |
 | `/1/mainDim` | `0x3d03` | 0/1 |
-| `/1/mainMono` | `0x3f9e` bit 1 | host/device monitor flags |
-| `/1/mainTalkback` | `0x3f9e` bit 0 | host/device monitor flags |
+| `/1/mainMono` | none | host-side |
+| `/1/mainTalkback` | `0x3f9e` bit 0, read-modify-write | host/device monitor flags; preserve bit 1 (MS processing) |
 | `/1/mainSpeakerB`, `/1/speakerBLinked` | output assign words | host/output assignment |
 | `/1/mainMuteFx` | control-room `NN03` | FX return level |
-| `/1/mastervolume` | Main Out `NN00` | 0.1 dB, signed |
+| `/1/mastervolume` | Main Out `NN00` | normalized fader value through the documented curve |
 
 ### 12.3 Page 3 global FX
 
