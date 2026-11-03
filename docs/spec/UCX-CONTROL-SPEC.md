@@ -399,29 +399,63 @@ the fader.  The post-fader coupling is not expressed in `NN01`.
 
 ### 6.2.1 Talkback activation
 
-Talkback is a host-driven rewrite of the monitored sends. For a hardware
-input at index `i`, the source fader records are `0x14e0 + i` and
-`0x15e0 + i`; the companion sends are `0x4080 + i` and `0x40c0 + i`.
-The source fader's level and pan determine the source send values, so the
-activation burst has no fixed length: captured ON bursts for one output
-ranged from 27 to 33 words depending on the source channel's current
-fader, pan and link state. The first source words are absent when the
-Listenback source is the same input as the Talkback source.
+Talkback is a host-driven rewrite of the monitored sends. The source route
+uses a four-word block per side. For a hardware input at zero-based index
+`i`, the Talkback block is:
+
+| Field | Address |
+|---|---|
+| source level | `0x14e0 + i` |
+| source pan | `0x14e0 + i` (second word) |
+| source send | `0x4080 + i` |
+| right-side level | `0x15e0 + i` |
+| right-side pan | `0x15e0 + i` (second word) |
+| right-side send | `0x40c0 + i` |
+
+The 18 hardware inputs therefore occupy `0x14e0..0x14f1`,
+`0x15e0..0x15f1`, `0x4080..0x4091` and `0x40c0..0x40d1`. Level and pan are
+written as two consecutive words at the same address; pan is
+`(pan << 4) | 0x8`, with `0x0008` at centre, `0xF9C8` hard left and
+`0x0648` hard right.
+
+The source send is a matrix coefficient. At source fader `0 dB` and pan
+centre it is `0x8B33`; `-6 dB` is `0x2CE8`, `-20 dB` is `0x08F5`, and
+`-21 dB` is `0x07FC`. The coefficient is the matrix encoding of the source
+fader gain multiplied by the equal-power pan gain. At `-65 dB` the source
+block is omitted. The source level word remained `0xD760` (`-65.0 dB`) in
+the measured Phones 1 routing; the route gain is carried by the companion
+matrix word.
+
+The source block is followed by the attenuated active sends and the FX
+returns. A normal ON/OFF burst is 60 bytes (15 words); a leading `0x3f98`
+word makes it 64 bytes. With no active sends, the burst is shorter. The
+first source block is omitted when the Listenback source is the same input
+as the Talkback source.
 
 The activation sequence also:
 
-- attenuates every active non-talkback send into each receiving output by
-  the configured Talkback Dim amount;
+- attenuates active sends into the Talkback-receiving outputs by the
+  Talkback Dim amount, and active sends into Main by the Listenback Dim
+  amount;
 - writes each affected output's FX-return level (`0x1203`, `0x1303`, …) to
   `0xFD76` (`-65.0 dB`), without disabling the Reverb or Echo processors;
 - sets bit 0 of `0x3f9e` with a read-modify-write, preserving bit 1 (MS
   processing).
 
+A `0 dB` Dim writes no active-send word at all. At `-65 dB` the affected
+send is `0x0000`. Listenback Dim is independent of the Listenback input:
+with the input at `None`, Main sends still use the configured Listenback Dim.
+
+Listenback with a different source adds a second source block at
+`0x12e0 + i` / `0x13e0 + i` with matrix `0x4000 + i` / `0x4040 + i`.
+With the same source as Talkback, only the first source block is present.
+
 Deactivation restores the words captured before activation and clears bit 0.
-A source change while Talkback is inactive emits a separate cleanup burst for
-the old source under some transitions; a `None` source emits no activation
-burst. `0x3f98` is present in some source-change captures and is not yet
-assigned.
+A source change while Talkback is inactive emitted a 4-byte
+`0x0001 = 0x0000` cleanup in the measured scene; a live source change also
+rewrote the old and new source blocks. A `None` source emits no activation
+burst. `0x3f98` is present in some source and activation bursts and is not
+yet assigned.
 
 ### 6.3 Mute, solo and stereo mode
 
