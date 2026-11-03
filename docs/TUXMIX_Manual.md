@@ -297,8 +297,9 @@ Talkback button and its receive switches.
 
 Talkback attenuates the active sends in the monitored mix; silent routes are
 not rewritten. The talkback source is added only to outputs whose Talkback
-receive is enabled. Releasing Talkback restores the previous sends and FX
-returns.
+receive is enabled. Talkback also silences the FX returns on the monitored
+outputs; it does not switch the Reverb or Echo processors off. Releasing
+Talkback restores the previous sends and FX-return levels.
 
 These are temporary monitoring states. Releasing Talkback returns the
 monitor mix to its previous state; talkback is not stored in a scene.
