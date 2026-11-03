@@ -2488,7 +2488,7 @@ impl Fireface {
             }
         }
 
-        let old_flag = (self.settings.ms_proc as u16) << 1;
+        let old_flag = (self.settings.mono as u16) << 1;
         let flag_addr = 0x3f9e;
         push_edit(&mut edits, flag_addr, old_flag, old_flag | 1);
 
@@ -2787,7 +2787,7 @@ impl Fireface {
         match addr {
             ucx::global::DIM => self.settings.dim = value != 0,
             ucx::global::MONITOR_FLAGS => {
-                self.settings.ms_proc = value & 0x02 != 0;
+                self.settings.mono = value & 0x02 != 0;
             }
             _ => {}
         }
@@ -6152,6 +6152,7 @@ mod tests {
         dev.outputs[3].fx_return_db = -65.0;
         dev.outputs[4].fx_return_db = -65.0;
         dev.outputs[5].fx_return_db = -65.0;
+        dev.settings.mono = true;
         writes.lock().unwrap().clear();
 
         dev.set_talkback_with(
