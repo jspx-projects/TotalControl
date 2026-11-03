@@ -403,20 +403,24 @@ Talkback is a host-driven rewrite of the monitored sends. The source route
 uses a four-word block per side. For a hardware input at zero-based index
 `i`, the Talkback block is:
 
+For a receiving output pair whose DSP output is `D`, and hardware input
+index `i`:
+
 | Field | Address |
 |---|---|
-| source level | `0x14e0 + i` |
-| source pan | `0x14e0 + i` (second word) |
-| source send | `0x4080 + i` |
-| right-side level | `0x15e0 + i` |
-| right-side pan | `0x15e0 + i` (second word) |
-| right-side send | `0x40c0 + i` |
+| source level | `((0x12 + D) << 8) \| (0xE0 + i)` |
+| source pan | the same address, second word |
+| source send | `0x4000 + D * 0x40 + i` |
+| right-side level | `((0x13 + D) << 8) \| (0xE0 + i)` |
+| right-side pan | the same address, second word |
+| right-side send | `0x4000 + (D + 1) * 0x40 + i` |
 
-The 18 hardware inputs therefore occupy `0x14e0..0x14f1`,
-`0x15e0..0x15f1`, `0x4080..0x4091` and `0x40c0..0x40d1`. Level and pan are
-written as two consecutive words at the same address; pan is
-`(pan << 4) | 0x8`, with `0x0008` at centre, `0xF9C8` hard left and
-`0x0648` hard right.
+The measured Phones 1 receiver had DSP output 2, so its 18 inputs occupied
+`0x14e0..0x14f1`, `0x15e0..0x15f1`, `0x4080..0x4091` and
+`0x40c0..0x40d1`. The addresses move with the receiving output; they are not
+fixed to Phones 1. Level and pan are written as two consecutive words at the
+same address; pan is `(pan << 4) | 0x8`, with `0x0008` at centre, `0xF9C8`
+hard left and `0x0648` hard right.
 
 The source send is a matrix coefficient. At source fader `0 dB` and pan
 centre it is `0x8B33`; `-6 dB` is `0x2CE8`, `-20 dB` is `0x08F5`, and
@@ -446,9 +450,10 @@ A `0 dB` Dim writes no active-send word at all. At `-65 dB` the affected
 send is `0x0000`. Listenback Dim is independent of the Listenback input:
 with the input at `None`, Main sends still use the configured Listenback Dim.
 
-Listenback with a different source adds a second source block at
-`0x12e0 + i` / `0x13e0 + i` with matrix `0x4000 + i` / `0x4040 + i`.
-With the same source as Talkback, only the first source block is present.
+Listenback with a different source adds a second source block at the Main
+output's DSP addresses: `0x12e0 + i` / `0x13e0 + i` with matrix
+`0x4000 + i` / `0x4040 + i` when Main is DSP 0. With the same source as
+Talkback, only the first source block is present.
 
 Deactivation restores the words captured before activation and clears bit 0.
 A source change while Talkback is inactive emitted a 4-byte
