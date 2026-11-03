@@ -2450,9 +2450,13 @@ impl Fireface {
 
         // Source routes are written after the attenuated normal sends so a
         // source that is also a normal send cannot overwrite the talkback
-        // route with the dimmed value.
-        for &pair in &receivers {
-            source_block(self, &mut edits, pair, source);
+        // route with the dimmed value.  The reference app omits the source
+        // block when Listenback uses the same input: the captured form is
+        // the short 36-byte burst.
+        if config.listenback != Some(source) {
+            for &pair in &receivers {
+                source_block(self, &mut edits, pair, source);
+            }
         }
         if let Some(listen) = config.listenback {
             if let Some(pair) = main_pair {
@@ -6206,7 +6210,7 @@ mod tests {
         )
         .unwrap();
         let words = written_words(&writes);
-        assert!(words.contains(&(0x14e0, 0xd760)));
+        assert!(!words.iter().any(|(addr, _)| *addr == 0x14e0));
         assert!(!words.iter().any(|(addr, _)| *addr == 0x12e1));
     }
 
