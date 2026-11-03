@@ -432,9 +432,10 @@ matrix word.
 
 The source block is followed by the attenuated active sends and the FX
 returns. A normal ON/OFF burst is 60 bytes (15 words); a leading `0x3f98`
-word makes it 64 bytes. With no active sends, the burst is shorter. The
-first source block is omitted when the Listenback source is the same input
-as the Talkback source.
+word makes it 64 bytes. With no active sends, the burst is shorter. When
+the Listenback source is the same input as the Talkback source, no source
+block is written; the captured form is 36 bytes, containing only the
+active sends, FX returns and `0x3f9e`.
 
 The activation sequence also:
 
