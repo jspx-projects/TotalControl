@@ -81,7 +81,14 @@ connected to a computer.  `i.o.` means loaded; `n.o.` means an empty slot.
 Loading a setup while online changes only the front-panel parameters (input
 gains and output volumes), not routing.
 
-Stereo/mono mode cannot be changed at the unit.
+Pushing the encoder for more than one second toggles the link (gang) mode.
+The display shows `on` or `off`.  In stereo mode the display presents only the
+left channel of each pair (`L1`, `L3`, `L5`, ...) and the setting applies to
+both channels.  In mono mode both channels are presented and are independent.
+
+The right-hand dot in the display has two documented meanings: a half-dB step
+on `i.3`/`i.4`, and a negative value on the output channels.  The 2019 guide
+does not describe a separate dot for a linked pair.
 
 Front-panel gain and output-volume changes are reported to the host as `NN07`
 and `NN00`.  No other front-panel control is exposed.
