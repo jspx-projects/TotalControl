@@ -63,6 +63,9 @@ request; do not commit or push directly to `main`.
   and in the PR description, using `.github/pull_request_template.md`.
 - Push the branch, open a draft PR early, and wait for CI. Do not merge with a
   failing or missing required check.
+- Do not merge or close a pull request until the user has explicitly approved
+  the completed change. Keep it open or draft while work continues; merge or
+  close only when the user specifically asks for that action.
 - Use squash merge by default so `main` stays linear and each PR has one
   revert point. Use rebase-and-merge only for a deliberately clean commit
   series; do not add merge commits.
@@ -78,10 +81,9 @@ request; do not commit or push directly to `main`.
 
 ## Working rules
 
-- Use the NAS mailbox in `/media/nas_data/John/Electronica/rme/coordination/`
-  for Windows/oracle questions and acknowledgements. Linux owns
-  `LINUX-STATUS.md`, `LINUX-REQUESTS.md`, `DECISIONS.md`, `analysis/*` and
-  `coordination/inbox/windows/*`.
+- Use the NAS coordination mailbox for Windows/oracle questions and
+  acknowledgements. Linux owns `LINUX-STATUS.md`, `LINUX-REQUESTS.md`,
+  `DECISIONS.md`, `analysis/*` and `coordination/inbox/windows/*`.
 - Push only to our own repository, `jspx-projects/TotalControl`.
 - The UI is part of this repository. Do not add an external TotalControl development
   remote; the imported upstream history is on `archive/tuxmix-upstream`.
