@@ -38,10 +38,53 @@ Units and ranges are the values used by the backend. A register value is
 | ALSA PCM channels | 18 at every rate |
 | Default transport | isochronous interface 0 |
 | Alternate transport | interrupt interface 5 |
-| Front panel | one rotary encoder: selects an output channel and sets its volume |
+| Front panel | one rotary encoder with push: selects an input or output and sets its gain or volume |
 
 The serial string is the stable unit identity. The ALSA card index changes
 across reconnects and personality changes.
+
+### 1.1 Front panel
+
+The front-panel control is one rotary encoder with push.  A green LED shows
+CHANNEL or LEVEL mode.  Pushing toggles between them; pushing repeatedly jumps
+to `PH`.
+
+CHANNEL mode selects:
+
+| Display | Channel |
+|---|---|
+| `i.1`–`i.4` | inputs 1–4 |
+| `L.1`–`L.6` | line outputs 1–6 |
+| `PH` | phones / line output 7/8 |
+| `SP` | SPDIF output |
+| `A.1`–`A.8` | ADAT outputs 1–8 |
+| `SU` | load setup |
+
+LEVEL mode sets:
+
+| Channel | Range | Step |
+|---|---|---|
+| `i.1`, `i.2` | 0 dB or 10–65 dB | 1 dB |
+| `i.3`, `i.4` | 0–12 dB | 0.5 dB |
+| `L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8` | +6 to −58 dB; a right-hand dot marks values below 0 dB; `oo.` is mute | 1 dB |
+
+Input 1/2 gain is analog; input 3/4 gain is digital; output level is digital
+in the mixer.
+
+Pushing the encoder in LEVEL mode for one second enters Panorama mode: `CE`
+center, `LL` full left, `rr` full right.  It returns to LEVEL after one second
+without a change.
+
+`SU` loads one of six user setups, `FA` the factory preset, `Ad` the 8-channel
+AD/DA converter mode, and `CC` Class Compliant mode when the unit is not
+connected to a computer.  `i.o.` means loaded; `n.o.` means an empty slot.
+Loading a setup while online changes only the front-panel parameters (input
+gains and output volumes), not routing.
+
+Stereo/mono mode cannot be changed at the unit.
+
+Front-panel gain and output-volume changes are reported to the host as `NN07`
+and `NN00`.  No other front-panel control is exposed.
 
 ## 2. USB transport
 
