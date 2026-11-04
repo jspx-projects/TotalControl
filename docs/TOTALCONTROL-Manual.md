@@ -624,6 +624,32 @@ The WirePlumber rule in
 [`ui/totalcontrol/tools/alsa/wireplumber-uc.conf`](../ui/totalcontrol/tools/alsa/wireplumber-uc.conf)
 selects polled scheduling and the 18-channel Pro Audio profile.
 
+### Surround playback
+
+The Pro Audio profile is the right choice for a DAW, but its 18 playback
+channels are presented as `AUX0…AUX17`.  Desktop players that send a 5.1 or
+7.1 stream cannot map those speaker positions onto AUX channels, so PipeWire
+keeps only the front pair.
+
+For surround media, run the bridge while TotalControl is running:
+
+```sh
+scripts/totalcontrol-surround.sh start
+```
+
+It creates two PipeWire sinks:
+
+- `TotalControl Surround 5.1` → SW playback 1/2, 3/4 and 5/6
+- `TotalControl Surround 7.1` → SW playback 1/2, 3/4, 5/6 and 7/8
+
+Select the matching sink in KDE or in the player.  An already-playing stream
+keeps its old device; stop and restart it, or move it to the new sink.  Use
+`start` again after changing the selected Fireface/MR18 device, and
+`scripts/totalcontrol-surround.sh stop` to remove the sinks.
+
+The bridge is host-side.  TotalControl still sees the audio on the SW playback
+channels and can route it like any other playback source.
+
 ## Appendix C — OSC setup
 
 OSC is opt-in and binds to loopback by default:
