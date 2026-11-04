@@ -244,9 +244,9 @@ every channel of one type shows the same panel shape:
 
 Notes:
 
-- **Gain** is the preamp gain of the four front inputs. It follows the
-  stereo link and follows the unit's physical encoder when one is turned
-  on the hardware.
+- **Gain** is the preamp gain of the four front inputs. At connect it is
+  written from the saved scene. It follows the stereo link and follows the
+  unit's physical encoder when one is turned on the hardware.
 - **Width** narrows or widens the pair: `1.00` full stereo, `0.00` mono,
   `-1.00` swapped channels.
 - **MS proc** encodes or decodes the pair as mid/side.
@@ -600,13 +600,15 @@ At connect TotalControl compares the readable device state with the saved scene
 and lets you choose, with a dialog:
 
 - **Use TotalControl settings** — write the saved scene to the device.
-- **Use device settings** — keep what the device currently reports where
-  TotalControl can read it (clock, gains, volumes, and similar).
+- **Use device settings** — keep the values TotalControl can read back. On
+  the UCX this is the output volume; input gain, the switches, references and
+  options stay with the saved scene.
 - **Always use TotalControl settings** — as above and stop asking.
 
-Note that on the UCX the hardware-held switches on the front panel (options,
-reference levels, `48V` and similar) are not read back by TotalControl, so the
-panel shows the last value set from TotalControl; the dialog never changes them.
+On the UCX the hardware-held switches (options, reference levels, `48V`,
+Inst and Level) have no readback. TotalControl writes the saved scene values
+at connect, so the panel and the unit agree; the mismatch dialog never changes
+them.
 
 ## Appendix A — Device modes
 

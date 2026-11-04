@@ -165,7 +165,9 @@ stream live state changes.
 | `0x1200..0x2300`, offset 0 | hardware-output volume, signed 0.1 dB |
 | `0x12a0`, `0x22a0` | selected-submix fader record |
 
-Input gains are reported when the physical encoder moves. Output-volume state
+Input gains are reported when the physical encoder moves. The word is not
+emitted at connect, so it is not a startup readback: TotalControl writes the
+saved scene gain at connect and follows `NN07` afterwards. Output-volume state
 is mapped to the Phones-first output order. The encoder reports the `NN00` of
 the output selected on the unit's display; `PH` emits `0x1800` and `0x1900`.
 
@@ -182,16 +184,16 @@ state are the live controls read back from this stream.
 
 | State | Source |
 |---|---|
-| Input gain 1–4 | `0xNN07` state word |
-| Output volume | `0xNN00` state word |
+| Input gain 1–4 | saved scene at connect; `0xNN07` after an encoder move |
+| Output volume | `0xNN00` state word; saved scene at connect |
 | DIM | `0x3d03` state word |
 | Talkback | `0x3f9e` bit 0 |
 | Mono Main Out | `0x3f9e` bit 1 |
 | Stereo mode | `0xNN02` / `0xNN04` state word |
 | Fader records | `0x12a0` family |
-| 48 V, Inst, Level, reference level | host scene only |
-| Options word | unit-owned |
-| EQ, dynamics, FX | host scene only |
+| 48 V, Inst, Level, reference level | saved scene, written at connect |
+| Options word | saved scene, written at connect |
+| EQ, dynamics, FX | saved scene, written at connect |
 
 ## 4. Register model
 
@@ -744,8 +746,8 @@ Request `0x10`, index 1487, carries the unit's options as one full word:
 
 Every option change writes the whole word, including the current clock source
 in bits 1–2. Bit 10 is not an index of its own. No options-word readback is
-exposed: request `0x10` in returns a status word. The device-owned values are
-kept in the scene and written when they change.
+exposed: request `0x10` in returns a status word. The saved scene value is
+written at connect and after a change.
 
 ## 12. Streaming
 
@@ -856,14 +858,21 @@ A scene stores:
 - channel names and trim values.
 
 The backend writes the mixer scene at connect and after relevant rate or
-stream changes.  The options word (clock source, optical format, SPDIF
-professional, word-clock rate and termination, EQ+D for Record), the reference
-levels and the 48 V/Inst/Level switches are held by the unit: TotalControl does not
-write them at connect and has no readback for them.  The saved scene keeps the
-last value written from TotalControl for display.
+stream changes.  The preamp group (input gain and right gain, 48 V, Inst,
+Level and AutoSet), the reference levels and the options word (clock source,
+optical format, SPDIF professional, word-clock rate and termination, EQ+D for
+Record) are also written from the saved scene at connect.
 
-Input gain, front-panel output volume, DIM and MS state are read from the IF1
-state stream.  A read-back gain is not overwritten by the saved scene.
+The unit retains input gain and the main output fader across a power cycle.
+It does not report input gain at connect; the saved scene supplies the connect
+value and later encoder words update the model.  The switches, references and
+options have no readback, so the saved scene is the only source.  A mismatch
+dialog does not include UCX input gain.
+
+Front-panel output volume, DIM and MS state are read from the IF1 state stream.
+DIM, Talkback, Mono Main Out and stereo mode stay device-owned where they are
+reported.  EQ, dynamics, FX, matrix and fader records are written by the host
+at connect.
 
 Scenes are keyed by unit serial. Each unit keeps its own scene file.
 
