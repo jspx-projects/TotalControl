@@ -78,9 +78,10 @@ The encoder's long press is context-dependent:
 | input `i.1`–`i.4` | toggles Link mode and shows the pair status | the gain with the pair dot in the fixed decimal position, e.g. `2.6` for 26 dB | about one second |
 | output `L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8` | panorama | `CE` centre; `L.1`/`r.1` at the limits (the guide names them `LL`/`rr`) | about one second without a change |
 
-In stereo mode the display presents only the left channel of each pair
-(`i.1`, `i.3`, ...) and the setting applies to both channels.  In mono mode
-both channels are independent.
+In stereo mode both channels of a linked pair show the same gain and the pair
+dot.  The setting applies to both channels.  In mono mode the two channels are
+independent.  The UC guide's "only the left channel is shown" rule does not
+apply to the UCX display.
 
 The dot in the display has three uses:
 
