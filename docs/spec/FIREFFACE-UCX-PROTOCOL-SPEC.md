@@ -909,6 +909,12 @@ optical format, SPDIF professional, word-clock rate and termination, EQ+D for
 Record) are also written from the saved scene at connect.
 
 The unit retains input gain and the main output fader across a power cycle.
+The user guide also states that the unit permanently stores its configuration
+and complete mixer state and reloads them at power-on.  That stored state is a
+standalone feature: loading a setup while online changes only the front-panel
+parameters (gains and output volumes), not routing.  TotalControl still writes
+the saved scene at connect, because the host cannot read the full stored state.
+
 It does not report input gain at connect; the saved scene supplies the connect
 value and later encoder words update the model.  The switches, references and
 options have no readback, so the saved scene is the only source.  A mismatch
