@@ -87,8 +87,11 @@ left channel of each pair (`L1`, `L3`, `L5`, ...) and the setting applies to
 both channels.  In mono mode both channels are presented and are independent.
 
 The right-hand dot in the display has two documented meanings: a half-dB step
-on `i.3`/`i.4`, and a negative value on the output channels.  The 2019 guide
-does not describe a separate dot for a linked pair.
+on `i.3`/`i.4`, and a negative value on the output channels.  On the unit, the
+long-press pair status places the dot in the fixed decimal position, for
+example `2.6` for a 26 dB gain.  That dot is the pair/link marker, not a
+decimal value; it clears when the display returns to LEVEL.  The 2019 guide
+does not describe this third use.
 
 Front-panel gain and output-volume changes are reported to the host as `NN07`
 and `NN00`.  No other front-panel control is exposed.
