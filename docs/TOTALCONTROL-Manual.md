@@ -418,6 +418,10 @@ level together. Recall is momentary and does not latch.
 the Main Out and Speaker B must be assigned first. Speaker B is runtime only:
 loading a scene or recalling a snapshot does not switch it back on.
 
+`Speaker B → Link to Main` in Control Room Settings ties the Speaker B level
+to Main. Linked, the Speaker B pair follows Main fader, Recall and Dim changes;
+unlinked, it keeps its own level.
+
 **Mono** sums the Main monitor signal to mono. **Mute FX** removes the Reverb
 and Echo returns from the Control Room outputs. Both are part of the mixer
 scene.
@@ -435,7 +439,7 @@ build.
 | State | Stored in |
 |---|---|
 | Main and Speaker B assignments | TotalControl preferences |
-| Main Dim amount, Recall level, Talkback/Listenback settings | TotalControl preferences |
+| Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences |
 | Dim and Speaker B active state | Runtime only |
 | Talkback and Listenback active state | Runtime only |
 | Mono, Mute FX and the mixer levels | Mixer scene |
@@ -451,7 +455,7 @@ The dialog has four sections:
 
 - **Talkback**: source and Dim.
 - **Listenback**: source and Dim.
-- **Main Out**: Recall, Dim, External Input and Gain.
+- **Main Out**: Recall, Dim, External Input, Gain and `Speaker B → Link to Main`.
 - **Solo / PFL Mode**: `Live Mode, PFL replaces Solo` and
   `Exclusive Solo/PFL Mode`.
 

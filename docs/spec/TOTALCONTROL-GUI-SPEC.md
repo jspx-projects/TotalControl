@@ -729,8 +729,10 @@ reconnecting, or a stream-start or sample-rate reapply leaves Dim off and does
 not attenuate the Main Out again. The saved scene contains the level that was
 audible, not a pending Dim operation. Speaker B requires assigned Main and
 Speaker B outputs; its button switches the monitor routing between those
-pairs, and clearing the Speaker B assignment also clears Speaker B. Mono and
-Mute FX are stored in the device scene.
+pairs, and clearing the Speaker B assignment also clears Speaker B. The
+`Link to Main` setting makes Speaker B follow Main fader, Recall and Dim
+changes; unlinked it keeps its own level. Mono and Mute FX are stored in the
+device scene.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged
@@ -865,7 +867,7 @@ and a click outside the dialog discard the draft.
 |---|---|
 | Talkback | Input, Dim |
 | Listenback | Input, Dim |
-| Main Out | Recall, Dim, External Input, Gain |
+| Main Out | Recall, Dim, External Input, Gain, Speaker B link |
 | Solo / PFL Mode | Live Mode, PFL replaces Solo; Exclusive Solo/PFL Mode |
 
 The input lists start with `None`, then the mono hardware inputs by their
