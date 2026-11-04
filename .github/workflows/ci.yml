@@ -14,11 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tuxmix:
+  totalcontrol:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ui/tuxmix
+        working-directory: ui/totalcontrol
     steps:
       - uses: actions/checkout@v4
 
