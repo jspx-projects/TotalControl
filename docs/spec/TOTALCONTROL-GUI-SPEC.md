@@ -712,8 +712,14 @@ strip's output-bus trigger, and its row stays lit while the menu is open.
 Dim and Recall act on the assigned Main Out pair. Dim attenuates the current
 Main Out level by the configured Main Out Dim amount and restores it on
 release. Recall sets the underlying Main Out level to the configured listening
-volume once; it does not latch. Speaker B uses the UCX control-room register.
-Mono and Mute FX are stored in the device scene.
+volume once; it does not latch. Without an assigned Main Out both controls
+leave the mix unchanged and never fall back to a Phones pair.
+
+Dim is a runtime monitoring state. Applying a scene, reconnecting, or a
+stream-start or sample-rate reapply leaves it off and does not attenuate the
+Main Out again. The saved scene contains the level that was audible, not a
+pending Dim operation. Speaker B uses the UCX control-room register. Mono and
+Mute FX are stored in the device scene.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged

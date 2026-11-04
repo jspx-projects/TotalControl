@@ -399,6 +399,11 @@ Talkback and External Input are temporary listening states. Recall changes the
 underlying monitor level; it is not a second volume control that is restored
 on release.
 
+Dim and Recall need an assigned Main Out. Without one they leave the mix
+unchanged; they never act on a Phones output. Dim is a live monitoring state
+and is not stored in a scene: applying a scene or changing the sample rate
+turns it off without lowering the monitor level a second time.
+
 ### Control Room Settings
 
 The Talkback source and Dim, Listenback source and Dim, Recall level, Main Dim,

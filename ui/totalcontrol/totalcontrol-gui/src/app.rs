@@ -6871,7 +6871,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             {
                 fail(state, "dim", &e);
             }
-            notify_osc_bool(state, "/dim", on);
+            notify_osc_bool(state, "/dim", state.device.settings().dim);
         }
         Message::SpeakerB(on) => {
             if let Err(e) = state.device.set_speaker_b(on) {
