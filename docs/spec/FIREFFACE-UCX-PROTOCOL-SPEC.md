@@ -176,9 +176,10 @@ a linked pair and emit no state word.
 
 The state stream is sparse. It is not a full scene dump and it does not echo
 every writable register. It carries no observed word for 48 V, Inst, Level,
-reference level, the options word, EQ, dynamics or FX. The full mixer scene is
-written by the host at connect; gain, output volume, DIM, Talkback and MS
-state are the live controls read back from this stream.
+reference level, the options word, EQ, dynamics or FX. The mixer scene is
+written by the host at connect, together with those unreadable groups; gain,
+output volume, DIM, Talkback and MS state are the live controls read back from
+this stream afterwards.
 
 ### 3.3 State readback
 

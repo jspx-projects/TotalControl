@@ -284,14 +284,14 @@ reference group; `talkback` is omitted on Control Room channels.
 | Channel | Contents, top to bottom |
 |---|---|
 | Input 1/2 | Stereo, space, 48V, AutoSet, Gain, Width, Send FX, MS Proc, Ø L / R Ø |
-| Input 3/4 | Stereo, `ref.`, Inst + reference dropdown, AutoSet, Gain, Width, Send FX, MS Proc, Ø L / R Ø |
+| Input 3/4 | Stereo, `ref.`, Inst + reference dropdown, Gain, Width, Send FX, MS Proc, Ø L / R Ø |
 | Inputs 5–8 | Stereo, `ref.`, reference dropdown, two empty rows, Width, Send FX, MS Proc, Ø L / R Ø |
 | Inputs 9+ | Stereo, four empty rows, Width, Send FX, MS Proc, Ø L / R Ø |
 | Software playback | Stereo, Width, Send FX, MS Proc, phase slot |
 | Hardware output | Stereo, `ref.`, reference dropdown, Return FX, Ø L / R Ø, No Trim, space, Talkback, Loopback |
 
-- 48 V is available on inputs 1/2; AutoSet on inputs 1–4; Inst and a gain
-  knob on 3/4; a reference dropdown on 3–8; none from channel 9 on.
+- 48 V and AutoSet are available on inputs 1/2; Inst and a gain knob on 3/4;
+  a reference dropdown on 3–8; none from channel 9 on.
 - The reference levels for 5–8 move together: any change to one applies to
   all four. Inputs 3 and 4 keep separate levels unless linked.
 - Width is a pair control, -1.00 … 1.00: 1.00 full stereo, 0.00 mono and
