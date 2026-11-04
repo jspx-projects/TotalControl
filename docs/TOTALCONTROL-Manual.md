@@ -390,7 +390,7 @@ The button stack, on one channel, has:
 | `speaker B` | switches monitoring from Main to the Speaker B output |
 | `mono` | sums the Main monitor signal to mono |
 | `talkback` | sends the talkback source to the performers’ Phones outputs and dims the other Phones signals |
-| `ext. input` | replaces the Main mix with the selected stereo external input |
+| `ext. input` | selects the configured external input; its runtime path is not active in this build |
 | `mute FX` | removes Reverb and Echo from Main |
 | `settings` | opens the Control Room Settings dialog |
 | `assign` | assigns Main, Speaker B and Phones outputs and selects the Cue/PFL destination |

@@ -747,7 +747,7 @@ destinations in this order, using the same names as the Control Room channels:
 | Destination | Device |
 |---|---|
 | Main | output mode word `0xNN02` bit 1 on the chosen pair |
-| Speaker B | the same bit, plus control-room state word `0x3d00 = 3` |
+| Speaker B | the same bit, plus control-room state word `0x3d00 = 1` while active |
 | Phones 1..4 | host-side; the unit receives nothing |
 | Cue/PFL to | host-side; selects the Cue/PFL monitoring target |
 
@@ -925,5 +925,6 @@ layout slots, the current auto-saved mix and the GUI preference file.
 - Input and playback meters are post-trim: a constant input tone falls and
   rises with the trim value. Output meters remain post-fader.
 - Width is host-side and has no width register: it rewrites the pair's
-  matrix cells. Playback stereo/mono, Mono, No Trim and Talkback receive are
-  host-side and do not produce device writes.
+  matrix cells. Playback stereo/mono, No Trim and Talkback receive are
+  host-side and do not produce device writes. Mono writes the monitor flags
+  `0x3f9e` and `0x3f98`.
