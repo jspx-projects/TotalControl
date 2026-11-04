@@ -696,6 +696,11 @@ impl RmeDevice for MockBabyfacePro {
         Ok(())
     }
 
+    fn set_mono(&mut self, on: bool) -> Result<(), Error> {
+        self.settings.mono = on;
+        Ok(())
+    }
+
     fn set_eq_for_record(&mut self, on: bool) -> Result<(), Error> {
         self.settings.eq_for_record = on;
         Ok(())

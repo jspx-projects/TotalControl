@@ -1011,6 +1011,13 @@ impl RmeDevice for Mirror {
         });
         Ok(())
     }
+
+    fn set_mono(&mut self, on: bool) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_mono(on);
+        });
+        Ok(())
+    }
 }
 
 fn missing(channel: ChannelId) -> Error {
