@@ -1981,7 +1981,7 @@ pub enum Message {
     RmeToggle(crate::osc_rme::RmeToggle),
     /// `/1/mastervolume`: the Main Out pair fader.
     RmeMasterVolume(f32),
-    /// `/2/gainRight`: the right side of a split input pair.
+    /// `/2/gainRight`: the right side of an input pair.
     RmeGainRight(usize, u32),
     /// `/1/select/1/N`: ad-hoc fader-group selection.
     RmeSelect(ChannelId, bool),
@@ -6467,6 +6467,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::RmeGainRight(idx, gain) => {
+            // The right side is independent even while the pair is linked;
+            // `/2/gain` only moves the left side.
             if let Err(e) = state.device.set_input_gain_right(idx, gain) {
                 fail(state, "set_input_gain_right", &e);
             }

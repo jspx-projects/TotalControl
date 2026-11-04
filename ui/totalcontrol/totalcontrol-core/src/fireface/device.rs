@@ -3081,6 +3081,45 @@ impl Fireface {
         Ok(())
     }
 
+    /// Write the preamp state that the UCX keeps in the unit but does not
+    /// report at connect.  Without this the GUI can show a gain or 48 V
+    /// state that the hardware does not have.
+    ///
+    /// Input gain is normally learned from the `0x8d` stream, but the unit
+    /// only emits that word when the encoder moves; at startup the saved
+    /// scene is the only value available.  The same applies to 48 V, Inst
+    /// and Level, which have no state word at all.
+    fn apply_ucx_preamp_state(&mut self) -> Result<(), Error> {
+        let inputs = self.inputs.len().min(4);
+        for idx in 0..inputs {
+            if let Some(gain) = self.inputs[idx].gain {
+                self.set_input_gain(idx, gain)?;
+            }
+            if let Some(gain_right) = self.inputs[idx].gain_right {
+                // The right side stays independent even while the pair is
+                // linked; `/2/gain` only moves the left side.
+                self.set_input_gain_right(idx, gain_right)?;
+            }
+        }
+        for idx in 0..inputs.min(2) {
+            let phantom = self.inputs[idx].phantom;
+            self.set_input_phantom(idx, phantom)?;
+        }
+        for idx in 2..inputs {
+            let input = self.inputs[idx].clone();
+            if input.has_instrument {
+                self.set_input_instrument(idx, input.instrument)?;
+            }
+            if input.has_pad {
+                self.set_input_pad(idx, input.pad)?;
+            }
+            if let Some(level) = input.level {
+                self.set_input_level(idx, level)?;
+            }
+        }
+        Ok(())
+    }
+
 }
 
 impl RmeDevice for Fireface {
@@ -5336,6 +5375,9 @@ impl RmeDevice for Fireface {
             self.set_mono(self.settings.mono)?;
             self.set_mute_fx(self.settings.mute_fx)?;
         }
+        if !self.is_uc() {
+            self.apply_ucx_preamp_state()?;
+        }
         let result = match batch {
             Some(batch) => batch.finish_wait(),
             None => Ok(()),
@@ -7225,7 +7267,7 @@ mod tests {
 
     #[test]
     fn ucx_scene_keeps_its_preamp_group_at_connect() {
-        let (mut dev, _writes) = open(Model::Ucx);
+        let (mut dev, writes) = open(Model::Ucx);
         let mut scene = dev.capture_scene();
         scene.inputs[0].gain = Some(20);
         scene.inputs[0].phantom = true;
@@ -7233,6 +7275,7 @@ mod tests {
         scene.inputs[2].level = Some(InputLevel::LoGain);
         scene.inputs[2].ref_level = 2;
         scene.inputs[2].instrument = true;
+        writes.lock().unwrap().clear();
         dev.apply_scene(&scene).unwrap();
 
         let inputs = dev.inputs();
@@ -7242,6 +7285,21 @@ mod tests {
         assert_eq!(inputs[2].level, Some(InputLevel::LoGain));
         assert_eq!(inputs[2].ref_level, 2);
         assert!(inputs[2].instrument);
+
+        // The UCX stores these but does not report them at connect, so the
+        // scene must be written to make the GUI and hardware agree.
+        let words = written_words(&writes);
+        let last = |addr: u16| {
+            words
+                .iter()
+                .rev()
+                .find(|(a, _)| *a == addr)
+                .map(|(_, v)| *v)
+        };
+        assert_eq!(last(0x0007), Some(200), "input 1 gain 20.0 dB");
+        assert_eq!(last(0x0008), Some(1), "input 1 48 V");
+        assert_eq!(last(0x0209), Some(1), "input 3 instrument");
+        assert_eq!(last(0x0208), Some(2), "input 3 LoGain level");
     }
 
     #[test]
