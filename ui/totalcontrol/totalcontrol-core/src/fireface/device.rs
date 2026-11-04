@@ -484,21 +484,23 @@ impl ReadableState {
                 }
             }
         }
-        for &(idx, gain) in &self.input_gain {
-            if let Some(input) = scene.inputs.get(idx) {
-                if input.gain != Some(gain) {
-                    let (dev, ours) = if idx < 2 {
-                        (format!("{gain} dB"), format!("{} dB", input.gain.unwrap_or(0)))
-                    } else {
-                        (
-                            format!("{:.1} dB", gain as f32 / 2.0),
-                            format!(
-                                "{:.1} dB",
-                                input.gain.unwrap_or(0) as f32 / 2.0
-                            ),
-                        )
-                    };
-                    out.push(format!("AN{} gain: device {dev}, TotalControl {ours}", idx + 1));
+        if !self.ucx {
+            for &(idx, gain) in &self.input_gain {
+                if let Some(input) = scene.inputs.get(idx) {
+                    if input.gain != Some(gain) {
+                        let (dev, ours) = if idx < 2 {
+                            (format!("{gain} dB"), format!("{} dB", input.gain.unwrap_or(0)))
+                        } else {
+                            (
+                                format!("{:.1} dB", gain as f32 / 2.0),
+                                format!("{:.1} dB", input.gain.unwrap_or(0) as f32 / 2.0),
+                            )
+                        };
+                        out.push(format!(
+                            "AN{} gain: device {dev}, TotalControl {ours}",
+                            idx + 1
+                        ));
+                    }
                 }
             }
         }
@@ -2591,10 +2593,8 @@ impl Fireface {
     /// values stay at the TotalControl scene.
     pub fn restore_readable(&mut self, state: &ReadableState) -> Result<(), Error> {
         if !self.is_uc() {
-            // UCX: only the gain and output-volume maps are read back.
-            for &(idx, gain) in &state.input_gain {
-                self.set_gain(idx, gain)?;
-            }
+            // UCX: input gain is not reported at connect, so it stays with
+            // the scene.  Only the output-volume map is restored.
             for &(idx, volume) in &state.output_volume {
                 self.set_volume(ChannelId::Output(idx), 0, volume)?;
             }
@@ -5136,15 +5136,13 @@ impl RmeDevice for Fireface {
                 input.autoset = saved.7;
             }
         } else {
-            // The gain is read back from the 0x8d stream; use the value the
-            // unit reported if it has arrived.  Otherwise keep the scene's
-            // value.  Scenes written before the half-dB model stored inputs
-            // 3/4 as whole dB with `gain_max = 12`; convert those to raw
-            // half-dB units (0..24).
+            // The UCX does not report input gain at connect, so the scene is
+            // authoritative for the preamp group.  Live encoder moves still
+            // update the model through the 0x8d stream.  Scenes written
+            // before the half-dB model stored inputs 3/4 as whole dB with
+            // `gain_max = 12`; convert those to raw half-dB units (0..24).
             for (idx, input) in self.inputs.iter_mut().enumerate() {
-                if let Some(gain) = known_gains.get(&idx) {
-                    input.gain = Some(*gain);
-                } else if scene
+                if scene
                     .inputs
                     .get(idx)
                     .is_some_and(|saved| saved.gain_max == Some(12))
@@ -7176,13 +7174,19 @@ mod tests {
     }
 
     #[test]
-    fn ucx_scene_adopts_a_read_back_gain_over_the_saved_value() {
-        let (mut dev, _writes) = open(Model::Ucx);
+    fn ucx_scene_gain_wins_over_a_stale_state_word() {
+        // The UCX does not report gain at connect, so the scene is the
+        // authoritative preamp value; the state stream only updates live
+        // encoder moves after the scene has been applied.
+        let (mut dev, writes) = open(Model::Ucx);
         dev.apply_ucx_state_word(0x0207, 15);
         let mut scene = dev.capture_scene();
         scene.inputs[2].gain = Some(0);
+        writes.lock().unwrap().clear();
         dev.apply_scene(&scene).unwrap();
-        assert_eq!(dev.inputs()[2].gain, Some(3));
+        assert_eq!(dev.inputs()[2].gain, Some(0));
+        let words = written_words(&writes);
+        assert!(words.iter().any(|(addr, value)| *addr == 0x0207 && *value == 0));
     }
 
     #[test]
@@ -7210,7 +7214,10 @@ mod tests {
         scene.inputs[0].gain = Some(0);
         scene.outputs[0].volume = 1.0;
         let differences = state.differences(&scene);
-        assert!(differences.iter().any(|item| item.contains("AN1 gain")));
+        assert!(
+            !differences.iter().any(|item| item.contains("AN1 gain")),
+            "UCX input gain is not trusted at connect"
+        );
         assert!(differences.iter().any(|item| item.contains("volume")));
         assert!(
             !differences.iter().any(|item| item.contains("Clock")),
@@ -7220,7 +7227,13 @@ mod tests {
         writes.lock().unwrap().clear();
         dev.restore_readable(&state).unwrap();
         let w = writes.lock().unwrap();
-        assert!(w.contains(&Write::Words(vec![(0x0007, 400)])));
+        assert!(
+            !w.iter().any(|write| matches!(
+                write,
+                Write::Words(words) if words.iter().any(|(addr, _)| *addr == 0x0007)
+            )),
+            "choosing the device must not restore a gain the unit did not report at connect"
+        );
         assert!(w.iter().any(|write| matches!(
             write,
             Write::Words(words) if words.iter().any(|(addr, _)| *addr == 0x1800)
