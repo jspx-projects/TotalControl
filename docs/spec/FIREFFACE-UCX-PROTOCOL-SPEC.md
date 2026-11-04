@@ -171,8 +171,9 @@ saved scene gain at connect and follows `NN07` afterwards. Output-volume state
 is mapped to the Phones-first output order. The encoder reports the `NN00` of
 the output selected on the unit's display; `PH` emits `0x1800` and `0x1900`.
 
-Front-panel 48 V, Inst and Level changes write `NN08`/`NN09` on both sides of
-a linked pair and emit no state word.
+Front-panel gain and output-volume changes are reported as `NN07` and
+`NN00`. 48 V, Inst and Level are host-written; the unit stores them but emits
+no state word.
 
 The state stream is sparse. It is not a full scene dump and it does not echo
 every writable register. It carries no observed word for 48 V, Inst, Level,
