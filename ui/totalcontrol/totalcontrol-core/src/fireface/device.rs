@@ -3120,6 +3120,16 @@ impl Fireface {
         Ok(())
     }
 
+    /// Write the UCX device group that has no host readback: the line and
+    /// phones reference levels and the options word (clock source, optical
+    /// format, SPDIF professional, word clock and EQ+D).
+    fn apply_ucx_device_settings(&mut self) -> Result<(), Error> {
+        self.set_line_out_ref(self.settings.line_out_ref)?;
+        self.set_phones_ref(self.settings.phones_ref)?;
+        self.set_line_in_ref_58(self.settings.line_in_ref_58)?;
+        self.ucx_write_options()
+    }
+
 }
 
 impl RmeDevice for Fireface {
@@ -5377,6 +5387,7 @@ impl RmeDevice for Fireface {
         }
         if !self.is_uc() {
             self.apply_ucx_preamp_state()?;
+            self.apply_ucx_device_settings()?;
         }
         let result = match batch {
             Some(batch) => batch.finish_wait(),
@@ -7315,6 +7326,9 @@ mod tests {
         scene.settings.word_clock_single_speed = true;
         scene.settings.word_clock_termination = true;
         scene.settings.eq_for_record = true;
+        scene.settings.line_out_ref = 1;
+        scene.settings.phones_ref = 2;
+        scene.settings.line_in_ref_58 = 3;
         writes.lock().unwrap().clear();
         dev.apply_scene(&scene).unwrap();
 
@@ -7325,12 +7339,24 @@ mod tests {
         assert!(settings.word_clock_single_speed);
         assert!(settings.word_clock_termination);
         assert!(settings.eq_for_record);
-        // Device-owned settings are never part of the connect write.
-        assert!(!writes
+        // These are device-owned and unreadable, so the scene is written
+        // at connect to keep the GUI and hardware in step.
+        let words = written_words(&writes);
+        let last = |addr: u16| {
+            words
+                .iter()
+                .rev()
+                .find(|(a, _)| *a == addr)
+                .map(|(_, v)| *v)
+        };
+        assert_eq!(last(0x1208), Some(1));
+        assert_eq!(last(0x1808), Some(2));
+        assert_eq!(last(0x0407), Some(3));
+        assert!(writes
             .lock()
             .unwrap()
             .iter()
-            .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, _, 1487))));
+            .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x00CE, 1487))));
     }
 
     #[test]
