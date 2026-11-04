@@ -709,17 +709,27 @@ Settings stays lit while its dialog is open. `assign` is a selector, not a
 monitoring button: it uses the same compact row and white drop decoration as a
 strip's output-bus trigger, and its row stays lit while the menu is open.
 
-Dim and Recall act on the assigned Main Out pair. Dim attenuates the current
-Main Out level by the configured Main Out Dim amount and restores it on
-release. Recall sets the underlying Main Out level to the configured listening
-volume once; it does not latch. Without an assigned Main Out both controls
-leave the mix unchanged and never fall back to a Phones pair.
+Dim and Recall act on the assigned Main Out pair. Without an assigned Main
+Out both controls leave the mix unchanged and never fall back to a Phones
+pair.
 
-Dim is a runtime monitoring state. Applying a scene, reconnecting, or a
-stream-start or sample-rate reapply leaves it off and does not attenuate the
-Main Out again. The saved scene contains the level that was audible, not a
-pending Dim operation. Speaker B uses the UCX control-room register. Mono and
-Mute FX are stored in the device scene.
+Dim saves the current Main Out levels, lowers that pair by the configured Dim
+amount and engages the device Dim state. Releasing Dim restores the saved
+levels. A Main Out fader move while Dim is engaged changes the audible level
+but not the saved pre-Dim levels; releasing Dim returns to the saved levels.
+Changing the Main Dim amount while Dim is engaged re-applies the new amount to
+the saved levels. Reassigning or clearing the Main Out releases Dim first.
+
+Recall sets the underlying Main Out level to the configured listening volume
+once; it does not latch. When Dim is engaged, Recall updates the saved pre-Dim
+levels and the current dimmed levels together.
+
+Dim and Speaker B are runtime monitoring states. Applying a scene,
+reconnecting, or a stream-start or sample-rate reapply leaves Dim off and does
+not attenuate the Main Out again. The saved scene contains the level that was
+audible, not a pending Dim operation. Speaker B requires an assigned output;
+clearing the assignment also clears Speaker B. Mono and Mute FX are stored in
+the device scene.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged
@@ -864,8 +874,9 @@ one-decimal value display.
 
 `OK` stores the settings in `gui.json` for the selected device. The settings
 are not part of the mixer scene, snapshot, undo stack or OSC scene state.
-The Control Room button state (`Dim`, `Talkback`, `Speaker B`, `Mono`,
-`Mute FX`) remains runtime state and is not stored in these settings.
+`Dim` and `Speaker B` remain runtime state. `Mono` and `Mute FX` are mixer
+scene state. External Input and the Solo/PFL modes are stored as settings;
+their runtime signal paths are not implemented.
 
 ## 13. Latency display
 
