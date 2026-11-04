@@ -441,6 +441,10 @@ and `Phones 1`–`Phones 4`, regardless of the View → Names setting, and they
 cannot be renamed. The hardware channel feeding each destination is listed
 by its own hardware name in the second menu level.
 
+The Main and Speaker B assignments are kept with your TotalControl
+preferences. They are restored at startup and are not changed by loading a
+scene or recalling a snapshot.
+
 Clicking a Control Room strip — including its name, fader or switches —
 selects it as the current submix, like any other output. Control Room
 channels are ordinary outputs for routing, so a hardware output stays a

@@ -3873,17 +3873,16 @@ impl RmeDevice for Fireface {
                 "Assign is not decoded on the UC".into(),
             ));
         }
-        let Some(pair) = pair else {
-            return Ok(());
-        };
-        if pair >= BLOCKS / 2 {
-            return Err(Error::InvalidChannel(format!("output pair {pair}")));
+        if let Some(pair) = pair {
+            if pair >= BLOCKS / 2 {
+                return Err(Error::InvalidChannel(format!("output pair {pair}")));
+            }
         }
         let previous = self.settings.main_out;
-        if previous == Some(pair) {
+        if previous == pair {
             return Ok(());
         }
-        self.settings.main_out = Some(pair);
+        self.settings.main_out = pair;
         if let Some(old) = previous {
             if old < BLOCKS / 2 {
                 let mute = self.outputs.get(old * 2).map(|o| o.mute).unwrap_or(false);
@@ -3891,9 +3890,11 @@ impl RmeDevice for Fireface {
                 self.ucx_write_output_mode(old * 2 + 1, mute)?;
             }
         }
-        let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
-        self.ucx_write_output_mode(pair * 2, mute)?;
-        self.ucx_write_output_mode(pair * 2 + 1, mute)?;
+        if let Some(pair) = pair {
+            let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
+            self.ucx_write_output_mode(pair * 2, mute)?;
+            self.ucx_write_output_mode(pair * 2 + 1, mute)?;
+        }
         Ok(())
     }
 
@@ -4671,7 +4672,15 @@ impl RmeDevice for Fireface {
                 saved.dynamics = current.dynamics;
             }
         }
+        // The Control Room assignments are application configuration, not
+        // mixer scene values.  Keep the live assignment when a scene is
+        // recalled or reapplied so Dim and Recall keep addressing the pair
+        // the user assigned.
+        let live_main_out = self.settings.main_out;
+        let live_main_b_out = self.settings.main_b_out;
         self.settings = scene.settings.clone();
+        self.settings.main_out = live_main_out;
+        self.settings.main_b_out = live_main_b_out;
         self.matrix_overrides.clear();
         if self.is_uc() {
             for (idx, (input, saved)) in self.inputs.iter_mut().zip(device_inputs).enumerate() {
@@ -5589,6 +5598,27 @@ mod tests {
 
         let scene = dev.capture_scene();
         assert!(!scene.settings.dim);
+    }
+
+    #[test]
+    fn ucx_scene_apply_keeps_the_live_main_out_assignment() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+
+        let mut scene = dev.capture_scene();
+        // A scene can carry an older assignment; the live Control Room
+        // configuration wins.
+        scene.settings.main_out = Some(3);
+        dev.apply_scene(&scene).unwrap();
+        assert_eq!(dev.settings().main_out, Some(1));
+    }
+
+    #[test]
+    fn ucx_clearing_main_out_clears_the_assignment() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out(None).unwrap();
+        assert_eq!(dev.settings().main_out, None);
     }
 
     #[test]

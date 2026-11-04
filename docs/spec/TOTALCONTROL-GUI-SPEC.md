@@ -835,7 +835,11 @@ right, and the Control Room shifts its own channels left by one slot.
 
 The moving channel is drawn once, above the rows and panel, and accepts no
 pointer input until it settles. No motion runs when assignments are restored
-from a scene or from preferences at startup.
+from preferences at startup.
+
+The Main and Speaker B assignments are application configuration stored with
+the GUI preferences. A scene load or reapply keeps the live assignment; a
+scene's stored assignment does not move the Control Room destinations.
 
 The front-panel volume knob follows the output selected on the unit's display,
 not the Control Room Main assignment; `PH` always addresses channels 7/8.
