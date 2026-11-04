@@ -100,14 +100,14 @@ start_sinks() {
     # 5.1: FL FR FC LFE SL SR -> AUX0..AUX5
     pw-loopback -n totalcontrol-surround51 -c 6 \
         -m '[ FL, FR, FC, LFE, SL, SR ]' \
-        -i 'media.class=Audio/Sink node.name=totalcontrol-surround51 node.description=TotalControl Surround 5.1' \
+        -i 'media.class=Audio/Sink node.name=totalcontrol-surround51 node.description="TotalControl Surround 5.1"' \
         -P 0 -o 'node.autoconnect=false' &
     echo $! >>"$PID_FILE"
 
     # 7.1: FL FR FC LFE RL RR SL SR -> AUX0..AUX7
     pw-loopback -n totalcontrol-surround71 -c 8 \
         -m '[ FL, FR, FC, LFE, RL, RR, SL, SR ]' \
-        -i 'media.class=Audio/Sink node.name=totalcontrol-surround71 node.description=TotalControl Surround 7.1' \
+        -i 'media.class=Audio/Sink node.name=totalcontrol-surround71 node.description="TotalControl Surround 7.1"' \
         -P 0 -o 'node.autoconnect=false' &
     echo $! >>"$PID_FILE"
 
