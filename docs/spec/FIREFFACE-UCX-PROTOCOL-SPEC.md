@@ -71,9 +71,24 @@ LEVEL mode sets:
 Input 1/2 gain is analog; input 3/4 gain is digital; output level is digital
 in the mixer.
 
-Pushing the encoder in LEVEL mode for one second enters Panorama mode: `CE`
-center, `LL` full left, `rr` full right.  It returns to LEVEL after one second
-without a change.
+The encoder's long press is context-dependent:
+
+| Selected channel | Long press | Display | Return |
+|---|---|---|---|
+| input `i.1`–`i.4` | toggles Link mode and shows the pair status | the gain with the pair dot in the fixed decimal position, e.g. `2.6` for 26 dB | about one second |
+| output `L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8` | panorama | `CE` centre; `L.1`/`r.1` at the limits (the guide names them `LL`/`rr`) | about one second without a change |
+
+In stereo mode the display presents only the left channel of each pair
+(`i.1`, `i.3`, ...) and the setting applies to both channels.  In mono mode
+both channels are independent.
+
+The dot in the display has three uses:
+
+| Context | Meaning |
+|---|---|
+| `i.3`/`i.4` gain | half-dB step |
+| output level | negative value, e.g. `20.` = −20 dB |
+| input pair status | linked pair; `2.6` = 26 dB with the pair dot |
 
 `SU` loads one of six user setups, `FA` the factory preset, `Ad` the 8-channel
 AD/DA converter mode, and `CC` Class Compliant mode when the unit is not
@@ -81,20 +96,10 @@ connected to a computer.  `i.o.` means loaded; `n.o.` means an empty slot.
 Loading a setup while online changes only the front-panel parameters (input
 gains and output volumes), not routing.
 
-Pushing the encoder for more than one second toggles the link (gang) mode.
-The display shows `on` or `off`.  In stereo mode the display presents only the
-left channel of each pair (`L1`, `L3`, `L5`, ...) and the setting applies to
-both channels.  In mono mode both channels are presented and are independent.
-
-The right-hand dot in the display has two documented meanings: a half-dB step
-on `i.3`/`i.4`, and a negative value on the output channels.  On the unit, the
-long-press pair status places the dot in the fixed decimal position, for
-example `2.6` for a 26 dB gain.  That dot is the pair/link marker, not a
-decimal value; it clears when the display returns to LEVEL.  The 2019 guide
-does not describe this third use.
-
 Front-panel gain and output-volume changes are reported to the host as `NN07`
-and `NN00`.  No other front-panel control is exposed.
+and `NN00`.  Link/stereo changes use the stereo-mode state words.  A
+front-panel pan/balance change is part of the mixer state; its host readback
+is not yet confirmed.
 
 ## 2. USB transport
 
