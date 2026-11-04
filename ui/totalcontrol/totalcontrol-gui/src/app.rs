@@ -576,6 +576,9 @@ impl RmeDevice for DeviceHandle {
     fn set_mono(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_mono(on))
     }
+    fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_speaker_b_linked(on))
+    }
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_main_out(pair))
     }
@@ -2048,6 +2051,7 @@ pub enum Message {
     ControlRoomListenbackDim(f32),
     ControlRoomRecallDb(f32),
     ControlRoomMainDim(f32),
+    ControlRoomSpeakerBLinked(bool),
     ControlRoomExternalInput(Option<usize>),
     ControlRoomExternalGain(f32),
     ControlRoomPflReplacesSolo(bool),
@@ -3203,6 +3207,9 @@ pub fn apply_control_room_assignments(
             state.device.set_main_out_b(Some(b))?;
         }
     }
+    state
+        .device
+        .set_speaker_b_linked(state.control_room.speaker_b_linked)?;
     enforce_control_room_stereo(state);
     Ok(())
 }
@@ -4752,6 +4759,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::ControlRoomListenbackDim(_)
             | Message::ControlRoomRecallDb(_)
             | Message::ControlRoomMainDim(_)
+            | Message::ControlRoomSpeakerBLinked(_)
             | Message::ControlRoomExternalInput(_)
             | Message::ControlRoomExternalGain(_)
             | Message::ControlRoomPflReplacesSolo(_)
@@ -6964,6 +6972,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     fail(state, "dim", &e);
                 }
             }
+            if let Err(e) = state
+                .device
+                .set_speaker_b_linked(state.control_room.speaker_b_linked)
+            {
+                fail(state, "speaker B link", &e);
+            }
         }
         Message::ResetControlRoomSettings => {
             state.control_room_draft = ControlRoomSettings::default();
@@ -6985,6 +6999,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::ControlRoomMainDim(db) => {
             state.control_room_draft.main_dim_db = round_half_db(db);
+        }
+        Message::ControlRoomSpeakerBLinked(on) => {
+            state.control_room_draft.speaker_b_linked = on;
         }
         Message::ControlRoomExternalInput(pair) => {
             state.control_room_draft.external_input = pair;
@@ -13054,6 +13071,14 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
                 Message::ControlRoomExternalGain,
                 scale,
             ),
+        ),
+        row_with(
+            "Speaker B",
+            checkbox(draft.speaker_b_linked)
+                .label("Link to Main")
+                .text_size(text_size)
+                .on_toggle(Message::ControlRoomSpeakerBLinked)
+                .into(),
         ),
         section("SOLO / PFL MODE"),
         checkbox(draft.pfl_replaces_solo)

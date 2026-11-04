@@ -549,6 +549,8 @@ pub struct Fireface {
     dim_saved: Option<(usize, f32, f32)>,
     /// Attenuation applied by the current control-room Dim.
     dim_amount_db: f32,
+    /// Speaker B follows Main Out level changes.
+    speaker_b_linked: bool,
     /// Register words replaced by the current Talkback activation, in write
     /// order.  Restored when Talkback is released.
     talkback_saved: Option<Vec<(u16, u16)>>,
@@ -1046,6 +1048,7 @@ impl Fireface {
             output_mute_saved: HashMap::new(),
             dim_saved: None,
             dim_amount_db: -20.0,
+            speaker_b_linked: false,
             talkback_saved: None,
             talkback_active: false,
             input_settings,
@@ -2931,6 +2934,38 @@ impl Fireface {
         }
         Ok(())
     }
+
+    /// When Speaker B is linked to Main, mirror a Main Out level change onto
+    /// the corresponding Speaker B channel.
+    fn mirror_speaker_b_from_main(&mut self, idx: usize, volume: f32) -> Result<(), Error> {
+        if !self.speaker_b_linked || self.settings.main_out != Some(idx / 2) {
+            return Ok(());
+        }
+        let Some(b) = self.settings.main_b_out else {
+            return Ok(());
+        };
+        if b == idx / 2 {
+            return Ok(());
+        }
+        let b_idx = b * 2 + idx % 2;
+        if b_idx >= self.outputs.len() {
+            return Ok(());
+        }
+        if self.outputs[b_idx].mute {
+            self.outputs[b_idx].volume = volume;
+            self.output_mute_saved.insert(b_idx, volume);
+            return Ok(());
+        }
+        if self.is_uc() {
+            self.uc_write_output_volume(b_idx, volume)?;
+            self.uc_write_output_master(b_idx, volume)?;
+        } else {
+            self.ucx_write_output_volume(b_idx, volume)?;
+        }
+        self.outputs[b_idx].volume = volume;
+        Ok(())
+    }
+
 }
 
 impl RmeDevice for Fireface {
@@ -3098,6 +3133,7 @@ impl RmeDevice for Fireface {
                     self.ucx_write_output_volume(idx, v)?;
                 }
                 self.outputs[idx].volume = v;
+                self.mirror_speaker_b_from_main(idx, v)?;
             }
             ChannelId::Input(idx) => self.apply_input_volume(idx, output, v)?,
             ChannelId::Playback(idx) => self.apply_playback_volume(idx, output, v)?,
@@ -4065,6 +4101,29 @@ impl RmeDevice for Fireface {
             (0x3f98, if on { 0x83ff } else { 0xffff }),
         ])?;
         self.settings.mono = on;
+        Ok(())
+    }
+
+    fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), Error> {
+        if self.is_uc() {
+            return Err(Error::InvalidChannel(
+                "Speaker B does not exist on the UC".into(),
+            ));
+        }
+        self.speaker_b_linked = on;
+        if on {
+            if let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) {
+                if main != b {
+                    for side in 0..2 {
+                        let idx = main * 2 + side;
+                        if idx < self.outputs.len() {
+                            let volume = self.outputs[idx].volume;
+                            self.set_volume(ChannelId::Output(b * 2 + side), 0, volume)?;
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -5630,6 +5689,47 @@ mod tests {
         assert!((dev.outputs()[6].volume - before.0).abs() < 1e-6);
         assert!((dev.outputs()[7].volume - before.1).abs() < 1e-6);
         assert!(!dev.settings().dim);
+    }
+
+    #[test]
+    fn ucx_speaker_b_link_follows_main_volume_changes() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, 0.4).unwrap();
+        dev.set_output_volume(2, 0, 0.8).unwrap();
+
+        dev.set_speaker_b_linked(true).unwrap();
+        assert!((dev.outputs()[4].volume - 0.4).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - 0.4).abs() < 1e-6);
+
+        dev.set_output_volume(1, 0, 0.25).unwrap();
+        assert!((dev.outputs()[4].volume - 0.25).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - 0.25).abs() < 1e-6);
+
+        dev.set_speaker_b_linked(false).unwrap();
+        dev.set_output_volume(1, 0, 0.1).unwrap();
+        assert!((dev.outputs()[4].volume - 0.25).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ucx_speaker_b_link_follows_dim() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, db_to_linear(-10.0)).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
+
+        dev.set_dim_with(true, -20.0).unwrap();
+        let dimmed = db_to_linear(-30.0);
+        assert!((dev.outputs()[4].volume - dimmed).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - dimmed).abs() < 1e-6);
+
+        dev.set_dim(false).unwrap();
+        let level = db_to_linear(-10.0);
+        assert!((dev.outputs()[4].volume - level).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - level).abs() < 1e-6);
     }
 
     #[test]

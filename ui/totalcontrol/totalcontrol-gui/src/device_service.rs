@@ -1018,6 +1018,13 @@ impl RmeDevice for Mirror {
         });
         Ok(())
     }
+
+    fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_speaker_b_linked(on);
+        });
+        Ok(())
+    }
 }
 
 fn missing(channel: ChannelId) -> Error {

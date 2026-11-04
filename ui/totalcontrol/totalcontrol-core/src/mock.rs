@@ -701,6 +701,10 @@ impl RmeDevice for MockBabyfacePro {
         Ok(())
     }
 
+    fn set_speaker_b_linked(&mut self, _on: bool) -> Result<(), Error> {
+        Ok(())
+    }
+
     fn set_eq_for_record(&mut self, on: bool) -> Result<(), Error> {
         self.settings.eq_for_record = on;
         Ok(())
