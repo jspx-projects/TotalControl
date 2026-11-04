@@ -414,9 +414,9 @@ again.
 Dim is engaged, Recall changes the saved pre-Dim level and the current dimmed
 level together. Recall is momentary and does not latch.
 
-**Speaker B** switches monitoring to the output assigned to Speaker B. It must
-be assigned first. Speaker B is runtime only: loading a scene or recalling a
-snapshot does not switch it back on.
+**Speaker B** switches monitoring to the output assigned to Speaker B. Both
+the Main Out and Speaker B must be assigned first. Speaker B is runtime only:
+loading a scene or recalling a snapshot does not switch it back on.
 
 **Mono** sums the Main monitor signal to mono. **Mute FX** removes the Reverb
 and Echo returns from the Control Room outputs. Both are part of the mixer

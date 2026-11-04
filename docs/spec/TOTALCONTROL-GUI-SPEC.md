@@ -727,9 +727,10 @@ levels and the current dimmed levels together.
 Dim and Speaker B are runtime monitoring states. Applying a scene,
 reconnecting, or a stream-start or sample-rate reapply leaves Dim off and does
 not attenuate the Main Out again. The saved scene contains the level that was
-audible, not a pending Dim operation. Speaker B requires an assigned output;
-clearing the assignment also clears Speaker B. Mono and Mute FX are stored in
-the device scene.
+audible, not a pending Dim operation. Speaker B requires assigned Main and
+Speaker B outputs; its button switches the monitor routing between those
+pairs, and clearing the Speaker B assignment also clears Speaker B. Mono and
+Mute FX are stored in the device scene.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged
