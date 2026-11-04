@@ -1823,15 +1823,23 @@ impl Fireface {
     /// word rather than clobbering the Main flag with a mute.
     fn ucx_write_output_mode(&self, idx: usize, mute: bool) -> Result<(), Error> {
         let pair = idx / 2;
+        let monitoring = self.settings.main_out == Some(pair)
+            || self.settings.main_b_out == Some(pair);
+        self.ucx_write_output_mode_value(
+            idx,
+            (mute as u16) | ((monitoring as u16) << 1),
+        )
+    }
+
+    fn ucx_write_output_mode_value(&self, idx: usize, value: u16) -> Result<(), Error> {
+        let pair = idx / 2;
         let side = idx % 2;
         let dsp = ucx::output_pair_dsp(pair)
             .ok_or_else(|| Error::InvalidChannel(format!("output {idx}")))?;
         let channel = ucx::output_channel(dsp + side);
-        let monitoring = self.settings.main_out == Some(pair)
-            || self.settings.main_b_out == Some(pair);
         self.write_word(
             ucx::channel_reg(channel, ucx::offset::OUTPUT_MUTE),
-            (mute as u16) | ((monitoring as u16) << 1),
+            value,
         )
     }
 
@@ -3907,6 +3915,9 @@ impl RmeDevice for Fireface {
         // Dim belongs to the pair that was Main when it engaged.  Release
         // it before moving or clearing the assignment, so the old pair
         // returns to its saved level.
+        if self.settings.speaker_b {
+            self.set_speaker_b(false)?;
+        }
         if self.settings.dim {
             self.set_dim(false)?;
         }
@@ -3944,6 +3955,9 @@ impl RmeDevice for Fireface {
         if previous == pair {
             return Ok(());
         }
+        if self.settings.speaker_b {
+            self.set_speaker_b(false)?;
+        }
         self.settings.main_b_out = pair;
         if let Some(old) = previous {
             if old < BLOCKS / 2 {
@@ -3957,7 +3971,7 @@ impl RmeDevice for Fireface {
                 let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
                 self.ucx_write_output_mode(pair * 2, mute)?;
                 self.ucx_write_output_mode(pair * 2 + 1, mute)?;
-                self.write_word(0x3d00, if self.settings.speaker_b { 6 } else { 0 })?;
+                self.write_word(0x3d00, if self.settings.speaker_b { 1 } else { 0 })?;
             }
             None => {
                 // Clearing the assignment also leaves Speaker B.  The
@@ -4005,10 +4019,34 @@ impl RmeDevice for Fireface {
                 "Speaker B does not exist on the UC".into(),
             ));
         }
-        // Phones/Main mode word plus the control-room state word.
-        self.write_word(0x1802, if on { 2 } else { 0 })?;
-        self.write_word(0x1902, if on { 2 } else { 0 })?;
-        self.write_word(0x3d00, if on { 8 } else { 0 })?;
+        let Some(main) = self.settings.main_out else {
+            return Err(Error::InvalidChannel(
+                "Speaker B needs an assigned Main Out".into(),
+            ));
+        };
+        let Some(b) = self.settings.main_b_out else {
+            return Err(Error::InvalidChannel(
+                "Speaker B needs an assigned output".into(),
+            ));
+        };
+        // The mode word carries mute in bit 0 and the monitor routing in
+        // bit 1.  While Speaker B is active the Main pair carries bit 1 and
+        // the B pair does not; while it is inactive the reverse holds.
+        for idx in [main * 2, main * 2 + 1] {
+            let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
+            self.ucx_write_output_mode_value(
+                idx,
+                mute as u16 | if on { 2 } else { 0 },
+            )?;
+        }
+        for idx in [b * 2, b * 2 + 1] {
+            let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
+            self.ucx_write_output_mode_value(
+                idx,
+                mute as u16 | if on { 0 } else { 2 },
+            )?;
+        }
+        self.write_word(0x3d00, if on { 1 } else { 0 })?;
         self.settings.speaker_b = on;
         Ok(())
     }
@@ -5540,16 +5578,33 @@ mod tests {
     }
 
     #[test]
-    fn ucx_control_room_speaker_b_and_dim_write_registers() {        let (mut dev, writes) = open(Model::Ucx);
+    fn ucx_control_room_speaker_b_and_dim_write_registers() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
         writes.lock().unwrap().clear();
         dev.set_speaker_b(true).unwrap();
         {
             let w = writes.lock().unwrap();
-            assert!(w.contains(&Write::Words(vec![(0x1802, 2)])));
-            assert!(w.contains(&Write::Words(vec![(0x1902, 2)])));
-            assert!(w.contains(&Write::Words(vec![(0x3d00, 8)])));
+            assert!(w.contains(&Write::Words(vec![(0x1202, 2)])));
+            assert!(w.contains(&Write::Words(vec![(0x1302, 2)])));
+            assert!(w.contains(&Write::Words(vec![(0x1402, 0)])));
+            assert!(w.contains(&Write::Words(vec![(0x1502, 0)])));
+            assert!(w.contains(&Write::Words(vec![(0x3d00, 1)])));
         }
         assert!(dev.settings().speaker_b);
+
+        writes.lock().unwrap().clear();
+        dev.set_speaker_b(false).unwrap();
+        {
+            let w = writes.lock().unwrap();
+            assert!(w.contains(&Write::Words(vec![(0x1202, 0)])));
+            assert!(w.contains(&Write::Words(vec![(0x1302, 0)])));
+            assert!(w.contains(&Write::Words(vec![(0x1402, 2)])));
+            assert!(w.contains(&Write::Words(vec![(0x1502, 2)])));
+            assert!(w.contains(&Write::Words(vec![(0x3d00, 0)])));
+        }
+        assert!(!dev.settings().speaker_b);
 
         dev.set_main_out(Some(3)).unwrap();
         let before = (dev.outputs()[6].volume, dev.outputs()[7].volume);
@@ -5575,6 +5630,20 @@ mod tests {
         assert!((dev.outputs()[6].volume - before.0).abs() < 1e-6);
         assert!((dev.outputs()[7].volume - before.1).abs() < 1e-6);
         assert!(!dev.settings().dim);
+    }
+
+    #[test]
+    fn ucx_speaker_b_mode_word_keeps_the_output_mute_bit() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.outputs[4].mute = true;
+        dev.outputs[5].mute = true;
+        writes.lock().unwrap().clear();
+        dev.set_speaker_b(true).unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(0x1402, 1)));
+        assert!(words.contains(&(0x1502, 1)));
     }
 
     #[test]
