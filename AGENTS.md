@@ -11,9 +11,11 @@ documents for the current implementation, not as a work log.
   not, what it used to be, or what went wrong before.
 - No historical notes, retractions, changelogs, capture diaries, or "oracle
   said" narration in a specification.
-- No personal identifying information. Do not put serial numbers, USB
+- No personal identifying information anywhere in the repository, pull
+  requests, commit messages or issues. Do not put serial numbers, USB
   vendor/product IDs, hostnames, usernames, file paths with a home directory,
-  or device addresses in a specification.
+  or device addresses there. Use placeholders such as `<checkout>` instead of
+  a contributor's local path.
 - Keep specifications minimal. Tables and short normative paragraphs are
   preferred over prose.
 - Put open questions, TODO lists, capture requests and working notes in
