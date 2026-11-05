@@ -11,11 +11,11 @@ use iced::{Alignment, Background, Color, Element, Length};
 use crate::app::{Message, TotalControl};
 use crate::theme;
 
-const CARD_W: f32 = 560.0;
+const CARD_W: f32 = 700.0;
 /// More rows than this would make the dialog taller than the window on a
 /// small display, so the list gets a fixed height and its own scrollbar.
 const MAX_VISIBLE_MISMATCHES: usize = 6;
-const MISMATCH_ROW_H: f32 = 16.0;
+const MISMATCH_ROW_H: f32 = 22.0;
 
 fn uses_scroll_list(items: usize) -> bool {
     items > MAX_VISIBLE_MISMATCHES
@@ -27,12 +27,12 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
         return Space::new().into();
     };
 
-    let mut differences = column![].spacing(theme::SPACE_TIGHT * scale);
+    let mut differences = column![].spacing(theme::SPACE_SM * scale);
     for item in &mismatch.items {
         differences = differences.push(
             text(format!("• {item}"))
                 .color(theme::TEXT_PRIMARY)
-                .size(theme::TEXT_XS * scale),
+                .size(theme::TEXT_SM * scale),
         );
     }
     let differences: Element<'_, Message> = if uses_scroll_list(mismatch.items.len()) {
@@ -54,20 +54,21 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
             column![
                 text("Mismatch detected")
                     .color(theme::TEXT_PRIMARY)
-                    .size(theme::TEXT_XL * scale),
+                    .size(theme::TEXT_XL * 1.2 * scale),
                 text(if ucx {
-                    "Input gain and output volume of the device and TotalControl are different."
+                    "The device and TotalControl mixer states are different."
                 } else {
                     "Channel and FX settings of the device and TotalControl are different."
                 })
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_XS * scale),
+                .size(theme::TEXT_MD * scale),
                 differences,
                 text(if ucx {
-                    "The UCX reports input gain and output volume. Choosing Use device \
-                     settings restores those values on the unit and in TotalControl. The options \
-                     word, reference levels and the 48 V/Inst/Level switches are not read \
-                     back and stay at the TotalControl scene."
+                    "The UCX state dump covers input and output levels, mute, EQ, \
+                     dynamics, FX returns and matrix sends. Choosing Use device settings \
+                     adopts those decoded values on the unit and in TotalControl. The \
+                     options word and host-only names and trims stay at the TotalControl \
+                     scene."
                 } else {
                     "The UC stores its matrix, faders and loopback, but only the clock, \
                      optical format, 48 V, PAD and Inst registers can be read back. \
@@ -75,36 +76,36 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
                      faders and loopback stay at the TotalControl scene."
                 })
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_MICRO * scale),
+                .size(theme::TEXT_XS * scale),
                 row![
                     button(
                         text("Use TotalControl settings (default)")
-                            .size(theme::TEXT_XS * scale)
+                            .size(theme::TEXT_SM * scale)
                     )
-                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                    .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                     .style(theme::segment_button(true))
                     .on_press(Message::MismatchUseTotalcontrol),
-                    button(text("Use device settings").size(theme::TEXT_XS * scale))
-                        .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                    button(text("Use device settings").size(theme::TEXT_SM * scale))
+                        .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                         .style(theme::ghost_button)
                         .on_press(Message::MismatchUseDevice),
                 ]
-                .spacing(theme::SPACE_MD * scale)
+                .spacing(theme::SPACE_LG * scale)
                 .align_y(Alignment::Center),
                 button(
                     text("Always use TotalControl settings and do not ask again")
                         .color(theme::TEXT_SEC)
-                        .size(theme::TEXT_MICRO * scale)
+                        .size(theme::TEXT_XS * scale)
                 )
-                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
+                .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
                 .style(theme::plain_button)
                 .on_press(Message::MismatchAlwaysTotalcontrol),
             ]
-            .spacing(theme::SPACE_LG * scale)
+            .spacing(theme::SPACE_XL * scale)
             .width(Length::Fill),
         )
         .style(theme::dialog)
-        .padding(theme::SPACE_XL * scale)
+        .padding(theme::SPACE_XXL * scale)
         .width(Length::Fill)
         .max_width(CARD_W * scale),
     );

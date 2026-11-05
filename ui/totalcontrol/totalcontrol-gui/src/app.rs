@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use totalcontrol_core::channel::EqBandType;
+use totalcontrol_core::fireface::UcxDump;
 #[cfg(feature = "alsa")]
 use totalcontrol_core::{BabyfacePro, Fireface, FirefaceModel, UcxAlsa};
 use totalcontrol_core::{
@@ -1219,6 +1220,49 @@ impl DeviceHandle {
         None
     }
 
+    pub fn begin_startup_state_dump(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), totalcontrol_core::Error> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.begin_startup_state_dump(timeout);
+        }
+        Ok(())
+    }
+
+    pub fn startup_dump_pending(&self) -> bool {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.startup_dump_pending();
+        }
+        false
+    }
+
+    pub fn startup_dump_complete(&self) -> bool {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.startup_dump_complete();
+        }
+        true
+    }
+
+    pub fn pre_connect_words(&self) -> Option<std::collections::HashMap<u16, u16>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return Some(d.pre_connect_words().clone());
+        }
+        None
+    }
+
+    pub fn load_scene_model(&mut self, scene: &Scene) -> Result<(), totalcontrol_core::Error> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.load_scene_model(scene);
+        }
+        self.apply_scene(scene)
+    }
+
     pub fn firmware(&self) -> Option<u32> {
         if let DeviceHandle::Mirror(d) = self {
             return d.info().firmware;
@@ -2205,6 +2249,10 @@ pub struct StartupMismatch {
     pub totalcontrol_scene: Scene,
     /// The scene's input gains after the UCX half-dB migration.
     pub totalcontrol_gain: Vec<(usize, u32)>,
+    /// Full decoded UCX dump, when the mismatch came from the dump.
+    pub ucx_dump: Option<UcxDump>,
+    /// Saved scene with all decoded device values applied, for "Use device".
+    pub device_scene: Option<Scene>,
 }
 
 pub struct TotalControl {
@@ -2468,6 +2516,10 @@ pub struct TotalControl {
     pub surround_71_running: bool,
     /// RME-style startup mismatch dialog.  `None` = no prompt.
     pub startup_mismatch: Option<StartupMismatch>,
+    /// UCX startup dump still in flight; compare once it completes.
+    pub startup_compare_pending: bool,
+    /// Saved scene used for the deferred UCX comparison.
+    pub startup_compare_scene: Option<Scene>,
     /// Suppress future mismatch prompts and write the saved TotalControl scene.
     pub always_init_device: bool,
     /// Whether the device this handle was opened on is still there, as of
@@ -3021,6 +3073,8 @@ pub fn new_with_device(
         surround_51_running: false,
         surround_71_running: false,
         startup_mismatch: None,
+        startup_compare_pending: false,
+        startup_compare_scene: None,
         always_init_device: false,
         backend,
         explicit_mock: mock,
@@ -3623,6 +3677,31 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
             scene.outputs.get(4).map(|o| o.loopback),
         );
         state.host_scene = Some(scene.clone());
+        if state.device.is_ucx_model() && !state.always_init_device {
+            if let Err(e) =
+                state
+                    .device
+                    .begin_startup_state_dump(Duration::from_millis(3000))
+            {
+                log::warn!("UCX startup state dump request failed: {e:?}");
+            }
+        }
+        if state.device.is_ucx_model()
+            && state.device.startup_dump_pending()
+            && !state.always_init_device
+        {
+            // Show the saved scene immediately, but do not touch the
+            // device until the pre-connect dump has been decoded.  Writing
+            // now would interleave scene echoes with the dump stream.
+            if let Err(e) = state.device.load_scene_model(&scene) {
+                log::warn!("could not load the UCX scene model: {e:?}");
+            }
+            state.host_scene = Some(state.device.capture_scene());
+            state.startup_compare_scene = Some(scene);
+            state.startup_compare_pending = true;
+            log::info!("deferred UCX startup sync until the state dump completes");
+            return;
+        }
         // RME's UC behavior is unconditional: on connect TotalMix writes
         // its host state over the unit, with no mismatch dialog (verified
         // on TotalMix FX 2.10 / driver 1.277).  Live front-panel changes
@@ -3638,6 +3717,8 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
                         device_state,
                         totalcontrol_scene: scene.clone(),
                         totalcontrol_gain,
+                        ucx_dump: None,
+                        device_scene: None,
                     });
                 }
             }
@@ -3661,6 +3742,8 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
                             device_state: Default::default(),
                             totalcontrol_scene: scene.clone(),
                             totalcontrol_gain,
+                            ucx_dump: None,
+                            device_scene: None,
                         },
                     );
                 }
@@ -3716,6 +3799,62 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
 /// The startup path has its own saved scene; if that reapply is still
 /// pending, keep it instead of overwriting it with a possibly device-updated
 /// model.
+/// Finish the parts of startup that must follow the scene write.
+fn finish_startup_setup(state: &mut TotalControl) {
+    if let Err(e) = apply_control_room_assignments(state) {
+        log::debug!("Control Room assignments not restored: {e}");
+    }
+    sync_surround_bridge(state);
+    restore_engine(state);
+    state.device.begin_metering();
+    maybe_attach_device_service(state);
+}
+
+fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
+    match state.device.apply_scene(scene) {
+        Ok(()) => {
+            enforce_control_room_stereo(state);
+            state.host_scene = Some(state.device.capture_scene());
+        }
+        Err(e) => log::warn!("startup scene apply failed: {e:?}"),
+    }
+    finish_startup_setup(state);
+}
+
+/// Finish the deferred UCX startup comparison after the asynchronous
+/// pre-connect dump has been snapshotted.
+fn poll_startup_compare(state: &mut TotalControl) {
+    if !state.startup_compare_pending || !state.device.startup_dump_complete() {
+        return;
+    }
+    state.startup_compare_pending = false;
+    let Some(scene) = state.startup_compare_scene.take() else {
+        finish_startup_setup(state);
+        return;
+    };
+    let dump = UcxDump::new(state.device.pre_connect_words().unwrap_or_default());
+    let mut device_scene = scene.clone();
+    let items = dump.differences_into(&mut device_scene);
+    log::info!(
+        "UCX startup comparison: {} difference(s): {:?}",
+        items.len(),
+        items
+    );
+    if items.is_empty() {
+        apply_startup_scene(state, &scene);
+        return;
+    }
+    let totalcontrol_gain = scene_gain_pairs(&scene, true);
+    state.startup_mismatch = Some(StartupMismatch {
+        items,
+        device_state: Default::default(),
+        totalcontrol_scene: scene,
+        totalcontrol_gain,
+        ucx_dump: Some(dump),
+        device_scene: Some(device_scene),
+    });
+}
+
 fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &str) {
     if state.startup_scene.is_some() {
         log::debug!("{reason}: a startup scene reapply is already pending");
@@ -6899,6 +7038,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             let before = panel_fingerprint(state);
             let _ = state.device.poll_events();
+            poll_startup_compare(state);
             if panel_fingerprint(state) != before {
                 // The front panel moved a level, a mute or the dim: show
                 // it at the fast rate while it keeps moving.
@@ -7117,22 +7257,34 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         },
         Message::MismatchUseTotalcontrol => {
             if let Some(mismatch) = state.startup_mismatch.take() {
-                apply_totalcontrol_mismatch(state, &mismatch);
+                if mismatch.ucx_dump.is_some() {
+                    apply_startup_scene(state, &mismatch.totalcontrol_scene);
+                } else {
+                    apply_totalcontrol_mismatch(state, &mismatch);
+                }
             }
             state.sync_direction = SyncDirection::GuiToDevice;
         }
         Message::MismatchUseDevice => {
             if let Some(mismatch) = state.startup_mismatch.take() {
-                if let Err(e) = state.device.restore_readable(&mismatch.device_state) {
-                    fail(state, "restore device settings", &e);
+                if let Some(scene) = mismatch.device_scene.as_ref() {
+                    apply_startup_scene(state, scene);
+                } else {
+                    if let Err(e) = state.device.restore_readable(&mismatch.device_state) {
+                        fail(state, "restore device settings", &e);
+                    }
+                    state.host_scene = Some(state.device.capture_scene());
                 }
-                state.host_scene = Some(state.device.capture_scene());
             }
             state.sync_direction = SyncDirection::GuiToDevice;
         }
         Message::MismatchAlwaysTotalcontrol => {
             if let Some(mismatch) = state.startup_mismatch.take() {
-                apply_totalcontrol_mismatch(state, &mismatch);
+                if mismatch.ucx_dump.is_some() {
+                    apply_startup_scene(state, &mismatch.totalcontrol_scene);
+                } else {
+                    apply_totalcontrol_mismatch(state, &mismatch);
+                }
             }
             state.always_init_device = true;
             state.prefs_dirty = true;
@@ -16009,14 +16161,15 @@ mod tests {
         control_room_visual_width,
         is_control_room_cid, strip_params, ResetMix, OptionsMenu,
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
-        FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
+        FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W, StartupMismatch,
     };
     use crate::osc::OscOutbound;
     use crate::sidebar;
     use crate::theme;
     use crate::widgets::strip;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::time::{Duration, Instant};
+    use totalcontrol_core::fireface::UcxDump;
     use totalcontrol_core::RmeDevice;
 
     #[test]
@@ -18661,6 +18814,46 @@ mod tests {
         assert_eq!(input_gain_knob_label(40, Some(35), false, true), "40\n35");
         assert_eq!(input_gain_knob_label(7, Some(5), true, true), "3.5\n2.5");
         assert_eq!(input_gain_knob_label(40, Some(35), false, false), "40");
+    }
+
+    #[test]
+    fn use_device_applies_the_full_decoded_scene() {
+        let mut state = new(true, None, None);
+        let mut saved = state.device.capture_scene();
+        saved.outputs[0].volume = 0.25;
+        let mut device = saved.clone();
+        device.outputs[0].volume = 0.5;
+        state.startup_mismatch = Some(StartupMismatch {
+            items: vec!["output 0 volume".into()],
+            device_state: Default::default(),
+            totalcontrol_scene: saved,
+            totalcontrol_gain: Vec::new(),
+            ucx_dump: Some(UcxDump::new(HashMap::new())),
+            device_scene: Some(device),
+        });
+        let _ = update(&mut state, Message::MismatchUseDevice);
+        assert!(state.startup_mismatch.is_none());
+        assert!((state.device.outputs()[0].volume - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn use_totalcontrol_applies_the_saved_scene() {
+        let mut state = new(true, None, None);
+        let mut saved = state.device.capture_scene();
+        saved.outputs[0].volume = 0.25;
+        let mut device = saved.clone();
+        device.outputs[0].volume = 0.5;
+        state.startup_mismatch = Some(StartupMismatch {
+            items: vec!["output 0 volume".into()],
+            device_state: Default::default(),
+            totalcontrol_scene: saved,
+            totalcontrol_gain: Vec::new(),
+            ucx_dump: Some(UcxDump::new(HashMap::new())),
+            device_scene: Some(device),
+        });
+        let _ = update(&mut state, Message::MismatchUseTotalcontrol);
+        assert!(state.startup_mismatch.is_none());
+        assert!((state.device.outputs()[0].volume - 0.25).abs() < 1e-6);
     }
 
 }
