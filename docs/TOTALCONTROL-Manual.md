@@ -697,10 +697,11 @@ because their step is 1 dB. It is not a link marker.
 | `Ad` | 8-channel AD/DA converter mode, only when disconnected from USB |
 | `CC` | Class Compliant mode, only when disconnected from USB |
 
-Press and hold for about one second to load the selected entry. `i.o.` means
-loaded and `n.o.` means an empty slot. Loading a setup while connected changes
-only the front-panel parameters — input gains and output volumes — not the
-routing. `CC` activates after a power cycle.
+The press that enters the `SU` menu is short. The final press that loads the
+selected entry must be held for about one second; a short press does not load
+it. `i.o.` means loaded and `n.o.` means an empty slot. Loading a setup while
+connected changes only the front-panel parameters — input gains and output
+volumes — not the routing. `CC` activates after a power cycle.
 
 The six slots are written from TotalMix FX, **Options → Store current State
 into Device → Setup 1–6**. The host does not upload a scene; the unit snapshots
