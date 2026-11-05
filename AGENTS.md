@@ -16,6 +16,9 @@ documents for the current implementation, not as a work log.
   vendor/product IDs, hostnames, usernames, file paths with a home directory,
   or device addresses there. Use placeholders such as `<checkout>` instead of
   a contributor's local path.
+- Do not commit captured device state: raw state dumps, mixer scenes, capture
+  files or the values of a user's current setup. Keep captures outside the
+  repository and use synthetic fixtures for tests.
 - Keep specifications minimal. Tables and short normative paragraphs are
   preferred over prose.
 - Put open questions, TODO lists, capture requests and working notes in
