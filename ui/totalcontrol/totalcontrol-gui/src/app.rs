@@ -9701,21 +9701,19 @@ const ECHO_HIGH_CUTS: [&str; 6] = ["Off", "16k", "12k", "8k", "4k", "2k"];
 
 fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    // Secondary text in the settings sheet is a little larger than the
-    // mixer's micro labels; it is read at popover distance, not strip
-    // distance.
-    let ts = scale * 1.15;
+    // Match Control Room Settings: 16 pt at the current UI scale.
+    let text_size = 16.0 * scale;
     let settings = state.device.settings();
     let modifiers = state.modifiers;
 
     // Caption column shared by every labelled row, so the controls line up.
     // Wide enough for the longest device label, "Single speed word clock".
-    const LABEL_W: f32 = 138.0;
+    const LABEL_W: f32 = 180.0;
     let section = |label: &'static str| -> Element<'static, Message> {
         row![
             text(label)
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_MICRO * ts),
+                .size(text_size),
             iced::widget::rule::horizontal(1),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -9726,9 +9724,9 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     let header = row![
         text("Settings")
             .color(theme::TEXT_PRIMARY)
-            .size(theme::TEXT_MD * scale),
+            .size(text_size),
         iced::widget::Space::new().width(Length::Fill),
-        iced::widget::button(text("Close").size(theme::TEXT_XS * ts))
+        iced::widget::button(text("Close").size(text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ToggleDevicePanel),
@@ -9767,7 +9765,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                 k,
                 text(label)
                     .color(theme::TEXT_SEC)
-                    .size(theme::TEXT_XS * ts),
+                    .size(text_size),
             ]
             .spacing(theme::SPACE_SM * scale)
             .align_x(iced::Alignment::Center)
@@ -9845,7 +9843,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                 let mut line = row![].spacing(theme::SPACE_SM * scale);
                 for &(label, active, on_toggle) in pair {
                     line = line.push(
-                        iced::widget::button(text(label).size(theme::TEXT_XS * ts).center())
+                        iced::widget::button(text(label).size(text_size).center())
                             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
                             .width(Length::Fill)
                             .style(theme::toggle_button(active, theme::ACCENT))
@@ -9872,22 +9870,26 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                  same reason.",
             )
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         );
     }
-    popover(state, body.into(), Message::ToggleDevicePanel)
+    popover(state, body.into(), Message::ToggleDevicePanel, 520.0)
 }
 
 /// The card of a popover docked beside the sidebar, closing on `close` when
 /// a click lands outside it.
-fn popover<'a>(state: &'a TotalControl, body: Element<'a, Message>, close: Message) -> Element<'a, Message> {
+fn popover<'a>(
+    state: &'a TotalControl,
+    body: Element<'a, Message>,
+    close: Message,
+    width: f32,
+) -> Element<'a, Message> {
     let scale = state.ui_scale;
-    const CARD_W: f32 = 320.0;
     let card = opaque(
         container(body)
             .style(theme::dialog)
             .padding(theme::SPACE_XL * scale)
-            .width(Length::Fixed(CARD_W * scale)),
+            .width(Length::Fixed(width * scale)),
     );
 
     // One layer, not a catcher stacked under the card: in a `stack`, the
@@ -9992,13 +9994,13 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
 /// around its window, not what the card does.
 fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let ts = scale * 1.15;
+    let text_size = 16.0 * scale;
     let header = row![
         text("TotalControl settings")
             .color(theme::TEXT_PRIMARY)
-            .size(theme::TEXT_MD * scale),
+            .size(text_size),
         iced::widget::Space::new().width(Length::Fill),
-        iced::widget::button(text("Close").size(theme::TEXT_XS * ts))
+        iced::widget::button(text("Close").size(text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ToggleSettings),
@@ -10007,13 +10009,13 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let section = row![
         text("BACKGROUND")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
     let toggle = |label: &'static str, active: bool, message: Message| {
-        iced::widget::button(text(label).size(theme::TEXT_XS * ts).center())
+        iced::widget::button(text(label).size(text_size).center())
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::toggle_button(active, theme::ACCENT))
@@ -10030,7 +10032,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         background = background.push(
             text("No system tray found: closing the window quits.")
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_XS * ts),
+                .size(text_size),
         );
     }
     background = background.push(toggle(
@@ -10041,7 +10043,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let sync_section = row![
         text("STARTUP SYNC")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -10049,7 +10051,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let surround_section = row![
         text("SURROUND")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -10068,7 +10070,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         ),
         text("Active while TotalControl runs. Select the device in KDE or the player.")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
     ]
     .spacing(theme::SPACE_SM * scale);
     let sync_help = text(if state.device.is_uc_model() {
@@ -10079,7 +10081,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
          saved TotalControl scene, and choose when they differ."
     })
     .color(theme::TEXT_SEC)
-    .size(theme::TEXT_XS * ts);
+    .size(text_size);
     let sync_buttons = row![
         toggle(
             "Device → GUI",
@@ -10107,7 +10109,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let osc_section = row![
         text("OSC")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -10115,7 +10117,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let osc_mode = row![
         text("Protocol")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         toggle(
             "Classic",
             state.osc_dialect == crate::osc::OscDialect::Classic,
@@ -10132,19 +10134,19 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let osc_ports = row![
         text("Receive")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         text_input("9000", &state.osc_recv_text)
             .on_input(Message::OscRecvPortChanged)
             .width(Length::Fixed(90.0 * scale))
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         text("Send")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         text_input("9001", &state.osc_send_text)
             .on_input(Message::OscSendPortChanged)
             .width(Length::Fixed(90.0 * scale))
-            .size(theme::TEXT_XS * ts),
-        iced::widget::button(text("Apply").size(theme::TEXT_XS * ts))
+            .size(text_size),
+        iced::widget::button(text("Apply").size(text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ApplyOscPorts),
@@ -10162,13 +10164,13 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         osc_ports,
         text("Loopback only. Classic uses the banked 1.96–2.11 address space; Global uses absolute channels and native values (TotalMix FX 2.1+).")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
     ]
     .spacing(theme::SPACE_SM * scale);
     let body = column![header, background, sync, surround, osc]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
-    popover(state, body.into(), Message::ToggleSettings)
+    popover(state, body.into(), Message::ToggleSettings, 520.0)
 }
 
 /// A sample rate as people say it: "48 kHz", "44.1 kHz", "176.4 kHz".
@@ -10203,7 +10205,7 @@ pub(crate) fn sidebar_px(state: &TotalControl) -> f32 {
 /// termination, and EQ+D for Record (`docs/spec/UCX-CONTROL-SPEC.md` §11).
 fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let ts = scale * 1.15;
+    let text_size = 16.0 * scale;
     let settings = state.device.settings();
     let uc = state.device.is_uc_model();
     let ucx = state.device.is_ucx_model();
@@ -10211,7 +10213,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         row![
             text(label)
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_MICRO * ts),
+                .size(text_size),
             iced::widget::rule::horizontal(1),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -10221,14 +10223,14 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let caption = |label: &'static str| {
         text(label)
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts)
+            .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
     let field = |p: iced::widget::PickList<'static, String, Vec<String>, String, Message>| {
         p.style(theme::pick_list)
             .menu_style(theme::menu)
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .text_size(theme::TEXT_MD * scale)
+            .text_size(text_size)
             .width(Length::Fill)
     };
     let ref_row = |label: &'static str,
@@ -10259,7 +10261,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let checkbox = |on: bool, message: Message| {
         iced::widget::button(
             text(if on { "\u{2713}" } else { "" })
-                .size(theme::TEXT_MD * ts)
+                .size(text_size)
                 .center(),
         )
         .padding(0)
@@ -10345,7 +10347,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .style(theme::pick_list)
         .menu_style(theme::menu)
         .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-        .text_size(theme::TEXT_MD * scale)
+        .text_size(text_size)
         .width(Length::Fill),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -10359,7 +10361,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             "Read from the unit at connect; written only when changed here."
         })
         .color(theme::TEXT_SEC)
-        .size(theme::TEXT_MICRO * ts),
+        .size(text_size),
         row![
             caption("Clock source"),
             field(pick_list(
@@ -10384,7 +10386,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                  the remaining logical channels stay silent.",
             )
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         );
     }
     if uc {
@@ -10437,7 +10439,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 caption("Firmware"),
                 text(firmware)
                     .color(theme::TEXT_PRIMARY)
-                    .size(theme::TEXT_XS * ts),
+                    .size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -10449,7 +10451,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 caption("Serial"),
                 text(serial)
                     .color(theme::TEXT_PRIMARY)
-                    .size(theme::TEXT_XS * ts),
+                    .size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -10462,11 +10464,11 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
 
 fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let ts = scale * 1.15;
+    let text_size = 16.0 * scale;
     let caption = |label: &'static str| {
         text(label)
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts)
+            .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
     let heading = row![
@@ -10476,7 +10478,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             "AUDIO ENGINE \u{00b7} PIPEWIRE"
         })
         .color(theme::TEXT_SEC)
-        .size(theme::TEXT_MICRO * ts),
+        .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -10490,7 +10492,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                  set by whatever opens the card.",
             )
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         ]
         .spacing(theme::SPACE_MD * scale)
         .width(Length::Fill)
@@ -10532,7 +10534,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         p.style(theme::pick_list)
             .menu_style(theme::menu)
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .text_size(theme::TEXT_MD * scale)
+            .text_size(text_size)
             .width(Length::Fill)
     };
     let rate_list = rate_opts.clone();
@@ -10611,9 +10613,9 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             };
             body = body.push(
                 row![
-                    text(label).size(theme::TEXT_XS * ts).color(theme::TEXT_SEC),
+                    text(label).size(text_size).color(theme::TEXT_SEC),
                     iced::widget::Space::new().width(Length::Fill),
-                    text(value).size(theme::TEXT_XS * ts).color(colour),
+                    text(value).size(text_size).color(colour),
                 ]
                 .spacing(theme::SPACE_MD * scale)
                 .align_y(iced::Alignment::Center),
@@ -10630,7 +10632,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Host volume"),
                 text(format!("{percent}% ({db:.1} dB)"))
-                    .size(theme::TEXT_XS * ts)
+                    .size(text_size)
                     .color(colour),
                 iced::widget::Space::new().width(Length::Fill),
                 button(text("0 dB").size(theme::TEXT_XS * scale))
