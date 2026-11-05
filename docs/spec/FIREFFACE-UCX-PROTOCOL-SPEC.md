@@ -24,6 +24,7 @@ Units and ranges are the values used by the backend. A register value is
 - [14. State and scenes](#14-state-and-scenes)
 - [15. Capabilities](#15-capabilities)
 - [16. Code map](#16-code-map)
+- [Appendix A — Requested state dump](#appendix-a--requested-state-dump)
 
 ## 1. Device model
 
@@ -1005,3 +1006,127 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | Channel DSP registers | `ui/totalcontrol/totalcontrol-core/src/fireface/settings.rs` |
 | Channel topology | `ui/totalcontrol/totalcontrol-core/src/profiles/ucx.rs` |
 | Capability guards | `ui/totalcontrol/totalcontrol-core/src/fireface/models.rs` |
+
+## Appendix A — Requested state dump
+
+After the state endpoint is active, write `0x3f99 = 0x0812` to request a
+one-shot state dump.  The UCX returns about 1,636 unique words on `0x8d`,
+covering the hardware inputs, hardware outputs, their matrix-send records and
+the global FX/monitor words.  The dump is not a live stream; it is a connect
+snapshot.
+
+The table is the observed layout.  “Unknown” means the address is present but
+its meaning has not been confirmed.
+
+### Input channels
+
+Input `n` (`0..17`) uses base `n << 8`.
+
+| Offset | Meaning | Encoding |
+|---|---|---|
+| `0x0000` | mute | 0/1 |
+| `0x0001` | FX send | signed 0.1 dB; `0xfd76` = −65.0 dB, `0xff9c` = −10.0 dB |
+| `0x0002` | stereo | 0 mono / 1 stereo |
+| `0x0003`, `0x0004` | unknown | 0 observed |
+| `0x0005` | MS processing | 0/1 |
+| `0x0006` | phase, left | 0/1 |
+| `0x0007` | preamp gain | 0.1 dB; `0x012c` = 30.0 dB |
+| `0x0008` | 48 V (inputs 1/2) / Level (inputs 3/4) | 0/1; Level 0 −10 dBV, 1 +4 dBu, 2 LoGain |
+| `0x0009` | Inst | 0/1 |
+| `0x000a` | AutoSet | 0/1 |
+| `0x0020` | low cut enable | 0/1 |
+| `0x0021` | low cut frequency | Hz |
+| `0x0022` | low cut slope | code |
+| `0x0040` | EQ enable | 0/1 |
+| `0x0041` | band 1 type | code |
+| `0x0042` | band 1 gain | signed 0.1 dB; `0x003c` = +6.0 dB |
+| `0x0043` | band 1 frequency | Hz |
+| `0x0044` | band 1 Q | code |
+| `0x0045` | band 2 gain | signed 0.1 dB |
+| `0x0046` | band 2 frequency | Hz |
+| `0x0047` | band 2 Q | code |
+| `0x0048` | band 3 type | code |
+| `0x0049` | band 3 gain | signed 0.1 dB |
+| `0x004a` | band 3 frequency | Hz |
+| `0x004b` | band 3 Q | code |
+| `0x0060` | dynamics enable | 0/1 |
+| `0x0061` | dynamics gain | signed 0.1 dB |
+| `0x0062` | dynamics attack | ms |
+| `0x0063` | dynamics release | ms |
+| `0x0064` | compressor threshold | signed 0.1 dB |
+| `0x0065` | compressor ratio | code |
+| `0x0066` | expander threshold | signed 0.1 dB |
+| `0x0067` | expander ratio | code |
+| `0x0080` | AutoLevel enable | 0/1 |
+| `0x0081` | AutoLevel max gain | 0.1 dB |
+| `0x0082` | AutoLevel headroom | 0.1 dB |
+| `0x0083` | AutoLevel rise time | 0.1 s |
+
+Input mute also clears the input's matrix sends in the dump.  Solo has no
+single flag in the dump; it is implemented by zeroing the other sends.
+
+### Output channels
+
+The hardware-output blocks are:
+
+| Block | Output pair |
+|---|---|
+| `0x12`/`0x13` | AN 1/2 |
+| `0x14`/`0x15` | AN 3/4 |
+| `0x16`/`0x17` | AN 5/6 |
+| `0x18`/`0x19` | Phones 7/8 |
+| `0x1a`/`0x1b` | SPDIF |
+| `0x1c`/`0x1d` | ADAT 1/2 |
+| `0x1e`/`0x1f` | ADAT 3/4 |
+| `0x20`/`0x21` | ADAT 5/6 |
+| `0x22`/`0x23` | ADAT 7/8 |
+
+Each channel uses the same offset block:
+
+| Offset | Meaning | Encoding |
+|---|---|---|
+| `0x0000` | volume | signed 0.1 dB; `0xff86` = −12.2 dB |
+| `0x0001` | balance | signed −100..+100 |
+| `0x0002` | mute | 0/1 |
+| `0x0003` | FX return | signed 0.1 dB |
+| `0x0004` | stereo | 0/1 |
+| `0x0005`, `0x0006` | unknown | 0 observed |
+| `0x0007` | phase, left | 0/1 |
+| `0x0008` | reference/Level code | code |
+| `0x0020` | low cut enable | 0/1 |
+| `0x0021` | low cut frequency | Hz |
+| `0x0022` | low cut slope | code |
+| `0x0040` | EQ enable | 0/1 |
+| `0x0041`..`0x004b` | EQ bands | as inputs |
+| `0x0060`..`0x0067` | dynamics | as inputs |
+| `0x0080`..`0x0083` | AutoLevel | as inputs |
+
+### Matrix sends
+
+Each output block carries 18 input-send records.  A record is two words:
+level and pan.
+
+| Input index | Record address |
+|---|---|
+| 0–7 | `0x?a0 + 2n` |
+| 8–9 | `0x?c0 + 2(n−8)` |
+| 10–17 | `0x?e0 + 2(n−10)` |
+
+Examples: input 0 to output 0 at `0x18a0`/`0x18a1`; input 2 to output 0 at
+`0x18a4`/`0x18a5`.  The level word is signed tenths dB shifted left by 4
+(`0xfc40` = −6.0 dB); the companion word is the signed pan value.
+
+Software-playback sends were not observed to change any dump word; their
+state is not in this snapshot.
+
+### Globals
+
+| Address | Meaning |
+|---|---|
+| `0x3c00` | Reverb enable |
+| `0x3c01`..`0x3c0d` | Reverb parameters |
+| `0x3c20` | Echo enable |
+| `0x3c21`..`0x3c26` | Echo parameters |
+| `0x3d00`..`0x3d46` | monitor, control-room and global state |
+
+`0x3f00`..`0x3f50` are heartbeat/status words, not state.
