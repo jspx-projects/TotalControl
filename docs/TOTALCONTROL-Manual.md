@@ -787,9 +787,9 @@ totalcontrol --osc
 | `--osc-host` | 127.0.0.1 | Feedback destination |
 
 Configure the controller to send to the receive port and receive feedback on
-the send port. A TotalMix FX-compatible controller can use its normal address
-space. The address space is defined in
-[`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md).
+the send port. The classic address space is defined in
+[`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md); Global uses
+RME's separate Global OSC protocol table.
 
 For a controller on another host, set `--osc-host` to the controller's address
 and allow the feedback port through the firewall. Do not run two controllers
