@@ -32,9 +32,11 @@ pub struct OscConfig {
 }
 
 /// Which TotalMix FX OSC compatibility mode the worker speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OscDialect {
     /// Banked TotalMix FX 1.96–2.11 address space.
+    #[default]
     Classic,
     /// Absolute-channel TotalMix FX 2.1+ address space.
     Global,
