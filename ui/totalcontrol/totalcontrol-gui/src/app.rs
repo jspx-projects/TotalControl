@@ -10948,8 +10948,9 @@ fn input_gain_label(raw: u32, half: bool) -> String {
     }
 }
 
-/// The Gain knob label for a linked left input.  Different left/right gains
-/// are shown on two lines; equal values collapse to one.
+/// The Gain knob label for a linked left input.  The device always treats
+/// inputs 1-4 as unlinked, so a paired input always shows both values, even
+/// when they are currently equal.
 fn input_gain_knob_label(
     gain: u32,
     gain_right: Option<u32>,
@@ -10958,9 +10959,8 @@ fn input_gain_knob_label(
 ) -> String {
     let left = input_gain_label(gain, half);
     if linked_left {
-        if let Some(right) = gain_right.filter(|right| *right != gain) {
-            return format!("{left}\n{}", input_gain_label(right, half));
-        }
+        let right = gain_right.unwrap_or(gain);
+        return format!("{left}\n{}", input_gain_label(right, half));
     }
     left
 }
@@ -17479,9 +17479,9 @@ mod tests {
     }
 
     #[test]
-    fn linked_gain_knob_shows_both_values_only_when_they_differ() {
-        assert_eq!(input_gain_knob_label(40, None, false, true), "40");
-        assert_eq!(input_gain_knob_label(40, Some(40), false, true), "40");
+    fn linked_gain_knob_always_shows_both_values() {
+        assert_eq!(input_gain_knob_label(40, None, false, true), "40\n40");
+        assert_eq!(input_gain_knob_label(40, Some(40), false, true), "40\n40");
         assert_eq!(input_gain_knob_label(40, Some(35), false, true), "40\n35");
         assert_eq!(input_gain_knob_label(7, Some(5), true, true), "3.5\n2.5");
         assert_eq!(input_gain_knob_label(40, Some(35), false, false), "40");

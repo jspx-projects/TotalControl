@@ -356,9 +356,9 @@ arrives before the scene is applied does not override it. On the UCX the knob
 then follows physical encoder moves, which the unit reports in the IF1 state
 stream.
 
-When a linked input pair has different left and right gains, the knob shows
-both values, left above right. When the values are equal — including both at
-the minimum or both at the maximum — it shows one value.
+A linked input pair always shows both values, left above right, even when
+they are equal. This mirrors the device, which always treats inputs 1–4 as
+unlinked. An unlinked input shows one value.
 
 ### 3.3 Device sheet
 

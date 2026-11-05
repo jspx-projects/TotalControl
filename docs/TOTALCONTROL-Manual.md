@@ -647,10 +647,10 @@ The device has a fixed link view: inputs `i1`–`i4` are individual, and the
 outputs appear only as pairs `L1`/`L3`/`L5` and `A1`/`A3`/`A5`/`A7`. The front
 knob cannot link or unlink a pair; the link state is a TotalControl setting.
 
-When a linked input pair has different left and right gains, the Gain knob in
-TotalControl shows both values: the left gain above, the right gain below.
-When the two are equal — including both at the minimum or both at the
-maximum — the knob shows one value.
+A linked input pair always shows both gains in the TotalControl Gain knob:
+the left gain above, the right gain below, even when they are equal. This
+mirrors the device, which always treats inputs 1–4 as unlinked. An unlinked
+input shows one value.
 
 ### Output level
 
