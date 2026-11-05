@@ -10224,6 +10224,7 @@ fn strip_params<'a>(
         instrument: false,
         has_gain: false,
         gain: 0,
+        gain_right: None,
         gain_max: 0,
         gain_half: false,
         has_sensitivity: false,
@@ -10333,6 +10334,7 @@ fn strip_params<'a>(
                 instrument: ch.instrument,
                 has_gain: ch.gain_max.is_some(),
                 gain: ch.gain.unwrap_or(0),
+                gain_right: ch.gain_right,
                 gain_max: ch.gain_max.unwrap_or(0),
                 // The driver's new UCX control is 0..24 in 0.5 dB units;
                 // the older whole-dB control was 0..18 (or 0..12).
@@ -10930,6 +10932,32 @@ fn settings_slot<'a>(
         .into()
 }
 
+/// Format one input gain for the Gain knob.  `half` means raw half-dB units.
+fn input_gain_label(raw: u32, half: bool) -> String {
+    if half {
+        format!("{:.1}", raw as f32 / 2.0)
+    } else {
+        raw.to_string()
+    }
+}
+
+/// The Gain knob label for a linked left input.  Different left/right gains
+/// are shown on two lines; equal values collapse to one.
+fn input_gain_knob_label(
+    gain: u32,
+    gain_right: Option<u32>,
+    half: bool,
+    linked_left: bool,
+) -> String {
+    let left = input_gain_label(gain, half);
+    if linked_left {
+        if let Some(right) = gain_right.filter(|right| *right != gain) {
+            return format!("{left}\n{}", input_gain_label(right, half));
+        }
+    }
+    left
+}
+
 /// One label plus one knob.  The knob is a fixed box pinned to the right
 /// edge, so gain, width, send FX and return FX sit at the same x on every
 /// channel type.
@@ -11164,6 +11192,12 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
         // Row 5 — gain.
         let gain = p.has_gain.then(|| {
             let gain_max = p.gain_max;
+            let label = input_gain_knob_label(
+                p.gain,
+                p.gain_right,
+                p.gain_half,
+                p.stereo_linked && idx % 2 == 0,
+            );
             settings_knob_row(
                 column![
                     text("gain")
@@ -11178,13 +11212,11 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 knob(Knob {
                     value: p.gain as f32,
                     range: (0.0, gain_max as f32),
-                    // Gain is tracked in dB (0-65 Mic / 0-18 Instr),
-                    // 1 dB steps, like TotalMix.
-                    label: if p.gain_half {
-                        format!("{:.1}", p.gain as f32 / 2.0)
-                    } else {
-                        p.gain.to_string()
-                    },
+                    // Gain is tracked in raw device units (whole dB on
+                    // inputs 1/2, half-dB units on 3/4).  A linked pair with
+                    // different left/right gains shows both values, left
+                    // above right; equal values collapse to one number.
+                    label,
                     arc_from_center: false,
                     level_arc_color: Some(theme::PHANTOM),
                     interactive: true,
@@ -15006,6 +15038,7 @@ mod tests {
         any_channel_muted, any_channel_soloed, apply_pending_resize,
         channel_trim, trim_factor, trim_meter_levels,
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
+        input_gain_knob_label,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
         apply_startup_sync, apply_control_room_assignments, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
@@ -17438,6 +17471,14 @@ mod tests {
         assert!(state.selected.contains(&a) && state.selected.contains(&b));
     }
 
+    #[test]
+    fn linked_gain_knob_shows_both_values_only_when_they_differ() {
+        assert_eq!(input_gain_knob_label(40, None, false, true), "40");
+        assert_eq!(input_gain_knob_label(40, Some(40), false, true), "40");
+        assert_eq!(input_gain_knob_label(40, Some(35), false, true), "40\n35");
+        assert_eq!(input_gain_knob_label(7, Some(5), true, true), "3.5\n2.5");
+        assert_eq!(input_gain_knob_label(40, Some(35), false, false), "40");
+    }
 
 }
 
