@@ -11,11 +11,11 @@ use iced::{Alignment, Background, Color, Element, Length};
 use crate::app::{Message, TotalControl};
 use crate::theme;
 
-const CARD_W: f32 = 700.0;
+const CARD_W: f32 = 760.0;
 /// More rows than this would make the dialog taller than the window on a
 /// small display, so the list gets a fixed height and its own scrollbar.
 const MAX_VISIBLE_MISMATCHES: usize = 6;
-const MISMATCH_ROW_H: f32 = 22.0;
+const MISMATCH_ROW_H: f32 = 24.0;
 
 fn uses_scroll_list(items: usize) -> bool {
     items > MAX_VISIBLE_MISMATCHES
@@ -23,6 +23,9 @@ fn uses_scroll_list(items: usize) -> bool {
 
 pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
+    // Match the Control Room Settings dialog, which uses 16 pt for its
+    // labels, sections, pickers and values at the current UI scale.
+    let text_size = 16.0 * scale;
     let Some(mismatch) = &state.startup_mismatch else {
         return Space::new().into();
     };
@@ -32,7 +35,7 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
         differences = differences.push(
             text(format!("• {item}"))
                 .color(theme::TEXT_PRIMARY)
-                .size(theme::TEXT_SM * scale),
+                .size(text_size),
         );
     }
     let differences: Element<'_, Message> = if uses_scroll_list(mismatch.items.len()) {
@@ -54,14 +57,14 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
             column![
                 text("Mismatch detected")
                     .color(theme::TEXT_PRIMARY)
-                    .size(theme::TEXT_XL * 1.2 * scale),
+                    .size(text_size),
                 text(if ucx {
                     "The device and TotalControl mixer states are different."
                 } else {
                     "Channel and FX settings of the device and TotalControl are different."
                 })
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_MD * scale),
+                .size(text_size),
                 differences,
                 text(if ucx {
                     "The UCX state dump covers input and output levels, mute, EQ, \
@@ -76,16 +79,16 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
                      faders and loopback stay at the TotalControl scene."
                 })
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_XS * scale),
+                .size(text_size),
                 row![
                     button(
                         text("Use TotalControl settings (default)")
-                            .size(theme::TEXT_SM * scale)
+                            .size(text_size)
                     )
                     .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                     .style(theme::segment_button(true))
                     .on_press(Message::MismatchUseTotalcontrol),
-                    button(text("Use device settings").size(theme::TEXT_SM * scale))
+                    button(text("Use device settings").size(text_size))
                         .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                         .style(theme::ghost_button)
                         .on_press(Message::MismatchUseDevice),
@@ -95,7 +98,7 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
                 button(
                     text("Always use TotalControl settings and do not ask again")
                         .color(theme::TEXT_SEC)
-                        .size(theme::TEXT_XS * scale)
+                        .size(text_size)
                 )
                 .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
                 .style(theme::plain_button)
