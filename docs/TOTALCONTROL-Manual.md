@@ -667,7 +667,8 @@ A long press on an output enters panorama mode:
 | intermediate | balance position |
 
 The balance range is −100 to +100 in steps of 5. The display returns to the
-output fader after about one second without a change.
+output fader after about one second without a change. TotalControl follows the
+balance change and shows the same position on the output's balance knob.
 
 ### Dots
 

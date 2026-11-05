@@ -2819,6 +2819,23 @@ impl Fireface {
             self.device_output_volume.insert(idx, volume);
             return;
         }
+        if addr as u8 == 1 {
+            if let Some(idx) = ucx::output_index_from_state(addr & 0xff00) {
+                let balance = (value as i16).clamp(-100, 100) as i8;
+                if let Some(output) = self.outputs.get_mut(idx) {
+                    output.balance = balance;
+                }
+                if self.output_linked(idx / 2) {
+                    let left = idx & !1;
+                    for i in [left, left + 1] {
+                        if let Some(output) = self.outputs.get_mut(i) {
+                            output.balance = balance;
+                        }
+                    }
+                }
+                return;
+            }
+        }
         match addr {
             ucx::global::DIM => self.settings.dim = value != 0,
             ucx::global::MONITOR_FLAGS => {
@@ -5797,6 +5814,15 @@ mod tests {
         assert!(words.contains(&(0x0082, 90)));
         assert!(words.contains(&(0x0083, 25)));
         assert_eq!(dev.inputs()[0].dynamics, Some(d));
+    }
+
+    #[test]
+    fn ucx_output_balance_state_word_updates_the_pair() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.apply_ucx_state_word(0x1201, (-50i16) as u16);
+        assert_eq!(dev.outputs()[2].balance, -50);
+        assert_eq!(dev.outputs()[3].balance, -50);
+        assert_eq!(dev.pan(ChannelId::Output(2), 0).unwrap(), -50);
     }
 
     #[test]

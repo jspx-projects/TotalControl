@@ -108,10 +108,9 @@ connected to a computer.  `i.o.` means loaded; `n.o.` means an empty slot.
 Loading a setup while online changes only the front-panel parameters (input
 gains and output volumes), not routing.
 
-Front-panel gain and output-volume changes are reported to the host as `NN07`
-and `NN00`.  GUI link/stereo changes use the stereo-mode state words.  A
-front-panel pan/balance change is part of the mixer state; its host readback
-is not yet confirmed.
+Front-panel gain, output-volume and output-balance changes are reported to the
+host as `NN07`, `NN00` and `NN01`.  GUI link/stereo changes use the
+stereo-mode state words.
 
 ## 2. USB transport
 
@@ -233,13 +232,16 @@ stream live state changes.
 | `0x1204`, `0x1304` | output stereo mode |
 | `0x0007`, `0x0107`, `0x0207`, `0x0307` | input gain 1–4, 0.1 dB |
 | `0x1200..0x2300`, offset 0 | hardware-output volume, signed 0.1 dB |
+| `0x1200..0x2300`, offset 1 | hardware-output balance, signed |
 | `0x12a0`, `0x22a0` | selected-submix fader record |
 
 Input gains are reported when the physical encoder moves. The word is not
 emitted at connect, so it is not a startup readback: TotalControl writes the
-saved scene gain at connect and follows `NN07` afterwards. Output-volume state
-is mapped to the Phones-first output order. The encoder reports the `NN00` of
-the output selected on the unit's display; `PH` emits `0x1800` and `0x1900`.
+saved scene gain at connect and follows `NN07` afterwards. Output-volume and
+balance state is mapped to the Phones-first output order. The encoder reports
+the `NN00` or `NN01` of the output selected on the unit's display; `PH` emits
+`0x1800`/`0x1801` and `0x1900`/`0x1901`. A balance word updates both sides of
+a linked output pair.
 
 Front-panel gain and output-volume changes are reported as `NN07` and
 `NN00`. 48 V, Inst and Level are host-written; the unit stores them but emits
@@ -258,6 +260,7 @@ this stream afterwards.
 |---|---|
 | Input gain 1–4 | saved scene at connect; `0xNN07` after an encoder move |
 | Output volume | `0xNN00` state word; saved scene at connect |
+| Output balance | `0xNN01` state word |
 | DIM | `0x3d03` state word |
 | Talkback | `0x3f9e` bit 0 |
 | Mono Main Out | `0x3f9e` bit 1 |
