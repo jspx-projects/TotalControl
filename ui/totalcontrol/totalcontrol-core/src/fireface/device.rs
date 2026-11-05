@@ -3801,11 +3801,13 @@ impl RmeDevice for Fireface {
                         self.inputs[idx].volumes[p] = volume;
                     }
                     self.muted.insert(channel);
-                } else if let Some((volumes, pans)) = self.mute_saved.remove(&channel) {
-                    self.muted.remove(&channel);
-                    self.inputs[idx].pans.clone_from(&pans);
-                    for (p, volume) in volumes.iter().enumerate().take(PAIRS) {
-                        self.apply_input_volume(idx, p, *volume)?;
+                } else {
+                    if let Some((volumes, pans)) = self.mute_saved.remove(&channel) {
+                        self.muted.remove(&channel);
+                        self.inputs[idx].pans.clone_from(&pans);
+                        for (p, volume) in volumes.iter().enumerate().take(PAIRS) {
+                            self.apply_input_volume(idx, p, *volume)?;
+                        }
                     }
                     if !self.is_uc() {
                         self.write_word(
@@ -5324,10 +5326,10 @@ impl RmeDevice for Fireface {
         } else {
             for idx in 0..self.outputs.len() {
                 let volume = self.outputs[idx].volume;
+                let mute = self.outputs[idx].mute;
                 self.set_volume(ChannelId::Output(idx), 0, volume)?;
-                if self.outputs[idx].mute {
-                    self.set_mute(ChannelId::Output(idx), true)?;
-                }
+                // Scene recall must also clear a mute left on the unit.
+                self.set_mute(ChannelId::Output(idx), mute)?;
             }
             // Balance and stereo mode are separate registers from volume.
             for pair in 0..PAIRS {
@@ -5411,9 +5413,7 @@ impl RmeDevice for Fireface {
                     self.ucx_write_autoset(idx, self.inputs[idx].autoset)?;
                 }
             }
-            if self.inputs[idx].mute {
-                self.set_mute(ChannelId::Input(idx), true)?;
-            }
+            self.set_mute(ChannelId::Input(idx), self.inputs[idx].mute)?;
             if !self.is_uc() {
                 if self.inputs[idx].eq.is_some() {
                     self.sync_input_eq(idx);
@@ -5437,9 +5437,7 @@ impl RmeDevice for Fireface {
                     self.apply_playback_volume(idx, p, volume)?;
                 }
             }
-            if self.playbacks[idx].mute {
-                self.set_mute(ChannelId::Playback(idx), true)?;
-            }
+            self.set_mute(ChannelId::Playback(idx), self.playbacks[idx].mute)?;
         }
         if !self.is_uc() {
             for cell in &scene.matrix_overrides {
