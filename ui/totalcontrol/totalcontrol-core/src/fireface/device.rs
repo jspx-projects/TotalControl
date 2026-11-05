@@ -583,6 +583,8 @@ pub struct Fireface {
     /// output-volume values that can be compared at open.
     device_input_gain: HashMap<usize, u32>,
     device_output_volume: HashMap<usize, f32>,
+    /// Raw words from the last requested UCX state dump.
+    state_words: HashMap<u16, u16>,
     /// UCX IF1 heartbeat sequence and next refresh time.  Without this the
     /// unit does not stream live state deltas such as the Phones knob.
     ucx_heartbeat: u16,
@@ -1066,6 +1068,7 @@ impl Fireface {
             autoset: [false; 4],
             device_input_gain: HashMap::new(),
             device_output_volume: HashMap::new(),
+            state_words: HashMap::new(),
             ucx_heartbeat: 0,
             ucx_heartbeat_due: Instant::now(),
             ignore_output_until: None,
@@ -1076,6 +1079,15 @@ impl Fireface {
         };
         if async_writer {
             dev.async_writer = AsyncWriter::new(Arc::clone(&dev.transport)).map(Arc::new);
+        }
+        if model == Model::Ucx && async_writer {
+            match dev.capture_state_dump(Duration::from_millis(2500)) {
+                Ok(()) => log::info!(
+                    "captured UCX state dump: {} unique words",
+                    dev.state_words.len()
+                ),
+                Err(e) => log::warn!("UCX state dump request failed: {e:?}"),
+            }
         }
         if model == Model::Uc {
             dev.read_uc_levels();
@@ -2135,6 +2147,41 @@ impl Fireface {
     /// Snapshot the UC values that have an on-demand readback or a queued
     /// front-panel event.  Returns `None` for the UCX, whose readback path
     /// is not implemented yet.
+    /// Ask the unit for its full state dump and drain it.  The UCX does not
+    /// send this dump spontaneously on Linux: the host must write
+    /// `0x3f99 = 0x0812` after the state endpoint is running.  The dump is
+    /// then buffered by the kernel and arrives as ordinary `0x8d` words.
+    pub fn capture_state_dump(&mut self, timeout: Duration) -> Result<(), Error> {
+        self.state_words.clear();
+        self.write_word(0x3f99, 0x0812)?;
+        self.flush_write_batch()?;
+
+        let started = Instant::now();
+        let mut last_len = 0;
+        let mut last_change = Instant::now();
+        while started.elapsed() < timeout {
+            self.poll_events()?;
+            if self.state_words.len() != last_len {
+                last_len = self.state_words.len();
+                last_change = Instant::now();
+            }
+            if self.state_words.contains_key(&0x3d00)
+                && self.state_words.len() > 1500
+                && last_change.elapsed() > Duration::from_millis(120)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.poll_events()?;
+        Ok(())
+    }
+
+    /// Raw state words from the last capture or live state word.
+    pub fn state_words(&self) -> &HashMap<u16, u16> {
+        &self.state_words
+    }
+
     pub fn readable_state(&self) -> Option<ReadableState> {
         if !self.is_uc() && self.model != Model::Ucx {
             return None;
@@ -2787,6 +2834,7 @@ impl Fireface {
     }
 
     fn apply_ucx_state_word(&mut self, addr: u16, value: u16) {
+        self.state_words.insert(addr, value);
         if let Some(idx) = ucx::input_gain_index(addr) {
             // The unit reports physical gain moves here in 0.1 dB units.
             // Inputs 1/2 use whole dB; inputs 3/4 use 0.5 dB steps.
@@ -7213,6 +7261,15 @@ mod tests {
         assert!(w.contains(&Write::Words(vec![(0x0007, 400)])));
         assert!(w.contains(&Write::Words(vec![(0x0207, 15)])));
         assert_eq!(dev.inputs()[2].gain, Some(3));
+    }
+
+    #[test]
+    fn ucx_state_dump_keeps_every_raw_word() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.apply_ucx_state_word(0x0000, 1);
+        dev.apply_ucx_state_word(0x1200, 0xff86);
+        assert_eq!(dev.state_words().get(&0x0000), Some(&1));
+        assert_eq!(dev.state_words().get(&0x1200), Some(&0xff86));
     }
 
     #[test]

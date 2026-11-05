@@ -247,12 +247,16 @@ Front-panel gain and output-volume changes are reported as `NN07` and
 `NN00`. 48 V, Inst and Level are host-written; the unit stores them but emits
 no state word.
 
-The state stream is sparse. It is not a full scene dump and it does not echo
-every writable register. It carries no observed word for 48 V, Inst, Level,
-reference level, the options word, EQ, dynamics or FX. The mixer scene is
-written by the host at connect, together with those unreadable groups; gain,
-output volume, DIM, Talkback and MS state are the live controls read back from
-this stream afterwards.
+While a session is running the state stream is sparse and carries only changed
+values.  The full state dump is requested on demand: after the state endpoint
+is active, write `0x3f99 = 0x0812`.  The unit then emits a one-shot dump
+covering the 18 input blocks, the 18 output blocks, the output matrix-send
+block and the global FX/monitor words.  The input blocks include 48 V, Inst,
+Level and AutoSet; the output blocks include references and balance.  The
+detailed field map is maintained in `docs/work/DEVICE-SETUPS.md`.
+
+The saved scene is still the host default at connect; the requested dump makes
+a real comparison possible.
 
 ### 3.3 State readback
 
