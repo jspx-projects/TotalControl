@@ -635,18 +635,17 @@ that value.
 
 ### Input gain
 
-Inputs 1 and 2 use the microphone range, 0–65 dB. Inputs 3 and 4 use the
-instrument/line range, 0–12 dB. Both use 0.5 dB steps.
+Inputs 1 and 2 use the microphone range, 0–65 dB, in 1 dB steps. Inputs 3
+and 4 use the instrument/line range, 0–12 dB, in 0.5 dB steps.
 
 A long press on an input enters pair-adjust mode. The left digit gets a dot
 and the encoder moves **both** channels of the pair, whether or not the pair
 is linked. For example, a gain of 26 dB shows `2.6` while both channels move,
 then returns to `26`.
 
-The right digit's dot reports whether the **device** considers the pair
-linked. The device never links inputs 1–4 and always links output pairs; this
-is a fixed device view, independent of the link state in TotalControl. The
-front knob cannot link or unlink a pair.
+The device has a fixed link view: inputs `i1`–`i4` are individual, and the
+outputs appear only as pairs `L1`/`L3`/`L5` and `A1`/`A3`/`A5`/`A7`. The front
+knob cannot link or unlink a pair; the link state is a TotalControl setting.
 
 When a linked input pair has different left and right gains, the Gain knob in
 TotalControl shows both values: the left gain above, the right gain below.
@@ -674,13 +673,13 @@ output fader after about one second without a change.
 
 | Dot | Meaning |
 |---|---|
-| right digit | the device considers the pair linked |
 | left digit | the encoder is adjusting both channels of the pair |
-| right digit on an output level | negative value |
+| right digit on `i3`/`i4` | half-dB step (`11.` = 11.5 dB) |
+| right digit on an output level | negative value, shown only below 0 dB |
 
 The left dot is not a decimal point. `2.6` on an input means 26 dB with both
-channels moving, not 2.6 dB.  The right dot in the channel display is the
-device's link marker; on an output level the right dot marks a negative value.
+channels moving, not 2.6 dB. The right dot is never shown for `i1`/`i2`
+because their step is 1 dB. It is not a link marker.
 
 ### Setups
 

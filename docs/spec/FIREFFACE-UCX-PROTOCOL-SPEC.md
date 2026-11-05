@@ -64,29 +64,31 @@ LEVEL mode sets:
 
 | Channel | Range | Step |
 |---|---|---|
-| `i1`, `i2` | 0–65 dB | 0.5 dB |
+| `i1`, `i2` | 0–65 dB | 1 dB |
 | `i3`, `i4` | 0–12 dB | 0.5 dB |
 | `L1`, `L3`, `L5`, `PH`, `SP`, `A1`, `A3`, `A5`, `A7` | +6 to −64 dB; below 0 dB a dot after the second digit; the next step is mute | 1 dB |
 
 Input 1/2 gain is analog; input 3/4 gain is digital; output level is digital
 in the mixer.
 
-The display has two digits, each with a decimal dot to its right:
+The display has two digits, each with a dot to its right.  The left dot marks
+pair-adjust mode: the encoder is moving both channels of the pair.  The right
+dot is a value marker, not a link marker:
 
-| Dot | Meaning |
+| Context | Right dot |
 |---|---|
-| right digit | the device considers the channel pair linked |
-| left digit | the encoder is adjusting both channels of the pair, regardless of the link state |
+| `i1`, `i2` gain | never shown; the step is whole dB |
+| `i3`, `i4` gain | marks a half-dB step, e.g. `11.` is 11.5 dB in the GUI |
+| output level | shown below 0 dB and never at 0…+6 dB; marks a negative value |
 
-The device cannot link or unlink channels.  Its own view is fixed: inputs
-`i1`–`i4` are shown unlinked, and every output pair is shown linked,
-regardless of the link state in the GUI.  The right dot therefore reports the
-device view, not the GUI link state.
+The device cannot link or unlink channels.  Its fixed view is visible in the
+channel cycle: inputs `i1`–`i4` are individual, and outputs appear as pairs
+`L1`/`L3`/`L5` and `A1`/`A3`/`A5`/`A7`.  The link state is a host setting.
 
 A long press on an input enters pair-adjust mode: the left dot appears and
 the knob moves both channels of the selected pair, even when the device or
-the GUI treats the pair as unlinked.  The pair moves in 0.5 dB steps and the
-display returns to the normal value after about one second.
+the GUI treats the pair as unlinked.  The display returns to the normal value
+after about one second.
 
 A long press on an output enters panorama mode:
 
@@ -99,11 +101,6 @@ A long press on an output enters panorama mode:
 The balance range is −100 … +100 in steps of 5; the displayed value is the
 balance value divided by 10.  The display returns to the output fader after
 about one second without a change.
-
-On an output level, a dot after the second digit marks a negative value;
-0…+6 dB has no dot.  The right dot in the channel display is the device link
-marker; the same position in the level display marks a negative output.  On
-inputs 3/4, the 0.5 dB step is the value step.
 
 `SU` loads one of six user setups, `FA` the factory preset, `Ad` the 8-channel
 AD/DA converter mode, and `CC` Class Compliant mode when the unit is not
