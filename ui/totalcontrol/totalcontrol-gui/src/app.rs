@@ -5183,10 +5183,10 @@ fn global_control_room_state(state: &TotalControl) -> Vec<crate::osc_global::Glo
             input,
         )));
     }
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::ExternalIn(
+        state.control_room.external_input.is_some(),
+    )));
     if let Some(pair) = state.control_room.external_input {
-        out.push(GlobalCommand::ControlRoom(ControlRoomControl::ExternalIn(
-            true,
-        )));
         out.push(GlobalCommand::ControlRoom(ControlRoomControl::ExtInChannel(
             pair * 2,
         )));
