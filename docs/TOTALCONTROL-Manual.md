@@ -606,6 +606,10 @@ and lets you choose, with a dialog:
   options stay with the saved scene.
 - **Always use TotalControl settings** — as above and stop asking.
 
+The dialog lists every difference. When more than six are shown, the list gets
+its own scrollbar and a fixed height so the dialog does not grow beyond the
+window.
+
 On the UCX the hardware-held switches (options, reference levels, `48V`,
 Inst and Level) have no readback. TotalControl writes the saved scene values
 at connect, so the panel and the unit agree; the mismatch dialog never changes

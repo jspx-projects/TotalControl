@@ -339,7 +339,7 @@ Output registers are the input layout mirrored at `+0x1200`:
 | `0x00` | volume | 0.1 dB, signed |
 | `0x01` | balance | −100..+100 |
 | `0x02` | mute | 0/1 |
-| `0x03` | FX Return | 0.1 dB, signed |
+| `0x03` | FX Return | 0.1 dB, signed, −65.0..0.0 dB |
 | `0x04` | stereo mode | 0 mono, 1 stereo |
 | `0x05` | MS processing | 0/1 |
 | `0x07` | phase L, and R at `+0x100` | 0/1 |
@@ -644,8 +644,10 @@ ADAT 7/8    0x2201 / 0x2301
 
 ### 7.2 FX Return
 
-`NN03` sets the effect return for one output channel: 0.1 dB, signed. A
-linked pair writes both channels.
+`NN03` sets the effect return for one output channel: 0.1 dB, signed,
+−65.0..0.0 dB. A linked pair writes both channels; writing either side
+updates both registers in the state dump. Values above 0.0 dB are ignored by
+the unit.
 
 ### 7.3 Loopback
 
@@ -714,6 +716,11 @@ The writer maps frequency directly in Hz and Q as Q × 10.
 | Slope | 6/12/18/24 dB/oct | `NN22` |
 
 The slope writer maps 6/12/18/24 to 0/1/2/3.
+
+A linked input pair exposes one EQ/low-cut block to the host: writing either
+side updates both `NN20`–`NN22` and `NN40`–`NN4b` registers, and the device
+keeps the last value written. The left channel is the reference; the GUI and
+the scene carry the same values on both sides.
 
 ## 9. Dynamics and AutoLevel
 
@@ -1096,7 +1103,7 @@ Each channel uses the same offset block:
 | `0x0000` | volume | signed 0.1 dB; `0xff86` = −12.2 dB |
 | `0x0001` | balance | signed −100..+100 |
 | `0x0002` | mute | 0/1 |
-| `0x0003` | FX return | signed 0.1 dB |
+| `0x0003` | FX return | signed 0.1 dB, −65.0..0.0 dB; writing either side of a linked pair updates both |
 | `0x0004` | stereo | 0/1 |
 | `0x0005`, `0x0006` | unknown | 0 observed |
 | `0x0007` | phase, left | 0/1 |
