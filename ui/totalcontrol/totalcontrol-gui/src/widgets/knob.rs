@@ -453,11 +453,11 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 // value size for short numbers, but leave room for both
                 // lines and the rim.
                 if label_chars <= 4 {
-                    13.0
+                    14.5
                 } else if label_chars <= 6 {
-                    10.5
+                    11.5
                 } else {
-                    9.0
+                    10.0
                 }
             } else if label_chars <= 4 {
                 15.0
