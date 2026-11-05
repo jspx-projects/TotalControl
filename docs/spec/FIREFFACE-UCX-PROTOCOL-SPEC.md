@@ -947,18 +947,23 @@ The unit retains input gain and the main output fader across a power cycle.
 The user guide also states that the unit permanently stores its configuration
 and complete mixer state and reloads them at power-on.  That stored state is a
 standalone feature: loading a setup while online changes only the front-panel
-parameters (gains and output volumes), not routing.  TotalControl still writes
-the saved scene at connect, because the host cannot read the full stored state.
+parameters (gains and output volumes), not routing.
 
-It does not report input gain at connect; the saved scene supplies the connect
-value and later encoder words update the model.  The switches, references and
-options have no readback, so the saved scene is the only source.  A mismatch
-dialog does not include UCX input gain.
+The host can request the full mixer snapshot with `0x3f99 = 0x0812` while the
+state endpoint is active.  The dump contains the input gain, 48 V, Inst, Level,
+AutoSet, references, balance, channel DSP and matrix-send records that the
+sparse running stream does not report.  TotalControl requests and retains that
+dump at open.
 
-Front-panel output volume, DIM and MS state are read from the IF1 state stream.
+The options word, clock source and sample rate are not part of the dump; they
+remain host-written from the saved scene.  Channel names and trim are host-only.
+The saved scene is still the default at connect, and the startup policy decides
+which fields the host writes and which it adopts from the dump.
+
+Front-panel output volume, DIM, MS and gain changes remain live `0x8d` words.
 DIM, Talkback, Mono Main Out and stereo mode stay device-owned where they are
-reported.  EQ, dynamics, FX, matrix and fader records are written by the host
-at connect.
+reported.  EQ, dynamics, FX, matrix and fader records are in the requested dump
+and are also written by the host at connect.
 
 Scenes are keyed by unit serial. Each unit keeps its own scene file.
 
