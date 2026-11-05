@@ -401,7 +401,7 @@ The fader base is submix-dependent: the selected hardware output chooses the
 | `0x3d20` | control-room Main pair | read-only; 0 = AN1/2 in the tested state |
 | `0x3d21` | control-room Speaker B pair | read-only; 2 = AN3/4 in the normal state |
 | `0x3d22` | unknown | 0 in the tested states |
-| `0x3d40` | runtime/mode flag | read-only; 0 normal, 1 in the AD-mode capture |
+| `0x3d40` | host-session/runtime flag | read-only; 0 in a Linux-only session, 1 after a TotalMix session |
 | `0x3d41`, `0x3d42` | unknown | read-only, 0 in the tested states |
 | `0x3d43` | unknown boolean | writable 0/1 |
 | `0x3d44` | unknown index/sentinel | writable; −1, 0 and 2 accepted |
@@ -1179,7 +1179,8 @@ state is not in this snapshot.
 | `0x3d20` | control-room Main pair |
 | `0x3d21` | control-room Speaker B pair |
 | `0x3d22` | unknown |
-| `0x3d40`–`0x3d42` | unknown/read-only |
+| `0x3d40` | host-session/runtime flag |
+| `0x3d41`–`0x3d42` | unknown/read-only |
 | `0x3d43`–`0x3d46` | unknown/writable |
 
 The dump does not contain `0x3d05`–`0x3d1f` or `0x3d23`–`0x3d3f`.

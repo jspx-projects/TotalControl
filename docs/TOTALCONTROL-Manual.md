@@ -709,6 +709,12 @@ its current internal state, including routing, EQ, FX, references and options.
 TotalControl leaves the six device slots untouched. Its own **Mix 1–8**
 snapshots are host files, not the unit's setups.
 
+If the unit reports an error at power-up and every user slot still shows
+`n.o.` after TotalMix has stored it, the unit's setup memory has not passed
+its self-test. `FA` may still load because it comes from the firmware. In that
+case the six device slots are unavailable; keep using host scenes and Mix 1–8
+and have the unit serviced.
+
 ## Appendix A — Device modes
 
 TotalControl needs the normal vendor mode of the interface. In that mode the
