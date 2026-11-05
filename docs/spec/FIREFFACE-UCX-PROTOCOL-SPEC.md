@@ -49,47 +49,61 @@ The front-panel control is one rotary encoder with push.  A green LED shows
 CHANNEL or LEVEL mode.  Pushing toggles between them; pushing repeatedly jumps
 to `PH`.
 
-CHANNEL mode selects:
+CHANNEL mode cycles through:
 
 | Display | Channel |
 |---|---|
-| `i.1`–`i.4` | inputs 1–4 |
-| `L.1`–`L.6` | line outputs 1–6 |
+| `i1`–`i4` | inputs 1–4 |
+| `L1`, `L3`, `L5` | line output pairs 1/2, 3/4, 5/6 |
 | `PH` | phones / line output 7/8 |
 | `SP` | SPDIF output |
-| `A.1`–`A.8` | ADAT outputs 1–8 |
+| `A1`, `A3`, `A5`, `A7` | ADAT output pairs 1/2 … 7/8 |
 | `SU` | load setup |
 
 LEVEL mode sets:
 
 | Channel | Range | Step |
 |---|---|---|
-| `i.1`, `i.2` | 0 dB or 10–65 dB | 1 dB |
-| `i.3`, `i.4` | 0–12 dB | 0.5 dB |
-| `L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8` | +6 to −58 dB; a right-hand dot marks values below 0 dB; `oo.` is mute | 1 dB |
+| `i1`, `i2` | 0–65 dB | 0.5 dB |
+| `i3`, `i4` | 0–12 dB | 0.5 dB |
+| `L1`, `L3`, `L5`, `PH`, `SP`, `A1`, `A3`, `A5`, `A7` | +6 to −64 dB; below 0 dB a dot after the second digit; the next step is mute | 1 dB |
 
 Input 1/2 gain is analog; input 3/4 gain is digital; output level is digital
 in the mixer.
 
-The encoder's long press is context-dependent:
+The display has two digits, each with a decimal dot to its right:
 
-| Selected channel | Long press | Display | Return |
-|---|---|---|---|
-| input `i.1`–`i.4` | toggles Link mode and shows the pair status | the gain with the pair dot in the fixed decimal position, e.g. `2.6` for 26 dB | about one second |
-| output `L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8` | panorama | `CE` centre; `L.1`/`r.1` at the limits (the guide names them `LL`/`rr`) | about one second without a change |
-
-In stereo mode both channels of a linked pair show the same gain and the pair
-dot.  The setting applies to both channels.  In mono mode the two channels are
-independent.  The UC guide's "only the left channel is shown" rule does not
-apply to the UCX display.
-
-The dot in the display has three uses:
-
-| Context | Meaning |
+| Dot | Meaning |
 |---|---|
-| `i.3`/`i.4` gain | half-dB step |
-| output level | negative value, e.g. `20.` = −20 dB |
-| input pair status | linked pair; `2.6` = 26 dB with the pair dot |
+| right digit | the device considers the channel pair linked |
+| left digit | the encoder is adjusting both channels of the pair, regardless of the link state |
+
+The device cannot link or unlink channels.  Its own view is fixed: inputs
+`i1`–`i4` are shown unlinked, and every output pair is shown linked,
+regardless of the link state in the GUI.  The right dot therefore reports the
+device view, not the GUI link state.
+
+A long press on an input enters pair-adjust mode: the left dot appears and
+the knob moves both channels of the selected pair, even when the device or
+the GUI treats the pair as unlinked.  The pair moves in 0.5 dB steps and the
+display returns to the normal value after about one second.
+
+A long press on an output enters panorama mode:
+
+| Display | Meaning |
+|---|---|
+| `CE` | centre |
+| `L.1` / `r.1` | full left / full right (the guide names them `LL` / `rr`) |
+| `L9.` … `L1`, `CE`, `R1` … `R9.` | intermediate balance positions |
+
+The balance range is −100 … +100 in steps of 5; the displayed value is the
+balance value divided by 10.  The display returns to the output fader after
+about one second without a change.
+
+On an output level, a dot after the second digit marks a negative value;
+0…+6 dB has no dot.  The right dot in the channel display is the device link
+marker; the same position in the level display marks a negative output.  On
+inputs 3/4, the 0.5 dB step is the value step.
 
 `SU` loads one of six user setups, `FA` the factory preset, `Ad` the 8-channel
 AD/DA converter mode, and `CC` Class Compliant mode when the unit is not
@@ -98,7 +112,7 @@ Loading a setup while online changes only the front-panel parameters (input
 gains and output volumes), not routing.
 
 Front-panel gain and output-volume changes are reported to the host as `NN07`
-and `NN00`.  Link/stereo changes use the stereo-mode state words.  A
+and `NN00`.  GUI link/stereo changes use the stereo-mode state words.  A
 front-panel pan/balance change is part of the mixer state; its host readback
 is not yet confirmed.
 
