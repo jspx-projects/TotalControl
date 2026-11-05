@@ -1032,7 +1032,8 @@ Input `n` (`0..17`) uses base `n << 8`.
 | `0x0000` | mute | 0/1 |
 | `0x0001` | FX send | signed 0.1 dB; `0xfd76` = −65.0 dB, `0xff9c` = −10.0 dB |
 | `0x0002` | stereo | 0 mono / 1 stereo |
-| `0x0003`, `0x0004` | unknown | 0 observed |
+| `0x0003` | record enable | 0/1 |
+| `0x0004` | unknown | 0 observed; not the remote state |
 | `0x0005` | MS processing | 0/1 |
 | `0x0006` | phase, left | 0/1 |
 | `0x0007` | preamp gain | 0.1 dB; `0x012c` = 30.0 dB |
