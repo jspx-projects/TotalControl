@@ -5927,6 +5927,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.connected = state.device.is_connected();
                 if !state.connected {
                     state.show_device_panel = false;
+                    clear_meters(state);
                 }
                 // A fallback mock (no device found at launch) must keep
                 // probing for the real card.  Its `is_connected()` is true,
@@ -5955,6 +5956,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         log::info!("Device connected: {}", fresh.target().label());
                         state.prefs_dirty = true;
                         replace_device_handle(state, fresh);
+                        clear_meters(state);
                         state.device_target = Some(state.device.target());
                         state.connected = state.device.is_connected();
                         state.show_device_panel = false;
@@ -6041,10 +6043,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             let input_trims: Vec<f32> =
                 state.device.inputs().iter().map(|c| c.trim).collect();
-            let raw_input = state
-                .device
-                .input_peaks()
-                .unwrap_or_else(|| state.device.input_meters());
+            let raw_input = if state.connected {
+                state
+                    .device
+                    .input_peaks()
+                    .unwrap_or_else(|| state.device.input_meters())
+            } else {
+                vec![0.0; state.device.inputs().len()]
+            };
             let in_levels = trim_meter_levels(&raw_input, &input_trims);
             for (i, m) in state.input_meters.iter_mut().enumerate() {
                 m.step_elapsed(in_levels.get(i).copied().unwrap_or(0.0));
@@ -6053,7 +6059,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // playback.  Hardware-output post-fader meters come from the
             // device too when it supplies them; otherwise fall back to the
             // host-side matrix sum used by the ALSA/mock backends.
-            let (pb_levels, device_output) =
+            let (pb_levels, device_output) = if state.connected {
                 if let Some(pb) = state.device.device_playback_peaks() {
                     state.playback_tap_channels = state.device.playbacks().len();
                     (pb, state.device.device_output_peaks())
@@ -6069,7 +6075,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         tap_levels.to_vec()
                     };
                     (pb, state.device.device_output_meters())
-                };
+                }
+            } else {
+                (
+                    vec![0.0; state.device.playbacks().len()],
+                    Some(vec![0.0; state.device.outputs().len()]),
+                )
+            };
             let playback_trims: Vec<f32> =
                 state.device.playbacks().iter().map(|c| c.trim).collect();
             let pb_levels = trim_meter_levels(&pb_levels, &playback_trims);
@@ -6090,11 +6102,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             for (i, m) in state.output_meters.iter_mut().enumerate() {
                 m.step_elapsed(out_levels.get(i).copied().unwrap_or(0.0));
             }
-            let fx_levels = state
-                .device
-                .fx_peaks()
-                .or_else(|| state.device.fx_meters())
-                .unwrap_or([0.0, 0.0]);
+            let fx_levels = if state.connected {
+                state
+                    .device
+                    .fx_peaks()
+                    .or_else(|| state.device.fx_meters())
+                    .unwrap_or([0.0, 0.0])
+            } else {
+                [0.0, 0.0]
+            };
             for (i, m) in state.fx_meters.iter_mut().enumerate() {
                 m.step_elapsed(fx_levels[i]);
             }
@@ -8010,6 +8026,22 @@ fn merge_host_changes(state: &mut TotalControl, before: Scene) {
 /// Swap in a newly opened device.  When the device service owns the
 /// handle, stop the old thread, clear its bus and start a service for the
 /// new unit before any caller touches the model.
+fn clear_meters(state: &mut TotalControl) {
+    for m in &mut state.input_meters {
+        *m = MeterAnim::new();
+    }
+    for m in &mut state.playback_meters {
+        *m = MeterAnim::new();
+    }
+    for m in &mut state.output_meters {
+        *m = MeterAnim::new();
+    }
+    for m in &mut state.fx_meters {
+        *m = MeterAnim::new();
+    }
+    state.fx_overload = [false, false];
+}
+
 fn replace_device_handle(state: &mut TotalControl, new: DeviceHandle) {
     let use_service = state.device_service.is_some() || crate::device_service::requested();
     state.device_service = None;
