@@ -4848,6 +4848,24 @@ fn global_control_room_messages(
     }
 }
 
+fn global_feedback_is_typed(command: &crate::osc_global::GlobalCommand) -> bool {
+    use crate::osc_global::{Bus, ChannelControl, GlobalCommand, MixControl};
+    match command {
+        GlobalCommand::Channel { bus, control, .. } => match control {
+            ChannelControl::Mute(_) => true,
+            ChannelControl::Volume(_) | ChannelControl::VolumeLin(_) | ChannelControl::Balance(_) => {
+                *bus == Bus::Output
+            }
+            _ => false,
+        },
+        GlobalCommand::Mix { control, .. } => matches!(
+            control,
+            MixControl::Fader(_) | MixControl::FaderLin(_) | MixControl::Balance(_)
+        ),
+        _ => false,
+    }
+}
+
 fn global_messages(state: &TotalControl, command: &crate::osc_global::GlobalCommand) -> Vec<Message> {
     use crate::osc_global::GlobalCommand;
     match command {
@@ -6278,7 +6296,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             crate::osc_global::GlobalCommand::Send(_)
                 | crate::osc_global::GlobalCommand::Level { .. }
                 | crate::osc_global::GlobalCommand::Status(_)
-        );
+        ) && !global_feedback_is_typed(command);
         for message in messages {
             let _ = update(state, message);
         }
@@ -15610,7 +15628,8 @@ mod tests {
         any_channel_muted, any_channel_soloed, apply_pending_resize,
         channel_trim, trim_factor, trim_meter_levels,
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
-        global_feedback, global_messages, input_gain_knob_label, TotalControl,
+        global_feedback, global_feedback_is_typed, global_messages, input_gain_knob_label,
+        TotalControl,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
         apply_startup_sync, apply_control_room_assignments, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
@@ -18125,6 +18144,30 @@ mod tests {
             ),
         );
         assert!(state.device.settings().mono);
+    }
+
+    #[test]
+    fn global_typed_feedback_is_not_echoed_twice() {
+        use crate::osc_global::{Bus, ChannelControl, GlobalCommand, MixControl};
+        assert!(global_feedback_is_typed(&GlobalCommand::Channel {
+            bus: Bus::Output,
+            channel: 0,
+            control: ChannelControl::Volume(-6.0),
+        }));
+        assert!(!global_feedback_is_typed(&GlobalCommand::Channel {
+            bus: Bus::Input,
+            channel: 0,
+            control: ChannelControl::Volume(-6.0),
+        }));
+        assert!(global_feedback_is_typed(&GlobalCommand::Mix {
+            source: Bus::Input,
+            channel: 0,
+            submix: 0,
+            control: MixControl::Fader(-6.0),
+        }));
+        assert!(!global_feedback_is_typed(&GlobalCommand::ControlRoom(
+            crate::osc_global::ControlRoomControl::Dim(true)
+        )));
     }
 
     #[test]
