@@ -702,6 +702,12 @@ loaded and `n.o.` means an empty slot. Loading a setup while connected changes
 only the front-panel parameters — input gains and output volumes — not the
 routing. `CC` activates after a power cycle.
 
+The six slots are written from TotalMix FX, **Options → Store current State
+into Device → Setup 1–6**. The host does not upload a scene; the unit snapshots
+its current internal state, including routing, EQ, FX, references and options.
+TotalControl leaves the six device slots untouched. Its own **Mix 1–8**
+snapshots are host files, not the unit's setups.
+
 ## Appendix A — Device modes
 
 TotalControl needs the normal vendor mode of the interface. In that mode the
