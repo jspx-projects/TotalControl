@@ -16,7 +16,6 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      docs_only: ${{ steps.changes.outputs.docs_only }}
       kernel: ${{ steps.changes.outputs.kernel }}
       core: ${{ steps.changes.outputs.core }}
       gui: ${{ steps.changes.outputs.gui }}
@@ -47,21 +46,11 @@ jobs:
             all=true
           fi
 
-          docs_only=false
-          if [ -z "$changed" ]; then
-            docs_only=false
-          elif echo "$changed" | grep -qvE '^(docs/.*\.md|[^/]+\.md)$'; then
-            docs_only=false
-          else
-            docs_only=true
-          fi
-
           rust_all=$all
           if has '^ui/totalcontrol/(Cargo\.toml|Cargo\.lock)$'; then
             rust_all=true
           fi
 
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
           echo "kernel=$(flag "$all" '^kernel/')" >> "$GITHUB_OUTPUT"
           echo "core=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-core/')" >> "$GITHUB_OUTPUT"
           echo "gui=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-gui/')" >> "$GITHUB_OUTPUT"
@@ -146,7 +135,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
       - name: Build TUI
         run: cargo test -p totalcontrol-tui
 
