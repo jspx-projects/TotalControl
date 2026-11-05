@@ -1977,6 +1977,9 @@ pub enum Message {
     /// One raw classic RME OSC message.  Parsed on the UI thread so the
     /// parser can resolve `Toggle` against the confirmed mixer model.
     OscRmeIn(String, Vec<OscType>),
+    /// One decoded Global OSC command.  The transport is absolute and
+    /// value-native, so no page or bank state is involved.
+    OscGlobalIn(crate::osc_global::GlobalCommand),
     /// A `Toggle` control whose direction depends on the current model.
     RmeToggle(crate::osc_rme::RmeToggle),
     /// `/1/mastervolume`: the Main Out pair fader.
@@ -2400,6 +2403,7 @@ pub struct TotalControl {
     pub osc_enabled: bool,
     pub osc_recv_port: u16,
     pub osc_send_port: u16,
+    pub osc_dialect: crate::osc::OscDialect,
     pub osc_recv_text: String,
     pub osc_send_text: String,
     /// `--osc` was passed: the command line overrides the saved switch.
@@ -2921,6 +2925,9 @@ pub fn new_with_device(
     let osc_cli = osc_config.is_some();
     let osc_recv_port = osc_config.map(|c| c.recv_port).unwrap_or(9000);
     let osc_send_port = osc_config.map(|c| c.send_port).unwrap_or(9001);
+    let osc_dialect = osc_config
+        .map(|c| c.dialect)
+        .unwrap_or(crate::osc::OscDialect::Classic);
     let osc_enabled = osc_cli;
 
     let state = TotalControl {
@@ -2980,6 +2987,7 @@ pub fn new_with_device(
         osc_enabled,
         osc_recv_port,
         osc_send_port,
+        osc_dialect,
         osc_recv_text: osc_recv_port.to_string(),
         osc_send_text: osc_send_port.to_string(),
         osc_cli,
@@ -3116,6 +3124,7 @@ fn rebuild_osc_config(state: &mut TotalControl) {
             recv_port: state.osc_recv_port,
             send_port: state.osc_send_port,
             send_host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            dialect: state.osc_dialect,
         });
     } else {
         state.osc_config = None;
@@ -4546,6 +4555,11 @@ fn notify_osc(state: &mut TotalControl, msg: OscOutbound) {
         | OscOutbound::Mute(cid, _)
         | OscOutbound::Solo(cid, _) => notify_rme_channel(state, cid),
         OscOutbound::Raw { addr, args } => notify_rme_native(state, &addr, &args),
+        OscOutbound::Global(command) => {
+            if let Some(tx) = state.osc_tx.as_mut() {
+                let _ = tx.try_send(OscOutbound::Global(command));
+            }
+        }
     }
 }
 
@@ -5736,6 +5750,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::EngineRead(..)
                 | Message::OscLog(_)
                 | Message::OscRmeIn(_, _)
+                | Message::OscGlobalIn(_)
                 | Message::WindowResized(_)
                 | Message::WindowSize(..)
         )
@@ -5775,6 +5790,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         if changed {
             notify_rme_page(state, page);
         }
+        return Task::none();
+    }
+    // Global OSC: the codec is deliberately separate from the classic
+    // banked parser.  Commands are kept for the next mapping step; until
+    // then the raw message is visible in the OSC debug log.
+    if let Message::OscGlobalIn(command) = &message {
+        log::debug!("OSC global: {command:?}");
         return Task::none();
     }
     // UC startup: the first scene write happens before the meter taps open
@@ -7270,7 +7292,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.osc_log.truncate(OSC_LOG_MAX);
         }
         // Handled at the top of `update`, before this match.
-        Message::OscRmeIn(_, _) => {}
+        Message::OscRmeIn(_, _) | Message::OscGlobalIn(_) => {}
         Message::ToggleOscLog => state.show_osc_log = !state.show_osc_log,
         Message::ClearOscLog => state.osc_log.clear(),
         Message::SetOscEnabled(on) => {
