@@ -2800,6 +2800,14 @@ impl Fireface {
             if let Some(input) = self.inputs.get_mut(idx) {
                 input.gain = Some(gain);
             }
+            // The odd channel is the right side of the pair.  Keep the
+            // left channel's `gain_right` alias in step so the GUI can show
+            // both gains of a linked pair.
+            if idx % 2 == 1 {
+                if let Some(left) = self.inputs.get_mut(idx - 1) {
+                    left.gain_right = Some(gain);
+                }
+            }
             self.device_input_gain.insert(idx, gain);
             return;
         }
@@ -4483,6 +4491,14 @@ impl RmeDevice for Fireface {
         self.ucx_write_input_gain_right(idx, tenths)?;
         if let Some(input) = self.inputs.get_mut(idx) {
             input.gain_right = Some(gain);
+        }
+        // The right-side register is the odd channel's gain.  Keep the
+        // channel model in step so a linked-pair display can read either
+        // side.
+        if idx % 2 == 0 {
+            if let Some(right) = self.inputs.get_mut(idx + 1) {
+                right.gain = Some(gain);
+            }
         }
         Ok(())
     }
@@ -7171,6 +7187,17 @@ mod tests {
         assert!(w.contains(&Write::Words(vec![(0x0007, 400)])));
         assert!(w.contains(&Write::Words(vec![(0x0207, 15)])));
         assert_eq!(dev.inputs()[2].gain, Some(3));
+    }
+
+    #[test]
+    fn ucx_right_gain_keeps_the_pair_alias_in_step() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_input_gain_right(0, 35).unwrap();
+        assert_eq!(dev.inputs()[0].gain_right, Some(35));
+        assert_eq!(dev.inputs()[1].gain, Some(35));
+        dev.apply_ucx_state_word(0x0107, 150);
+        assert_eq!(dev.inputs()[1].gain, Some(15));
+        assert_eq!(dev.inputs()[0].gain_right, Some(15));
     }
 
     #[test]

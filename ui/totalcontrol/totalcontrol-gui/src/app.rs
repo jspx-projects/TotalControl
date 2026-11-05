@@ -10283,6 +10283,13 @@ fn strip_params<'a>(
             let ch = &state.device.inputs()[i];
             let has_48v = caps.input_phantom && ch.channel_type == ChannelType::Mic;
             let linked = state.device.input_pair_linked(i / 2);
+            let gain_right = ch.gain_right.or_else(|| {
+                if linked && i % 2 == 0 {
+                    state.device.inputs().get(i + 1).and_then(|right| right.gain)
+                } else {
+                    None
+                }
+            });
             let (volume, pan) = if linked {
                 let left = i & !1;
                 let right = left + 1;
@@ -10334,7 +10341,7 @@ fn strip_params<'a>(
                 instrument: ch.instrument,
                 has_gain: ch.gain_max.is_some(),
                 gain: ch.gain.unwrap_or(0),
-                gain_right: ch.gain_right,
+                gain_right,
                 gain_max: ch.gain_max.unwrap_or(0),
                 // The driver's new UCX control is 0..24 in 0.5 dB units;
                 // the older whole-dB control was 0..18 (or 0..12).
