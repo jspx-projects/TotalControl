@@ -674,7 +674,7 @@ output fader after about one second without a change.
 | Dot | Meaning |
 |---|---|
 | left digit | the encoder is adjusting both channels of the pair |
-| right digit on `i3`/`i4` | half-dB step (`11.` = 11.5 dB) |
+| right digit on `i3`/`i4` | half-dB step (`11.` = 11.5 dB); always present for a half-dB value, absent for a whole-dB value |
 | right digit on an output level | negative value, shown only below 0 dB |
 
 The left dot is not a decimal point. `2.6` on an input means 26 dB with both

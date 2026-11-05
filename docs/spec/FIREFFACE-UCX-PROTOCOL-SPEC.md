@@ -78,7 +78,7 @@ dot is a value marker, not a link marker:
 | Context | Right dot |
 |---|---|
 | `i1`, `i2` gain | never shown; the step is whole dB |
-| `i3`, `i4` gain | marks a half-dB step, e.g. `11.` is 11.5 dB in the GUI |
+| `i3`, `i4` gain | marks a half-dB step, e.g. `11.` is 11.5 dB in the GUI; always present for a half-dB value, absent for a whole-dB value |
 | output level | shown below 0 dB and never at 0…+6 dB; marks a negative value |
 
 The device cannot link or unlink channels.  Its fixed view is visible in the
