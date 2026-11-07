@@ -906,16 +906,17 @@ const FILL_ALPHA: f32 = 0.92;
 /// Splits the meter column into one full-width bar, or two thin bars for a
 /// linked stereo pair.
 fn meter_split(r: Rectangle, scale: f32, second: bool) -> (Rectangle, Option<Rectangle>) {
-    if !second {
-        return (r, None);
-    }
-    // Keep a full pixel of air between the two bars at scale 1.0.  A
-    // 1 px gap could round to touching or overlapping on some display
-    // scales because the two half-widths are fractional.
+    // Every bar is half the wash column, whether the channel is mono or
+    // stereo.  A mono channel shows one left-aligned bar, not a full-width
+    // bar that reads as two stereo bars merged together.
     let gap = 2.0 * scale;
     let half_w = ((r.width - gap) / 2.0).max(0.0);
+    let left = Rectangle::new(r.position(), Size::new(half_w, r.height));
+    if !second {
+        return (left, None);
+    }
     (
-        Rectangle::new(r.position(), Size::new(half_w, r.height)),
+        left,
         Some(Rectangle::new(
             Point::new(r.x + half_w + gap, r.y),
             Size::new(half_w, r.height),
@@ -1643,6 +1644,15 @@ mod tests {
             "the two bars need at least one clear pixel"
         );
         assert!(right.x + right.width <= r.x + r.width + f32::EPSILON);
+    }
+
+    #[test]
+    fn mono_meter_bar_has_one_stereo_bar_width() {
+        let r = Rectangle::new(Point::new(10.0, 20.0), Size::new(METER_W, 200.0));
+        let (mono, _) = meter_split(r, 1.0, false);
+        let (stereo_left, _) = meter_split(r, 1.0, true);
+        assert!((mono.width - stereo_left.width).abs() < f32::EPSILON);
+        assert!((mono.height - r.height).abs() < f32::EPSILON);
     }
 
     #[test]
