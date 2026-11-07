@@ -236,8 +236,15 @@ The GUI also persists interface state: window layout, sidebar state, channel
 names, Control Room preferences and device identity. The TUI and GUI share the
 mixer scene, so the last writer wins.
 
+A named **workspace** bundles the current scene, the eight snapshots and their
+names, channel labels, the four groups, the six layouts, view state, Control
+Room state, virtual-surround settings and window size in one `.tcws` JSON
+file. It is the portable host-side configuration; `gui.json` remains the
+per-installation preference file, `auto.json` the crash-recovery scene, and
+the unit's six setups remain device state.
+
 Runtime monitoring state, such as the active Talkback press or a cue selection,
-is not part of the mixer scene.
+is not part of the mixer scene or a workspace.
 
 Startup sync compares the saved scene with the device where the backend can
 read state back.  Groups without readback are written from the saved scene.

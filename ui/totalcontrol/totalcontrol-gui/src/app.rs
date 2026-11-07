@@ -5,9 +5,11 @@ use iced::widget::{
     row, scrollable, slider, stack, text, text_input,
 };
 use iced::{window, Background, Color, Element, Length, Subscription, Task};
+use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult};
 use rosc::OscType;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use totalcontrol_core::channel::EqBandType;
@@ -29,6 +31,7 @@ use crate::scenes::{load_scene_file, save_scene_file};
 use crate::sidebar::{self, Group};
 use crate::sync_dialog;
 use crate::theme;
+use crate::workspaces::{self, Workspace, WorkspaceSnapshot, WorkspaceView};
 use crate::widgets::dynamics_plot::dynamics_plot;
 use crate::widgets::eq_plot::{eq_plot, EqPlotActions};
 use crate::widgets::fader;
@@ -1702,6 +1705,14 @@ pub enum ResetMix {
     TotalReset,
 }
 
+/// The top-bar Workspace menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkspaceMenu {
+    #[default]
+    Closed,
+    Root,
+}
+
 /// The top-bar Options menu.  Reset Mix is a submenu; Settings opens the
 /// app-level sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2073,6 +2084,16 @@ pub enum Message {
     ToggleFxPanel,
     /// Opens the Assign menu at its first level, or closes it.
     ToggleAssign,
+    /// Opens the top-bar Workspace menu, or closes it.
+    ToggleWorkspace,
+    /// Opens a workspace file.
+    WorkspaceOpen,
+    /// Saves the current workspace, prompting for a path when it has none.
+    WorkspaceSave,
+    /// Saves the current workspace under a new path.
+    WorkspaceSaveAs,
+    /// Closes the Workspace menu.
+    CloseWorkspace,
     /// Opens the top-bar Options menu, or closes it.
     ToggleOptions,
     /// Opens the Reset Mix submenu.
@@ -2164,6 +2185,8 @@ pub enum Message {
     /// will save into.
     SnapshotClicked(u8),
     SnapshotStore,
+    /// Rename the selected snapshot slot.
+    SnapshotNameChanged(String),
     /// Enters/exits group-assignment mode — while active, clicking a
     /// group's mute/solo/fader cell assigns the current multi-selection
     /// (`state.selected`) as that group's membership.
@@ -2516,6 +2539,14 @@ pub struct TotalControl {
     /// links, layered above the whole window (see `about::about_modal`).
     pub show_about: bool,
     pub show_settings: bool,
+    /// Top-bar Workspace menu state.
+    pub workspace_menu: WorkspaceMenu,
+    /// Current workspace file, if any.
+    pub workspace_path: Option<PathBuf>,
+    /// Whether host-side workspace state has changed since the last save.
+    pub workspace_dirty: bool,
+    /// Last folder used by the Workspace file dialogs.
+    pub workspace_last_dir: Option<PathBuf>,
     /// Top-bar Options menu state.
     pub options_menu: OptionsMenu,
     /// Persisted intent for the virtual surround outputs.
@@ -2574,11 +2605,12 @@ pub struct TotalControl {
     /// tell an empty slot from a stored one. Read once at startup, kept in
     /// step by `SnapshotStore`.
     pub stored_snapshots: [bool; 8],
-    /// The simulated device's snapshots. A mock session never touches the
-    /// real `Mix n` files (as its auto-save never does): storing there
-    /// would overwrite the user's real snapshots with simulated data, and
-    /// recalling a real one would push hardware state into the simulation.
-    pub mock_snapshots: [Option<Scene>; 8],
+    /// The current eight Mix slots.  Real sessions load these from
+    /// `Mix n.json`; a mock session keeps them in memory so simulated data
+    /// never overwrites the user's real snapshots.
+    pub snapshots: [Option<Scene>; 8],
+    /// User-visible names of the eight Mix slots.
+    pub snapshot_names: [String; 8],
     /// Which channels `Message::GlobalSoloToggle` most recently cleared
     /// — restored on the next press if nothing's been soloed again in
     /// the meantime. Empty when there's nothing to restore.
@@ -2993,6 +3025,13 @@ pub fn new_with_device(
         .map(|c| c.dialect)
         .unwrap_or(crate::osc::OscDialect::Classic);
     let osc_enabled = osc_cli;
+    let snapshots: [Option<Scene>; 8] = std::array::from_fn(|i| {
+        if simulated {
+            None
+        } else {
+            crate::scenes::load_scene_file(&format!("Mix {}", i + 1))
+        }
+    });
 
     let state = TotalControl {
         device,
@@ -3077,6 +3116,10 @@ pub fn new_with_device(
         assign_anim: None,
         show_about: false,
         show_settings: false,
+        workspace_menu: WorkspaceMenu::Closed,
+        workspace_path: None,
+        workspace_dirty: false,
+        workspace_last_dir: None,
         options_menu: OptionsMenu::Closed,
         surround_51: false,
         surround_71: false,
@@ -3100,13 +3143,9 @@ pub fn new_with_device(
         layouts: std::array::from_fn(|i| crate::layouts::load_layout_file((i + 1) as u8)),
         active_layout: None,
         active_snapshot: None,
-        stored_snapshots: std::array::from_fn(|i| {
-            !simulated
-                && crate::scenes::scenes_dir()
-                    .join(format!("Mix {}.json", i + 1))
-                    .exists()
-        }),
-        mock_snapshots: Default::default(),
+        stored_snapshots: std::array::from_fn(|i| snapshots[i].is_some()),
+        snapshots,
+        snapshot_names: std::array::from_fn(|i| format!("Mix {}", i + 1)),
         last_cleared_solos: Vec::new(),
         last_cleared_mutes: Vec::new(),
         snapshot_dirty: false,
@@ -3235,6 +3274,7 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         labels,
         show_original_names: state.show_original_names,
         window_size: state.window_size,
+        workspace_last_dir: state.workspace_last_dir.clone(),
         // Only a choice to leave the default is worth writing down.
         keep_in_tray: (!state.keep_in_tray).then_some(false),
         engine_force_rate: Some(state.engine_force_rate),
@@ -3318,6 +3358,7 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
         .collect();
     state.show_original_names = prefs.show_original_names;
     state.window_size = prefs.window_size;
+    state.workspace_last_dir = prefs.workspace_last_dir;
     state.keep_in_tray = prefs.keep_in_tray.unwrap_or(true);
     state.engine_force_rate = prefs.engine_force_rate.unwrap_or(0);
     state.engine_force_quantum = prefs.engine_force_quantum.unwrap_or(0);
@@ -3376,6 +3417,215 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
         prefs.sync_direction.unwrap_or(SyncDirection::DeviceToGui)
     };
     state.device.sync_settings_to_device();
+}
+
+/// Capture the complete host-side configuration for a workspace file.
+fn capture_workspace(state: &TotalControl) -> Workspace {
+    let scene = state
+        .host_scene
+        .clone()
+        .unwrap_or_else(|| state.device.capture_scene());
+    let snapshots: [WorkspaceSnapshot; 8] = std::array::from_fn(|i| WorkspaceSnapshot {
+        name: state
+            .snapshot_names
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| format!("Mix {}", i + 1)),
+        scene: state.snapshots.get(i).cloned().flatten(),
+    });
+    let name = state
+        .workspace_path
+        .as_ref()
+        .and_then(|path| path.file_stem())
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Untitled")
+        .to_string();
+    let panels = state.sidebar_panels_open;
+    Workspace {
+        schema: workspaces::SCHEMA,
+        name,
+        scene,
+        snapshots,
+        groups: state.groups.clone(),
+        layouts: state.layouts.clone(),
+        labels: state.labels.iter().map(|(c, l)| (*c, l.clone())).collect(),
+        view: WorkspaceView {
+            view: state.view,
+            row_mode: state.row_mode,
+            sidebar_open: state.sidebar_open,
+            sidebar_width: state.sidebar_width,
+            panels_open: [panels.options, panels.snapshots, panels.groups, panels.layout],
+            fx_panel: state.show_fx_panel,
+            ui_scale: state.ui_scale,
+            sel_out: state.sel_out,
+            quick_channel: state.quick_channel,
+            show_original_names: state.show_original_names,
+            matrix_mono: state.matrix_mono,
+            active_snapshot: state.active_snapshot,
+            active_layout: state.active_layout,
+            collapsed: state.collapsed.clone(),
+        },
+        control_room: state.control_room.clone(),
+        assign: state.assign,
+        surround_51: state.surround_51,
+        surround_71: state.surround_71,
+        window_size: state.window_size,
+    }
+}
+
+/// Apply a loaded workspace.  The device scene is applied first; GUI state
+/// is only replaced after that succeeds, so a failed load cannot leave a
+/// half-switched configuration.
+fn apply_workspace(
+    state: &mut TotalControl,
+    workspace: &Workspace,
+    path: PathBuf,
+) -> Result<(), String> {
+    if workspace.schema > workspaces::SCHEMA {
+        return Err(format!(
+            "Workspace schema {} is newer than this TotalControl.",
+            workspace.schema
+        ));
+    }
+    workspace
+        .scene
+        .check_compatible(state.device.canonical_model())
+        .map_err(|e| e.to_string())?;
+    state
+        .device
+        .apply_scene(&workspace.scene)
+        .map_err(|e| e.to_string())?;
+
+    state.host_scene = Some(workspace.scene.clone());
+    state.snapshots = std::array::from_fn(|i| {
+        workspace
+            .snapshots
+            .get(i)
+            .and_then(|slot| slot.scene.clone())
+    });
+    state.stored_snapshots = std::array::from_fn(|i| state.snapshots[i].is_some());
+    state.snapshot_names = std::array::from_fn(|i| {
+        workspace
+            .snapshots
+            .get(i)
+            .map(|slot| slot.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("Mix {}", i + 1))
+    });
+    state.groups = workspace.groups.clone();
+    state.group_editing = false;
+    state.layouts = workspace.layouts.clone();
+    state.active_layout = workspace.view.active_layout;
+    state.active_snapshot = workspace.view.active_snapshot;
+    state.collapsed = workspace.view.collapsed.clone();
+    state.collapse_anim.clear();
+    state.labels = workspace.labels.iter().cloned().collect();
+    state.view = workspace.view.view;
+    state.row_mode = workspace.view.row_mode;
+    state.sidebar_open = workspace.view.sidebar_open;
+    state.sidebar_width = workspace
+        .view
+        .sidebar_width
+        .clamp(sidebar::MIN_WIDTH, sidebar::MAX_WIDTH);
+    state.sidebar_panels_open = sidebar::PanelsOpen {
+        options: workspace.view.panels_open[0],
+        snapshots: workspace.view.panels_open[1],
+        groups: workspace.view.panels_open[2],
+        layout: workspace.view.panels_open[3],
+    };
+    state.show_fx_panel = workspace.view.fx_panel;
+    state.ui_scale = workspace
+        .view
+        .ui_scale
+        .clamp(theme::SCALE_MIN, theme::SCALE_MAX);
+    state.sel_out = workspace.view.sel_out;
+    state.quick_channel = workspace.view.quick_channel;
+    state.show_original_names = workspace.view.show_original_names;
+    state.matrix_mono = workspace.view.matrix_mono;
+    state.control_room = workspace.control_room.clone();
+    state.control_room_draft = workspace.control_room.clone();
+    state.assign = workspace.assign;
+    state.surround_51 = workspace.surround_51;
+    state.surround_71 = workspace.surround_71;
+    state.window_size = workspace.window_size;
+    state.workspace_path = Some(path);
+    state.workspace_dirty = false;
+    state.workspace_menu = WorkspaceMenu::Closed;
+    state.snapshot_dirty = false;
+    state.prefs_dirty = true;
+    state.last_saved_json = None;
+    enforce_control_room_stereo(state);
+    apply_control_room_assignments(state).map_err(|e| e.to_string())?;
+    sync_surround_bridge(state);
+    Ok(())
+}
+
+fn workspace_dialog_dir(state: &TotalControl) -> PathBuf {
+    state
+        .workspace_last_dir
+        .clone()
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(workspaces::default_dir)
+}
+
+fn remember_workspace_dir(state: &mut TotalControl, path: &std::path::Path) {
+    if let Some(parent) = path.parent() {
+        state.workspace_last_dir = Some(parent.to_path_buf());
+        state.prefs_dirty = true;
+    }
+}
+
+fn workspace_open_dialog(state: &TotalControl) -> Option<PathBuf> {
+    FileDialog::new()
+        .add_filter("TotalControl Workspace", &[workspaces::EXTENSION])
+        .set_directory(workspace_dialog_dir(state))
+        .pick_file()
+}
+
+fn workspace_save_dialog(state: &TotalControl) -> Option<PathBuf> {
+    let default_name = state
+        .workspace_path
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("Untitled.tcws");
+    FileDialog::new()
+        .add_filter("TotalControl Workspace", &[workspaces::EXTENSION])
+        .set_directory(workspace_dialog_dir(state))
+        .set_file_name(default_name)
+        .save_file()
+        .map(workspaces::with_extension)
+}
+
+fn save_workspace_to(state: &mut TotalControl, path: PathBuf) -> Result<(), String> {
+    let mut workspace = capture_workspace(state);
+    workspace.name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Untitled")
+        .to_string();
+    workspaces::save(&path, &workspace)?;
+    state.workspace_path = Some(path.clone());
+    state.workspace_dirty = false;
+    state.prefs_dirty = true;
+    remember_workspace_dir(state, &path);
+    state.notice = Some((
+        format!("Saved workspace {}", path.display()),
+        Instant::now(),
+    ));
+    Ok(())
+}
+
+fn confirm_discard_workspace(state: &TotalControl) -> bool {
+    if !state.workspace_dirty {
+        return true;
+    }
+    MessageDialog::new()
+        .set_title("Unsaved workspace")
+        .set_description("The current workspace has unsaved changes. Open another one and discard them?")
+        .set_buttons(MessageButtons::YesNo)
+        .show()
+        == MessageDialogResult::Yes
 }
 
 /// Push the Control Room Main and Speaker B assignments from the saved
@@ -6456,6 +6706,11 @@ fn is_undoable(message: &Message) -> bool {
             | Message::ToggleDevicePanel
             | Message::ToggleAbout
             | Message::ToggleSettings
+            | Message::ToggleWorkspace
+            | Message::WorkspaceOpen
+            | Message::WorkspaceSave
+            | Message::WorkspaceSaveAs
+            | Message::CloseWorkspace
             | Message::ToggleOptions
             | Message::OptionsReset
             | Message::OptionsBack
@@ -6507,6 +6762,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::RenameCommit
             | Message::SetShowOriginalNames(_)
             | Message::SnapshotStore
+            | Message::SnapshotNameChanged(_)
             | Message::GroupEditToggle
             | Message::GroupLinkToggle(..)
             | Message::GroupClear
@@ -6638,6 +6894,31 @@ fn changes_mix(message: &Message) -> bool {
     }
 }
 
+/// Whether a message changes host-side state that belongs in a workspace.
+fn changes_workspace(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::SnapshotClicked(_)
+            | Message::SnapshotStore
+            | Message::SnapshotNameChanged(_)
+            | Message::LayoutClicked(_)
+            | Message::LayoutStore
+            | Message::GroupEditToggle
+            | Message::GroupLinkToggle(..)
+            | Message::GroupClear
+            | Message::ControlRoomMuteFx(_)
+            | Message::ControlRoomMono(_)
+            | Message::ControlRoomRecall
+            | Message::Dim(_)
+            | Message::SpeakerB(_)
+            | Message::TalkbackChanged(_)
+            | Message::QuickChannelSelected(_)
+            | Message::SelectOutput(_)
+            | Message::ToggleMatrixMono
+    ) || changes_prefs(message)
+        || changes_mix(message)
+}
+
 /// Whether `message` can only do something on a connection that speaks
 /// RME's own protocol: the setters behind `require_proprietary` in the ALSA
 /// backend (`babyface.rs`), plus `set_eq_for_record`, which that backend
@@ -6721,6 +7002,18 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
     // A Control Room pair can never be unlinked; correct the model before
     // the message below acts on it.
     enforce_control_room_stereo(state);
+    if changes_workspace(&message)
+        && !matches!(
+            message,
+            Message::ToggleWorkspace
+                | Message::WorkspaceOpen
+                | Message::WorkspaceSave
+                | Message::WorkspaceSaveAs
+                | Message::CloseWorkspace
+        )
+    {
+        state.workspace_dirty = true;
+    }
     // The Assign cards close on an explicit close or an actual click
     // elsewhere.  Hover messages, the periodic engine poll and the collapse
     // animation tick must not close them: moving from the assign button to
@@ -7423,6 +7716,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // Topmost thing first: the modal outranks an in-place edit.
             if state.show_about {
                 state.show_about = false;
+            } else if state.workspace_menu != WorkspaceMenu::Closed {
+                state.workspace_menu = WorkspaceMenu::Closed;
+            } else if state.options_menu != OptionsMenu::Closed {
+                state.options_menu = OptionsMenu::Closed;
             } else if state.control_room_settings_open {
                 state.control_room_settings_open = false;
                 state.control_room_draft = state.control_room.clone();
@@ -8518,7 +8815,64 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.show_settings = !state.show_settings;
             state.show_device_panel = false;
         }
+        Message::ToggleWorkspace => {
+            state.options_menu = OptionsMenu::Closed;
+            state.assign_menu = AssignMenu::Closed;
+            state.workspace_menu = match state.workspace_menu {
+                WorkspaceMenu::Closed => WorkspaceMenu::Root,
+                WorkspaceMenu::Root => WorkspaceMenu::Closed,
+            };
+        }
+        Message::CloseWorkspace => state.workspace_menu = WorkspaceMenu::Closed,
+        Message::WorkspaceOpen => {
+            state.workspace_menu = WorkspaceMenu::Closed;
+            if !confirm_discard_workspace(state) {
+                return Task::none();
+            }
+            let Some(path) = workspace_open_dialog(state) else {
+                return Task::none();
+            };
+            match workspaces::load(&path)
+                .and_then(|workspace| apply_workspace(state, &workspace, path.clone()))
+            {
+                Ok(()) => {
+                    remember_workspace_dir(state, &path);
+                    state.notice = Some((
+                        format!("Opened workspace {}", path.display()),
+                        Instant::now(),
+                    ));
+                    if let (Some(id), Some((w, h))) = (state.window_id, state.window_size) {
+                        return window::resize(id, iced::Size::new(w, h));
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Could not open workspace {}: {e}", path.display());
+                    state.notice = Some((format!("Could not open workspace: {e}"), Instant::now()));
+                }
+            }
+        }
+        Message::WorkspaceSave => {
+            state.workspace_menu = WorkspaceMenu::Closed;
+            if let Some(path) = state.workspace_path.clone() {
+                if let Err(e) = save_workspace_to(state, path) {
+                    state.notice = Some((e, Instant::now()));
+                }
+            } else if let Some(path) = workspace_save_dialog(state) {
+                if let Err(e) = save_workspace_to(state, path) {
+                    state.notice = Some((e, Instant::now()));
+                }
+            }
+        }
+        Message::WorkspaceSaveAs => {
+            state.workspace_menu = WorkspaceMenu::Closed;
+            if let Some(path) = workspace_save_dialog(state) {
+                if let Err(e) = save_workspace_to(state, path) {
+                    state.notice = Some((e, Instant::now()));
+                }
+            }
+        }
         Message::ToggleOptions => {
+            state.workspace_menu = WorkspaceMenu::Closed;
             state.options_menu = match state.options_menu {
                 OptionsMenu::Closed => OptionsMenu::Root,
                 _ => OptionsMenu::Closed,
@@ -9010,14 +9364,29 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::ControlRoomExclusiveSoloPfl(on) => {
             state.control_room_draft.exclusive_solo_pfl = on;
         }
+        Message::SnapshotNameChanged(name) => {
+            if let Some(n) = state.active_snapshot {
+                if let Some(slot) = state.snapshot_names.get_mut(n - 1) {
+                    *slot = name;
+                    state.workspace_dirty = true;
+                }
+            }
+        }
         Message::SnapshotClicked(n) => {
             state.active_snapshot = Some(n as usize);
             state.snapshot_dirty = false;
-            let scene = if state.device.is_mock() {
-                state.mock_snapshots.get(n as usize - 1).cloned().flatten()
-            } else {
-                load_scene_file(&format!("Mix {n}"))
-            };
+            let scene = state
+                .snapshots
+                .get(n as usize - 1)
+                .cloned()
+                .flatten()
+                .or_else(|| {
+                    if state.device.is_mock() {
+                        None
+                    } else {
+                        load_scene_file(&format!("Mix {n}"))
+                    }
+                });
             if let Some(scene) = scene {
                 if let Err(e) = state.device.apply_scene(&scene) {
                     fail(state, "snapshot", &e);
@@ -9035,9 +9404,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     .clone()
                     .unwrap_or_else(|| state.device.capture_scene());
                 let saved = if state.device.is_mock() {
-                    if let Some(slot) = state.mock_snapshots.get_mut(n - 1) {
-                        *slot = Some(scene);
-                    }
                     Ok(())
                 } else {
                     save_scene_file(&format!("Mix {n}"), &scene)
@@ -9045,6 +9411,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 if let Err(e) = saved {
                     log::warn!("Failed to store snapshot 'Mix {n}': {e}");
                 } else {
+                    if let Some(slot) = state.snapshots.get_mut(n - 1) {
+                        *slot = Some(scene);
+                    }
                     state.snapshot_dirty = false;
                     if let Some(slot) = state.stored_snapshots.get_mut(n - 1) {
                         *slot = true;
@@ -9598,6 +9967,12 @@ pub fn view(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
             .height(Length::Fill)
             .into();
     }
+    if state.workspace_menu != WorkspaceMenu::Closed {
+        base = stack(vec![base, workspace_menu_layer(state)])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    }
     if state.options_menu != OptionsMenu::Closed {
         base = stack(vec![base, options_menu_layer(state)])
             .width(Length::Fill)
@@ -9779,7 +10154,7 @@ const ECHO_HIGH_CUTS: [&str; 6] = ["Off", "16k", "12k", "8k", "4k", "2k"];
 fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     // Match Control Room Settings: 16 pt at the current UI scale.
-    let text_size = 16.0 * scale;
+    let text_size = theme::TEXT_DIALOG * scale;
     let settings = state.device.settings();
     let modifiers = state.modifiers;
 
@@ -9995,6 +10370,41 @@ fn popover<'a>(
     )
 }
 
+/// A centered, modal dialog with a dimmed scrim.  The Settings sheet used
+/// to be a sidebar popover; dialogs are centered and cannot be dragged off
+/// the window.
+fn centered_dialog<'a>(
+    state: &'a TotalControl,
+    body: Element<'a, Message>,
+    close: Message,
+    width: f32,
+) -> Element<'a, Message> {
+    let scale = state.ui_scale;
+    let card = opaque(
+        container(body)
+            .style(theme::dialog)
+            .padding(theme::SPACE_XL * scale)
+            .width(Length::Fixed(width * scale)),
+    );
+    opaque(
+        mouse_area(
+            container(card)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_theme: &iced::Theme| container::Style {
+                    background: Some(Background::Color(Color {
+                        a: 0.55,
+                        ..Color::BLACK
+                    })),
+                    ..container::Style::default()
+                }),
+        )
+        .on_press(close),
+    )
+}
+
 /// A refused device write, as a small card at the foot of the window. It
 /// takes no clicks (a `Space`-sized layer would levitate the cursor for the
 /// mixer below): the card alone is as big as its text.
@@ -10016,19 +10426,61 @@ fn notice_toast(message: &str, scale: f32) -> Element<'_, Message> {
     .into()
 }
 
-/// The top-bar Options menu.  Root holds Reset Mix and Settings; Reset Mix
-/// expands into the reset actions.
-fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
+/// The top-bar Workspace menu.  The file dialogs use the remembered
+/// workspace folder, defaulting to the user's Documents directory.
+fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let ts = scale * 1.15;
-    let item = |label: String, message: Message| {
-        iced::widget::button(text(label).size(theme::TEXT_XS * ts))
+    let text_size = theme::TEXT_DIALOG * scale;
+    let item = |label: &'static str, message: Message| {
+        iced::widget::button(text(label).size(text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::ghost_button)
             .on_press(message)
     };
-    let mut card = column![].spacing(0.0).width(Length::Fixed(250.0 * scale));
+    let card = column![
+        item("Open Workspace…", Message::WorkspaceOpen),
+        item("Save Workspace", Message::WorkspaceSave),
+        item("Save Workspace As…", Message::WorkspaceSaveAs),
+    ]
+    .spacing(0.0)
+    .width(Length::Fixed(250.0 * scale));
+    let card = opaque(
+        container(card)
+            .style(theme::dialog)
+            .padding(theme::SPACE_SM * scale),
+    );
+    opaque(
+        mouse_area(
+            container(card)
+                .align_x(iced::Alignment::Start)
+                .padding(iced::Padding {
+                    top: theme::TOP_BAR_H * scale,
+                    // Under the Workspace button, before Options.
+                    left: 390.0 * scale,
+                    right: 0.0,
+                    bottom: 0.0,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .on_press(Message::CloseWorkspace),
+    )
+}
+
+/// The top-bar Options menu.  Root holds Reset Mix and Settings; Reset Mix
+/// expands into the reset actions.
+fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
+    let scale = state.ui_scale;
+    let text_size = theme::TEXT_DIALOG * scale;
+    let item = |label: String, message: Message| {
+        iced::widget::button(text(label).size(text_size))
+            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+            .width(Length::Fill)
+            .style(theme::ghost_button)
+            .on_press(message)
+    };
+    let mut card = column![].spacing(0.0).width(Length::Fixed(360.0 * scale));
     match state.options_menu {
         OptionsMenu::Root => {
             card = card
@@ -10054,9 +10506,9 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
                 .align_x(iced::Alignment::Start)
                 .padding(iced::Padding {
                     top: theme::TOP_BAR_H * scale,
-                    // Under the Options button: brand + view tabs + the
-                    // fixed gaps before it in the top bar.
-                    left: 390.0 * scale,
+                    // Under the Options button: brand + view tabs +
+                    // Workspace and the fixed gaps before it in the top bar.
+                    left: 500.0 * scale,
                     right: 0.0,
                     bottom: 0.0,
                 })
@@ -10071,7 +10523,7 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
 /// around its window, not what the card does.
 fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let text_size = 16.0 * scale;
+    let text_size = theme::TEXT_DIALOG * scale;
     let header = row![
         text("TotalControl settings")
             .color(theme::TEXT_PRIMARY)
@@ -10247,7 +10699,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let body = column![header, background, sync, surround, osc]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
-    popover(state, body.into(), Message::ToggleSettings, 520.0)
+    centered_dialog(state, body.into(), Message::ToggleSettings, 520.0)
 }
 
 /// A sample rate as people say it: "48 kHz", "44.1 kHz", "176.4 kHz".
@@ -10282,7 +10734,7 @@ pub(crate) fn sidebar_px(state: &TotalControl) -> f32 {
 /// termination, and EQ+D for Record (`docs/spec/UCX-CONTROL-SPEC.md` §11).
 fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let text_size = 16.0 * scale;
+    let text_size = theme::TEXT_DIALOG * scale;
     let settings = state.device.settings();
     let uc = state.device.is_uc_model();
     let ucx = state.device.is_ucx_model();
@@ -10541,7 +10993,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
 
 fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let text_size = 16.0 * scale;
+    let text_size = theme::TEXT_DIALOG * scale;
     let caption = |label: &'static str| {
         text(label)
             .color(theme::TEXT_SEC)
@@ -10652,7 +11104,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Errors"),
                 iced::widget::Space::new().width(Length::Fill),
-                button(text("reset").size(theme::TEXT_XS * scale))
+                button(text("reset").size(theme::TEXT_DIALOG * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::ResetTransportErrors),
@@ -10712,7 +11164,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     .size(text_size)
                     .color(colour),
                 iced::widget::Space::new().width(Length::Fill),
-                button(text("0 dB").size(theme::TEXT_XS * scale))
+                button(text("0 dB").size(theme::TEXT_DIALOG * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::HostVolumeUnity),
@@ -10758,7 +11210,7 @@ fn transport_delta(
 /// round-trip estimate; the UC line is a one-way output budget.
 fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let line = |s: String, c: Color| text(s).color(c).size(theme::TEXT_XS * scale);
+    let line = |s: String, c: Color| text(s).color(c).size(theme::TEXT_DIALOG * scale);
     match state.card_stream {
         Some(card) => {
             let mut col = column![].spacing(theme::SPACE_TIGHT * scale);
@@ -11223,6 +11675,22 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
         .style(theme::ghost_button)
         .on_press(Message::ToggleAbout);
 
+    // Workspace > Open/Save.  The file itself is the complete host-side
+    // configuration; the menu is deliberately separate from Options.
+    let workspace = iced::widget::button(
+        text(if state.workspace_menu != WorkspaceMenu::Closed {
+            "WORKSPACE ▴"
+        } else if state.workspace_dirty {
+            "WORKSPACE *"
+        } else {
+            "WORKSPACE"
+        })
+        .size(theme::TEXT_MD * scale),
+    )
+    .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
+    .style(theme::tab_toggle(state.workspace_menu != WorkspaceMenu::Closed))
+    .on_press(Message::ToggleWorkspace);
+
     // Options > Reset Mix and Settings.  Reset Mix is a submenu; Settings
     // opens the app-level sheet.
     let options = iced::widget::button(
@@ -11240,6 +11708,7 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     let mut bar = row![
         brand,
         tab_toggle,
+        workspace,
         options,
         // Everything right of here is the tool side of the bar: the
         // flexible space sits in the middle, so the session chip stays
@@ -11940,7 +12409,7 @@ fn route_popover(state: &TotalControl, width: f32, scale: f32) -> Element<'_, Me
     for (display, label) in labels.iter().enumerate() {
         let internal = display_to_internal.get(display).copied().unwrap_or(display);
         list = list.push(
-            button(text(label.clone()).size(theme::TEXT_SM * scale))
+            button(text(label.clone()).size(theme::TEXT_DIALOG * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
                 // The bus a strip routes to is a position, not an "on"
@@ -14448,7 +14917,7 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
         iced::widget::button(
             container(
                 text(label)
-                    .size(theme::TEXT_MD * scale)
+                    .size(theme::TEXT_DIALOG * scale)
                     .font(if strong { bold } else { iced::Font::DEFAULT })
                     .center(),
             )
@@ -15161,7 +15630,7 @@ fn db_control(value: f32, on_change: fn(f32) -> Message, scale: f32) -> Element<
             .height(24.0 * scale),
         text(format!("{value:+.1} dB"))
             .color(theme::TEXT_PRIMARY)
-            .size(16.0 * scale)
+            .size(theme::TEXT_DIALOG * scale)
             .width(Length::Fixed(84.0 * scale)),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -15181,7 +15650,7 @@ fn db_control(value: f32, on_change: fn(f32) -> Message, scale: f32) -> Element<
 fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let draft = &state.control_room_draft;
-    let text_size = 16.0 * scale;
+    let text_size = theme::TEXT_DIALOG * scale;
     let content_w = 500.0 * scale;
 
     let section = |label: &'static str| -> Element<'static, Message> {
@@ -16244,17 +16713,19 @@ mod tests {
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
         apply_startup_sync, apply_control_room_assignments, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
+        apply_workspace, capture_workspace, save_workspace_to,
         reorder_pair_volumes, fx_reserve, fx_slot,
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, MeterAnim, Message, RowMode, View,
         ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
         control_room_visual_width,
-        is_control_room_cid, strip_params, ResetMix, OptionsMenu,
+        is_control_room_cid, strip_params, ResetMix, OptionsMenu, WorkspaceMenu,
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
         FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W, StartupMismatch,
     };
     use crate::osc::OscOutbound;
+    use std::path::PathBuf;
     use crate::sidebar;
     use crate::theme;
     use crate::widgets::strip;
@@ -18113,7 +18584,7 @@ mod tests {
         let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
         let _ = update(&mut state, Message::SnapshotStore);
         assert!(state.stored_snapshots[2]);
-        assert!(state.mock_snapshots[2].is_some(), "stored in memory, not on disk");
+        assert!(state.snapshots[2].is_some(), "stored in memory, not on disk");
         let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.1));
         let _ = update(&mut state, Message::SnapshotClicked(3));
         assert!((state.device.inputs()[4].volumes[0] - 0.5).abs() < 1e-6);
@@ -19013,6 +19484,92 @@ mod tests {
         let _ = update(&mut state, Message::MismatchUseDevice);
         assert!(state.startup_mismatch.is_none());
         assert!((state.device.outputs()[0].volume - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn workspace_menu_opens_and_escape_closes_it() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::ToggleWorkspace);
+        assert_eq!(state.workspace_menu, WorkspaceMenu::Root);
+        let _ = update(&mut state, Message::EscapePressed);
+        assert_eq!(state.workspace_menu, WorkspaceMenu::Closed);
+    }
+
+    #[test]
+    fn changing_host_state_marks_the_workspace_dirty() {
+        let mut state = new(true, None, None);
+        state.workspace_dirty = false;
+        let _ = update(&mut state, Message::SetView(View::Mixer));
+        assert!(state.workspace_dirty);
+    }
+
+    #[test]
+    fn a_workspace_captures_labels_groups_layouts_and_snapshots() {
+        let mut state = new(true, None, None);
+        state.view = View::Mixer;
+        state.row_mode = RowMode::Two;
+        state.sidebar_open = false;
+        state.sidebar_width = 240.0;
+        state.labels.insert(ChannelId::Input(0), "Vocal".into());
+        state.groups[0].members = vec![ChannelId::Output(0), ChannelId::Output(2)];
+        state.groups[0].fader_linked = true;
+        state.collapsed.insert(ChannelId::Input(1));
+        state.snapshot_names[0] = "Surround".into();
+        state.snapshots[0] = Some(state.device.capture_scene());
+        state.active_snapshot = Some(1);
+
+        let workspace = capture_workspace(&state);
+        assert_eq!(workspace.view.view, View::Mixer);
+        assert_eq!(workspace.view.row_mode, RowMode::Two);
+        assert_eq!(workspace.view.sidebar_width, 240.0);
+        assert_eq!(workspace.labels[0].1, "Vocal");
+        assert!(workspace.groups[0].fader_linked);
+        assert!(workspace.view.collapsed.contains(&ChannelId::Input(1)));
+        assert_eq!(workspace.snapshots[0].name, "Surround");
+        assert!(workspace.snapshots[0].scene.is_some());
+    }
+
+    #[test]
+    fn saving_a_workspace_writes_the_file_and_clears_dirty() {
+        let dir = std::env::temp_dir().join(format!(
+            "totalcontrol-app-workspace-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("saved.tcws");
+        let mut state = new(true, None, None);
+        state.workspace_dirty = true;
+        save_workspace_to(&mut state, path.clone()).unwrap();
+        assert!(path.exists());
+        assert!(!state.workspace_dirty);
+        assert_eq!(state.workspace_path, Some(path.clone()));
+        let loaded = crate::workspaces::load(&path).unwrap();
+        assert_eq!(loaded.name, "saved");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn applying_a_workspace_restores_the_host_state() {
+        let mut source = new(true, None, None);
+        source.view = View::Mixer;
+        source.labels.insert(ChannelId::Input(0), "Vocal".into());
+        source.groups[1].members = vec![ChannelId::Output(0)];
+        source.groups[1].fader_linked = true;
+        source.collapsed.insert(ChannelId::Playback(0));
+        source.snapshot_names[2] = "Stereo".into();
+        source.snapshots[2] = Some(source.device.capture_scene());
+        let workspace = capture_workspace(&source);
+
+        let mut target = new(true, None, None);
+        apply_workspace(&mut target, &workspace, PathBuf::from("/tmp/test.tcws")).unwrap();
+        assert_eq!(target.view, View::Mixer);
+        assert_eq!(target.labels.get(&ChannelId::Input(0)).map(String::as_str), Some("Vocal"));
+        assert!(target.groups[1].fader_linked);
+        assert!(target.collapsed.contains(&ChannelId::Playback(0)));
+        assert_eq!(target.snapshot_names[2], "Stereo");
+        assert!(target.snapshots[2].is_some());
+        assert_eq!(target.workspace_path, Some(PathBuf::from("/tmp/test.tcws")));
+        assert!(!target.workspace_dirty);
     }
 
     #[test]

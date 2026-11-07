@@ -89,11 +89,38 @@ the menu, rewrites the whole mixer and pushes it in a single scene apply:
 | Set inputs mono, outputs stereo | the ADM layout |
 | Total reset | straight playback to Main plus effects off and output volumes set |
 
-### 1.2 App settings
+Menu items and dialog body text use the Control Room Settings size: 16 px at
+scale 1.0.
+
+### 1.2 Workspace menu
+
+The top bar has `WORKSPACE` immediately before `OPTIONS`. Its menu contains:
+
+| Item | Action |
+|---|---|
+| `Open Workspace…` | choose a `.tcws` file and replace the current workspace |
+| `Save Workspace` | save to the current file, or open Save As when there is no file |
+| `Save Workspace As…` | choose a new `.tcws` file |
+
+The file dialogs remember the last used folder in `gui.json`. With no saved
+folder they start in `Documents`, falling back to the home directory. A
+workspace written for another device model is refused. Opening a workspace
+while the current one is dirty asks before discarding the changes.
+
+A workspace contains the current mixer, the eight named snapshots, labels,
+groups, six layout slots, collapsed/expanded strips, view and sidebar state,
+Control Room settings and assignments, virtual-surround settings and window
+size. It excludes undo/redo, open dialogs and transient selections. Selecting
+a snapshot slot exposes a name field below its Store action.
+
+`WORKSPACE` shows `*` while the host state differs from the saved file.
+
+### 1.3 App settings
 
 `Options > Settings`, the tray Settings entry and the `,` shortcut open the
-app-level settings sheet. It holds BACKGROUND, STARTUP SYNC, SURROUND and
-OSC sections.
+app-level settings sheet. It is a centered modal dialog with a dimmed scrim,
+not a sidebar popover; it holds BACKGROUND, STARTUP SYNC, SURROUND and OSC
+sections.
 
 SURROUND has `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
 checked output creates a PipeWire sink while TotalControl runs and removes it
@@ -961,11 +988,12 @@ panel labels it accordingly and keeps the four terms visible.
 
 ## 14. State references
 
-Scene contents, snapshot storage, startup mismatch, undo and the split between
-mixer state and GUI preferences are defined in
+Scene contents, workspace storage, snapshot storage, startup mismatch, undo
+and the split between mixer state and GUI preferences are defined in
 [`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §9. This
 specification only names the visible surfaces: eight snapshot slots, six
-layout slots, the current auto-saved mix and the GUI preference file.
+layout slots, the Workspace menu, the current auto-saved mix and the GUI
+preference file.
 
 The startup mismatch dialog lists the decoded differences as a bullet list.
 On the UCX it appears after the asynchronous pre-connect dump has been
@@ -984,6 +1012,8 @@ beyond the window.
   strip.
 - Panel and row transitions use the constant-speed width tween.
 - The right sidebar remains visible while expanded, at every window width.
+- Menu items and dialog body text use `theme::TEXT_DIALOG` (16 px at scale 1.0).
+- The app settings sheet is centered over a dimmed scrim.
 - The three channel rows scroll together under one horizontal slider.
 - Phase, pan, output balance, dynamics, FX and loopback survive scene recall.
 - Output balance survives output-fader movement.

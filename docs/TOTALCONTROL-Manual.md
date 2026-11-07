@@ -32,8 +32,8 @@ reduced control set.
 - [9. FX: sends, reverb and echo](#9-fx-sends-reverb-and-echo)
 - [10. Control Room](#10-control-room)
 - [11. Gestures](#11-gestures)
-- [12. Options menu](#12-options-menu)
-- [13. Snapshots, layouts, undo and redo](#13-snapshots-layouts-undo-and-redo)
+- [12. Workspace and Options menus](#12-workspace-and-options-menus)
+- [13. Workspaces, snapshots, layouts, undo and redo](#13-workspaces-snapshots-layouts-undo-and-redo)
 - [14. Latency](#14-latency)
 - [15. Where TotalControl keeps its data](#15-where-totalcontrol-keeps-its-data)
 - [16. Running in the background](#16-running-in-the-background)
@@ -742,9 +742,12 @@ front-panel equivalent controls of the unit.
   it.
 - Ordinary buttons act once per click.
 
-## 12. Options menu
+## 12. Workspace and Options menus
 
-The `OPTIONS` menu in the top bar contains `Reset Mix` and `Settings`.
+The top bar has a `WORKSPACE` menu before `OPTIONS`. `WORKSPACE` opens and
+saves the complete host-side configuration described in section 13.
+
+The `OPTIONS` menu contains `Reset Mix` and `Settings`.
 
 `Reset Mix` lists the standard mixes:
 
@@ -762,29 +765,75 @@ The `OPTIONS` menu in the top bar contains `Reset Mix` and `Settings`.
 
 Choosing one rewrites the whole mixer in one go.
 
-`Settings` opens the TotalControl settings sheet: background behaviour,
-startup sync, and the virtual surround outputs described in Appendix B.
+`Settings` opens the centralized TotalControl settings dialog: background
+behaviour, startup sync, and the virtual surround outputs described in
+Appendix B.
 
-## 13. Snapshots, layouts, undo and redo
+## 13. Workspaces, snapshots, layouts, undo and redo
 
-TotalControl keeps your work in three layers:
+TotalControl keeps your work in four layers:
 
-- **Snapshots** (eight slots) store a complete mix: routing, faders, names,
-  trims and the device settings TotalControl manages. They are mixer-plus files —
-  broader than the device's own snapshot. Recall applies them to the device
-  at once. The current mix is saved every few seconds and again when
-  TotalControl closes.
-- **Layouts** (six slots) store only which strips are collapsed.
-- **GUI state** (window, sidebar, view, zoom, names, open panels, selected
-  output and link groupings) is remembered automatically between sessions.
+| Layer | Contains | Stored |
+|---|---|---|
+| **Workspace** | The complete host-side configuration: current mix, the eight named snapshots, labels, groups, layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
+| **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace, and in the working `Mix n.json` files |
+| **Auto state** | The current mixer, saved continuously for crash recovery | `auto.json` |
+| **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
+
+### Workspaces
+
+`WORKSPACE` opens a menu:
+
+- `Open Workspace…`
+- `Save Workspace`
+- `Save Workspace As…`
+
+The file dialogs start in the last folder you used, or in your `Documents`
+folder when there is no remembered folder. A workspace is one JSON file with
+the `.tcws` extension. Save writes atomically; a failed save cannot destroy the
+previous file.
+
+A workspace contains:
+
+- the current mixer scene;
+- all eight snapshots and their names;
+- user channel labels;
+- the four mute/solo/fader groups;
+- the six layout slots and the current collapsed/expanded strips;
+- view, row mode, sidebar, zoom and selected-output state;
+- Control Room assignments and monitoring settings;
+- the virtual surround-output settings;
+- the window size.
+
+Undo/redo history, open dialogs and transient selections are not saved.
+
+Opening a workspace replaces all of the above and applies its mixer to the
+device. If the current workspace has unsaved changes, TotalControl asks before
+discarding them. A workspace written for a different device model is refused.
+
+The `WORKSPACE` label shows `*` while the workspace has unsaved changes. Saving
+clears the marker. A workspace is separate from the auto-saved current mix and
+from the unit's device setups.
+
+### Snapshots
+
+**Snapshots** are eight numbered slots, each with a name. Select a slot and
+edit its name in the field below the Store action. They store a complete mixer
+state but not the GUI state, groups or layout. Recall applies the stored mix to
+the device at once. The current mix is also saved every few seconds and again
+when TotalControl closes.
+
+### Layouts
+
+**Layouts** are six slots for the collapsed/expanded strip set. They are part
+of the current workspace, not separate mixer states.
 
 Undo restores the scene as it was before your last mix-changing step; every
 continuous drag of one control counts as a single step. Redo reapplies what
 you undid. Device settings and window layout are not part of undo.
 
-Groups (multi-select sets) exist only while TotalControl runs; they are not saved.
-There is no RME-style Workspace file — TotalControl keeps the same information in
-separate files instead.
+Groups are saved in a workspace. Loading a workspace replaces the current
+groups with the stored ones.
 
 ## 14. Latency
 
@@ -803,12 +852,16 @@ packets; reset only clears the display baseline.
 
 ## 15. Where TotalControl keeps its data
 
+- Workspaces: `.tcws` files in the folder you choose when saving.
 - Snapshots: `Mix <n>.json` in the scene directory.
 - The continuously saved current mix: `auto.json` in the scene directory.
 - Layouts: `Layout <n>.json` in the layout directory.
-- Window and GUI state: `gui.json` in the `~/.config/totalcontrol/` directory.
+- Window, GUI state and the last workspace folder: `gui.json` in the
+  `~/.config/totalcontrol/` directory.
 
-These are plain JSON files you can back up or copy between machines.
+The workspace file is the portable one: it contains the current mixer,
+snapshots, labels, groups, layouts and view state. The other files are the
+working state of the current session.
 
 ## 16. Running in the background
 
