@@ -117,6 +117,8 @@ size. It excludes undo/redo, open dialogs and transient selections. Selecting
 a snapshot slot exposes a name field below its Store action.
 
 `WORKSPACE` shows `*` while the host state differs from the saved file.
+Menus start below the top bar, so clicking the other top-bar menu switches to
+it immediately on the first press; submenu items open on the first click.
 
 ### 1.3 App settings
 

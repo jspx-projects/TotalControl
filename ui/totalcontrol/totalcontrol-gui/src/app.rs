@@ -7652,10 +7652,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             };
         }
         Message::SetView(v) => {
+            close_top_menus(state);
             state.view = v;
             state.matrix_hover = None;
         }
         Message::SelectDevice(target) => {
+            close_top_menus(state);
             if let Err(e) = switch_device(state, target) {
                 fail(state, "switch device", &e);
             }
@@ -7680,6 +7682,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::QuickChannelSelected(cid) => state.quick_channel = cid,
         Message::SelectOutput(i) => {
+            close_top_menus(state);
             // A click or OSC message can outlive the device it came from
             // (an open submix list, a delayed controller update). Keep the
             // remembered submix inside the current unit's output pairs; the
@@ -8812,6 +8815,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::ToggleSettings => {
+            close_top_menus(state);
             state.show_settings = !state.show_settings;
             state.show_device_panel = false;
         }
@@ -8896,7 +8900,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.prefs_dirty = true;
             sync_surround_bridge(state);
         }
-        Message::ToggleAbout => state.show_about = !state.show_about,
+        Message::ToggleAbout => {
+            close_top_menus(state);
+            state.show_about = !state.show_about;
+        }
         Message::OpenRepoUrl => {
             // Fire and forget: the browser is not our child process, and a
             // minimal session may have no `xdg-open` to hand it to at all.
@@ -10426,6 +10433,45 @@ fn notice_toast(message: &str, scale: f32) -> Element<'_, Message> {
     .into()
 }
 
+fn close_top_menus(state: &mut TotalControl) {
+    state.workspace_menu = WorkspaceMenu::Closed;
+    state.options_menu = OptionsMenu::Closed;
+}
+
+/// Place a menu card at `left` below the top bar.  The click catcher starts
+/// below the bar, so clicking another top-bar menu switches to it on the
+/// first press instead of being consumed by the open menu.
+fn menu_below_top_bar<'a>(
+    card: Element<'a, Message>,
+    left: f32,
+    close: Message,
+    scale: f32,
+) -> Element<'a, Message> {
+    let catcher = mouse_area(
+        container(card)
+            .align_x(iced::Alignment::Start)
+            .align_y(iced::Alignment::Start)
+            .padding(iced::Padding {
+                top: theme::SPACE_TIGHT * scale,
+                left: left * scale,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(close);
+    column![
+        iced::widget::Space::new()
+            .width(Length::Fill)
+            .height(Length::Fixed(theme::TOP_BAR_H * scale)),
+        catcher,
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
 /// The top-bar Workspace menu.  The file dialogs use the remembered
 /// workspace folder, defaulting to the user's Documents directory.
 fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
@@ -10450,22 +10496,7 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             .style(theme::dialog)
             .padding(theme::SPACE_SM * scale),
     );
-    opaque(
-        mouse_area(
-            container(card)
-                .align_x(iced::Alignment::Start)
-                .padding(iced::Padding {
-                    top: theme::TOP_BAR_H * scale,
-                    // Under the Workspace button, before Options.
-                    left: 390.0 * scale,
-                    right: 0.0,
-                    bottom: 0.0,
-                })
-                .width(Length::Fill)
-                .height(Length::Fill),
-        )
-        .on_press(Message::CloseWorkspace),
-    )
+    menu_below_top_bar(card.into(), 390.0, Message::CloseWorkspace, scale)
 }
 
 /// The top-bar Options menu.  Root holds Reset Mix and Settings; Reset Mix
@@ -10500,23 +10531,7 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             .style(theme::dialog)
             .padding(theme::SPACE_SM * scale),
     );
-    opaque(
-        mouse_area(
-            container(card)
-                .align_x(iced::Alignment::Start)
-                .padding(iced::Padding {
-                    top: theme::TOP_BAR_H * scale,
-                    // Under the Options button: brand + view tabs +
-                    // Workspace and the fixed gaps before it in the top bar.
-                    left: 500.0 * scale,
-                    right: 0.0,
-                    bottom: 0.0,
-                })
-                .width(Length::Fill)
-                .height(Length::Fill),
-        )
-        .on_press(Message::CloseOptions),
-    )
+    menu_below_top_bar(card.into(), 500.0, Message::CloseOptions, scale)
 }
 
 /// The app's own settings (as opposed to the device's): how TotalControl behaves
@@ -19485,6 +19500,19 @@ mod tests {
         assert_eq!(state.workspace_menu, WorkspaceMenu::Root);
         let _ = update(&mut state, Message::EscapePressed);
         assert_eq!(state.workspace_menu, WorkspaceMenu::Closed);
+    }
+
+    #[test]
+    fn the_two_top_bar_menus_switch_on_the_first_press() {
+        let mut state = new(true, None, None);
+        state.workspace_menu = WorkspaceMenu::Root;
+        let _ = update(&mut state, Message::ToggleOptions);
+        assert_eq!(state.workspace_menu, WorkspaceMenu::Closed);
+        assert_eq!(state.options_menu, OptionsMenu::Root);
+
+        let _ = update(&mut state, Message::ToggleWorkspace);
+        assert_eq!(state.options_menu, OptionsMenu::Closed);
+        assert_eq!(state.workspace_menu, WorkspaceMenu::Root);
     }
 
     #[test]

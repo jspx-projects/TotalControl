@@ -824,6 +824,9 @@ The `WORKSPACE` label shows `*` while the workspace has unsaved changes. Saving
 clears the marker. A workspace is separate from the auto-saved current mix and
 from the unit's device setups.
 
+Clicking `OPTIONS` while the Workspace menu is open switches to the Options
+menu immediately, and the reverse. Submenus open on the first click.
+
 ### Snapshots
 
 **Snapshots** are eight numbered slots, each with a name. Select a slot and
