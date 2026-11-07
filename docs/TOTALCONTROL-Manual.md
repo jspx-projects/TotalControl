@@ -1063,9 +1063,12 @@ channels and can route it like any other playback source.
 ## Appendix C — OSC setup
 
 OSC is opt-in and binds to loopback. Open `Options > Settings`, enable
-`OSC control surface`, and choose `Classic` or `Global`; the receive and send
-ports are in the same section and are saved with the other settings. Disabling
-the switch stops the surface immediately.
+`Enable OSC control surface`, and choose `Classic` or `Global`; the receive
+and send ports are in the same section and are saved with the other settings.
+Disabling the switch stops the surface immediately.
+
+`Show OSC debug log` below it opens the traffic panel; it is greyed out until
+OSC is enabled and closes when OSC is switched off.
 
 `Classic` is the banked TotalMix FX 1.96–2.11 address space. `Global` is the
 absolute-channel TotalMix FX 2.1+ surface: channels are addressed by their

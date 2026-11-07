@@ -2065,8 +2065,7 @@ pub enum Message {
     /// message crossing the bridge in either direction, regardless of
     /// whether the panel is currently open (see `osc::worker`).
     OscLog(String),
-    /// Toggles the OSC debug log panel (top-bar button, only shown when
-    /// `--osc` is active).
+    /// Toggles the OSC debug log panel from the settings sheet.
     ToggleOscLog,
     ClearOscLog,
     /// Settings sheet: start/stop the OSC surface.
@@ -8679,6 +8678,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::ClearOscLog => state.osc_log.clear(),
         Message::SetOscEnabled(on) => {
             state.osc_enabled = on;
+            if !on {
+                state.show_osc_log = false;
+            }
             state.prefs_dirty = true;
             rebuild_osc_config(state);
         }
@@ -10670,6 +10672,15 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             state.osc_enabled,
             Message::SetOscEnabled(!state.osc_enabled),
         ),
+        {
+            let mut log = checkbox(state.show_osc_log)
+                .label("Show OSC debug log")
+                .text_size(text_size);
+            if state.osc_enabled {
+                log = log.on_toggle(|_| Message::ToggleOscLog);
+            }
+            log
+        },
         row![
             text("Protocol")
                 .color(theme::TEXT_PRIMARY)
@@ -11726,16 +11737,6 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_XXL)
     .align_y(iced::Alignment::Center);
 
-    // Only when `--osc` is actually running — otherwise there's nothing
-    // for the log to show, and the button would just be dead weight.
-    if state.osc_config.is_some() {
-        bar = bar.push(
-            iced::widget::button(text("OSC LOG").size(theme::TEXT_MD * scale))
-                .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
-                .style(theme::tab_toggle(state.show_osc_log))
-                .on_press(Message::ToggleOscLog),
-        );
-    }
     // The session chip hugs its own content (Submix + Clock) at the right
     // edge: it used to be stretched across `FillPortion(20)` inside a
     // scrollable, which painted a mostly-empty recessed pill across the
@@ -19500,6 +19501,15 @@ mod tests {
         assert_eq!(state.workspace_menu, WorkspaceMenu::Root);
         let _ = update(&mut state, Message::EscapePressed);
         assert_eq!(state.workspace_menu, WorkspaceMenu::Closed);
+    }
+
+    #[test]
+    fn disabling_osc_hides_the_debug_log() {
+        let mut state = new(true, None, None);
+        state.osc_enabled = true;
+        state.show_osc_log = true;
+        let _ = update(&mut state, Message::SetOscEnabled(false));
+        assert!(!state.show_osc_log);
     }
 
     #[test]
