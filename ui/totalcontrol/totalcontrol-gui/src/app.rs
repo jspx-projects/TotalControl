@@ -10444,7 +10444,7 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
         item("Save Workspace As…", Message::WorkspaceSaveAs),
     ]
     .spacing(0.0)
-    .width(Length::Fixed(320.0 * scale));
+    .width(Length::Fixed(224.0 * scale));
     let card = opaque(
         container(card)
             .style(theme::dialog)
@@ -10480,7 +10480,7 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             .style(theme::ghost_button)
             .on_press(message)
     };
-    let mut card = column![].spacing(0.0).width(Length::Fixed(320.0 * scale));
+    let mut card = column![].spacing(0.0).width(Length::Fixed(224.0 * scale));
     match state.options_menu {
         OptionsMenu::Root => {
             card = card
