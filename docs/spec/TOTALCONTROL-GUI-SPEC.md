@@ -90,7 +90,10 @@ the menu, rewrites the whole mixer and pushes it in a single scene apply:
 | Total reset | straight playback to Main plus effects off and output volumes set |
 
 Menu items and dialog body text use the Control Room Settings size: 16 px at
-scale 1.0.
+scale 1.0.  The Workspace and Options menus use the same 320 px width at
+scale 1.0; long Reset Mix labels wrap inside the item.  Settings use standard
+controls: independent switches are checkboxes, mutually exclusive choices are
+radio buttons, and buttons are reserved for actions.
 
 ### 1.2 Workspace menu
 
@@ -120,7 +123,8 @@ a snapshot slot exposes a name field below its Store action.
 `Options > Settings`, the tray Settings entry and the `,` shortcut open the
 app-level settings sheet. It is a centered modal dialog with a dimmed scrim,
 not a sidebar popover; it holds BACKGROUND, STARTUP SYNC, SURROUND and OSC
-sections.
+sections.  Independent options are checkboxes, one-of-many options are radio
+buttons, and the only footer action is `Close`.
 
 SURROUND has `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
 checked output creates a PipeWire sink while TotalControl runs and removes it

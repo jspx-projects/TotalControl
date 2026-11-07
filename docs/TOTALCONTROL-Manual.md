@@ -765,9 +765,10 @@ The `OPTIONS` menu contains `Reset Mix` and `Settings`.
 
 Choosing one rewrites the whole mixer in one go.
 
-`Settings` opens the centralized TotalControl settings dialog: background
+`Settings` opens the centered TotalControl settings dialog: background
 behaviour, startup sync, and the virtual surround outputs described in
-Appendix B.
+Appendix B. Independent options are checkboxes; one-of-many choices such as
+the startup sync direction and OSC protocol are radio buttons.
 
 ## 13. Workspaces, snapshots, layouts, undo and redo
 

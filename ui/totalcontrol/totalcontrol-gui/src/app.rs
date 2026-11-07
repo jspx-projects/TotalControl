@@ -10432,7 +10432,7 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
     let item = |label: &'static str, message: Message| {
-        iced::widget::button(text(label).size(text_size))
+        iced::widget::button(text(label).size(text_size).width(Length::Fill))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::ghost_button)
@@ -10444,7 +10444,7 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
         item("Save Workspace As…", Message::WorkspaceSaveAs),
     ]
     .spacing(0.0)
-    .width(Length::Fixed(250.0 * scale));
+    .width(Length::Fixed(320.0 * scale));
     let card = opaque(
         container(card)
             .style(theme::dialog)
@@ -10474,13 +10474,13 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
     let item = |label: String, message: Message| {
-        iced::widget::button(text(label).size(text_size))
+        iced::widget::button(text(label).size(text_size).width(Length::Fill))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::ghost_button)
             .on_press(message)
     };
-    let mut card = column![].spacing(0.0).width(Length::Fixed(360.0 * scale));
+    let mut card = column![].spacing(0.0).width(Length::Fixed(320.0 * scale));
     match state.options_menu {
         OptionsMenu::Root => {
             card = card
@@ -10524,152 +10524,116 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
 fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
-    let header = row![
-        text("TotalControl settings")
-            .color(theme::TEXT_PRIMARY)
-            .size(text_size),
-        iced::widget::Space::new().width(Length::Fill),
-        iced::widget::button(text("Close").size(text_size))
-            .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-            .style(theme::ghost_button)
-            .on_press(Message::ToggleSettings),
-    ]
-    .align_y(iced::Alignment::Center);
-    let section = row![
-        text("BACKGROUND")
-            .color(theme::TEXT_SEC)
-            .size(text_size),
-        iced::widget::rule::horizontal(1),
-    ]
-    .spacing(theme::SPACE_MD * scale)
-    .align_y(iced::Alignment::Center);
-    let toggle = |label: &'static str, active: bool, message: Message| {
-        iced::widget::button(text(label).size(text_size).center())
-            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .width(Length::Fill)
-            .style(theme::toggle_button(active, theme::ACCENT))
-            .on_press(message)
+    let section = |label: &'static str| {
+        row![
+            text(label).color(theme::TEXT_SEC).size(text_size),
+            iced::widget::rule::horizontal(1),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center)
     };
-    let mut background = column![section].spacing(theme::SPACE_SM * scale);
+    let check = |label: &'static str, value: bool, message: Message| {
+        checkbox(value)
+            .label(label)
+            .text_size(text_size)
+            .on_toggle(move |_| message.clone())
+    };
+    let radio_choice = |label: &'static str, selected: bool, message: Message| {
+        iced::widget::radio(label, true, Some(selected), move |_| message.clone())
+            .size(16.0 * scale)
+            .text_size(text_size)
+    };
+    let help = |text_value: &'static str| {
+        text(text_value)
+            .color(theme::TEXT_SEC)
+            .size(text_size)
+    };
+    let header = text("TotalControl settings")
+        .color(theme::TEXT_PRIMARY)
+        .size(text_size);
+
+    let mut background = column![section("BACKGROUND")]
+        .spacing(theme::SPACE_SM * scale)
+        .width(Length::Fill);
     if state.tray_active {
-        background = background.push(toggle(
+        background = background.push(check(
             "Keep running in the tray when closed",
             state.keep_in_tray,
             Message::SetKeepInTray(!state.keep_in_tray),
         ));
     } else {
-        background = background.push(
-            text("No system tray found: closing the window quits.")
-                .color(theme::TEXT_SEC)
-                .size(text_size),
-        );
+        background = background.push(help("No system tray found: closing the window quits."));
     }
-    background = background.push(toggle(
+    background = background.push(check(
         "Start with the session, hidden in the tray",
         state.autostart,
         Message::SetAutostart(!state.autostart),
     ));
-    let sync_section = row![
-        text("STARTUP SYNC")
-            .color(theme::TEXT_SEC)
-            .size(text_size),
-        iced::widget::rule::horizontal(1),
-    ]
-    .spacing(theme::SPACE_MD * scale)
-    .align_y(iced::Alignment::Center);
-    let surround_section = row![
-        text("SURROUND")
-            .color(theme::TEXT_SEC)
-            .size(text_size),
-        iced::widget::rule::horizontal(1),
-    ]
-    .spacing(theme::SPACE_MD * scale)
-    .align_y(iced::Alignment::Center);
-    let surround = column![
-        surround_section,
-        toggle(
-            "Virtual 5.1 output",
-            state.surround_51,
-            Message::SetSurround51(!state.surround_51),
-        ),
-        toggle(
-            "Virtual 7.1 output",
-            state.surround_71,
-            Message::SetSurround71(!state.surround_71),
-        ),
-        text("Active while TotalControl runs. Select the device in KDE or the player.")
-            .color(theme::TEXT_SEC)
-            .size(text_size),
-    ]
-    .spacing(theme::SPACE_SM * scale);
-    let sync_help = text(if state.device.is_uc_model() {
+
+    let sync_help = help(if state.device.is_uc_model() {
         "The UC keeps input gain, reference levels, clock and rate. TotalControl writes only \
          its mixer scene (matrix, faders, mutes, loopback) on connect."
     } else {
         "On first connect: read the device where it has readback, compare it with the \
          saved TotalControl scene, and choose when they differ."
-    })
-    .color(theme::TEXT_SEC)
-    .size(text_size);
-    let sync_buttons = row![
-        toggle(
-            "Device → GUI",
-            state.sync_direction == SyncDirection::DeviceToGui,
-            Message::SetSyncDirection(SyncDirection::DeviceToGui),
+    });
+    let mut sync = column![section("STARTUP SYNC"), sync_help]
+        .spacing(theme::SPACE_SM * scale)
+        .width(Length::Fill);
+    if !state.device.is_uc_model() {
+        sync = sync.push(
+            row![
+                text("On first connect")
+                    .color(theme::TEXT_PRIMARY)
+                    .size(text_size),
+                radio_choice(
+                    "Device → GUI",
+                    state.sync_direction == SyncDirection::DeviceToGui,
+                    Message::SetSyncDirection(SyncDirection::DeviceToGui),
+                ),
+                radio_choice(
+                    "GUI → device",
+                    state.sync_direction == SyncDirection::GuiToDevice,
+                    Message::SetSyncDirection(SyncDirection::GuiToDevice),
+                ),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+        sync = sync.push(check(
+            "Always init the device with TotalControl settings",
+            state.always_init_device,
+            Message::SetAlwaysInitDevice(!state.always_init_device),
+        ));
+    }
+
+    let surround = column![
+        section("SURROUND"),
+        check(
+            "Virtual 5.1 output",
+            state.surround_51,
+            Message::SetSurround51(!state.surround_51),
         ),
-        toggle(
-            "GUI → device",
-            state.sync_direction == SyncDirection::GuiToDevice,
-            Message::SetSyncDirection(SyncDirection::GuiToDevice),
+        check(
+            "Virtual 7.1 output",
+            state.surround_71,
+            Message::SetSurround71(!state.surround_71),
         ),
-    ]
-    .spacing(theme::SPACE_SM * scale);
-    let always_init = toggle(
-        "Always init the device with TotalControl settings",
-        state.always_init_device,
-        Message::SetAlwaysInitDevice(!state.always_init_device),
-    );
-    let sync = if state.device.is_uc_model() {
-        column![sync_section, sync_help].spacing(theme::SPACE_SM * scale)
-    } else {
-        column![sync_section, sync_help, sync_buttons, always_init]
-            .spacing(theme::SPACE_SM * scale)
-    };
-    let osc_section = row![
-        text("OSC")
-            .color(theme::TEXT_SEC)
-            .size(text_size),
-        iced::widget::rule::horizontal(1),
-    ]
-    .spacing(theme::SPACE_MD * scale)
-    .align_y(iced::Alignment::Center);
-    let osc_mode = row![
-        text("Protocol")
-            .color(theme::TEXT_SEC)
-            .size(text_size),
-        toggle(
-            "Classic",
-            state.osc_dialect == crate::osc::OscDialect::Classic,
-            Message::SetOscMode(crate::osc::OscDialect::Classic),
-        ),
-        toggle(
-            "Global",
-            state.osc_dialect == crate::osc::OscDialect::Global,
-            Message::SetOscMode(crate::osc::OscDialect::Global),
-        ),
+        help("Active while TotalControl runs. Select the device in KDE or the player."),
     ]
     .spacing(theme::SPACE_SM * scale)
-    .align_y(iced::Alignment::Center);
+    .width(Length::Fill);
+
     let osc_ports = row![
-        text("Receive")
-            .color(theme::TEXT_SEC)
+        text("Receive port")
+            .color(theme::TEXT_PRIMARY)
             .size(text_size),
         text_input("9000", &state.osc_recv_text)
             .on_input(Message::OscRecvPortChanged)
             .width(Length::Fixed(90.0 * scale))
             .size(text_size),
-        text("Send")
-            .color(theme::TEXT_SEC)
+        text("Send port")
+            .color(theme::TEXT_PRIMARY)
             .size(text_size),
         text_input("9001", &state.osc_send_text)
             .on_input(Message::OscSendPortChanged)
@@ -10681,22 +10645,50 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             .on_press(Message::ApplyOscPorts),
     ]
     .spacing(theme::SPACE_SM * scale)
-    .align_y(iced::Alignment::Center);
+    .align_y(iced::Alignment::Center)
+    .width(Length::Fill);
+
     let osc = column![
-        osc_section,
-        toggle(
+        section("OSC"),
+        check(
             "Enable OSC control surface",
             state.osc_enabled,
             Message::SetOscEnabled(!state.osc_enabled),
         ),
-        osc_mode,
+        row![
+            text("Protocol")
+                .color(theme::TEXT_PRIMARY)
+                .size(text_size),
+            radio_choice(
+                "Classic",
+                state.osc_dialect == crate::osc::OscDialect::Classic,
+                Message::SetOscMode(crate::osc::OscDialect::Classic),
+            ),
+            radio_choice(
+                "Global",
+                state.osc_dialect == crate::osc::OscDialect::Global,
+                Message::SetOscMode(crate::osc::OscDialect::Global),
+            ),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
         osc_ports,
-        text("Loopback only. Classic uses the banked 1.96–2.11 address space; Global uses absolute channels and native values (TotalMix FX 2.1+).")
-            .color(theme::TEXT_SEC)
-            .size(text_size),
+        help("Loopback only. Classic uses the banked 1.96–2.11 address space; Global uses absolute channels and native values (TotalMix FX 2.1+)."),
     ]
-    .spacing(theme::SPACE_SM * scale);
-    let body = column![header, background, sync, surround, osc]
+    .spacing(theme::SPACE_SM * scale)
+    .width(Length::Fill);
+
+    let footer = row![
+        iced::widget::Space::new().width(Length::Fill),
+        iced::widget::button(text("Close").size(text_size))
+            .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+            .style(theme::ghost_button)
+            .on_press(Message::ToggleSettings),
+    ]
+    .align_y(iced::Alignment::Center)
+    .width(Length::Fill);
+
+    let body = column![header, background, sync, surround, osc, footer]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
     centered_dialog(state, body.into(), Message::ToggleSettings, 520.0)
