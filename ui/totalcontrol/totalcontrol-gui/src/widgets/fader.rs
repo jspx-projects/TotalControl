@@ -909,7 +909,10 @@ fn meter_split(r: Rectangle, scale: f32, second: bool) -> (Rectangle, Option<Rec
     if !second {
         return (r, None);
     }
-    let gap = 1.0 * scale;
+    // Keep a full pixel of air between the two bars at scale 1.0.  A
+    // 1 px gap could round to touching or overlapping on some display
+    // scales because the two half-widths are fractional.
+    let gap = 2.0 * scale;
     let half_w = ((r.width - gap) / 2.0).max(0.0);
     (
         Rectangle::new(r.position(), Size::new(half_w, r.height)),
@@ -1628,6 +1631,18 @@ mod tests {
             (mid - 0.5).abs() < 0.01,
             "expected ~0.5 at the midpoint, got {mid}"
         );
+    }
+
+    #[test]
+    fn stereo_meter_bars_never_touch() {
+        let r = Rectangle::new(Point::new(10.0, 20.0), Size::new(METER_W, 200.0));
+        let (left, right) = meter_split(r, 1.0, true);
+        let right = right.expect("a stereo meter has a right bar");
+        assert!(
+            right.x >= left.x + left.width + 1.0,
+            "the two bars need at least one clear pixel"
+        );
+        assert!(right.x + right.width <= r.x + r.width + f32::EPSILON);
     }
 
     #[test]
