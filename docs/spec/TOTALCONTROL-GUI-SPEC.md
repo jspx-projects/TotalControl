@@ -992,12 +992,17 @@ panel labels it accordingly and keeps the four terms visible.
 
 ## 14. State references
 
-Scene contents, workspace storage, snapshot storage, startup mismatch, undo
-and the split between mixer state and GUI preferences are defined in
+Mixer-state contents, workspace storage, snapshot storage, startup mismatch,
+undo and the split between mixer state and GUI preferences are defined in
 [`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §9. This
 specification only names the visible surfaces: eight snapshot slots, six
 layout slots, the Workspace menu, the current auto-saved mix and the GUI
 preference file.
+
+The serialized mixer-state type is called `Scene` in code.  The interface
+never uses that word: it says **current mix** for the live state, **snapshot**
+for a saved mix inside a workspace, **workspace** for the complete `.tcws`
+configuration, and **device setup** for the unit’s six slots.
 
 The startup mismatch dialog lists the decoded differences as a bullet list.
 On the UCX it appears after the asynchronous pre-connect dump has been

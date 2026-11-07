@@ -224,7 +224,8 @@ the mixer's channel rows and send matrix. The address space is defined in
 
 ## 9. State, scenes and persistence
 
-The device model is the runtime state. It is captured as a `Scene` for:
+The device model is the runtime state. It is captured as a `Scene` — the
+internal name for one mixer state — for:
 
 - the auto-saved scene;
 - snapshot slots;
