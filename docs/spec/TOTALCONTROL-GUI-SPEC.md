@@ -116,14 +116,27 @@ folder they start in `Documents`, falling back to the home directory. A
 workspace written for another device model is refused. Opening a workspace
 while the current one is dirty asks before discarding the changes.
 
-The Factory Workspaces submenu lists `5.1 Direct` and `6.1 Direct`. Each
-clears the existing playback routing and replaces it with a one-to-one
-mapping to the first available hardware-output pairs, labels the source and
-output channels, and places the used outputs in group 1. Front L/Front R and
-Side L/Side R stay linked pairs; Center, LFE and Back C are split mono
-channels. Control Room assignments that use one of the chosen output pairs
-are cleared. A factory workspace has no file: `Save` opens Save As so the
-user can keep it.
+The Factory Workspaces submenu lists `5.1 Direct`, `7.1 Direct`, `5.1 → 4.0`
+and `7.1 → 4.0`. A factory workspace starts from a clean mixer rather than
+the current one: routing, FX sends and returns, Reverb/Echo, EQ, dynamics,
+mutes, solos, labels, groups, layouts and snapshots are initialised. Device
+clock, sample rate, references and device-owned preamps are retained. The 4.0
+layouts downmix into the existing 5.1/7.1 sink rather than creating a new
+sink.
+
+Direct layouts map one source channel to the first available hardware-output
+pairs. 4.0 maps Center and LFE to both front channels at 0.707, and maps the
+surround pair to the rear pair. In 7.1 → 4.0 both Rear and Side feed the rear
+pair at unity, preserving the sum of the original four surround speakers.
+
+Front L/Front R and Side L/Side R stay linked pairs; Center, LFE and Rear/Back
+channels are mono where applicable. Linked user labels drop the L/R suffix
+(`Front L` + `Front R` displays `Front`); a split pair displays the two
+individual names. The used outputs form group 1. Factory workspaces switch
+the control strip to custom names and enable Matrix Mono so the mono routing
+can be edited. Control Room assignments that use one of the chosen output
+pairs are cleared. A factory workspace has no file: `Save` opens Save As so
+the user can keep it.
 
 A workspace contains the current mixer, the eight named snapshots, labels,
 groups, six layout slots, collapsed/expanded strips, view and sidebar state,
@@ -146,13 +159,11 @@ not a sidebar popover; it holds BACKGROUND, STARTUP SYNC, SURROUND and OSC
 sections.  Independent options are checkboxes, one-of-many options are radio
 buttons, and the only footer action is `Close`.
 
-SURROUND has the `Virtual 5.1 output`, `Virtual 6.1 output` and
-`Virtual 7.1 output` checkboxes. A checked output creates a PipeWire sink while
-TotalControl runs and removes it when the application exits. The setting is
-persisted. The sinks follow the selected Fireface/MR18 Pro Audio device and
-bridge to the first surround SW playback channels. The 6.1 sink uses the
-player order `FL FR FC LFE BC SL SR`; its sixth bridge channel is unused so
-SL/SR stay on channels 7/8.
+SURROUND has the `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
+checked output creates a PipeWire sink while TotalControl runs and removes it
+when the application exits. The setting is persisted. The sinks follow the
+selected Fireface/MR18 Pro Audio device and bridge to the first six or eight
+SW playback channels.
 
 OSC has an `Enable OSC control surface` checkbox, `Classic` and `Global`
 radio buttons, a receive-port field, a send-port field and `Apply`.  The
@@ -696,6 +707,11 @@ every input and software-playback strip carries an independent send gain and
 pan to that bus. The input/playback fader is the send level to the current
 submix, not a single channel fader. The output strip's fader is the bus
 master.
+
+A split output pair has two independent mono buses. Selecting one channel
+selects only that channel's bus: only its strip takes the active surface, and
+the input/playback send faders read and write that mono matrix column. A
+linked output pair keeps the pair-level submix and stereo send model.
 
 | Term | Normal mixing desk | TotalMix FX | TotalControl |
 |---|---|---|---|

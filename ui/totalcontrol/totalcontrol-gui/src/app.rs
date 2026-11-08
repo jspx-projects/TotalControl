@@ -430,6 +430,20 @@ impl RmeDevice for DeviceHandle {
     fn matrix_uses_display_order(&self) -> bool {
         delegate!(self, matrix_uses_display_order)
     }
+    fn matrix_cells_supported(&self) -> bool {
+        delegate!(self, matrix_cells_supported)
+    }
+    fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
+        delegate!(self, matrix_cell(channel, block))
+    }
+    fn set_matrix_cell(
+        &mut self,
+        channel: ChannelId,
+        block: usize,
+        gain: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_matrix_cell(channel, block, gain))
+    }
     fn open() -> Result<Self, totalcontrol_core::Error> {
         unreachable!()
     }
@@ -2127,9 +2141,8 @@ pub enum Message {
     OptionsSettings,
     /// Closes the Options menu.
     CloseOptions,
-    /// Start/stop the virtual 5.1, 6.1 and 7.1 outputs.
+    /// Start/stop the virtual 5.1 and 7.1 outputs.
     SetSurround51(bool),
-    SetSurround61(bool),
     SetSurround71(bool),
     /// First level: open and pin that destination's second level.
     AssignDestinations(usize),
@@ -2320,6 +2333,8 @@ pub struct TotalControl {
     /// The card index is deliberately not part of this.
     pub device_target: Option<DeviceTarget>,
     pub sel_out: usize,
+    /// Selected side of a split output pair (0 = left, 1 = right).
+    pub sel_out_side: usize,
     /// Last front-panel OUT selection seen by `Message::Tick` — when it
     /// changes, `sel_out` follows (TotalMix highlights the panel's
     /// current submix). `None` = never seen (no panel / first tick).
@@ -2577,11 +2592,9 @@ pub struct TotalControl {
     pub options_menu: OptionsMenu,
     /// Persisted intent for the virtual surround outputs.
     pub surround_51: bool,
-    pub surround_61: bool,
     pub surround_71: bool,
     /// Whether the helper processes are currently running.
     pub surround_51_running: bool,
-    pub surround_61_running: bool,
     pub surround_71_running: bool,
     /// RME-style startup mismatch dialog.  `None` = no prompt.
     pub startup_mismatch: Option<StartupMismatch>,
@@ -3066,6 +3079,7 @@ pub fn new_with_device(
         device_target,
         connected,
         sel_out: 0,
+        sel_out_side: 0,
         last_panel_out: None,
         view: View::Quick,
         quick_channel: ChannelId::Input(0),
@@ -3150,10 +3164,8 @@ pub fn new_with_device(
         workspace_last_dir: None,
         options_menu: OptionsMenu::Closed,
         surround_51: false,
-        surround_61: false,
         surround_71: false,
         surround_51_running: false,
-        surround_61_running: false,
         surround_71_running: false,
         startup_mismatch: None,
         startup_compare_pending: false,
@@ -3294,7 +3306,6 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         fx_panel: Some(state.show_fx_panel),
         assign: state.assign,
         surround_51: state.surround_51,
-        surround_61: state.surround_61,
         surround_71: state.surround_71,
         control_room: state.control_room.clone(),
         sidebar_width: Some(state.sidebar_width),
@@ -3313,6 +3324,7 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         collapsed,
         flyouts,
         sel_out: Some(state.sel_out),
+        sel_out_side: Some(state.sel_out_side),
         sync_direction: Some(state.sync_direction),
         always_init_device: state.always_init_device,
         osc_enabled: state.osc_enabled,
@@ -3339,7 +3351,6 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
     }
     state.assign = prefs.assign;
     state.surround_51 = prefs.surround_51;
-    state.surround_61 = prefs.surround_61;
     state.surround_71 = prefs.surround_71;
     state.control_room = prefs.control_room;
     state.control_room_draft = state.control_room.clone();
@@ -3438,6 +3449,9 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
         let pairs = state.device.output_pair_count().max(1);
         state.sel_out = out.min(pairs - 1);
     }
+    if let Some(side) = prefs.sel_out_side {
+        state.sel_out_side = side.min(1);
+    }
 
     // USB has no readback; it must always restore GUI -> device.  The UCX
     // honours the user's choice, defaulting to the safe Device -> GUI.
@@ -3507,6 +3521,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             fx_panel: state.show_fx_panel,
             ui_scale: state.ui_scale,
             sel_out: state.sel_out,
+            sel_out_side: state.sel_out_side,
             quick_channel: state.quick_channel,
             show_original_names: state.show_original_names,
             matrix_mono: state.matrix_mono,
@@ -3520,7 +3535,6 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         control_room: state.control_room.clone(),
         assign: state.assign,
         surround_51: state.surround_51,
-        surround_61: state.surround_61,
         surround_71: state.surround_71,
         window_size: state.window_size,
     }
@@ -3604,7 +3618,11 @@ fn apply_workspace_state(
         .view
         .ui_scale
         .clamp(theme::SCALE_MIN, theme::SCALE_MAX);
-    state.sel_out = workspace.view.sel_out;
+    state.sel_out = workspace
+        .view
+        .sel_out
+        .min(state.device.output_pair_count().saturating_sub(1));
+    state.sel_out_side = workspace.view.sel_out_side.min(1);
     state.quick_channel = workspace.view.quick_channel;
     state.show_original_names = workspace.view.show_original_names;
     state.matrix_mono = workspace.view.matrix_mono;
@@ -3612,7 +3630,6 @@ fn apply_workspace_state(
     state.control_room_draft = workspace.control_room.clone();
     state.assign = workspace.assign;
     state.surround_51 = workspace.surround_51;
-    state.surround_61 = workspace.surround_61;
     state.surround_71 = workspace.surround_71;
     state.window_size = workspace.window_size;
     state.workspace_path = path;
@@ -3655,13 +3672,14 @@ fn load_surround_workspace(
         output_order: state.device.output_display_order(),
         matrix_uses_display_order: state.device.matrix_uses_display_order(),
     };
-    let mut workspace = capture_workspace(state);
-    workspaces::configure_direct(&mut workspace, layout, &topology)?;
-    apply_workspace_state(state, &workspace, None)?;
+    let workspace = workspaces::factory_workspace(
+        &capture_workspace(state),
+        layout,
+        &topology,
+    )?;
     // Rewriting the playback pairs at full width clears mono cells left by a
-    // previous width/MS setting.  The UCX writes only the natural side for
-    // ordinary pair sends, so those stale cells would otherwise survive the
-    // scene apply and break the one-to-one mapping.
+    // previous width/MS setting.  Do this before the scene apply so the
+    // downmix's own cross-side cells are not wiped again.
     if state.device.capabilities().channel_width {
         for pair in 0..state.device.playbacks().len() / 2 {
             state
@@ -3670,6 +3688,7 @@ fn load_surround_workspace(
                 .map_err(|e| e.to_string())?;
         }
     }
+    apply_workspace_state(state, &workspace, None)?;
     state.workspace_dirty = true;
     Ok(())
 }
@@ -3986,13 +4005,11 @@ fn run_surround_command(command: &str, target: Option<&str>) -> Result<(), Strin
 pub fn sync_surround_bridge(state: &mut TotalControl) {
     if state.device.is_mock() {
         state.surround_51_running = false;
-        state.surround_61_running = false;
         state.surround_71_running = false;
         return;
     }
     for (wanted, running, kind) in [
         (state.surround_51, &mut state.surround_51_running, "51"),
-        (state.surround_61, &mut state.surround_61_running, "61"),
         (state.surround_71, &mut state.surround_71_running, "71"),
     ] {
         if wanted == *running {
@@ -4026,10 +4043,6 @@ pub fn stop_surround_bridge(state: &mut TotalControl) {
     if state.surround_51_running {
         let _ = run_surround_command("stop51", None);
         state.surround_51_running = false;
-    }
-    if state.surround_61_running {
-        let _ = run_surround_command("stop61", None);
-        state.surround_61_running = false;
     }
     if state.surround_71_running {
         let _ = run_surround_command("stop71", None);
@@ -4519,7 +4532,6 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::RenameCommit
             | Message::SetShowOriginalNames(_)
             | Message::SetSurround51(_)
-            | Message::SetSurround61(_)
             | Message::SetSurround71(_)
             | Message::EngineRate(_)
             | Message::EngineQuantum(_)
@@ -4536,6 +4548,43 @@ pub(crate) fn user_label(state: &TotalControl, cid: ChannelId) -> Option<&str> {
         return None;
     }
     state.labels.get(&cid).map(String::as_str)
+}
+
+/// The linked-pair form of a user label: `Front L` + `Front R` → `Front`,
+/// matching the hardware `AN1` + `AN2` → `AN1/2` naming.
+pub(crate) fn user_pair_label(state: &TotalControl, cid: ChannelId) -> Option<String> {
+    let (left, right, linked) = match cid {
+        ChannelId::Input(i) if i % 2 == 0 => (
+            ChannelId::Input(i),
+            ChannelId::Input(i + 1),
+            state.device.input_pair_linked(i / 2),
+        ),
+        ChannelId::Playback(i) if i % 2 == 0 => (
+            ChannelId::Playback(i),
+            ChannelId::Playback(i + 1),
+            state.device.playback_linked(i / 2),
+        ),
+        ChannelId::Output(i) if i % 2 == 0 => (
+            ChannelId::Output(i),
+            ChannelId::Output(i + 1),
+            state.device.output_linked(i / 2),
+        ),
+        _ => return user_label(state, cid).map(str::to_string),
+    };
+    if !linked {
+        return user_label(state, left).map(str::to_string);
+    }
+    let left = user_label(state, left)?;
+    let right = user_label(state, right).unwrap_or(left);
+    if left == right {
+        return Some(left.to_string());
+    }
+    if let Some(prefix) = left.strip_suffix(" L") {
+        if right == format!("{prefix} R") {
+            return Some(prefix.to_string());
+        }
+    }
+    Some(format!("{left}/{right}"))
 }
 
 /// Whether `cid` is rendered by the Control Room. Its name is fixed by the
@@ -4567,8 +4616,13 @@ fn enforce_control_room_stereo(state: &mut TotalControl) {
 /// strip name ("AN1/2" -> "Vocals"), not one half of it.
 fn finish_params<'a>(state: &'a TotalControl, mut p: strip::StripParams<'a>) -> strip::StripParams<'a> {
     if !p.name_locked {
-        if let Some(label) = user_label(state, p.cid) {
-            p.name = label.to_string();
+        let label = if p.stereo_linked {
+            user_pair_label(state, p.cid)
+        } else {
+            user_label(state, p.cid).map(str::to_string)
+        };
+        if let Some(label) = label {
+            p.name = label;
             p.name_custom = true;
         }
     }
@@ -4726,6 +4780,12 @@ fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f
     // The caller passes the level shown next to the fader; the model
     // stores the send before trim.
     let send = effective_to_send(state, cid, v);
+    if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) && out == state.sel_out {
+        if let Some(block) = selected_output_block(state) {
+            let _ = state.device.set_matrix_cell(cid, block, send);
+            return;
+        }
+    }
     let _ = match cid {
         ChannelId::Input(ch) => state.device.set_input_volume(ch / 2, ch % 2, out, send),
         ChannelId::Playback(ch) => state.device.set_playback_volume(ch / 2, ch % 2, out, send),
@@ -4788,6 +4848,12 @@ fn channel_pan(state: &TotalControl, cid: ChannelId, out: usize) -> i8 {
 /// parameter: its balance is the difference between the two channel
 /// volumes, so the knob sets the quieter side's level.
 fn set_channel_pan(state: &mut TotalControl, cid: ChannelId, out: usize, pan: i8) {
+    if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_))
+        && out == state.sel_out
+        && selected_output_block(state).is_some()
+    {
+        return;
+    }
     let result = match cid {
         ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => {
             state.device.set_input_balance(i / 2, out, pan)
@@ -7021,7 +7087,6 @@ fn is_undoable(message: &Message) -> bool {
             | Message::OptionsSettings
             | Message::CloseOptions
             | Message::SetSurround51(_)
-            | Message::SetSurround61(_)
             | Message::SetSurround71(_)
             | Message::LineInRefSelected(_)
             | Message::LineInRef58Selected(_)
@@ -7274,6 +7339,33 @@ fn needs_protocol_features(message: &Message) -> bool {
     )
 }
 
+/// The exact mono output block currently selected, when the selected
+/// output pair is split.  Linked pairs keep the pair-level behaviour.
+fn selected_output_block(state: &TotalControl) -> Option<usize> {
+    let pair = state
+        .sel_out
+        .min(state.device.output_pair_count().saturating_sub(1));
+    if state.device.outputs_one_per_pair() || state.device.output_linked(pair) {
+        None
+    } else {
+        Some(pair * 2 + state.sel_out_side.min(1))
+    }
+}
+
+/// The output channel id used by the Quick view and split selection.
+fn selected_output_channel(state: &TotalControl) -> usize {
+    let pair = state
+        .sel_out
+        .min(state.device.output_pair_count().saturating_sub(1));
+    if state.device.outputs_one_per_pair() {
+        pair
+    } else if state.device.output_linked(pair) {
+        pair * 2
+    } else {
+        pair * 2 + state.sel_out_side.min(1)
+    }
+}
+
 /// Select a strip the way a plain click does.  The strip's own controls
 /// (mute, solo, the flyout buttons, the fader, the knobs) call this too, so
 /// a click anywhere on a channel selects it; on a hardware output it also
@@ -7287,11 +7379,17 @@ fn select_strip(state: &mut TotalControl, cid: ChannelId) {
     }
     state.select_anchor = Some(cid);
     if let ChannelId::Output(i) = cid {
-        state.sel_out = if state.device.outputs_one_per_pair() {
-            i
+        if state.device.outputs_one_per_pair() {
+            state.sel_out = i;
+            state.sel_out_side = 0;
         } else {
-            i / 2
-        };
+            state.sel_out = i / 2;
+            state.sel_out_side = if state.device.output_linked(i / 2) {
+                0
+            } else {
+                i % 2
+            };
+        }
     }
 }
 
@@ -7680,6 +7778,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 if state.last_panel_out != Some(out_sel) {
                     state.last_panel_out = Some(out_sel);
                     state.sel_out = state.device.display_pair_index(out);
+                    state.sel_out_side = 0;
                 }
             }
             let input_trims: Vec<f32> =
@@ -7996,6 +8095,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // Quick view derives an output channel from it.
             let sel_out = i.min(state.device.output_pair_count().saturating_sub(1));
             state.sel_out = sel_out;
+            state.sel_out_side = 0;
             // Selecting a bus dismisses the Route flyout — it did its
             // job. Doesn't touch any other (Settings/Eq/Trim) flyout
             // that happens to be open elsewhere.
@@ -8767,7 +8867,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             apply_grouped_volume(state, cid, out, v);
         }
         Message::MatrixCellChanged(cid, block, v) => {
-            if state.matrix_mono {
+            let split_playback = match cid {
+                ChannelId::Playback(i) => state
+                    .device
+                    .playbacks()
+                    .get(i)
+                    .is_some_and(|ch| ch.split),
+                _ => false,
+            };
+            if state.matrix_mono || split_playback {
                 let send = effective_to_send(state, cid, v);
                 if let Err(e) = state.device.set_matrix_cell(cid, block, send) {
                     fail(state, "set_matrix_cell", &e);
@@ -9229,11 +9337,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::CloseOptions => state.options_menu = OptionsMenu::Closed,
         Message::SetSurround51(on) => {
             state.surround_51 = on;
-            state.prefs_dirty = true;
-            sync_surround_bridge(state);
-        }
-        Message::SetSurround61(on) => {
-            state.surround_61 = on;
             state.prefs_dirty = true;
             sync_surround_bridge(state);
         }
@@ -9979,6 +10082,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     };
     state.playback_tap_channels = 0;
     state.sel_out = 0;
+    state.sel_out_side = 0;
     state.quick_channel = ChannelId::Input(0);
     state.last_panel_out = None;
     state.renaming = None;
@@ -9995,6 +10099,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.sel_out = state
         .sel_out
         .min(state.device.output_pair_count().saturating_sub(1));
+    state.sel_out_side = state.sel_out_side.min(1);
     if state.device.needs_scene_restore() {
         if let Some(scene) = load_scene_for_current(state) {
             state.host_scene = Some(scene.clone());
@@ -11008,11 +11113,6 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             "Virtual 5.1 output",
             state.surround_51,
             Message::SetSurround51(!state.surround_51),
-        ),
-        check(
-            "Virtual 6.1 output",
-            state.surround_61,
-            Message::SetSurround61(!state.surround_61),
         ),
         check(
             "Virtual 7.1 output",
@@ -12341,7 +12441,13 @@ fn strip_params<'a>(
                     None
                 }
             });
-            let (volume, pan) = if linked {
+            let (volume, pan) = if let Some(block) =
+                selected_output_block(state).filter(|_| output_idx == state.sel_out)
+            {
+                let trim = trim_factor(ch.trim);
+                let cell = state.device.matrix_cell(cid, block).unwrap_or(0.0);
+                (if trim > 0.0 { cell / trim } else { 0.0 }, 0)
+            } else if linked {
                 let left = i & !1;
                 let right = left + 1;
                 let left_volume = state
@@ -12424,7 +12530,13 @@ fn strip_params<'a>(
         ChannelId::Playback(i) => {
             let ch = &state.device.playbacks()[i];
             let linked = state.device.playback_linked(i / 2);
-            let (volume, pan) = if linked {
+            let (volume, pan) = if let Some(block) =
+                selected_output_block(state).filter(|_| output_idx == state.sel_out)
+            {
+                let trim = trim_factor(ch.trim);
+                let cell = state.device.matrix_cell(cid, block).unwrap_or(0.0);
+                (if trim > 0.0 { cell / trim } else { 0.0 }, 0)
+            } else if linked {
                 let left = i & !1;
                 let right = left + 1;
                 let left_volume = state
@@ -12542,11 +12654,7 @@ fn strip_params<'a>(
 
                 cue: ch.cue,
                 default_vol: 1.0,
-                active_surface: if state.device.outputs_one_per_pair() {
-                    i == state.sel_out
-                } else {
-                    i / 2 == state.sel_out
-                },
+                active_surface: i == selected_output_channel(state),
                 ..base
             }
         }
@@ -16931,7 +17039,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
     let sel_out = state
         .sel_out
         .min(state.device.output_pair_count().saturating_sub(1));
-    let dest_cid = ChannelId::Output(sel_out * 2);
+    let dest_cid = ChannelId::Output(selected_output_channel(state));
 
     // Rebuilt on every layout pass: the content sits behind a `responsive`
     // (the centered form needs the available size, which a `Length::Fill`
@@ -17637,17 +17745,13 @@ mod tests {
     fn surround_settings_are_remembered_and_never_start_a_bridge_in_mock() {
         let mut state = new(true, None, None);
         let _ = update(&mut state, Message::SetSurround51(true));
-        let _ = update(&mut state, Message::SetSurround61(true));
         let _ = update(&mut state, Message::SetSurround71(true));
         assert!(state.surround_51);
-        assert!(state.surround_61);
         assert!(state.surround_71);
         assert!(!state.surround_51_running);
-        assert!(!state.surround_61_running);
         assert!(!state.surround_71_running);
         let prefs = prefs_of(&state);
         assert!(prefs.surround_51);
-        assert!(prefs.surround_61);
         assert!(prefs.surround_71);
     }
 
@@ -20023,20 +20127,25 @@ mod tests {
     }
 
     #[test]
-    fn built_in_surround_workspaces_apply_through_the_workspace_path() {
-        for (layout, six_one) in [
-            (crate::workspaces::SurroundLayout::Direct51, false),
-            (crate::workspaces::SurroundLayout::Direct61, true),
+    fn factory_surround_workspaces_apply_through_the_workspace_path() {
+        for (layout, seven_one, downmix) in [
+            (crate::workspaces::SurroundLayout::Direct51, false, false),
+            (crate::workspaces::SurroundLayout::Direct71, true, false),
+            (crate::workspaces::SurroundLayout::Downmix51To40, false, true),
+            (crate::workspaces::SurroundLayout::Downmix71To40, true, true),
         ] {
             let mut state = new(true, None, None);
             state.workspace_dirty = false;
+            state.show_original_names = true;
+            state.labels.insert(ChannelId::Input(0), "Old".into());
             let _ = update(&mut state, Message::LoadSurroundWorkspace(layout));
 
             assert_eq!(state.workspace_path, None);
             assert!(state.workspace_dirty);
-            assert_eq!(state.surround_61, six_one);
-            assert_eq!(state.surround_51, !six_one);
-            assert!(!state.surround_71);
+            assert_eq!(state.surround_71, seven_one);
+            assert_eq!(state.surround_51, !seven_one);
+            assert!(!state.show_original_names);
+            assert!(!state.labels.contains_key(&ChannelId::Input(0)));
             assert_eq!(
                 state.labels.get(&ChannelId::Playback(0)).map(String::as_str),
                 Some("Front L")
@@ -20045,8 +20154,8 @@ mod tests {
                 state.labels.get(&ChannelId::Playback(2)).map(String::as_str),
                 Some("Center")
             );
-            assert!(state.groups[0].members.contains(&ChannelId::Output(2)));
-            assert!(state.groups[0].members.contains(&ChannelId::Output(3)));
+            assert!(!state.groups[0].members.is_empty());
+            assert!(state.view == View::Mixer);
             let first_pair = if state.device.matrix_uses_display_order() {
                 0
             } else {
@@ -20054,16 +20163,57 @@ mod tests {
             };
             assert_eq!(state.device.playbacks()[0].volumes[first_pair], 1.0);
             assert!(state.device.playbacks()[2].split);
-            assert_eq!(state.device.playbacks()[4].split, six_one);
             assert_eq!(
-                state.device.playbacks()[5]
-                    .volumes
-                    .iter()
-                    .filter(|&&volume| volume > 0.0)
-                    .count(),
-                if six_one { 0 } else { 1 }
+                state
+                    .host_scene
+                    .as_ref()
+                    .unwrap()
+                    .matrix_overrides
+                    .len(),
+                if downmix { 2 } else { 0 }
             );
         }
+    }
+
+    #[test]
+    fn split_output_channels_are_selected_individually() {
+        let mut state = new(true, None, None);
+        state.device.set_output_linked(1, false).unwrap();
+        let left = ChannelId::Output(2);
+        let right = ChannelId::Output(3);
+
+        let _ = update(&mut state, Message::StripClicked(left));
+        assert_eq!(state.sel_out, 1);
+        assert_eq!(state.sel_out_side, 0);
+        assert!(state.selected.contains(&left));
+        assert!(!state.selected.contains(&right));
+        assert!(strip_params(&state, left, state.sel_out).active_surface);
+        assert!(!strip_params(&state, right, state.sel_out).active_surface);
+
+        let _ = update(&mut state, Message::StripClicked(right));
+        assert_eq!(state.sel_out, 1);
+        assert_eq!(state.sel_out_side, 1);
+        assert!(state.selected.contains(&right));
+        assert!(!state.selected.contains(&left));
+        assert!(!strip_params(&state, left, state.sel_out).active_surface);
+        assert!(strip_params(&state, right, state.sel_out).active_surface);
+    }
+
+    #[test]
+    fn linked_pair_labels_drop_the_l_r_suffix() {
+        let mut state = new(true, None, None);
+        state.labels.insert(ChannelId::Playback(0), "Front L".into());
+        state.labels.insert(ChannelId::Playback(1), "Front R".into());
+        state.device.set_playback_linked(0, true).unwrap();
+        assert_eq!(
+            super::user_pair_label(&state, ChannelId::Playback(0)),
+            Some("Front".into())
+        );
+        state.device.set_playback_linked(0, false).unwrap();
+        assert_eq!(
+            super::user_pair_label(&state, ChannelId::Playback(0)),
+            Some("Front L".into())
+        );
     }
 
     #[test]

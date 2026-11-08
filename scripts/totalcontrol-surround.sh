@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create the TotalControl 5.1, 6.1 and 7.1 PipeWire sinks.
+# Create the TotalControl 5.1 and 7.1 PipeWire sinks.
 #
 # The Fireface/MR18 Pro Audio nodes expose 18 playback channels as AUX0..17.
 # Desktop players send a surround stream, which WirePlumber cannot map onto
@@ -16,15 +16,12 @@ usage() {
 Usage: totalcontrol-surround.sh COMMAND [target-sink]
 
 Commands:
-  start        create the 5.1, 6.1 and 7.1 sinks
-  stop         remove all three sinks
-  restart      remove and recreate all three
+  start        create both the 5.1 and 7.1 sinks
+  stop         remove both sinks
+  restart      remove and recreate both
   start51      create only the 5.1 sink
   stop51       remove only the 5.1 sink
   restart51    recreate only the 5.1 sink
-  start61      create only the 6.1 sink
-  stop61       remove only the 6.1 sink
-  restart61    recreate only the 6.1 sink
   start71      create only the 7.1 sink
   stop71       remove only the 7.1 sink
   restart71    recreate only the 7.1 sink
@@ -57,7 +54,6 @@ target_sink() {
 kind_name() {
     case "$1" in
         51) printf '%s\n' totalcontrol-surround51 ;;
-        61) printf '%s\n' totalcontrol-surround61 ;;
         71) printf '%s\n' totalcontrol-surround71 ;;
         *) return 1 ;;
     esac
@@ -66,18 +62,8 @@ kind_name() {
 kind_channels() {
     case "$1" in
         51) printf '%s\n' 'FL FR FC LFE SL SR' ;;
-        # 6.1 keeps the player's FL FR FC LFE BC SL SR order.  The sixth
-        # channel (RL) is unused, so SL/SR stay on channels 7/8.
-        61) printf '%s\n' 'FL FR FC LFE BC RL SL SR' ;;
         71) printf '%s\n' 'FL FR FC LFE RL RR SL SR' ;;
         *) return 1 ;;
-    esac
-}
-
-kind_unused_channel() {
-    case "$1" in
-        61) printf '%s\n' 5 ;;
-        *) printf '%s\n' -1 ;;
     esac
 }
 
@@ -119,10 +105,9 @@ wait_for_output() {
 
 start_one() {
     local kind="$1" target="$2"
-    local node channels channel idx address pid unused
+    local node channels channel idx address pid
     node="$(kind_name "$kind")"
     channels="$(kind_channels "$kind")"
-    unused="$(kind_unused_channel "$kind")"
     read -r -a channel_list <<<"$channels"
     local count="${#channel_list[@]}"
 
@@ -147,10 +132,6 @@ start_one() {
 
     idx=0
     for channel in "${channel_list[@]}"; do
-        if [[ "$idx" -eq "$unused" ]]; then
-            idx=$((idx + 1))
-            continue
-        fi
         wait_for_output "$node" "$channel" || {
             echo "The ${kind} sink did not create its ports" >&2
             stop_one "$kind"
@@ -175,23 +156,20 @@ start_all() {
         exit 1
     fi
     start_one 51 "$target"
-    start_one 61 "$target"
     start_one 71 "$target"
     echo "TotalControl surround sinks are ready on $target"
     echo "  TotalControl Surround 5.1"
-    echo "  TotalControl Surround 6.1"
     echo "  TotalControl Surround 7.1"
 }
 
 stop_all() {
     stop_one 51
-    stop_one 61
     stop_one 71
 }
 
 status() {
     local kind tfile
-    for kind in 51 61 71; do
+    for kind in 51 71; do
         tfile="$(target_file "$kind")"
         if [[ -f "$tfile" ]]; then
             echo "Target ${kind}: $(cat "$tfile")"
@@ -226,20 +204,6 @@ case "$cmd" in
         target="$(target_sink "${2:-}")"
         [ -n "$target" ] || { echo "No Fireface/MR18 Pro Audio sink found" >&2; exit 1; }
         start_one 51 "$target"
-        ;;
-    start61)
-        target="$(target_sink "${2:-}")"
-        [ -n "$target" ] || { echo "No Fireface/MR18 Pro Audio sink found" >&2; exit 1; }
-        start_one 61 "$target"
-        ;;
-    stop61)
-        stop_one 61
-        ;;
-    restart61)
-        stop_one 61
-        target="$(target_sink "${2:-}")"
-        [ -n "$target" ] || { echo "No Fireface/MR18 Pro Audio sink found" >&2; exit 1; }
-        start_one 61 "$target"
         ;;
     start71)
         target="$(target_sink "${2:-}")"

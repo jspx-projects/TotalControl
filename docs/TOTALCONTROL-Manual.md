@@ -821,31 +821,62 @@ term for a mixer state; the interface uses the terms below.
 
 - `Open Workspace…`
 - `Save Workspace`
-- `Factory Workspaces  ▸` → `5.1 Direct` or `6.1 Direct`
+- `Factory Workspaces  ▸`
 - `Save Workspace As…`
+
+The Factory Workspaces child menu contains `5.1 Direct`, `7.1 Direct`,
+`5.1 → 4.0` and `7.1 → 4.0`.
 
 The file dialogs start in the last folder you used, or in your `Documents`
 folder when there is no remembered folder. A workspace is one JSON file with
 the `.tcws` extension. Save writes atomically; a failed save cannot destroy the
 previous file.
 
-The factory surround workspaces route the virtual surround sink channels
-one-to-one to the first available hardware-output pairs. On the Fireface
-UC/UCX that is:
+Factory workspaces start from a clean mixer, not from the current one.
+Routing, playback and input sends, FX sends and returns, Reverb/Echo, EQ,
+dynamics, mutes, solos, labels, groups, layouts and snapshots are reset.
+Device-owned clock, sample rate, reference levels and preamps are kept. No
+return FX or other processing is switched on.
 
-| Workspace | Source channels | Hardware outputs |
+Direct layouts route the virtual surround sink channels one-to-one to the
+first available hardware-output pairs. On the Fireface UC/UCX that is:
+
+| Workspace | Source | Hardware outputs |
 |---|---|---|
-| `5.1 Direct` | Front L, Front R, Center, LFE, Side L, Side R | AN1/2 Front L/Front R, AN3/4 Center/LFE, AN5/6 Side L/Side R |
-| `6.1 Direct` | Front L, Front R, Center, LFE, Back C, unused, Side L, Side R | AN1/2 Front L/Front R, AN3/4 Center/LFE, AN5/6 Back C/unused, Phones 7/8 Side L/Side R |
+| `5.1 Direct` | Front L/R | AN1/2 |
+| | Center/LFE, split mono | AN3/4 |
+| | Side L/R | AN5/6 |
+| `7.1 Direct` | Front L/R | AN1/2 |
+| | Center/LFE, split mono | AN3/4 |
+| | Rear L/R | AN5/6 |
+| | Side L/R | Phones 7/8 |
 
-Front L/Front R and Side L/Side R remain linked stereo pairs; Center, LFE
-and Back C are split mono channels. The used outputs are placed in group 1. Loading one clears the
-existing playback routing before writing the surround routes. The direct
-workspaces do not apply bass management or a downmix. Loading one also clears
-Control Room assignments that use its output pairs, so those pairs stay
-available to the surround layout. A built-in workspace has no file yet:
-`Save` opens Save As and writes a normal `.tcws` file. You can remap the
+The 4.0 layouts do not create a new sink. They downmix the 5.1 or 7.1 sink
+into two full-range pairs, named Front and Rear on AN1/2 and AN3/4:
+
+| Workspace | Downmix |
+|---|---|
+| `5.1 → 4.0` | Front L/R direct; Center to front L+R at 0.707; LFE to front L+R at 0.707; Side L/R to rear L/R at unity |
+| `7.1 → 4.0` | Front L/R direct; Center to front L+R at 0.707; LFE to front L+R at 0.707; Rear L/R and Side L/R both to rear L/R at unity |
+
+Only the front pair is treated as full range, so LFE goes to the front pair
+only. The 7.1 rear sum keeps both physical surround feeds at unity, matching
+the loudness of having both rear and side speakers. The downmix layouts do
+not add bass management or a sub output.
+
+Front L/Front R, Rear L/R and Side L/R remain linked stereo pairs; Center,
+LFE and other mono channels are split mono. Linked user labels drop the L/R
+suffix (`Front L` + `Front R` displays `Front`); a split pair shows the two
+individual names. The used outputs form group 1. Loading a factory workspace
+also clears Control Room assignments that use its output pairs, so those
+pairs stay available to the surround layout. A factory workspace has no file
+yet: `Save` opens Save As and writes a normal `.tcws` file. You can remap the
 output routing afterwards and save that result.
+
+When an output pair is split, selecting one output channel selects only that
+mono bus. Its strip is the only active output surface, and the source send
+faders edit that mono matrix column. A linked pair keeps the pair-level
+submix.
 
 A workspace contains:
 
@@ -1098,18 +1129,15 @@ stream cannot map those speaker positions onto AUX channels, so PipeWire
 keeps only the front pair.
 
 For surround media, open `Options → Settings` and enable `Virtual 5.1 output`,
-`Virtual 6.1 output`, `Virtual 7.1 output`, or a combination.  The sinks
-exist while TotalControl runs and follow the selected Fireface/MR18 device:
+`Virtual 7.1 output`, or both. The sinks exist while TotalControl runs and
+follow the selected Fireface/MR18 device:
 
 - `TotalControl Surround 5.1` → SW playback 1/2 FL/FR, 3/4 C/LFE, 5/6 SL/SR
-- `TotalControl Surround 6.1` → SW playback 1/2 FL/FR, 3/4 C/LFE, 5/6 BC and
-  unused, 7/8 SL/SR
 - `TotalControl Surround 7.1` → SW playback 1/2 FL/FR, 3/4 C/LFE, 5/6 RL/RR,
   7/8 SL/SR
 
-The 6.1 sink keeps the player order FL FR FC LFE BC SL SR. Its sixth bridge
-channel is unused so the side pair stays on 7/8. The direct workspaces
-described in section 13 use this same order.
+The factory workspaces in section 13 use these same orders. The 4.0 factory
+layouts are downmixes of these sinks; they do not create another sink.
 
 Select the matching sink in KDE or in the player.  An already-playing stream
 keeps its old device; stop and restart it, or move it to the new sink.  The

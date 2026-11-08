@@ -41,6 +41,7 @@ pub struct WorkspaceView {
     pub fx_panel: bool,
     pub ui_scale: f32,
     pub sel_out: usize,
+    pub sel_out_side: usize,
     pub quick_channel: ChannelId,
     pub show_original_names: bool,
     pub matrix_mono: bool,
@@ -66,6 +67,7 @@ impl Default for WorkspaceView {
             fx_panel: true,
             ui_scale: default_scale(),
             sel_out: 0,
+            sel_out_side: 0,
             quick_channel: ChannelId::Input(0),
             show_original_names: false,
             matrix_mono: false,
@@ -105,7 +107,6 @@ pub struct Workspace {
     pub control_room: ControlRoomSettings,
     pub assign: [Option<usize>; 7],
     pub surround_51: bool,
-    pub surround_61: bool,
     pub surround_71: bool,
     pub window_size: Option<(f32, f32)>,
 }
@@ -126,30 +127,37 @@ impl Default for Workspace {
             control_room: ControlRoomSettings::default(),
             assign: [None; 7],
             surround_51: false,
-            surround_61: false,
             surround_71: false,
             window_size: None,
         }
     }
 }
 
-/// A predefined direct surround layout.  The source channels follow the
-/// virtual sink's channel order; each source is routed to one hardware
-/// output channel, with FL/FR and SL/SR kept as stereo pairs and C, LFE
-/// and BC kept as mono channels.
+/// A predefined surround workspace.  The direct layouts map the virtual
+/// sink channels one-to-one to hardware outputs; the downmix layouts fold
+/// 5.1 or 7.1 into four full-range channels (front and rear pairs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurroundLayout {
     Direct51,
-    Direct61,
+    Direct71,
+    Downmix51To40,
+    Downmix71To40,
 }
 
 impl SurroundLayout {
-    pub const ALL: [Self; 2] = [Self::Direct51, Self::Direct61];
+    pub const ALL: [Self; 4] = [
+        Self::Direct51,
+        Self::Direct71,
+        Self::Downmix51To40,
+        Self::Downmix71To40,
+    ];
 
     pub fn menu_label(self) -> &'static str {
         match self {
             Self::Direct51 => "5.1 Direct",
-            Self::Direct61 => "6.1 Direct",
+            Self::Direct71 => "7.1 Direct",
+            Self::Downmix51To40 => "5.1 → 4.0",
+            Self::Downmix71To40 => "7.1 → 4.0",
         }
     }
 
@@ -159,43 +167,90 @@ impl SurroundLayout {
 
     fn sources(self) -> &'static [SurroundSourceSpec] {
         match self {
-            Self::Direct51 => DIRECT_51_SOURCES,
-            Self::Direct61 => DIRECT_61_SOURCES,
+            Self::Direct51 | Self::Downmix51To40 => SOURCES_51,
+            Self::Direct71 | Self::Downmix71To40 => SOURCES_71,
         }
     }
 
     fn outputs(self) -> &'static [SurroundOutputSpec] {
         match self {
-            Self::Direct51 => DIRECT_51_OUTPUTS,
-            Self::Direct61 => DIRECT_61_OUTPUTS,
+            Self::Direct51 => OUTPUTS_51,
+            Self::Direct71 => OUTPUTS_71,
+            Self::Downmix51To40 | Self::Downmix71To40 => OUTPUTS_40,
         }
     }
 
-    fn routes(self) -> &'static [SurroundRouteSpec] {
+    fn routes(self) -> Vec<SurroundRoute> {
+        let mut routes = vec![
+            route(0, 0, 0, 1.0),
+            route(1, 0, 1, 1.0),
+        ];
         match self {
-            Self::Direct51 => DIRECT_51_ROUTES,
-            Self::Direct61 => DIRECT_61_ROUTES,
+            Self::Direct51 => {
+                routes.extend([
+                    route(2, 1, 0, 1.0),
+                    route(3, 1, 1, 1.0),
+                    route(4, 2, 0, 1.0),
+                    route(5, 2, 1, 1.0),
+                ]);
+            }
+            Self::Direct71 => {
+                routes.extend([
+                    route(2, 1, 0, 1.0),
+                    route(3, 1, 1, 1.0),
+                    route(4, 2, 0, 1.0),
+                    route(5, 2, 1, 1.0),
+                    route(6, 3, 0, 1.0),
+                    route(7, 3, 1, 1.0),
+                ]);
+            }
+            Self::Downmix51To40 => {
+                routes.extend([
+                    route(2, 0, 0, 0.707),
+                    route(2, 0, 1, 0.707),
+                    route(3, 0, 0, 0.707),
+                    route(3, 0, 1, 0.707),
+                    route(4, 1, 0, 1.0),
+                    route(5, 1, 1, 1.0),
+                ]);
+            }
+            Self::Downmix71To40 => {
+                routes.extend([
+                    route(2, 0, 0, 0.707),
+                    route(2, 0, 1, 0.707),
+                    route(3, 0, 0, 0.707),
+                    route(3, 0, 1, 0.707),
+                    route(4, 1, 0, 1.0),
+                    route(5, 1, 1, 1.0),
+                    route(6, 1, 0, 1.0),
+                    route(7, 1, 1, 1.0),
+                ]);
+            }
         }
+        routes
     }
 
     /// Software-playback pairs that are split into two mono strips.
     fn split_pairs(self) -> &'static [usize] {
         match self {
             Self::Direct51 => &[1],
-            Self::Direct61 => &[1, 2],
+            Self::Direct71 => &[1],
+            Self::Downmix51To40 | Self::Downmix71To40 => &[1],
         }
     }
 
-    fn six_one(self) -> bool {
-        self == Self::Direct61
+    fn seven_one(self) -> bool {
+        matches!(self, Self::Direct71 | Self::Downmix71To40)
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 struct SurroundSourceSpec {
     channel: usize,
     label: &'static str,
 }
 
+#[derive(Debug, Clone, Copy)]
 struct SurroundOutputSpec {
     /// Display position of the hardware-output pair.
     pair: usize,
@@ -206,13 +261,24 @@ struct SurroundOutputSpec {
     right_member: bool,
 }
 
-struct SurroundRouteSpec {
+#[derive(Debug, Clone, Copy)]
+struct SurroundRoute {
     source: usize,
     pair: usize,
     side: usize,
+    gain: f32,
 }
 
-const DIRECT_51_SOURCES: &[SurroundSourceSpec] = &[
+fn route(source: usize, pair: usize, side: usize, gain: f32) -> SurroundRoute {
+    SurroundRoute {
+        source,
+        pair,
+        side,
+        gain,
+    }
+}
+
+const SOURCES_51: &[SurroundSourceSpec] = &[
     SurroundSourceSpec { channel: 0, label: "Front L" },
     SurroundSourceSpec { channel: 1, label: "Front R" },
     SurroundSourceSpec { channel: 2, label: "Center" },
@@ -221,7 +287,18 @@ const DIRECT_51_SOURCES: &[SurroundSourceSpec] = &[
     SurroundSourceSpec { channel: 5, label: "Side R" },
 ];
 
-const DIRECT_51_OUTPUTS: &[SurroundOutputSpec] = &[
+const SOURCES_71: &[SurroundSourceSpec] = &[
+    SurroundSourceSpec { channel: 0, label: "Front L" },
+    SurroundSourceSpec { channel: 1, label: "Front R" },
+    SurroundSourceSpec { channel: 2, label: "Center" },
+    SurroundSourceSpec { channel: 3, label: "LFE" },
+    SurroundSourceSpec { channel: 4, label: "Rear L" },
+    SurroundSourceSpec { channel: 5, label: "Rear R" },
+    SurroundSourceSpec { channel: 6, label: "Side L" },
+    SurroundSourceSpec { channel: 7, label: "Side R" },
+];
+
+const OUTPUTS_51: &[SurroundOutputSpec] = &[
     SurroundOutputSpec {
         pair: 0,
         linked: true,
@@ -248,27 +325,7 @@ const DIRECT_51_OUTPUTS: &[SurroundOutputSpec] = &[
     },
 ];
 
-const DIRECT_51_ROUTES: &[SurroundRouteSpec] = &[
-    SurroundRouteSpec { source: 0, pair: 0, side: 0 },
-    SurroundRouteSpec { source: 1, pair: 0, side: 1 },
-    SurroundRouteSpec { source: 2, pair: 1, side: 0 },
-    SurroundRouteSpec { source: 3, pair: 1, side: 1 },
-    SurroundRouteSpec { source: 4, pair: 2, side: 0 },
-    SurroundRouteSpec { source: 5, pair: 2, side: 1 },
-];
-
-const DIRECT_61_SOURCES: &[SurroundSourceSpec] = &[
-    SurroundSourceSpec { channel: 0, label: "Front L" },
-    SurroundSourceSpec { channel: 1, label: "Front R" },
-    SurroundSourceSpec { channel: 2, label: "Center" },
-    SurroundSourceSpec { channel: 3, label: "LFE" },
-    SurroundSourceSpec { channel: 4, label: "Back C" },
-    SurroundSourceSpec { channel: 5, label: "Unused" },
-    SurroundSourceSpec { channel: 6, label: "Side L" },
-    SurroundSourceSpec { channel: 7, label: "Side R" },
-];
-
-const DIRECT_61_OUTPUTS: &[SurroundOutputSpec] = &[
+const OUTPUTS_71: &[SurroundOutputSpec] = &[
     SurroundOutputSpec {
         pair: 0,
         linked: true,
@@ -287,11 +344,11 @@ const DIRECT_61_OUTPUTS: &[SurroundOutputSpec] = &[
     },
     SurroundOutputSpec {
         pair: 2,
-        linked: false,
-        left: "Back C",
-        right: "Unused",
+        linked: true,
+        left: "Rear L",
+        right: "Rear R",
         left_member: true,
-        right_member: false,
+        right_member: true,
     },
     SurroundOutputSpec {
         pair: 3,
@@ -303,14 +360,23 @@ const DIRECT_61_OUTPUTS: &[SurroundOutputSpec] = &[
     },
 ];
 
-const DIRECT_61_ROUTES: &[SurroundRouteSpec] = &[
-    SurroundRouteSpec { source: 0, pair: 0, side: 0 },
-    SurroundRouteSpec { source: 1, pair: 0, side: 1 },
-    SurroundRouteSpec { source: 2, pair: 1, side: 0 },
-    SurroundRouteSpec { source: 3, pair: 1, side: 1 },
-    SurroundRouteSpec { source: 4, pair: 2, side: 0 },
-    SurroundRouteSpec { source: 6, pair: 3, side: 0 },
-    SurroundRouteSpec { source: 7, pair: 3, side: 1 },
+const OUTPUTS_40: &[SurroundOutputSpec] = &[
+    SurroundOutputSpec {
+        pair: 0,
+        linked: true,
+        left: "Front L",
+        right: "Front R",
+        left_member: true,
+        right_member: true,
+    },
+    SurroundOutputSpec {
+        pair: 1,
+        linked: true,
+        left: "Rear L",
+        right: "Rear R",
+        left_member: true,
+        right_member: true,
+    },
 ];
 
 /// How the current device numbers output pairs and their per-pair send
@@ -342,13 +408,96 @@ fn set_label(workspace: &mut Workspace, channel: ChannelId, label: &str) {
     workspace.labels.push((channel, label.to_string()));
 }
 
-/// Turn the current workspace into a direct 5.1 or 6.1 surround layout.
-///
-/// Playback routing is cleared first, then each source channel is sent to
-/// one physical output side in media-player order.  FL/FR and SL/SR are
-/// linked stereo pairs; C, LFE and BC are split mono channels.  The used
-/// output channels form group 1.
-pub fn configure_direct(
+/// Reset the mixer and monitoring state to factory defaults while keeping
+/// the device topology and device-owned integration settings (clock, rate,
+/// references, preamps).
+fn factory_scene(base: &Scene) -> Scene {
+    let mut scene = base.clone();
+    for input in &mut scene.inputs {
+        input.volumes.fill(0.0);
+        input.pans.fill(0);
+        input.fx_send_db = -65.0;
+        input.eq = input.eq.map(|_| Default::default());
+        input.dynamics = input.dynamics.map(|_| Default::default());
+        input.mute = false;
+        input.solo = false;
+        input.trim = 0.0;
+        input.width = 1.0;
+        input.ms_proc = false;
+        input.phase = false;
+        input.phase_r = false;
+    }
+    for playback in &mut scene.playbacks {
+        playback.volumes.fill(0.0);
+        playback.pans.fill(0);
+        playback.fx_send_db = -65.0;
+        playback.split = false;
+        playback.trim = 0.0;
+        playback.width = 1.0;
+        playback.ms_proc = false;
+        playback.mute = false;
+        playback.solo = false;
+    }
+    for output in &mut scene.outputs {
+        output.volume = 1.0;
+        output.eq = output.eq.map(|_| Default::default());
+        output.dynamics = output.dynamics.map(|_| Default::default());
+        output.loopback = false;
+        output.balance = 0;
+        output.fx_return_db = -65.0;
+        output.phase_l = false;
+        output.phase_r = false;
+        output.no_trim = false;
+        output.talkback = false;
+        output.mute = false;
+        output.solo = false;
+        output.cue = false;
+    }
+    scene.matrix_overrides.clear();
+    let settings = &mut scene.settings;
+    settings.pitch_percent = 0.0;
+    settings.ms_proc = false;
+    settings.an12 = false;
+    settings.eq_for_record = false;
+    settings.dim = false;
+    settings.dim_amount_db = -20.0;
+    settings.dim_saved.clear();
+    settings.speaker_b = false;
+    settings.main_out = None;
+    settings.main_b_out = None;
+    settings.mono = false;
+    settings.mute_fx = false;
+    settings.external_input = false;
+    settings.fx_send_db = None;
+    settings.reverb = settings.reverb.map(|_| Default::default());
+    settings.echo = settings.echo.map(|_| Default::default());
+    settings.width = 0.0;
+    settings.input_link = false;
+    settings.input_pair_link = vec![false; scene.inputs.len() / 2];
+    settings.output_link = vec![true; scene.outputs.len() / 2];
+    scene
+}
+
+/// Build a completely initialized factory surround workspace.  Nothing
+/// from the current mixer, routing, FX, labels, groups, layouts or
+/// snapshots is carried over.
+pub fn factory_workspace(
+    base: &Workspace,
+    layout: SurroundLayout,
+    topology: &SurroundTopology,
+) -> Result<Workspace, String> {
+    let mut workspace = Workspace::default();
+    workspace.scene = factory_scene(&base.scene);
+    workspace.view.view = View::Mixer;
+    workspace.view.show_original_names = false;
+    workspace.view.ui_scale = base.view.ui_scale;
+    workspace.view.matrix_mono = true;
+    workspace.window_size = None;
+    configure_layout(&mut workspace, layout, topology)?;
+    Ok(workspace)
+}
+
+fn configure_layout(
     workspace: &mut Workspace,
     layout: SurroundLayout,
     topology: &SurroundTopology,
@@ -415,9 +564,10 @@ pub fn configure_direct(
             }
         }
     }
-    workspace.scene.matrix_overrides.retain(|cell| {
-        cell.source < 18 && !chosen_blocks.contains(&cell.block)
-    });
+    workspace
+        .scene
+        .matrix_overrides
+        .retain(|cell| cell.source < 18 && !chosen_blocks.contains(&cell.block));
 
     for output in outputs {
         let internal = topology.internal_pair(output.pair).ok_or_else(|| {
@@ -467,33 +617,55 @@ pub fn configure_direct(
         }
     }
 
+    // Route by source/pair, putting the natural side in the pair model and
+    // any cross-side gain in a mono matrix override.
+    let mut pair_gains: std::collections::BTreeMap<(usize, usize), [Option<f32>; 2]> =
+        std::collections::BTreeMap::new();
     for route in routes {
-        if route.side != route.source % 2 {
-            return Err("Surround route crosses playback sides".into());
+        if route.side > 1 {
+            return Err("Surround route has an invalid side".into());
         }
-        let pair = topology.volume_pair(route.pair).ok_or_else(|| {
-            format!(
-                "This device has no hardware output pair {}",
-                route.pair + 1
-            )
+        pair_gains
+            .entry((route.source, route.pair))
+            .or_insert([None, None])[route.side] = Some(route.gain);
+    }
+    for ((source, pair), gains) in pair_gains {
+        let volume_pair = topology.volume_pair(pair).ok_or_else(|| {
+            format!("This device has no hardware output pair {}", pair + 1)
         })?;
-        let Some(playback) = workspace.scene.playbacks.get_mut(route.source) else {
+        let Some(playback) = workspace.scene.playbacks.get_mut(source) else {
             return Err(format!(
                 "This device has no software playback channel {}",
-                route.source + 1
+                source + 1
             ));
         };
-        if let Some(volume) = playback.volumes.get_mut(pair) {
-            *volume = 1.0;
+        let natural = source % 2;
+        let natural_gain = gains[natural].unwrap_or(0.0);
+        if let Some(volume) = playback.volumes.get_mut(volume_pair) {
+            *volume = natural_gain;
+        }
+        for side in 0..2 {
+            if side == natural {
+                continue;
+            }
+            let Some(gain) = gains[side] else {
+                continue;
+            };
+            if gain > 0.0 {
+                workspace
+                    .scene
+                    .matrix_overrides
+                    .push(totalcontrol_core::scene::MatrixOverride {
+                        source: 18 + source,
+                        block: pair * 2 + side,
+                        gain,
+                    });
+            }
         }
     }
 
     for source in sources {
-        set_label(
-            workspace,
-            ChannelId::Playback(source.channel),
-            source.label,
-        );
+        set_label(workspace, ChannelId::Playback(source.channel), source.label);
     }
 
     let members: Vec<ChannelId> = outputs
@@ -515,16 +687,13 @@ pub fn configure_direct(
         fader_linked: true,
     };
 
-    // Control Room pairs are always stereo and cannot be part of the
-    // surround layout, so clear any destination that now points at one of
-    // the chosen output pairs.
     for slot in workspace.assign[..OUTPUT_DESTS].iter_mut() {
         if slot.is_some_and(|pair| internal_pairs.contains(&pair)) {
             *slot = None;
         }
     }
-    workspace.scene.settings.main_out = workspace.assign[0];
-    workspace.scene.settings.main_b_out = workspace.assign[1];
+    workspace.scene.settings.main_out = None;
+    workspace.scene.settings.main_b_out = None;
     workspace.scene.settings.dim = false;
     workspace.scene.settings.speaker_b = false;
     workspace.scene.settings.mono = false;
@@ -534,11 +703,15 @@ pub fn configure_direct(
     workspace.view.external_input_on = false;
     workspace.view.pfl_inputs.clear();
     workspace.view.active_snapshot = None;
+    workspace.view.active_layout = None;
+    workspace.view.collapsed.clear();
     workspace.view.sel_out = internal_pairs[0];
+    workspace.view.sel_out_side = 0;
+    workspace.view.show_original_names = false;
+    workspace.view.matrix_mono = true;
 
-    workspace.surround_51 = !layout.six_one();
-    workspace.surround_61 = layout.six_one();
-    workspace.surround_71 = false;
+    workspace.surround_51 = !layout.seven_one();
+    workspace.surround_71 = layout.seven_one();
     workspace.name = layout.name().to_string();
     workspace.scene.name = workspace.name.clone();
     Ok(())
@@ -602,7 +775,10 @@ pub fn with_extension(path: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use totalcontrol_core::{OutputChannel, PlaybackChannel};
+    use totalcontrol_core::scene::MatrixOverride;
+    use totalcontrol_core::{
+        ChannelType, InputChannel, OutputChannel, PlaybackChannel, Reverb,
+    };
 
     fn channel_label(workspace: &Workspace, channel: ChannelId) -> Option<&str> {
         workspace
@@ -612,7 +788,7 @@ mod tests {
             .map(|(_, label)| label.as_str())
     }
 
-    fn test_workspace(playbacks: usize, outputs: usize) -> Workspace {
+    fn base_workspace(playbacks: usize, outputs: usize) -> Workspace {
         let mut workspace = Workspace::default();
         for i in 0..playbacks {
             workspace.scene.playbacks.push(PlaybackChannel::new(
@@ -622,10 +798,10 @@ mod tests {
             ));
         }
         for i in 0..outputs {
-            workspace
-                .scene
-                .outputs
-                .push(OutputChannel::new(i, &format!("OUT {}", i + 1)));
+            let mut output = OutputChannel::new(i, &format!("OUT {}", i + 1));
+            output.eq = Some(Default::default());
+            output.dynamics = Some(Default::default());
+            workspace.scene.outputs.push(output);
         }
         workspace.scene.settings.output_link = vec![true; outputs / 2];
         workspace
@@ -645,19 +821,115 @@ mod tests {
         }
     }
 
+    fn factory(layout: SurroundLayout, topology: &SurroundTopology) -> Workspace {
+        factory_workspace(&base_workspace(18, 18), layout, topology).unwrap()
+    }
+
+    #[test]
+    fn factory_workspace_starts_from_a_clean_mixer() {
+        let mut base = base_workspace(18, 18);
+        let mut input = InputChannel::new(0, "IN1", ChannelType::Line, 9);
+        input.eq = Some(Default::default());
+        input.dynamics = Some(Default::default());
+        base.scene.inputs.push(input);
+        // Make every mixer area dirty so the factory reset is observable.
+        base.scene.inputs[0].volumes[0] = 1.0;
+        base.scene.inputs[0].fx_send_db = 0.0;
+        base.scene.inputs[0].mute = true;
+        base.scene.inputs[0].phase = true;
+        base.scene.inputs[0].trim = -6.0;
+        if let Some(eq) = base.scene.inputs[0].eq.as_mut() {
+            eq.enabled = true;
+        }
+        if let Some(dynamics) = base.scene.inputs[0].dynamics.as_mut() {
+            dynamics.on = true;
+        }
+        base.scene.playbacks[8].volumes[4] = 1.0;
+        base.scene.playbacks[8].fx_send_db = 0.0;
+        base.scene.playbacks[8].trim = -6.0;
+        base.scene.playbacks[8].width = 0.0;
+        base.scene.playbacks[8].ms_proc = true;
+        base.scene.playbacks[8].mute = true;
+        base.scene.outputs[0].volume = 2.0;
+        base.scene.outputs[0].fx_return_db = 0.0;
+        base.scene.outputs[0].loopback = true;
+        if let Some(eq) = base.scene.outputs[0].eq.as_mut() {
+            eq.enabled = true;
+        }
+        if let Some(dynamics) = base.scene.outputs[0].dynamics.as_mut() {
+            dynamics.on = true;
+        }
+        base.scene.settings.reverb = Some(Reverb {
+            on: true,
+            ..Default::default()
+        });
+        base.scene.settings.dim = true;
+        base.scene.settings.speaker_b = true;
+        base.scene.settings.mono = true;
+        base.scene.settings.mute_fx = true;
+        base.scene.settings.pitch_percent = 3.0;
+        base.scene.settings.main_out = Some(1);
+        base.scene.matrix_overrides.push(MatrixOverride {
+            source: 18,
+            block: 3,
+            gain: 1.0,
+        });
+        base.labels
+            .push((ChannelId::Input(0), "Old input".into()));
+        base.groups[1].members.push(ChannelId::Output(0));
+        base.snapshots[0].name = "Old".into();
+        base.snapshots[0].scene = Some(base.scene.clone());
+        base.view.show_original_names = true;
+        base.view.matrix_mono = false;
+
+        let workspace =
+            factory_workspace(&base, SurroundLayout::Direct51, &ucx_topology()).unwrap();
+
+        assert!(workspace.scene.inputs[0].volumes.iter().all(|&v| v == 0.0));
+        assert_eq!(workspace.scene.inputs[0].fx_send_db, -65.0);
+        assert!(!workspace.scene.inputs[0].mute);
+        assert!(!workspace.scene.inputs[0].phase);
+        assert_eq!(workspace.scene.inputs[0].trim, 0.0);
+        assert!(!workspace.scene.inputs[0].eq.unwrap().enabled);
+        assert!(!workspace.scene.inputs[0].dynamics.unwrap().on);
+
+        let unused = &workspace.scene.playbacks[8];
+        assert!(unused.volumes.iter().all(|&v| v == 0.0));
+        assert_eq!(unused.fx_send_db, -65.0);
+        assert_eq!(unused.trim, 0.0);
+        assert_eq!(unused.width, 1.0);
+        assert!(!unused.ms_proc);
+        assert!(!unused.mute);
+
+        let output = &workspace.scene.outputs[0];
+        assert_eq!(output.volume, 1.0);
+        assert_eq!(output.fx_return_db, -65.0);
+        assert!(!output.loopback);
+        assert!(!output.eq.unwrap().enabled);
+        assert!(!output.dynamics.unwrap().on);
+
+        assert!(!workspace.scene.settings.reverb.unwrap().on);
+        assert!(!workspace.scene.settings.dim);
+        assert!(!workspace.scene.settings.speaker_b);
+        assert!(!workspace.scene.settings.mono);
+        assert!(!workspace.scene.settings.mute_fx);
+        assert_eq!(workspace.scene.settings.pitch_percent, 0.0);
+        assert_eq!(workspace.scene.settings.main_out, None);
+        assert!(workspace.labels.iter().all(|(id, _)| *id != ChannelId::Input(0)));
+        assert!(workspace.groups[1].members.is_empty());
+        assert!(workspace.snapshots.iter().all(|slot| slot.scene.is_none()));
+        assert!(!workspace.view.show_original_names);
+        assert!(workspace.view.matrix_mono);
+    }
+
     #[test]
     fn direct_51_keeps_stereo_pairs_and_mono_centre_and_lfe() {
-        let mut workspace = test_workspace(18, 18);
-        workspace.assign[0] = Some(1);
-        workspace.assign[2] = Some(4);
-        configure_direct(&mut workspace, SurroundLayout::Direct51, &ucx_topology()).unwrap();
+        let workspace = factory(SurroundLayout::Direct51, &ucx_topology());
 
         assert_eq!(workspace.name, "5.1 Direct");
         assert!(workspace.surround_51);
-        assert!(!workspace.surround_61);
         assert!(!workspace.surround_71);
 
-        // UCX volume arrays are in internal (Phones-first) pair order.
         for (source, pair) in [(0, 1), (1, 1), (2, 2), (3, 2), (4, 3), (5, 3)] {
             assert_eq!(workspace.scene.playbacks[source].volumes[pair], 1.0);
         }
@@ -682,54 +954,18 @@ mod tests {
         assert!(!workspace.scene.settings.output_link[2]);
         assert!(workspace.scene.settings.output_link[3]);
 
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(0)),
-            Some("Front L")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(1)),
-            Some("Front R")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(2)),
-            Some("Center")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(3)),
-            Some("LFE")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(4)),
-            Some("Side L")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(5)),
-            Some("Side R")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(2)),
-            Some("Front L")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(3)),
-            Some("Front R")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(4)),
-            Some("Center")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(5)),
-            Some("LFE")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(6)),
-            Some("Side L")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(7)),
-            Some("Side R")
-        );
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(0)), Some("Front L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(1)), Some("Front R"));
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(2)), Some("Center"));
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(3)), Some("LFE"));
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(4)), Some("Side L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(5)), Some("Side R"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(2)), Some("Front L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(3)), Some("Front R"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(4)), Some("Center"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(5)), Some("LFE"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(6)), Some("Side L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(7)), Some("Side R"));
 
         assert_eq!(
             workspace.groups[0].members,
@@ -742,105 +978,64 @@ mod tests {
                 ChannelId::Output(7),
             ]
         );
-        assert!(workspace.groups[0].mute_linked);
-        assert!(workspace.groups[0].solo_linked);
-        assert!(workspace.groups[0].fader_linked);
-
-        // The two Control Room assignments that pointed at surround outputs
-        // are cleared; the third, on an unrelated pair, survives.
-        assert_eq!(workspace.assign[0], None);
-        assert_eq!(workspace.assign[2], Some(4));
         assert!(workspace.scene.matrix_overrides.is_empty());
+        assert_eq!(workspace.view.sel_out, 1);
+        assert_eq!(workspace.view.sel_out_side, 0);
     }
 
     #[test]
     fn direct_51_uses_display_order_volume_indices_on_the_uc() {
-        let mut workspace = test_workspace(18, 18);
-        configure_direct(&mut workspace, SurroundLayout::Direct51, &uc_topology()).unwrap();
+        let workspace = factory(SurroundLayout::Direct51, &uc_topology());
 
         for (source, pair) in [(0, 0), (1, 0), (2, 1), (3, 1), (4, 2), (5, 2)] {
             assert_eq!(workspace.scene.playbacks[source].volumes[pair], 1.0);
         }
         // Output channels stay in internal Phones-first order.
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(2)),
-            Some("Front L")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(3)),
-            Some("Front R")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(7)),
-            Some("Side R")
-        );
+        assert_eq!(channel_label(&workspace, ChannelId::Output(2)), Some("Front L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(3)), Some("Front R"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(7)), Some("Side R"));
         assert_eq!(workspace.view.sel_out, 1);
     }
 
     #[test]
-    fn direct_61_preserves_player_order_and_leaves_channel_6_unused() {
-        let mut workspace = test_workspace(18, 18);
-        configure_direct(&mut workspace, SurroundLayout::Direct61, &ucx_topology()).unwrap();
+    fn direct_71_maps_front_centre_lfe_rear_and_side() {
+        let workspace = factory(SurroundLayout::Direct71, &ucx_topology());
 
-        assert_eq!(workspace.name, "6.1 Direct");
+        assert_eq!(workspace.name, "7.1 Direct");
         assert!(!workspace.surround_51);
-        assert!(workspace.surround_61);
-        assert!(!workspace.surround_71);
+        assert!(workspace.surround_71);
 
-        for (source, pair) in [(0, 1), (1, 1), (2, 2), (3, 2), (4, 3), (6, 0), (7, 0)] {
+        for (source, pair) in [
+            (0, 1),
+            (1, 1),
+            (2, 2),
+            (3, 2),
+            (4, 3),
+            (5, 3),
+            (6, 0),
+            (7, 0),
+        ] {
             assert_eq!(workspace.scene.playbacks[source].volumes[pair], 1.0);
         }
-        assert!(workspace.scene.playbacks[5].volumes.iter().all(|&v| v == 0.0));
-        for pair in 0..9 {
-            assert_eq!(workspace.scene.playbacks[5].volumes[pair], 0.0);
-        }
-
         assert!(workspace.scene.playbacks[2].split);
         assert!(workspace.scene.playbacks[3].split);
-        assert!(workspace.scene.playbacks[4].split);
-        assert!(workspace.scene.playbacks[5].split);
         assert!(!workspace.scene.playbacks[0].split);
-        assert!(!workspace.scene.playbacks[1].split);
+        assert!(!workspace.scene.playbacks[4].split);
         assert!(!workspace.scene.playbacks[6].split);
-        assert!(!workspace.scene.playbacks[7].split);
 
         assert!(workspace.scene.settings.output_link[1]);
         assert!(!workspace.scene.settings.output_link[2]);
-        assert!(!workspace.scene.settings.output_link[3]);
+        assert!(workspace.scene.settings.output_link[3]);
         assert!(workspace.scene.settings.output_link[0]);
 
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(4)),
-            Some("Back C")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(5)),
-            Some("Unused")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(6)),
-            Some("Side L")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Playback(7)),
-            Some("Side R")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(6)),
-            Some("Back C")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(7)),
-            Some("Unused")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(0)),
-            Some("Side L")
-        );
-        assert_eq!(
-            channel_label(&workspace, ChannelId::Output(1)),
-            Some("Side R")
-        );
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(4)), Some("Rear L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(5)), Some("Rear R"));
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(6)), Some("Side L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Playback(7)), Some("Side R"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(6)), Some("Rear L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(7)), Some("Rear R"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(0)), Some("Side L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(1)), Some("Side R"));
 
         assert_eq!(
             workspace.groups[0].members,
@@ -850,6 +1045,7 @@ mod tests {
                 ChannelId::Output(4),
                 ChannelId::Output(5),
                 ChannelId::Output(6),
+                ChannelId::Output(7),
                 ChannelId::Output(0),
                 ChannelId::Output(1),
             ]
@@ -858,31 +1054,126 @@ mod tests {
     }
 
     #[test]
-    fn direct_surround_workspaces_round_trip_through_tcws() {
+    fn downmix_51_to_40_centres_center_and_lfe_without_a_sub_output() {
+        let workspace = factory(SurroundLayout::Downmix51To40, &ucx_topology());
+
+        assert_eq!(workspace.name, "5.1 → 4.0");
+        assert!(workspace.surround_51);
+        assert!(!workspace.surround_71);
+
+        assert_eq!(workspace.scene.playbacks[0].volumes[1], 1.0);
+        assert_eq!(workspace.scene.playbacks[1].volumes[1], 1.0);
+        assert_eq!(workspace.scene.playbacks[2].volumes[1], 0.707);
+        assert_eq!(workspace.scene.playbacks[3].volumes[1], 0.707);
+        assert_eq!(workspace.scene.playbacks[4].volumes[2], 1.0);
+        assert_eq!(workspace.scene.playbacks[5].volumes[2], 1.0);
+
+        let overrides = &workspace.scene.matrix_overrides;
+        assert_eq!(overrides.len(), 2);
+        assert!(overrides.iter().any(|cell| {
+            cell.source == 20 && cell.block == 1 && (cell.gain - 0.707).abs() < 1e-6
+        }));
+        assert!(overrides.iter().any(|cell| {
+            cell.source == 21 && cell.block == 0 && (cell.gain - 0.707).abs() < 1e-6
+        }));
+
+        assert!(workspace.scene.settings.output_link[1]);
+        assert!(workspace.scene.settings.output_link[2]);
+        assert_eq!(channel_label(&workspace, ChannelId::Output(2)), Some("Front L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(3)), Some("Front R"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(4)), Some("Rear L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(5)), Some("Rear R"));
+        assert_eq!(
+            workspace.groups[0].members,
+            vec![
+                ChannelId::Output(2),
+                ChannelId::Output(3),
+                ChannelId::Output(4),
+                ChannelId::Output(5),
+            ]
+        );
+        // LFE is mixed to both front channels only; there is no sub pair.
+        assert_eq!(
+            workspace.scene.playbacks[3]
+                .volumes
+                .iter()
+                .filter(|&&v| v > 0.0)
+                .count(),
+            1
+        );
+        assert!(!workspace.groups[0].members.contains(&ChannelId::Output(6)));
+        assert!(!workspace.groups[0].members.contains(&ChannelId::Output(7)));
+        assert!(workspace
+            .scene
+            .matrix_overrides
+            .iter()
+            .all(|cell| cell.block < 4));
+    }
+
+    #[test]
+    fn downmix_71_to_40_adds_rear_and_side_into_the_rear_pair() {
+        let workspace = factory(SurroundLayout::Downmix71To40, &ucx_topology());
+
+        assert_eq!(workspace.name, "7.1 → 4.0");
+        assert!(!workspace.surround_51);
+        assert!(workspace.surround_71);
+
+        assert_eq!(workspace.scene.playbacks[0].volumes[1], 1.0);
+        assert_eq!(workspace.scene.playbacks[1].volumes[1], 1.0);
+        assert_eq!(workspace.scene.playbacks[2].volumes[1], 0.707);
+        assert_eq!(workspace.scene.playbacks[3].volumes[1], 0.707);
+        for source in 4..=7 {
+            assert_eq!(
+                workspace.scene.playbacks[source].volumes[2], 1.0,
+                "rear and side sources must sum into the rear pair at unity"
+            );
+        }
+        assert_eq!(workspace.scene.matrix_overrides.len(), 2);
+        assert_eq!(
+            workspace.groups[0].members,
+            vec![
+                ChannelId::Output(2),
+                ChannelId::Output(3),
+                ChannelId::Output(4),
+                ChannelId::Output(5),
+            ]
+        );
+        assert_eq!(channel_label(&workspace, ChannelId::Output(4)), Some("Rear L"));
+        assert_eq!(channel_label(&workspace, ChannelId::Output(5)), Some("Rear R"));
+    }
+
+    #[test]
+    fn downmix_51_on_the_uc_uses_display_order_volume_indices() {
+        let workspace = factory(SurroundLayout::Downmix51To40, &uc_topology());
+
+        assert_eq!(workspace.scene.playbacks[2].volumes[0], 0.707);
+        assert_eq!(workspace.scene.playbacks[3].volumes[0], 0.707);
+        assert_eq!(workspace.scene.playbacks[4].volumes[1], 1.0);
+        assert_eq!(workspace.scene.playbacks[5].volumes[1], 1.0);
+        assert_eq!(workspace.scene.matrix_overrides.len(), 2);
+    }
+
+    #[test]
+    fn factory_surround_workspaces_round_trip_through_tcws() {
         let dir = std::env::temp_dir().join(format!(
             "totalcontrol-surround-workspace-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("six-one.tcws");
+        let path = dir.join("seven-one-downmix.tcws");
 
-        let mut workspace = test_workspace(18, 18);
-        configure_direct(&mut workspace, SurroundLayout::Direct61, &ucx_topology()).unwrap();
+        let workspace = factory(SurroundLayout::Downmix71To40, &ucx_topology());
         save(&path, &workspace).unwrap();
 
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.name, "6.1 Direct");
-        assert!(loaded.surround_61);
-        assert_eq!(loaded.scene.playbacks[4].volumes[3], 1.0);
-        assert_eq!(
-            channel_label(&loaded, ChannelId::Playback(4)),
-            Some("Back C")
-        );
-        assert_eq!(
-            loaded.groups[0].members,
-            workspace.groups[0].members
-        );
-        assert!(loaded.scene.matrix_overrides.is_empty());
+        assert_eq!(loaded.name, "7.1 → 4.0");
+        assert!(loaded.surround_71);
+        assert_eq!(loaded.scene.playbacks[4].volumes[2], 1.0);
+        assert_eq!(loaded.scene.matrix_overrides.len(), 2);
+        assert_eq!(channel_label(&loaded, ChannelId::Playback(4)), Some("Rear L"));
+        assert_eq!(loaded.groups[0].members, workspace.groups[0].members);
+        assert!(loaded.view.matrix_mono);
+        assert_eq!(loaded.view.sel_out_side, 0);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -890,12 +1181,18 @@ mod tests {
     #[test]
     fn direct_surround_does_not_add_bass_management() {
         for layout in SurroundLayout::ALL {
-            let mut workspace = test_workspace(18, 18);
-            configure_direct(&mut workspace, layout, &ucx_topology()).unwrap();
-            let lfe = &workspace.scene.playbacks[3];
-            assert_eq!(lfe.volumes[2], 1.0);
-            assert_eq!(lfe.volumes.iter().filter(|&&v| v > 0.0).count(), 1);
-            assert!(workspace.scene.matrix_overrides.is_empty());
+            let workspace = factory(layout, &ucx_topology());
+            assert!(workspace.scene.outputs.len() >= 8);
+            assert_eq!(
+                workspace.scene.playbacks[3]
+                    .volumes
+                    .iter()
+                    .filter(|&&v| v > 0.0)
+                    .count(),
+                1,
+                "LFE must have exactly one pair route, never a dedicated sub path"
+            );
+            assert!(workspace.scene.matrix_overrides.len() <= 2);
         }
     }
 
@@ -903,7 +1200,7 @@ mod tests {
     fn workspace_round_trips_through_json() {
         let mut workspace = Workspace::default();
         workspace.name = "5.1".into();
-        workspace.labels.push((ChannelId::Playback(0), "FL".into()));
+        workspace.labels.push((ChannelId::Playback(0), "Front L".into()));
         workspace.groups[0].members.push(ChannelId::Output(0));
         workspace.groups[0].fader_linked = true;
         workspace.view.view = View::Mixer;
@@ -912,7 +1209,7 @@ mod tests {
         let json = serde_json::to_string(&workspace).unwrap();
         let back: Workspace = serde_json::from_str(&json).unwrap();
         assert_eq!(back.name, "5.1");
-        assert_eq!(back.labels[0].1, "FL");
+        assert_eq!(back.labels[0].1, "Front L");
         assert!(back.groups[0].fader_linked);
         assert_eq!(back.snapshots[0].name, "Surround");
         assert_eq!(back.view.view, View::Mixer);
