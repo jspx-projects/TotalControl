@@ -898,10 +898,10 @@ workspace. Sample rate, pitch/varispeed and the active Dim and Speaker B
 states are stored in the current mix.
 
 Opening a workspace replaces all of the above and applies its mixer to the
-device. If the current workspace has unsaved changes, TotalControl asks before
-discarding them; the action button is `Open` or `Load`, and `Cancel` leaves
-the current workspace unchanged. A workspace written for a different device
-model is refused.
+device. TotalControl first warns that loading a workspace will overwrite the
+current workspace; the buttons are `Cancel` and `Open` (or `Load` for a
+factory workspace). `Cancel` leaves the current workspace unchanged. A
+workspace written for a different device model is refused.
 
 The `WORKSPACE` label shows `*` while the workspace has unsaved changes. Saving
 clears the marker. A workspace is separate from the auto-saved current mix and

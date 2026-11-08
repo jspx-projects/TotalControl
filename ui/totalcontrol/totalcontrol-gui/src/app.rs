@@ -5,7 +5,7 @@ use iced::widget::{
     row, scrollable, slider, stack, text, text_input,
 };
 use iced::{window, Background, Color, Element, Length, Subscription, Task};
-use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult};
+use rfd::FileDialog;
 use rosc::OscType;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1745,6 +1745,13 @@ pub enum WorkspaceMenu {
     Factory,
 }
 
+/// What to do after the in-app unsaved-workspace confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspacePending {
+    Open,
+    Factory(crate::workspaces::SurroundLayout),
+}
+
 /// The top-bar Options menu.  Reset Mix is a submenu; Settings opens the
 /// app-level sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2129,6 +2136,10 @@ pub enum Message {
     WorkspaceBack,
     /// Loads a built-in direct surround workspace.
     LoadSurroundWorkspace(crate::workspaces::SurroundLayout),
+    /// Confirms the pending workspace replacement.
+    WorkspaceConfirm,
+    /// Cancels the pending workspace replacement.
+    WorkspaceCancel,
     /// Closes the Workspace menu.
     CloseWorkspace,
     /// Opens the top-bar Options menu, or closes it.
@@ -2586,6 +2597,8 @@ pub struct TotalControl {
     pub workspace_path: Option<PathBuf>,
     /// Whether host-side workspace state has changed since the last save.
     pub workspace_dirty: bool,
+    /// Pending workspace replacement waiting for the in-app confirmation.
+    pub workspace_pending: Option<WorkspacePending>,
     /// Last folder used by the Workspace file dialogs.
     pub workspace_last_dir: Option<PathBuf>,
     /// Top-bar Options menu state.
@@ -3161,6 +3174,7 @@ pub fn new_with_device(
         workspace_menu: WorkspaceMenu::Closed,
         workspace_path: None,
         workspace_dirty: false,
+        workspace_pending: None,
         workspace_last_dir: None,
         options_menu: OptionsMenu::Closed,
         surround_51: false,
@@ -3867,20 +3881,53 @@ fn save_workspace_to(state: &mut TotalControl, path: PathBuf) -> Result<(), Stri
     Ok(())
 }
 
-fn confirm_discard_workspace(state: &TotalControl, action: &str) -> bool {
-    if !state.workspace_dirty {
-        return true;
+fn open_workspace_after_confirm(state: &mut TotalControl) -> Task<Message> {
+    let Some(path) = workspace_open_dialog(state) else {
+        return Task::none();
+    };
+    match workspaces::load(&path)
+        .and_then(|workspace| apply_workspace(state, &workspace, path.clone()))
+    {
+        Ok(()) => {
+            remember_workspace_dir(state, &path);
+            state.notice = Some((
+                format!("Opened workspace {}", path.display()),
+                Instant::now(),
+            ));
+            if let (Some(id), Some((w, h))) = (state.window_id, state.window_size) {
+                return window::resize(id, iced::Size::new(w, h));
+            }
+        }
+        Err(e) => {
+            log::warn!("Could not open workspace {}: {e}", path.display());
+            state.notice = Some((format!("Could not open workspace: {e}"), Instant::now()));
+        }
     }
-    let result = MessageDialog::new()
-        .set_title("Unsaved workspace")
-        .set_description("The current workspace has unsaved changes. Continue and discard them?")
-        .set_buttons(MessageButtons::OkCancelCustom(
-            action.to_string(),
-            "Cancel".to_string(),
-        ))
-        .show();
-    matches!(result, MessageDialogResult::Ok)
-        || matches!(&result, MessageDialogResult::Custom(label) if label == action)
+    Task::none()
+}
+
+fn load_factory_workspace_after_confirm(
+    state: &mut TotalControl,
+    layout: workspaces::SurroundLayout,
+) {
+    match load_surround_workspace(state, layout) {
+        Ok(()) => {
+            state.notice = Some((
+                format!("Loaded factory workspace {}", layout.name()),
+                Instant::now(),
+            ));
+        }
+        Err(e) => {
+            log::warn!(
+                "Could not load factory workspace {}: {e}",
+                layout.name()
+            );
+            state.notice = Some((
+                format!("Could not load factory workspace: {e}"),
+                Instant::now(),
+            ));
+        }
+    }
 }
 
 /// Push the Control Room Main and Speaker B assignments from the saved
@@ -7084,6 +7131,8 @@ fn is_undoable(message: &Message) -> bool {
             | Message::WorkspaceSaveAs
             | Message::WorkspaceFactory
             | Message::WorkspaceBack
+            | Message::WorkspaceConfirm
+            | Message::WorkspaceCancel
             | Message::CloseWorkspace
             | Message::ToggleOptions
             | Message::OptionsReset
@@ -8139,7 +8188,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::EscapePressed => {
             // Topmost thing first: the modal outranks an in-place edit.
-            if state.show_about {
+            if state.workspace_pending.is_some() {
+                state.workspace_pending = None;
+            } else if state.show_about {
                 state.show_about = false;
             } else if state.workspace_menu != WorkspaceMenu::Closed {
                 state.workspace_menu = WorkspaceMenu::Closed;
@@ -9265,55 +9316,26 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::WorkspaceBack => state.workspace_menu = WorkspaceMenu::Root,
         Message::LoadSurroundWorkspace(layout) => {
             state.workspace_menu = WorkspaceMenu::Closed;
-            if !confirm_discard_workspace(state, "Load") {
+            state.workspace_pending = Some(WorkspacePending::Factory(layout));
+            return Task::none();
+        }
+        Message::WorkspaceConfirm => {
+            let Some(pending) = state.workspace_pending.take() else {
                 return Task::none();
-            }
-            match load_surround_workspace(state, layout) {
-                Ok(()) => {
-                    state.notice = Some((
-                        format!("Loaded surround workspace {}", layout.name()),
-                        Instant::now(),
-                    ));
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Could not load surround workspace {}: {e}",
-                        layout.name()
-                    );
-                    state.notice = Some((
-                        format!("Could not load surround workspace: {e}"),
-                        Instant::now(),
-                    ));
+            };
+            match pending {
+                WorkspacePending::Open => return open_workspace_after_confirm(state),
+                WorkspacePending::Factory(layout) => {
+                    load_factory_workspace_after_confirm(state, layout)
                 }
             }
         }
+        Message::WorkspaceCancel => state.workspace_pending = None,
         Message::CloseWorkspace => state.workspace_menu = WorkspaceMenu::Closed,
         Message::WorkspaceOpen => {
             state.workspace_menu = WorkspaceMenu::Closed;
-            if !confirm_discard_workspace(state, "Open") {
-                return Task::none();
-            }
-            let Some(path) = workspace_open_dialog(state) else {
-                return Task::none();
-            };
-            match workspaces::load(&path)
-                .and_then(|workspace| apply_workspace(state, &workspace, path.clone()))
-            {
-                Ok(()) => {
-                    remember_workspace_dir(state, &path);
-                    state.notice = Some((
-                        format!("Opened workspace {}", path.display()),
-                        Instant::now(),
-                    ));
-                    if let (Some(id), Some((w, h))) = (state.window_id, state.window_size) {
-                        return window::resize(id, iced::Size::new(w, h));
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Could not open workspace {}: {e}", path.display());
-                    state.notice = Some((format!("Could not open workspace: {e}"), Instant::now()));
-                }
-            }
+            state.workspace_pending = Some(WorkspacePending::Open);
+            return Task::none();
         }
         Message::WorkspaceSave => {
             state.workspace_menu = WorkspaceMenu::Closed;
@@ -10494,6 +10516,12 @@ pub fn view(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
             .height(Length::Fill)
             .into();
     }
+    if state.workspace_pending.is_some() {
+        base = stack(vec![base, workspace_confirm_modal(state)])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    }
     if state.startup_mismatch.is_some() {
         // RME's mismatch prompt is the topmost modal: it must be answered
         // before the mixer is used.
@@ -10957,6 +10985,39 @@ fn menu_below_top_bar<'a>(
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+/// Unsaved-workspace confirmation.  It is an in-app modal, not a native
+/// dialog, so it cannot open behind the main window.
+fn workspace_confirm_modal(state: &TotalControl) -> Element<'_, Message> {
+    let scale = state.ui_scale;
+    let (title, action) = match state.workspace_pending {
+        Some(WorkspacePending::Open) => ("Open workspace", "Open"),
+        Some(WorkspacePending::Factory(_)) => ("Load factory workspace", "Load"),
+        None => ("Workspace", "Continue"),
+    };
+    let body = column![
+        text(title)
+            .size(theme::TEXT_XL * scale)
+            .color(theme::TEXT_PRIMARY),
+        text("Loading a workspace will overwrite the current workspace.")
+            .size(theme::TEXT_DIALOG * scale)
+            .color(theme::TEXT_SEC),
+        row![
+            iced::widget::button(text("Cancel").size(theme::TEXT_DIALOG * scale))
+                .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::WorkspaceCancel),
+            iced::widget::button(text(action).size(theme::TEXT_DIALOG * scale))
+                .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::WorkspaceConfirm),
+        ]
+        .spacing(theme::SPACE_MD * scale),
+    ]
+    .spacing(theme::SPACE_LG * scale)
+    .width(Length::Fill);
+    centered_dialog(state, body.into(), Message::WorkspaceCancel, 460.0)
 }
 
 /// The top-bar Workspace menu.  The file dialogs use the remembered
@@ -20142,6 +20203,30 @@ mod tests {
     }
 
     #[test]
+    fn factory_workspace_load_waits_for_the_in_app_confirmation() {
+        let mut state = new(true, None, None);
+        let layout = crate::workspaces::SurroundLayout::Direct51;
+        let _ = update(&mut state, Message::LoadSurroundWorkspace(layout));
+        assert_eq!(
+            state.workspace_pending,
+            Some(super::WorkspacePending::Factory(layout))
+        );
+        assert!(!state.labels.contains_key(&ChannelId::Playback(0)));
+
+        let _ = update(&mut state, Message::WorkspaceCancel);
+        assert_eq!(state.workspace_pending, None);
+        assert!(!state.labels.contains_key(&ChannelId::Playback(0)));
+
+        let _ = update(&mut state, Message::LoadSurroundWorkspace(layout));
+        let _ = update(&mut state, Message::WorkspaceConfirm);
+        assert_eq!(state.workspace_pending, None);
+        assert_eq!(
+            state.labels.get(&ChannelId::Playback(0)).map(String::as_str),
+            Some("Front L")
+        );
+    }
+
+    #[test]
     fn factory_surround_workspaces_apply_through_the_workspace_path() {
         for (layout, seven_one, downmix) in [
             (crate::workspaces::SurroundLayout::Direct51, false, false),
@@ -20154,6 +20239,7 @@ mod tests {
             state.show_original_names = true;
             state.labels.insert(ChannelId::Input(0), "Old".into());
             let _ = update(&mut state, Message::LoadSurroundWorkspace(layout));
+            let _ = update(&mut state, Message::WorkspaceConfirm);
 
             assert_eq!(state.workspace_path, None);
             assert!(state.workspace_dirty);

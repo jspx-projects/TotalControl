@@ -117,8 +117,10 @@ The top bar has `WORKSPACE` immediately before `OPTIONS`. Its menu contains:
 
 The file dialogs remember the last used folder in `gui.json`. With no saved
 folder they start in `Documents`, falling back to the home directory. A
-workspace written for another device model is refused. Opening a workspace
-while the current one is dirty asks before discarding the changes.
+workspace written for another device model is refused. Opening or loading a
+workspace first shows an in-app confirmation: loading a workspace will
+overwrite the current workspace, with `Cancel` and the action word (`Open` or
+`Load`).
 
 The Factory Workspaces submenu lists `5.1 Direct`, `7.1 Direct`, `5.1 → 4.0`
 and `7.1 → 4.0`. A factory workspace starts from a clean mixer rather than
