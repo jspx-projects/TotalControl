@@ -47,7 +47,7 @@ const SETTINGS_GLYPH: f32 = 14.0;
 /// Budget: `90 - 2 * SPACE_MD` content = 78.  The compact icon column is
 /// `20 + SPACE_TIGHT` = 22, leaving 56 for the fader canvas.  The fader
 /// group is `METER_RULER_W (26) + GAP (4) + TRACK_W (26)` = 56, so the
-/// 13 px VU meter fits without clipping the track's right side.
+/// track keeps its original position and sits at the icon column's edge.
 pub(crate) const STRIP_W: f32 = 90.0;
 
 /// The message a Control Room strip's FX fader sends: FX Return on an
@@ -455,7 +455,7 @@ fn tab_button<'a>(
         scale,
         TAB_BTN_W,
         TAB_BTN_H,
-        theme::TEXT_SM + 1.0,
+        theme::TEXT_MD,
     )
 }
 
