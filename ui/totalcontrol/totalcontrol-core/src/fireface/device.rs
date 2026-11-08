@@ -3383,11 +3383,28 @@ impl Fireface {
         self.ucx_write_options()
     }
 
+    /// Whether the assigned Main Out pair is muted.  TotalMix mirrors this
+    /// in `0x3f9e` bit 2; the UCX keeps the output muted until that bit is
+    /// cleared as well as the `NN02` mode bit.
+    fn main_out_muted(&self) -> bool {
+        let Some(pair) = self.settings.main_out else {
+            return false;
+        };
+        self.outputs
+            .get(pair * 2)
+            .is_some_and(|output| output.mute)
+            || self
+                .outputs
+                .get(pair * 2 + 1)
+                .is_some_and(|output| output.mute)
+    }
+
     /// Current monitor flag word (`0x3f9e`): bit 0 Talkback, bit 1 Mono,
-    /// bit 5 External Input.
+    /// bit 2 Main Out mute, bit 5 External Input.
     fn monitor_flags(&self) -> u16 {
         (self.talkback_active as u16)
             | ((self.settings.mono as u16) << 1)
+            | ((self.main_out_muted() as u16) << 2)
             | ((self.settings.external_input as u16) << 5)
     }
 
@@ -4106,6 +4123,9 @@ impl RmeDevice for Fireface {
                     }
                 }
                 self.outputs[idx].mute = mute;
+                if !self.is_uc() && self.settings.main_out == Some(idx / 2) {
+                    self.write_word(0x3f9e, self.monitor_flags())?;
+                }
             }
             ChannelId::Input(idx) => {
                 if idx >= self.inputs.len() {
@@ -4647,6 +4667,7 @@ impl RmeDevice for Fireface {
             self.ucx_write_output_mode(pair * 2, mute)?;
             self.ucx_write_output_mode(pair * 2 + 1, mute)?;
         }
+        self.write_word(0x3f9e, self.monitor_flags())?;
         Ok(())
     }
 
@@ -5951,6 +5972,9 @@ impl RmeDevice for Fireface {
             // TotalMix enables the output mute bits in its connect write.
             // Without this the NN02 mute bits are stored but ignored.
             self.write_word(ucx::global::MUTE_ENABLE, 1)?;
+            // Refresh the monitor flags too; this clears a stale Main Out
+            // mute bit left by an earlier session.
+            self.write_word(0x3f9e, self.monitor_flags())?;
             // Balance and stereo mode are separate registers from volume.
             for pair in 0..PAIRS {
                 let linked = self.output_linked(pair);
@@ -6381,14 +6405,56 @@ mod tests {
     }
 
     #[test]
-    fn ucx_connect_enables_output_mute() {
+    fn ucx_main_output_mute_sets_and_clears_the_monitor_flag() {
         let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        writes.lock().unwrap().clear();
+
+        dev.set_mute(ChannelId::Output(2), true).unwrap();
+        let w = written_words(&writes);
+        assert!(
+            w.iter()
+                .any(|(reg, value)| *reg == 0x1202 && value & 1 == 1),
+            "Main mute mode bit"
+        );
+        assert!(w.contains(&(0x3f9e, 4)), "Main mute monitor flag");
+
+        writes.lock().unwrap().clear();
+        dev.set_mute(ChannelId::Output(2), false).unwrap();
+        let w = written_words(&writes);
+        assert!(
+            w.iter()
+                .any(|(reg, value)| *reg == 0x1202 && value & 1 == 0),
+            "Main mute mode bit cleared"
+        );
+        assert!(w.contains(&(0x3f9e, 0)), "Main mute monitor flag cleared");
+    }
+
+    #[test]
+    fn ucx_mono_preserves_the_main_output_mute_flag() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_mute(ChannelId::Output(2), true).unwrap();
+        writes.lock().unwrap().clear();
+        dev.set_mono(true).unwrap();
+        assert!(written_words(&writes).contains(&(0x3f9e, 6)));
+    }
+
+    #[test]
+    fn ucx_connect_enables_output_mute_and_clears_a_stale_main_mute_flag() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
         let scene = dev.capture_scene();
         writes.lock().unwrap().clear();
         dev.apply_scene(&scene).unwrap();
+        let words = written_words(&writes);
         assert!(
-            written_words(&writes).contains(&(ucx::global::MUTE_ENABLE, 1)),
+            words.contains(&(ucx::global::MUTE_ENABLE, 1)),
             "TotalMix enables the output mute bits at connect"
+        );
+        assert!(
+            words.contains(&(0x3f9e, 0)),
+            "a stale Main Out mute flag must be cleared at connect"
         );
     }
 
