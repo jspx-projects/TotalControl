@@ -3465,6 +3465,17 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         .unwrap_or("Untitled")
         .to_string();
     let panels = state.sidebar_panels_open;
+    let pfl_inputs = if state.control_room.pfl_replaces_solo {
+        state
+            .device
+            .inputs()
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, input)| input.solo.then_some(ChannelId::Input(idx)))
+            .collect()
+    } else {
+        Vec::new()
+    };
     Workspace {
         schema: workspaces::SCHEMA,
         name,
@@ -3489,6 +3500,8 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             active_layout: state.active_layout,
             collapsed: state.collapsed.clone(),
             talkback_on: state.talkback_on,
+            external_input_on: state.device.settings().external_input,
+            pfl_inputs,
         },
         control_room: state.control_room.clone(),
         assign: state.assign,
@@ -3584,6 +3597,8 @@ fn apply_workspace(
     state.last_saved_json = None;
     enforce_control_room_stereo(state);
     apply_control_room_assignments(state).map_err(|e| e.to_string())?;
+    apply_workspace_external_input(state, workspace)?;
+    apply_workspace_pfl(state, workspace)?;
     apply_workspace_sample_rate(state, &scene);
     apply_workspace_monitor_state(state, &scene)?;
     if state.device.capabilities().pitch {
@@ -3601,6 +3616,46 @@ fn apply_workspace(
         state.talkback_on = on;
     }
     sync_surround_bridge(state);
+    Ok(())
+}
+
+/// Restore the workspace's runtime External Input state after the scene and
+/// assignments are in place.
+fn apply_workspace_external_input(
+    state: &mut TotalControl,
+    workspace: &Workspace,
+) -> Result<(), String> {
+    if workspace.view.external_input_on {
+        let source = state.control_room.external_input;
+        if source.is_some() {
+            state
+                .device
+                .set_external_input(true, source, state.control_room.external_gain_db)
+                .map_err(|e| e.to_string())?;
+        }
+    } else if state.device.settings().external_input {
+        state
+            .device
+            .set_external_input(false, None, 0.0)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Restore the workspace's PFL listening set after the PFL mode and Cue/PFL
+/// target have been applied.
+fn apply_workspace_pfl(state: &mut TotalControl, workspace: &Workspace) -> Result<(), String> {
+    if !state.control_room.pfl_replaces_solo {
+        return Ok(());
+    }
+    for channel in &workspace.view.pfl_inputs {
+        if matches!(channel, ChannelId::Input(_)) {
+            state
+                .device
+                .set_pfl(*channel, true)
+                .map_err(|e| e.to_string())?;
+        }
+    }
     Ok(())
 }
 

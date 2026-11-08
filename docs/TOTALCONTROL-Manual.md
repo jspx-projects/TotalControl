@@ -550,7 +550,7 @@ The buttons are one channel wide, in TotalMix’s order:
 | `speaker B` | Latching | Switches monitoring between Main and Speaker B | Yes, snapshot and workspace |
 | `mono` | Latching | Main Out and Speaker B | Yes |
 | `talkback` | Toggle | Phones with Talkback receive, plus Main for Listenback | Yes, workspace |
-| `ext. input` | Latching | Main Out and Speaker B | No, runtime only |
+| `ext. input` | Latching | Main Out and Speaker B | Yes, workspace |
 | `mute FX` | Latching | Reverb and Echo returns on Main Out and Speaker B | Yes |
 | `settings` | Opens the dialog | — | No |
 | `assign` | Opens the menu | The monitoring assignments | No, preferences |
@@ -665,7 +665,8 @@ returns. The source list contains hardware inputs only.
 
 The button is available when a source pair is configured and a Main Out is
 assigned. Changing the source or gain while External Input is active
-re-engages the path with the new values.
+re-engages the path with the new values. The active External Input state is
+stored in a workspace and restored when that workspace is opened.
 
 ### PFL
 
@@ -678,7 +679,8 @@ restores the previous submix and FX returns.
 `Exclusive Solo/PFL Mode` keeps only one input pair listening at a time. The
 Control Strip's global Solo master shows `F` while a PFL input is active; it
 turns the active PFL inputs off and can bring them back, like the ordinary
-Solo master. Playback and output Solo behave normally.
+Solo master. Playback and output Solo behave normally. The active PFL inputs
+are stored in a workspace and restored when that workspace is opened.
 
 ### What is stored where
 
@@ -689,7 +691,7 @@ Solo master. Playback and output Solo behave normally.
 | Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences; also saved in a workspace |
 | Dim and Speaker B active state | Current mix (snapshot and workspace) |
 | Talkback and Listenback active state | Workspace |
-| External Input and PFL active state | Runtime only |
+| External Input and PFL active state | Workspace |
 | Mono, Mute FX and the mixer levels | Current mix (snapshot and workspace) |
 
 ### Control Room Settings
@@ -834,7 +836,7 @@ A workspace contains:
 - the six layout slots and the current collapsed/expanded strips;
 - view, row mode, sidebar, zoom and selected-output state;
 - Control Room assignments and monitoring settings;
-- active Talkback and Cue states;
+- active Talkback, Cue, External Input and PFL states;
 - the virtual surround-output settings;
 - the window size.
 
