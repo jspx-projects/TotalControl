@@ -492,6 +492,7 @@ pub fn factory_workspace(
     workspace.view.show_original_names = false;
     workspace.view.ui_scale = base.view.ui_scale;
     workspace.view.matrix_mono = true;
+    workspace.view.fx_panel = false;
     workspace.window_size = None;
     configure_layout(&mut workspace, layout, topology)?;
     Ok(workspace)
@@ -920,6 +921,7 @@ mod tests {
         assert!(workspace.snapshots.iter().all(|slot| slot.scene.is_none()));
         assert!(!workspace.view.show_original_names);
         assert!(workspace.view.matrix_mono);
+        assert!(!workspace.view.fx_panel);
     }
 
     #[test]

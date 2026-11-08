@@ -836,7 +836,8 @@ Factory workspaces start from a clean mixer, not from the current one.
 Routing, playback and input sends, FX sends and returns, Reverb/Echo, EQ,
 dynamics, mutes, solos, labels, groups, layouts and snapshots are reset.
 Device-owned clock, sample rate, reference levels and preamps are kept. No
-return FX or other processing is switched on.
+return FX or other processing is switched on, and the FX column starts
+collapsed.
 
 Direct layouts route the virtual surround sink channels one-to-one to the
 first available hardware-output pairs. On the Fireface UC/UCX that is:
@@ -898,7 +899,9 @@ states are stored in the current mix.
 
 Opening a workspace replaces all of the above and applies its mixer to the
 device. If the current workspace has unsaved changes, TotalControl asks before
-discarding them. A workspace written for a different device model is refused.
+discarding them; the action button is `Open` or `Load`, and `Cancel` leaves
+the current workspace unchanged. A workspace written for a different device
+model is refused.
 
 The `WORKSPACE` label shows `*` while the workspace has unsaved changes. Saving
 clears the marker. A workspace is separate from the auto-saved current mix and

@@ -3867,16 +3867,20 @@ fn save_workspace_to(state: &mut TotalControl, path: PathBuf) -> Result<(), Stri
     Ok(())
 }
 
-fn confirm_discard_workspace(state: &TotalControl) -> bool {
+fn confirm_discard_workspace(state: &TotalControl, action: &str) -> bool {
     if !state.workspace_dirty {
         return true;
     }
-    MessageDialog::new()
+    let result = MessageDialog::new()
         .set_title("Unsaved workspace")
-        .set_description("The current workspace has unsaved changes. Open another one and discard them?")
-        .set_buttons(MessageButtons::YesNo)
-        .show()
-        == MessageDialogResult::Yes
+        .set_description("The current workspace has unsaved changes. Continue and discard them?")
+        .set_buttons(MessageButtons::OkCancelCustom(
+            action.to_string(),
+            "Cancel".to_string(),
+        ))
+        .show();
+    matches!(result, MessageDialogResult::Ok)
+        || matches!(&result, MessageDialogResult::Custom(label) if label == action)
 }
 
 /// Push the Control Room Main and Speaker B assignments from the saved
@@ -7341,6 +7345,13 @@ fn needs_protocol_features(message: &Message) -> bool {
 
 /// The exact mono output block currently selected, when the selected
 /// output pair is split.  Linked pairs keep the pair-level behaviour.
+fn output_block_for_pair(output_order: &[usize], pair: usize, side: usize) -> Option<usize> {
+    output_order
+        .iter()
+        .position(|&p| p == pair)
+        .map(|display| display * 2 + side.min(1))
+}
+
 fn selected_output_block(state: &TotalControl) -> Option<usize> {
     let pair = state
         .sel_out
@@ -7348,7 +7359,11 @@ fn selected_output_block(state: &TotalControl) -> Option<usize> {
     if state.device.outputs_one_per_pair() || state.device.output_linked(pair) {
         None
     } else {
-        Some(pair * 2 + state.sel_out_side.min(1))
+        output_block_for_pair(
+            &state.device.output_display_order(),
+            pair,
+            state.sel_out_side,
+        )
     }
 }
 
@@ -9250,7 +9265,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::WorkspaceBack => state.workspace_menu = WorkspaceMenu::Root,
         Message::LoadSurroundWorkspace(layout) => {
             state.workspace_menu = WorkspaceMenu::Closed;
-            if !confirm_discard_workspace(state) {
+            if !confirm_discard_workspace(state, "Load") {
                 return Task::none();
             }
             match load_surround_workspace(state, layout) {
@@ -9275,7 +9290,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::CloseWorkspace => state.workspace_menu = WorkspaceMenu::Closed,
         Message::WorkspaceOpen => {
             state.workspace_menu = WorkspaceMenu::Closed;
-            if !confirm_discard_workspace(state) {
+            if !confirm_discard_workspace(state, "Open") {
                 return Task::none();
             }
             let Some(path) = workspace_open_dialog(state) else {
@@ -20156,6 +20171,8 @@ mod tests {
             );
             assert!(!state.groups[0].members.is_empty());
             assert!(state.view == View::Mixer);
+            assert!(!state.show_fx_panel);
+            assert!(!state.device.settings().mute_fx);
             let first_pair = if state.device.matrix_uses_display_order() {
                 0
             } else {
@@ -20173,6 +20190,17 @@ mod tests {
                 if downmix { 2 } else { 0 }
             );
         }
+    }
+
+    #[test]
+    fn split_output_matrix_blocks_use_display_order() {
+        let order = [1usize, 2, 3, 0, 4, 5, 6, 7, 8];
+        // AN3/4 is internal pair 2 but display pair 1.
+        assert_eq!(super::output_block_for_pair(&order, 2, 0), Some(2));
+        assert_eq!(super::output_block_for_pair(&order, 2, 1), Some(3));
+        // AN5/6 is internal pair 3 but display pair 2.
+        assert_eq!(super::output_block_for_pair(&order, 3, 0), Some(4));
+        assert_eq!(super::output_block_for_pair(&order, 3, 1), Some(5));
     }
 
     #[test]

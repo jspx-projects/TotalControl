@@ -100,6 +100,10 @@ scale 1.0; long Reset Mix labels wrap inside the item.  Settings use standard
 controls: independent switches are checkboxes, mutually exclusive choices are
 radio buttons, and buttons are reserved for actions.
 
+Confirmation dialogs never use `Yes`/`No`.  The confirming button names the
+action in one word (`Open`, `Load`, `Discard`, `Delete`); the other button is
+`Cancel`.
+
 ### 1.2 Workspace menu
 
 The top bar has `WORKSPACE` immediately before `OPTIONS`. Its menu contains:
@@ -133,10 +137,10 @@ Front L/Front R and Side L/Side R stay linked pairs; Center, LFE and Rear/Back
 channels are mono where applicable. Linked user labels drop the L/R suffix
 (`Front L` + `Front R` displays `Front`); a split pair displays the two
 individual names. The used outputs form group 1. Factory workspaces switch
-the control strip to custom names and enable Matrix Mono so the mono routing
-can be edited. Control Room assignments that use one of the chosen output
-pairs are cleared. A factory workspace has no file: `Save` opens Save As so
-the user can keep it.
+the control strip to custom names, collapse the FX column and enable Matrix
+Mono so the mono routing can be edited. Control Room assignments that use one
+of the chosen output pairs are cleared. A factory workspace has no file:
+`Save` opens Save As so the user can keep it.
 
 A workspace contains the current mixer, the eight named snapshots, labels,
 groups, six layout slots, collapsed/expanded strips, view and sidebar state,
