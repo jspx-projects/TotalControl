@@ -3,8 +3,10 @@
 # These are convenience packages hosted as GitHub release assets, not an
 # official Fedora package.  Build with packaging/fedora/build-rpms.sh.
 
+%{!?app_version:%global app_version 0.3.1}
+
 Name:           totalcontrol
-Version:        0.3.1
+Version:        %{app_version}
 Release:        1%{?dist}
 Summary:        TotalMix-compatible mixer for RME Fireface interfaces
 License:        GPL-3.0-only

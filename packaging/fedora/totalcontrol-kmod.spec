@@ -7,7 +7,7 @@
 
 %global kmod_name     snd-fireface-uc
 %global kmod_version  0.1
-%global app_version   0.3.1
+%{!?app_version:%global app_version 0.3.1}
 
 Name:           totalcontrol-kmod
 Version:        %{kmod_version}
@@ -52,8 +52,8 @@ install -Dm644 packaging/systemd/snd-fireface-uc-load.service \
 
 %post
 if [ -x /usr/sbin/dkms ]; then
-    /usr/sbin/dkms add -m %{kmod_name} -v %{kmod_version} || :
-    /usr/sbin/dkms build -m %{kmod_name} -v %{kmod_version} -k "$(uname -r)" || :
+    /usr/sbin/dkms add -m %{kmod_name} -v %{kmod_version} --force || :
+    /usr/sbin/dkms build -m %{kmod_name} -v %{kmod_version} -k "$(uname -r)" --force || :
     /usr/sbin/dkms install -m %{kmod_name} -v %{kmod_version} -k "$(uname -r)" --force || :
 fi
 systemctl daemon-reload || :

@@ -21,7 +21,7 @@ DKMS module and enrol the key in MOK before it can load.
 On Fedora:
 
 ```sh
-sudo dnf install rpm-build rpmdevtools cargo rust gcc gcc-c++ make \
+sudo dnf install rpm-build cargo rust gcc gcc-c++ make \
     pkgconf-pkg-config alsa-lib-devel mesa-libGL-devel libX11-devel \
     libxkbcommon-devel wayland-devel systemd-devel fontconfig-devel \
     freetype-devel openssl-devel desktop-file-utils git tar gzip
@@ -35,7 +35,7 @@ Install the module first, then the application:
 
 ```sh
 sudo dnf install ./packaging/fedora/out/totalcontrol-kmod-*.rpm
-sudo dnf install ./packaging/fedora/out/totalcontrol-0.3.1-*.rpm
+sudo dnf install ./packaging/fedora/out/totalcontrol-[0-9]*.rpm
 ```
 
 After installing matching kernel headers later, retry the module build with:
@@ -47,8 +47,13 @@ sudo dkms autoinstall
 ## GitHub release
 
 `.github/workflows/fedora-rpms.yml` builds the RPMs in a Fedora container.
-On a published GitHub release it attaches the RPMs to that release; on a
-manual workflow run it uploads them as workflow artifacts.
+On a published GitHub release it attaches the two primary RPMs to that
+release; on a manual workflow run it uploads all RPMs as workflow artifacts.
+
+The workflow is pinned to Fedora 44.  After moving to Fedora 45, change the
+`container:` image and publish a new release from the updated `main`; the RPM
+release suffix changes from `.fc44` to `.fc45` automatically.  Publish the
+release rather than leaving it as a draft so the workflow runs.
 
 The application version comes from
 `ui/totalcontrol/totalcontrol-gui/Cargo.toml`; the kernel module version comes
