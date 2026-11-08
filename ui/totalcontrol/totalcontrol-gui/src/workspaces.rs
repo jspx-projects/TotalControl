@@ -213,27 +213,27 @@ struct SurroundRouteSpec {
 }
 
 const DIRECT_51_SOURCES: &[SurroundSourceSpec] = &[
-    SurroundSourceSpec { channel: 0, label: "FL" },
-    SurroundSourceSpec { channel: 1, label: "FR" },
-    SurroundSourceSpec { channel: 2, label: "C" },
+    SurroundSourceSpec { channel: 0, label: "Front L" },
+    SurroundSourceSpec { channel: 1, label: "Front R" },
+    SurroundSourceSpec { channel: 2, label: "Center" },
     SurroundSourceSpec { channel: 3, label: "LFE" },
-    SurroundSourceSpec { channel: 4, label: "SL" },
-    SurroundSourceSpec { channel: 5, label: "SR" },
+    SurroundSourceSpec { channel: 4, label: "Side L" },
+    SurroundSourceSpec { channel: 5, label: "Side R" },
 ];
 
 const DIRECT_51_OUTPUTS: &[SurroundOutputSpec] = &[
     SurroundOutputSpec {
         pair: 0,
         linked: true,
-        left: "FL",
-        right: "FR",
+        left: "Front L",
+        right: "Front R",
         left_member: true,
         right_member: true,
     },
     SurroundOutputSpec {
         pair: 1,
         linked: false,
-        left: "C",
+        left: "Center",
         right: "LFE",
         left_member: true,
         right_member: true,
@@ -241,8 +241,8 @@ const DIRECT_51_OUTPUTS: &[SurroundOutputSpec] = &[
     SurroundOutputSpec {
         pair: 2,
         linked: true,
-        left: "SL",
-        right: "SR",
+        left: "Side L",
+        right: "Side R",
         left_member: true,
         right_member: true,
     },
@@ -258,29 +258,29 @@ const DIRECT_51_ROUTES: &[SurroundRouteSpec] = &[
 ];
 
 const DIRECT_61_SOURCES: &[SurroundSourceSpec] = &[
-    SurroundSourceSpec { channel: 0, label: "FL" },
-    SurroundSourceSpec { channel: 1, label: "FR" },
-    SurroundSourceSpec { channel: 2, label: "C" },
+    SurroundSourceSpec { channel: 0, label: "Front L" },
+    SurroundSourceSpec { channel: 1, label: "Front R" },
+    SurroundSourceSpec { channel: 2, label: "Center" },
     SurroundSourceSpec { channel: 3, label: "LFE" },
-    SurroundSourceSpec { channel: 4, label: "BC" },
+    SurroundSourceSpec { channel: 4, label: "Back C" },
     SurroundSourceSpec { channel: 5, label: "Unused" },
-    SurroundSourceSpec { channel: 6, label: "SL" },
-    SurroundSourceSpec { channel: 7, label: "SR" },
+    SurroundSourceSpec { channel: 6, label: "Side L" },
+    SurroundSourceSpec { channel: 7, label: "Side R" },
 ];
 
 const DIRECT_61_OUTPUTS: &[SurroundOutputSpec] = &[
     SurroundOutputSpec {
         pair: 0,
         linked: true,
-        left: "FL",
-        right: "FR",
+        left: "Front L",
+        right: "Front R",
         left_member: true,
         right_member: true,
     },
     SurroundOutputSpec {
         pair: 1,
         linked: false,
-        left: "C",
+        left: "Center",
         right: "LFE",
         left_member: true,
         right_member: true,
@@ -288,7 +288,7 @@ const DIRECT_61_OUTPUTS: &[SurroundOutputSpec] = &[
     SurroundOutputSpec {
         pair: 2,
         linked: false,
-        left: "BC",
+        left: "Back C",
         right: "Unused",
         left_member: true,
         right_member: false,
@@ -296,8 +296,8 @@ const DIRECT_61_OUTPUTS: &[SurroundOutputSpec] = &[
     SurroundOutputSpec {
         pair: 3,
         linked: true,
-        left: "SL",
-        right: "SR",
+        left: "Side L",
+        right: "Side R",
         left_member: true,
         right_member: true,
     },
@@ -682,18 +682,54 @@ mod tests {
         assert!(!workspace.scene.settings.output_link[2]);
         assert!(workspace.scene.settings.output_link[3]);
 
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(0)), Some("FL"));
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(1)), Some("FR"));
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(2)), Some("C"));
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(3)), Some("LFE"));
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(4)), Some("SL"));
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(5)), Some("SR"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(2)), Some("FL"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(3)), Some("FR"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(4)), Some("C"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(5)), Some("LFE"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(6)), Some("SL"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(7)), Some("SR"));
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(0)),
+            Some("Front L")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(1)),
+            Some("Front R")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(2)),
+            Some("Center")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(3)),
+            Some("LFE")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(4)),
+            Some("Side L")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(5)),
+            Some("Side R")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(2)),
+            Some("Front L")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(3)),
+            Some("Front R")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(4)),
+            Some("Center")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(5)),
+            Some("LFE")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(6)),
+            Some("Side L")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(7)),
+            Some("Side R")
+        );
 
         assert_eq!(
             workspace.groups[0].members,
@@ -726,9 +762,18 @@ mod tests {
             assert_eq!(workspace.scene.playbacks[source].volumes[pair], 1.0);
         }
         // Output channels stay in internal Phones-first order.
-        assert_eq!(channel_label(&workspace, ChannelId::Output(2)), Some("FL"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(3)), Some("FR"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(7)), Some("SR"));
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(2)),
+            Some("Front L")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(3)),
+            Some("Front R")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(7)),
+            Some("Side R")
+        );
         assert_eq!(workspace.view.sel_out, 1);
     }
 
@@ -764,14 +809,38 @@ mod tests {
         assert!(!workspace.scene.settings.output_link[3]);
         assert!(workspace.scene.settings.output_link[0]);
 
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(4)), Some("BC"));
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(5)), Some("Unused"));
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(6)), Some("SL"));
-        assert_eq!(channel_label(&workspace, ChannelId::Playback(7)), Some("SR"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(6)), Some("BC"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(7)), Some("Unused"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(0)), Some("SL"));
-        assert_eq!(channel_label(&workspace, ChannelId::Output(1)), Some("SR"));
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(4)),
+            Some("Back C")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(5)),
+            Some("Unused")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(6)),
+            Some("Side L")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Playback(7)),
+            Some("Side R")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(6)),
+            Some("Back C")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(7)),
+            Some("Unused")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(0)),
+            Some("Side L")
+        );
+        assert_eq!(
+            channel_label(&workspace, ChannelId::Output(1)),
+            Some("Side R")
+        );
 
         assert_eq!(
             workspace.groups[0].members,
@@ -805,7 +874,10 @@ mod tests {
         assert_eq!(loaded.name, "6.1 Direct");
         assert!(loaded.surround_61);
         assert_eq!(loaded.scene.playbacks[4].volumes[3], 1.0);
-        assert_eq!(channel_label(&loaded, ChannelId::Playback(4)), Some("BC"));
+        assert_eq!(
+            channel_label(&loaded, ChannelId::Playback(4)),
+            Some("Back C")
+        );
         assert_eq!(
             loaded.groups[0].members,
             workspace.groups[0].members

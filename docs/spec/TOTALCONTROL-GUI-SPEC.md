@@ -108,21 +108,22 @@ The top bar has `WORKSPACE` immediately before `OPTIONS`. Its menu contains:
 |---|---|
 | `Open Workspace…` | choose a `.tcws` file and replace the current workspace |
 | `Save Workspace` | save to the current file, or open Save As when there is no file |
+| `Factory Workspaces  ▸` | open the built-in direct surround layouts |
 | `Save Workspace As…` | choose a new `.tcws` file |
-| `Surround Workspace  ▸` | open the built-in direct surround layouts |
 
 The file dialogs remember the last used folder in `gui.json`. With no saved
 folder they start in `Documents`, falling back to the home directory. A
 workspace written for another device model is refused. Opening a workspace
 while the current one is dirty asks before discarding the changes.
 
-The Surround Workspace submenu lists `5.1 Direct` and `6.1 Direct`. Each
+The Factory Workspaces submenu lists `5.1 Direct` and `6.1 Direct`. Each
 clears the existing playback routing and replaces it with a one-to-one
 mapping to the first available hardware-output pairs, labels the source and
-output channels, and places the used outputs in group 1. Stereo sources stay
-linked pairs; C, LFE and BC are split mono channels. Control Room assignments
-that use one of the chosen output pairs are cleared. A built-in workspace has
-no file: `Save` opens Save As so the user can keep it.
+output channels, and places the used outputs in group 1. Front L/Front R and
+Side L/Side R stay linked pairs; Center, LFE and Back C are split mono
+channels. Control Room assignments that use one of the chosen output pairs
+are cleared. A factory workspace has no file: `Save` opens Save As so the
+user can keep it.
 
 A workspace contains the current mixer, the eight named snapshots, labels,
 groups, six layout slots, collapsed/expanded strips, view and sidebar state,

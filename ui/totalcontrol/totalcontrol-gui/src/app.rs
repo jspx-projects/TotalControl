@@ -1728,7 +1728,7 @@ pub enum WorkspaceMenu {
     #[default]
     Closed,
     Root,
-    Surround,
+    Factory,
 }
 
 /// The top-bar Options menu.  Reset Mix is a submenu; Settings opens the
@@ -2110,7 +2110,7 @@ pub enum Message {
     /// Saves the current workspace under a new path.
     WorkspaceSaveAs,
     /// Opens the built-in surround layouts.
-    WorkspaceSurround,
+    WorkspaceFactory,
     /// Returns from the surround list to the Workspace root.
     WorkspaceBack,
     /// Loads a built-in direct surround workspace.
@@ -7012,7 +7012,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::WorkspaceOpen
             | Message::WorkspaceSave
             | Message::WorkspaceSaveAs
-            | Message::WorkspaceSurround
+            | Message::WorkspaceFactory
             | Message::WorkspaceBack
             | Message::CloseWorkspace
             | Message::ToggleOptions
@@ -9135,10 +9135,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.assign_menu = AssignMenu::Closed;
             state.workspace_menu = match state.workspace_menu {
                 WorkspaceMenu::Closed => WorkspaceMenu::Root,
-                WorkspaceMenu::Root | WorkspaceMenu::Surround => WorkspaceMenu::Closed,
+                WorkspaceMenu::Root | WorkspaceMenu::Factory => WorkspaceMenu::Closed,
             };
         }
-        Message::WorkspaceSurround => state.workspace_menu = WorkspaceMenu::Surround,
+        Message::WorkspaceFactory => state.workspace_menu = WorkspaceMenu::Factory,
         Message::WorkspaceBack => state.workspace_menu = WorkspaceMenu::Root,
         Message::LoadSurroundWorkspace(layout) => {
             state.workspace_menu = WorkspaceMenu::Closed;
@@ -10857,14 +10857,14 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             card = card
                 .push(item("Open Workspace…", Message::WorkspaceOpen))
                 .push(item("Save Workspace", Message::WorkspaceSave))
-                .push(item("Save Workspace As…", Message::WorkspaceSaveAs))
                 .push(item(
-                    "Surround Workspace  ▸",
-                    Message::WorkspaceSurround,
-                ));
+                    "Factory Workspaces  ▸",
+                    Message::WorkspaceFactory,
+                ))
+                .push(item("Save Workspace As…", Message::WorkspaceSaveAs));
         }
-        WorkspaceMenu::Surround => {
-            card = card.push(item("‹  Surround Workspace", Message::WorkspaceBack));
+        WorkspaceMenu::Factory => {
+            card = card.push(item("‹  Factory Workspaces", Message::WorkspaceBack));
             for layout in workspaces::SurroundLayout::ALL {
                 card = card.push(item(layout.menu_label(), Message::LoadSurroundWorkspace(layout)));
             }
@@ -20039,11 +20039,11 @@ mod tests {
             assert!(!state.surround_71);
             assert_eq!(
                 state.labels.get(&ChannelId::Playback(0)).map(String::as_str),
-                Some("FL")
+                Some("Front L")
             );
             assert_eq!(
                 state.labels.get(&ChannelId::Playback(2)).map(String::as_str),
-                Some("C")
+                Some("Center")
             );
             assert!(state.groups[0].members.contains(&ChannelId::Output(2)));
             assert!(state.groups[0].members.contains(&ChannelId::Output(3)));

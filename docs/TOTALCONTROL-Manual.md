@@ -771,7 +771,7 @@ front-panel equivalent controls of the unit.
 
 The top bar has a `WORKSPACE` menu before `OPTIONS`. `WORKSPACE` opens and
 saves the complete host-side configuration described in section 13, and
-contains the built-in `Surround Workspace` layouts.
+contains the built-in `Factory Workspaces` layouts.
 
 The `OPTIONS` menu contains `Reset Mix` and `Settings`.
 
@@ -821,25 +821,25 @@ term for a mixer state; the interface uses the terms below.
 
 - `Open Workspace…`
 - `Save Workspace`
+- `Factory Workspaces  ▸` → `5.1 Direct` or `6.1 Direct`
 - `Save Workspace As…`
-- `Surround Workspace  ▸` → `5.1 Direct` or `6.1 Direct`
 
 The file dialogs start in the last folder you used, or in your `Documents`
 folder when there is no remembered folder. A workspace is one JSON file with
 the `.tcws` extension. Save writes atomically; a failed save cannot destroy the
 previous file.
 
-The built-in surround workspaces route the virtual surround sink channels
+The factory surround workspaces route the virtual surround sink channels
 one-to-one to the first available hardware-output pairs. On the Fireface
 UC/UCX that is:
 
 | Workspace | Source channels | Hardware outputs |
 |---|---|---|
-| `5.1 Direct` | FL FR C LFE SL SR | AN1/2 FL/FR, AN3/4 C/LFE, AN5/6 SL/SR |
-| `6.1 Direct` | FL FR C LFE BC (channel 6 unused) SL SR | AN1/2 FL/FR, AN3/4 C/LFE, AN5/6 BC/unused, Phones 7/8 SL/SR |
+| `5.1 Direct` | Front L, Front R, Center, LFE, Side L, Side R | AN1/2 Front L/Front R, AN3/4 Center/LFE, AN5/6 Side L/Side R |
+| `6.1 Direct` | Front L, Front R, Center, LFE, Back C, unused, Side L, Side R | AN1/2 Front L/Front R, AN3/4 Center/LFE, AN5/6 Back C/unused, Phones 7/8 Side L/Side R |
 
-FL/FR and SL/SR remain linked stereo pairs; C, LFE and BC are split mono
-channels. The used outputs are placed in group 1. Loading one clears the
+Front L/Front R and Side L/Side R remain linked stereo pairs; Center, LFE
+and Back C are split mono channels. The used outputs are placed in group 1. Loading one clears the
 existing playback routing before writing the surround routes. The direct
 workspaces do not apply bass management or a downmix. Loading one also clears
 Control Room assignments that use its output pairs, so those pairs stay
