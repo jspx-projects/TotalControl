@@ -109,11 +109,20 @@ The top bar has `WORKSPACE` immediately before `OPTIONS`. Its menu contains:
 | `Open Workspace…` | choose a `.tcws` file and replace the current workspace |
 | `Save Workspace` | save to the current file, or open Save As when there is no file |
 | `Save Workspace As…` | choose a new `.tcws` file |
+| `Surround Workspace  ▸` | open the built-in direct surround layouts |
 
 The file dialogs remember the last used folder in `gui.json`. With no saved
 folder they start in `Documents`, falling back to the home directory. A
 workspace written for another device model is refused. Opening a workspace
 while the current one is dirty asks before discarding the changes.
+
+The Surround Workspace submenu lists `5.1 Direct` and `6.1 Direct`. Each
+clears the existing playback routing and replaces it with a one-to-one
+mapping to the first available hardware-output pairs, labels the source and
+output channels, and places the used outputs in group 1. Stereo sources stay
+linked pairs; C, LFE and BC are split mono channels. Control Room assignments
+that use one of the chosen output pairs are cleared. A built-in workspace has
+no file: `Save` opens Save As so the user can keep it.
 
 A workspace contains the current mixer, the eight named snapshots, labels,
 groups, six layout slots, collapsed/expanded strips, view and sidebar state,
@@ -136,11 +145,13 @@ not a sidebar popover; it holds BACKGROUND, STARTUP SYNC, SURROUND and OSC
 sections.  Independent options are checkboxes, one-of-many options are radio
 buttons, and the only footer action is `Close`.
 
-SURROUND has `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
-checked output creates a PipeWire sink while TotalControl runs and removes it
-when the application exits. The setting is persisted. The sinks follow the
-selected Fireface/MR18 Pro Audio device and bridge to the first six or eight
-SW playback pairs.
+SURROUND has the `Virtual 5.1 output`, `Virtual 6.1 output` and
+`Virtual 7.1 output` checkboxes. A checked output creates a PipeWire sink while
+TotalControl runs and removes it when the application exits. The setting is
+persisted. The sinks follow the selected Fireface/MR18 Pro Audio device and
+bridge to the first surround SW playback channels. The 6.1 sink uses the
+player order `FL FR FC LFE BC SL SR`; its sixth bridge channel is unused so
+SL/SR stay on channels 7/8.
 
 OSC has an `Enable OSC control surface` checkbox, `Classic` and `Global`
 radio buttons, a receive-port field, a send-port field and `Apply`.  The

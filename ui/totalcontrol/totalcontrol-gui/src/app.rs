@@ -1728,6 +1728,7 @@ pub enum WorkspaceMenu {
     #[default]
     Closed,
     Root,
+    Surround,
 }
 
 /// The top-bar Options menu.  Reset Mix is a submenu; Settings opens the
@@ -2108,6 +2109,12 @@ pub enum Message {
     WorkspaceSave,
     /// Saves the current workspace under a new path.
     WorkspaceSaveAs,
+    /// Opens the built-in surround layouts.
+    WorkspaceSurround,
+    /// Returns from the surround list to the Workspace root.
+    WorkspaceBack,
+    /// Loads a built-in direct surround workspace.
+    LoadSurroundWorkspace(crate::workspaces::SurroundLayout),
     /// Closes the Workspace menu.
     CloseWorkspace,
     /// Opens the top-bar Options menu, or closes it.
@@ -2120,8 +2127,9 @@ pub enum Message {
     OptionsSettings,
     /// Closes the Options menu.
     CloseOptions,
-    /// Start/stop the virtual 5.1 and 7.1 outputs.
+    /// Start/stop the virtual 5.1, 6.1 and 7.1 outputs.
     SetSurround51(bool),
+    SetSurround61(bool),
     SetSurround71(bool),
     /// First level: open and pin that destination's second level.
     AssignDestinations(usize),
@@ -2569,9 +2577,11 @@ pub struct TotalControl {
     pub options_menu: OptionsMenu,
     /// Persisted intent for the virtual surround outputs.
     pub surround_51: bool,
+    pub surround_61: bool,
     pub surround_71: bool,
     /// Whether the helper processes are currently running.
     pub surround_51_running: bool,
+    pub surround_61_running: bool,
     pub surround_71_running: bool,
     /// RME-style startup mismatch dialog.  `None` = no prompt.
     pub startup_mismatch: Option<StartupMismatch>,
@@ -3140,8 +3150,10 @@ pub fn new_with_device(
         workspace_last_dir: None,
         options_menu: OptionsMenu::Closed,
         surround_51: false,
+        surround_61: false,
         surround_71: false,
         surround_51_running: false,
+        surround_61_running: false,
         surround_71_running: false,
         startup_mismatch: None,
         startup_compare_pending: false,
@@ -3282,6 +3294,7 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         fx_panel: Some(state.show_fx_panel),
         assign: state.assign,
         surround_51: state.surround_51,
+        surround_61: state.surround_61,
         surround_71: state.surround_71,
         control_room: state.control_room.clone(),
         sidebar_width: Some(state.sidebar_width),
@@ -3326,6 +3339,7 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
     }
     state.assign = prefs.assign;
     state.surround_51 = prefs.surround_51;
+    state.surround_61 = prefs.surround_61;
     state.surround_71 = prefs.surround_71;
     state.control_room = prefs.control_room;
     state.control_room_draft = state.control_room.clone();
@@ -3506,6 +3520,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         control_room: state.control_room.clone(),
         assign: state.assign,
         surround_51: state.surround_51,
+        surround_61: state.surround_61,
         surround_71: state.surround_71,
         window_size: state.window_size,
     }
@@ -3518,6 +3533,16 @@ fn apply_workspace(
     state: &mut TotalControl,
     workspace: &Workspace,
     path: PathBuf,
+) -> Result<(), String> {
+    apply_workspace_state(state, workspace, Some(path))
+}
+
+/// Shared apply path for file-backed and built-in workspaces.  A built-in
+/// workspace has no file and starts dirty, so Save opens Save As.
+fn apply_workspace_state(
+    state: &mut TotalControl,
+    workspace: &Workspace,
+    path: Option<PathBuf>,
 ) -> Result<(), String> {
     if workspace.schema > workspaces::SCHEMA {
         return Err(format!(
@@ -3587,9 +3612,10 @@ fn apply_workspace(
     state.control_room_draft = workspace.control_room.clone();
     state.assign = workspace.assign;
     state.surround_51 = workspace.surround_51;
+    state.surround_61 = workspace.surround_61;
     state.surround_71 = workspace.surround_71;
     state.window_size = workspace.window_size;
-    state.workspace_path = Some(path);
+    state.workspace_path = path;
     state.workspace_dirty = false;
     state.workspace_menu = WorkspaceMenu::Closed;
     state.snapshot_dirty = false;
@@ -3616,6 +3642,35 @@ fn apply_workspace(
         state.talkback_on = on;
     }
     sync_surround_bridge(state);
+    Ok(())
+}
+
+/// Build a built-in direct surround workspace from the current one and
+/// apply it through the normal workspace scene path.
+fn load_surround_workspace(
+    state: &mut TotalControl,
+    layout: workspaces::SurroundLayout,
+) -> Result<(), String> {
+    let topology = workspaces::SurroundTopology {
+        output_order: state.device.output_display_order(),
+        matrix_uses_display_order: state.device.matrix_uses_display_order(),
+    };
+    let mut workspace = capture_workspace(state);
+    workspaces::configure_direct(&mut workspace, layout, &topology)?;
+    apply_workspace_state(state, &workspace, None)?;
+    // Rewriting the playback pairs at full width clears mono cells left by a
+    // previous width/MS setting.  The UCX writes only the natural side for
+    // ordinary pair sends, so those stale cells would otherwise survive the
+    // scene apply and break the one-to-one mapping.
+    if state.device.capabilities().channel_width {
+        for pair in 0..state.device.playbacks().len() / 2 {
+            state
+                .device
+                .set_channel_width(ChannelId::Playback(pair * 2), 1.0)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    state.workspace_dirty = true;
     Ok(())
 }
 
@@ -3931,11 +3986,13 @@ fn run_surround_command(command: &str, target: Option<&str>) -> Result<(), Strin
 pub fn sync_surround_bridge(state: &mut TotalControl) {
     if state.device.is_mock() {
         state.surround_51_running = false;
+        state.surround_61_running = false;
         state.surround_71_running = false;
         return;
     }
     for (wanted, running, kind) in [
         (state.surround_51, &mut state.surround_51_running, "51"),
+        (state.surround_61, &mut state.surround_61_running, "61"),
         (state.surround_71, &mut state.surround_71_running, "71"),
     ] {
         if wanted == *running {
@@ -3969,6 +4026,10 @@ pub fn stop_surround_bridge(state: &mut TotalControl) {
     if state.surround_51_running {
         let _ = run_surround_command("stop51", None);
         state.surround_51_running = false;
+    }
+    if state.surround_61_running {
+        let _ = run_surround_command("stop61", None);
+        state.surround_61_running = false;
     }
     if state.surround_71_running {
         let _ = run_surround_command("stop71", None);
@@ -4458,6 +4519,7 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::RenameCommit
             | Message::SetShowOriginalNames(_)
             | Message::SetSurround51(_)
+            | Message::SetSurround61(_)
             | Message::SetSurround71(_)
             | Message::EngineRate(_)
             | Message::EngineQuantum(_)
@@ -6950,6 +7012,8 @@ fn is_undoable(message: &Message) -> bool {
             | Message::WorkspaceOpen
             | Message::WorkspaceSave
             | Message::WorkspaceSaveAs
+            | Message::WorkspaceSurround
+            | Message::WorkspaceBack
             | Message::CloseWorkspace
             | Message::ToggleOptions
             | Message::OptionsReset
@@ -6957,6 +7021,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::OptionsSettings
             | Message::CloseOptions
             | Message::SetSurround51(_)
+            | Message::SetSurround61(_)
             | Message::SetSurround71(_)
             | Message::LineInRefSelected(_)
             | Message::LineInRef58Selected(_)
@@ -7250,6 +7315,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::WorkspaceOpen
                 | Message::WorkspaceSave
                 | Message::WorkspaceSaveAs
+                | Message::LoadSurroundWorkspace(_)
                 | Message::CloseWorkspace
         )
     {
@@ -9069,8 +9135,34 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.assign_menu = AssignMenu::Closed;
             state.workspace_menu = match state.workspace_menu {
                 WorkspaceMenu::Closed => WorkspaceMenu::Root,
-                WorkspaceMenu::Root => WorkspaceMenu::Closed,
+                WorkspaceMenu::Root | WorkspaceMenu::Surround => WorkspaceMenu::Closed,
             };
+        }
+        Message::WorkspaceSurround => state.workspace_menu = WorkspaceMenu::Surround,
+        Message::WorkspaceBack => state.workspace_menu = WorkspaceMenu::Root,
+        Message::LoadSurroundWorkspace(layout) => {
+            state.workspace_menu = WorkspaceMenu::Closed;
+            if !confirm_discard_workspace(state) {
+                return Task::none();
+            }
+            match load_surround_workspace(state, layout) {
+                Ok(()) => {
+                    state.notice = Some((
+                        format!("Loaded surround workspace {}", layout.name()),
+                        Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Could not load surround workspace {}: {e}",
+                        layout.name()
+                    );
+                    state.notice = Some((
+                        format!("Could not load surround workspace: {e}"),
+                        Instant::now(),
+                    ));
+                }
+            }
         }
         Message::CloseWorkspace => state.workspace_menu = WorkspaceMenu::Closed,
         Message::WorkspaceOpen => {
@@ -9137,6 +9229,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::CloseOptions => state.options_menu = OptionsMenu::Closed,
         Message::SetSurround51(on) => {
             state.surround_51 = on;
+            state.prefs_dirty = true;
+            sync_surround_bridge(state);
+        }
+        Message::SetSurround61(on) => {
+            state.surround_61 = on;
             state.prefs_dirty = true;
             sync_surround_bridge(state);
         }
@@ -10754,13 +10851,26 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             .style(theme::ghost_button)
             .on_press(message)
     };
-    let card = column![
-        item("Open Workspace…", Message::WorkspaceOpen),
-        item("Save Workspace", Message::WorkspaceSave),
-        item("Save Workspace As…", Message::WorkspaceSaveAs),
-    ]
-    .spacing(0.0)
-    .width(Length::Fixed(224.0 * scale));
+    let mut card = column![].spacing(0.0).width(Length::Fixed(224.0 * scale));
+    match state.workspace_menu {
+        WorkspaceMenu::Root => {
+            card = card
+                .push(item("Open Workspace…", Message::WorkspaceOpen))
+                .push(item("Save Workspace", Message::WorkspaceSave))
+                .push(item("Save Workspace As…", Message::WorkspaceSaveAs))
+                .push(item(
+                    "Surround Workspace  ▸",
+                    Message::WorkspaceSurround,
+                ));
+        }
+        WorkspaceMenu::Surround => {
+            card = card.push(item("‹  Surround Workspace", Message::WorkspaceBack));
+            for layout in workspaces::SurroundLayout::ALL {
+                card = card.push(item(layout.menu_label(), Message::LoadSurroundWorkspace(layout)));
+            }
+        }
+        WorkspaceMenu::Closed => {}
+    }
     let card = opaque(
         container(card)
             .style(theme::dialog)
@@ -10898,6 +11008,11 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             "Virtual 5.1 output",
             state.surround_51,
             Message::SetSurround51(!state.surround_51),
+        ),
+        check(
+            "Virtual 6.1 output",
+            state.surround_61,
+            Message::SetSurround61(!state.surround_61),
         ),
         check(
             "Virtual 7.1 output",
@@ -17522,13 +17637,17 @@ mod tests {
     fn surround_settings_are_remembered_and_never_start_a_bridge_in_mock() {
         let mut state = new(true, None, None);
         let _ = update(&mut state, Message::SetSurround51(true));
+        let _ = update(&mut state, Message::SetSurround61(true));
         let _ = update(&mut state, Message::SetSurround71(true));
         assert!(state.surround_51);
+        assert!(state.surround_61);
         assert!(state.surround_71);
         assert!(!state.surround_51_running);
+        assert!(!state.surround_61_running);
         assert!(!state.surround_71_running);
         let prefs = prefs_of(&state);
         assert!(prefs.surround_51);
+        assert!(prefs.surround_61);
         assert!(prefs.surround_71);
     }
 
@@ -19901,6 +20020,50 @@ mod tests {
         assert_eq!(target.device.settings().pitch_percent, 1.5);
         assert_eq!(target.workspace_path, Some(PathBuf::from("/tmp/test.tcws")));
         assert!(!target.workspace_dirty);
+    }
+
+    #[test]
+    fn built_in_surround_workspaces_apply_through_the_workspace_path() {
+        for (layout, six_one) in [
+            (crate::workspaces::SurroundLayout::Direct51, false),
+            (crate::workspaces::SurroundLayout::Direct61, true),
+        ] {
+            let mut state = new(true, None, None);
+            state.workspace_dirty = false;
+            let _ = update(&mut state, Message::LoadSurroundWorkspace(layout));
+
+            assert_eq!(state.workspace_path, None);
+            assert!(state.workspace_dirty);
+            assert_eq!(state.surround_61, six_one);
+            assert_eq!(state.surround_51, !six_one);
+            assert!(!state.surround_71);
+            assert_eq!(
+                state.labels.get(&ChannelId::Playback(0)).map(String::as_str),
+                Some("FL")
+            );
+            assert_eq!(
+                state.labels.get(&ChannelId::Playback(2)).map(String::as_str),
+                Some("C")
+            );
+            assert!(state.groups[0].members.contains(&ChannelId::Output(2)));
+            assert!(state.groups[0].members.contains(&ChannelId::Output(3)));
+            let first_pair = if state.device.matrix_uses_display_order() {
+                0
+            } else {
+                state.device.output_display_order()[0]
+            };
+            assert_eq!(state.device.playbacks()[0].volumes[first_pair], 1.0);
+            assert!(state.device.playbacks()[2].split);
+            assert_eq!(state.device.playbacks()[4].split, six_one);
+            assert_eq!(
+                state.device.playbacks()[5]
+                    .volumes
+                    .iter()
+                    .filter(|&&volume| volume > 0.0)
+                    .count(),
+                if six_one { 0 } else { 1 }
+            );
+        }
     }
 
     #[test]

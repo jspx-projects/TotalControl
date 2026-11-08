@@ -770,7 +770,8 @@ front-panel equivalent controls of the unit.
 ## 12. Workspace and Options menus
 
 The top bar has a `WORKSPACE` menu before `OPTIONS`. `WORKSPACE` opens and
-saves the complete host-side configuration described in section 13.
+saves the complete host-side configuration described in section 13, and
+contains the built-in `Surround Workspace` layouts.
 
 The `OPTIONS` menu contains `Reset Mix` and `Settings`.
 
@@ -821,11 +822,30 @@ term for a mixer state; the interface uses the terms below.
 - `Open Workspace…`
 - `Save Workspace`
 - `Save Workspace As…`
+- `Surround Workspace  ▸` → `5.1 Direct` or `6.1 Direct`
 
 The file dialogs start in the last folder you used, or in your `Documents`
 folder when there is no remembered folder. A workspace is one JSON file with
 the `.tcws` extension. Save writes atomically; a failed save cannot destroy the
 previous file.
+
+The built-in surround workspaces route the virtual surround sink channels
+one-to-one to the first available hardware-output pairs. On the Fireface
+UC/UCX that is:
+
+| Workspace | Source channels | Hardware outputs |
+|---|---|---|
+| `5.1 Direct` | FL FR C LFE SL SR | AN1/2 FL/FR, AN3/4 C/LFE, AN5/6 SL/SR |
+| `6.1 Direct` | FL FR C LFE BC (channel 6 unused) SL SR | AN1/2 FL/FR, AN3/4 C/LFE, AN5/6 BC/unused, Phones 7/8 SL/SR |
+
+FL/FR and SL/SR remain linked stereo pairs; C, LFE and BC are split mono
+channels. The used outputs are placed in group 1. Loading one clears the
+existing playback routing before writing the surround routes. The direct
+workspaces do not apply bass management or a downmix. Loading one also clears
+Control Room assignments that use its output pairs, so those pairs stay
+available to the surround layout. A built-in workspace has no file yet:
+`Save` opens Save As and writes a normal `.tcws` file. You can remap the
+output routing afterwards and save that result.
 
 A workspace contains:
 
@@ -1073,16 +1093,23 @@ selects polled scheduling and the 18-channel Pro Audio profile.
 ### Surround playback
 
 The Pro Audio profile is the right choice for a DAW, but its 18 playback
-channels are presented as `AUX0…AUX17`.  Desktop players that send a 5.1 or
-7.1 stream cannot map those speaker positions onto AUX channels, so PipeWire
+channels are presented as `AUX0…AUX17`.  Desktop players that send a surround
+stream cannot map those speaker positions onto AUX channels, so PipeWire
 keeps only the front pair.
 
 For surround media, open `Options → Settings` and enable `Virtual 5.1 output`,
-`Virtual 7.1 output`, or both.  The sinks exist while TotalControl runs and
-follow the selected Fireface/MR18 device:
+`Virtual 6.1 output`, `Virtual 7.1 output`, or a combination.  The sinks
+exist while TotalControl runs and follow the selected Fireface/MR18 device:
 
-- `TotalControl Surround 5.1` → SW playback 1/2, 3/4 and 5/6
-- `TotalControl Surround 7.1` → SW playback 1/2, 3/4, 5/6 and 7/8
+- `TotalControl Surround 5.1` → SW playback 1/2 FL/FR, 3/4 C/LFE, 5/6 SL/SR
+- `TotalControl Surround 6.1` → SW playback 1/2 FL/FR, 3/4 C/LFE, 5/6 BC and
+  unused, 7/8 SL/SR
+- `TotalControl Surround 7.1` → SW playback 1/2 FL/FR, 3/4 C/LFE, 5/6 RL/RR,
+  7/8 SL/SR
+
+The 6.1 sink keeps the player order FL FR FC LFE BC SL SR. Its sixth bridge
+channel is unused so the side pair stays on 7/8. The direct workspaces
+described in section 13 use this same order.
 
 Select the matching sink in KDE or in the player.  An already-playing stream
 keeps its old device; stop and restart it, or move it to the new sink.  The

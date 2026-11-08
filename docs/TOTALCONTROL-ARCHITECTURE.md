@@ -246,6 +246,12 @@ the unit's six setups remain device state.  A workspace includes the sample
 rate, pitch/varispeed and active Dim and Speaker B states; the unit's six
 device setups and the device serial number remain outside it.
 
+The built-in direct 5.1 and 6.1 surround Workspaces are `Workspace` values
+built in memory and applied through the same `apply_workspace` scene path as
+a `.tcws` file.  They have no file path, so the next Save opens Save As.  The
+layout code only writes the mixer scene, labels and group; it does not add a
+second persistence format or a device setup.
+
 Active Talkback, Listenback, External Input, PFL and cue selections are
 workspace state.  A snapshot stores the mixer scene; the workspace also
 stores the active monitoring controls.
