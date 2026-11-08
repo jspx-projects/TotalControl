@@ -197,10 +197,14 @@ bar.
 ### Desktop menu entry
 
 The source tree ships `ui/totalcontrol/totalcontrol-gui/assets/totalcontrol.desktop`
-and the matching icons. The AUR package installs them system-wide under
-`/usr/share/applications` and `/usr/share/icons/hicolor`.
+and the matching icons. On Arch-based distributions, the community package
+in the AUR (Arch User Repository) installs them system-wide under
+`/usr/share/applications` and `/usr/share/icons/hicolor`. The AUR is not an
+official Arch package repository: use an AUR helper or build that package
+manually.
 
-For a source build, install the entry for the current user:
+For a source build on any distribution, install the entry for the current
+user:
 
 ```sh
 cd <checkout>
