@@ -545,11 +545,11 @@ The buttons are one channel wide, in TotalMix’s order:
 
 | Button | Kind | Outputs affected | In the current mix |
 |---|---|---|---|
-| `dim` | Latching | Main Out and Speaker B | No, runtime only |
+| `dim` | Latching | Main Out and Speaker B | Yes, snapshot and workspace |
 | `recall` | Momentary | Main Out; Speaker B if linked | No, momentary |
-| `speaker B` | Latching | Switches monitoring between Main and Speaker B | No, runtime only |
+| `speaker B` | Latching | Switches monitoring between Main and Speaker B | Yes, snapshot and workspace |
 | `mono` | Latching | Main Out and Speaker B | Yes |
-| `talkback` | Toggle | Phones with Talkback receive, plus Main for Listenback | No, runtime only |
+| `talkback` | Toggle | Phones with Talkback receive, plus Main for Listenback | Yes, workspace |
 | `ext. input` | Disabled | — | — |
 | `mute FX` | Latching | Reverb and Echo returns (see below) | Yes |
 | `settings` | Opens the dialog | — | No |
@@ -574,8 +574,9 @@ attenuate the Phones outputs; Talkback has its own Phones Dim amount.
 `Speaker B → Link to Main` additionally makes Speaker B follow the Main fader
 and Recall; Dim attenuates both speaker pairs whether or not they are linked.
 
-Dim is runtime only. It is not stored in a snapshot or workspace, and
-applying a snapshot or workspace leaves Dim off without lowering the level again.
+Dim is part of the current mix and is stored in a snapshot or workspace. The
+saved scene stores the active state, the pre-Dim speaker levels and the Dim
+amount, so loading it restores the same dimmed monitoring state.
 
 ### Recall
 
@@ -595,9 +596,10 @@ output assigned to Speaker B. Both the Main Out and Speaker B must be
 assigned first. The button lights while Speaker B is the active monitor
 path.
 
-Speaker B is runtime only and is not saved in a snapshot or workspace.
-Loading a snapshot or workspace leaves the current monitor path unchanged, and clearing
-the Speaker B assignment also clears Speaker B and turns the button off.
+Speaker B is part of the current mix and is stored in a snapshot or
+workspace. Loading a workspace restores the saved monitor path after the
+saved assignments are installed. Clearing the Speaker B assignment also
+clears Speaker B and turns the button off.
 
 `Speaker B → Link to Main` in Control Room Settings ties the Speaker B level
 to Main. Linked, the Speaker B pair follows Main fader and Recall changes;
@@ -618,8 +620,9 @@ Mono is part of the current mix, so it is saved in a snapshot and restored with 
 
 Talkback is the engineer’s communication path to the performers. Click
 **talkback** to switch it on; the button stays lit while it is active. Click
-it again to switch it off. It is a temporary monitoring state and is not
-stored in a snapshot or workspace.
+it again to switch it off. The active Talkback state is stored in a
+workspace and restored when that workspace is opened; it is not part of a
+snapshot.
 
 While Talkback is active:
 
@@ -665,8 +668,8 @@ would replace the Main mix with the selected stereo input is not implemented.
 | Main and Speaker B assignments | TotalControl preferences; also saved in a workspace |
 | Phones 1–4 destinations | TotalControl preferences; also saved in a workspace |
 | Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences; also saved in a workspace |
-| Dim and Speaker B active state | Runtime only |
-| Talkback and Listenback active state | Runtime only |
+| Dim and Speaker B active state | Current mix (snapshot and workspace) |
+| Talkback and Listenback active state | Workspace |
 | Mono, Mute FX and the mixer levels | Current mix (snapshot and workspace) |
 
 ### Control Room Settings
@@ -784,7 +787,7 @@ term for a mixer state; the interface uses the terms below.
 
 | Layer | Contains | Stored |
 |---|---|---|
-| **Workspace** | The portable host-side configuration: current mix, the eight named snapshots, labels, groups, layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
+| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups, layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
 | **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace, and in the working `Mix n.json` files |
 | **Auto state** | The current mixer, saved continuously for crash recovery | `auto.json` |
 | **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
@@ -804,20 +807,21 @@ previous file.
 
 A workspace contains:
 
-- the current mix;
+- the current mix, including sample rate, pitch/varispeed and Dim/Speaker B state;
 - all eight snapshots and their names;
 - user channel labels;
 - the four mute/solo/fader groups;
 - the six layout slots and the current collapsed/expanded strips;
 - view, row mode, sidebar, zoom and selected-output state;
 - Control Room assignments and monitoring settings;
+- active Talkback and Cue states;
 - the virtual surround-output settings;
 - the window size.
 
-Undo/redo history, open dialogs and transient selections are not saved. A
-workspace also excludes the sample rate, pitch/varispeed, active Dim and
-Speaker B states, the unit's six device setups and the device serial number.
-Loading a workspace leaves those values as they are on the current unit.
+Undo/redo history, open dialogs and transient selections are not saved. The
+unit's six device setups and the device serial number are not part of a
+workspace. Sample rate, pitch/varispeed and the active Dim and Speaker B
+states are stored in the current mix.
 
 Opening a workspace replaces all of the above and applies its mixer to the
 device. If the current workspace has unsaved changes, TotalControl asks before

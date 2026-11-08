@@ -3420,10 +3420,16 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
 
 /// Capture the complete host-side configuration for a workspace file.
 fn capture_workspace(state: &TotalControl) -> Workspace {
-    let scene = state
+    let mut scene = state
         .host_scene
         .clone()
         .unwrap_or_else(|| state.device.capture_scene());
+    // The host scene deliberately does not let device-reported values
+    // overwrite the saved mix.  The live rate and Dim amount are workspace
+    // settings, so take their current values at save time.
+    scene.settings.sample_rate = state.device.settings().sample_rate;
+    scene.settings.pitch_percent = state.device.settings().pitch_percent;
+    scene.settings.dim_amount_db = state.control_room.main_dim_db;
     let snapshots: [WorkspaceSnapshot; 8] = std::array::from_fn(|i| WorkspaceSnapshot {
         name: state
             .snapshot_names
@@ -3463,6 +3469,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             active_snapshot: state.active_snapshot,
             active_layout: state.active_layout,
             collapsed: state.collapsed.clone(),
+            talkback_on: state.talkback_on,
         },
         control_room: state.control_room.clone(),
         assign: state.assign,
@@ -3486,16 +3493,19 @@ fn apply_workspace(
             workspace.schema
         ));
     }
-    workspace
-        .scene
+    let mut scene = workspace.scene.clone();
+    // The Dim amount is both a Control Room preference and part of the
+    // active workspace state.  Older files may only carry the preference.
+    scene.settings.dim_amount_db = workspace.control_room.main_dim_db;
+    scene
         .check_compatible(state.device.canonical_model())
         .map_err(|e| e.to_string())?;
     state
         .device
-        .apply_scene(&workspace.scene)
+        .apply_scene(&scene)
         .map_err(|e| e.to_string())?;
 
-    state.host_scene = Some(workspace.scene.clone());
+    state.host_scene = Some(scene.clone());
     state.snapshots = std::array::from_fn(|i| {
         workspace
             .snapshots
@@ -3555,7 +3565,101 @@ fn apply_workspace(
     state.last_saved_json = None;
     enforce_control_room_stereo(state);
     apply_control_room_assignments(state).map_err(|e| e.to_string())?;
+    apply_workspace_sample_rate(state, &scene);
+    apply_workspace_monitor_state(state, &scene)?;
+    if state.device.capabilities().pitch {
+        state
+            .device
+            .set_pitch(scene.settings.pitch_percent)
+            .map_err(|e| e.to_string())?;
+    }
+    if workspace.view.talkback_on != state.talkback_on {
+        let on = workspace.view.talkback_on;
+        state
+            .device
+            .set_talkback_with(on, &talkback_config(state))
+            .map_err(|e| e.to_string())?;
+        state.talkback_on = on;
+    }
     sync_surround_bridge(state);
+    Ok(())
+}
+
+/// Apply the rate stored in a workspace.  The scene writer sets the device
+/// model/register; this also moves the PipeWire graph when the sound server
+/// owns the card, then schedules a scene reapply for the stream restart.
+fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
+    let rate = scene.settings.sample_rate;
+    if rate == 0 {
+        return;
+    }
+    if state.device.is_mock() {
+        let _ = state.device.set_sample_rate(rate);
+        state.engine_force_rate = rate;
+        if let Some(engine) = state.engine.as_mut() {
+            engine.force_rate = rate;
+        }
+        return;
+    }
+    if !state.device.rate_follows_sound_server() {
+        return;
+    }
+    let current = state.card_stream.map(|stream| stream.rate);
+    if current == Some(rate) || (current.is_none() && state.engine_force_rate == rate) {
+        return;
+    }
+    state.engine_force_rate = rate;
+    if let Err(e) = pw_clock::force_rate(rate) {
+        log::warn!("Setting the workspace PipeWire rate failed: {e}");
+        return;
+    }
+    state.device.set_meter_rate(rate);
+    state.pending_device_rate = state
+        .card_stream
+        .is_some()
+        .then_some((rate, Instant::now()));
+    state.engine = pw_clock::read();
+    state.card_stream = pw_clock::card_stream(state.device.card_id());
+    state.startup_scene = Some(scene.clone());
+    state.startup_scene_due = Some(Instant::now() + Duration::from_millis(1_500));
+}
+
+/// Apply the workspace's Control Room monitor state after its assignments
+/// have been installed.  `apply_scene` uses the live assignments; this
+/// second pass is what makes Dim and Speaker B follow the assignments saved
+/// in the workspace.
+fn apply_workspace_monitor_state(
+    state: &mut TotalControl,
+    scene: &Scene,
+) -> Result<(), String> {
+    if !state.device.is_ucx_model() {
+        return Ok(());
+    }
+    // The device service applies commands in order but its mirror snapshot
+    // can still show the previous assignments here.  Use the workspace's
+    // assignment map for the capability checks; set_main_out was queued
+    // before these writes.
+    let main = state.assign.first().copied().flatten();
+    let main_b = state.assign.get(1).copied().flatten();
+    if main.is_some() && main_b.is_some() {
+        state
+            .device
+            .set_speaker_b(scene.settings.speaker_b)
+            .map_err(|e| e.to_string())?;
+    }
+    if scene.settings.dim {
+        if main.is_some() {
+            state
+                .device
+                .set_dim_with(true, scene.settings.dim_amount_db)
+                .map_err(|e| e.to_string())?;
+        }
+    } else {
+        state
+            .device
+            .set_dim_with(false, scene.settings.dim_amount_db)
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -6888,7 +6992,8 @@ fn changes_mix(message: &Message) -> bool {
         | Message::PhonesRefSelected(_)
         | Message::SpdifProfessionalChanged(_)
         | Message::WordClockSingleSpeedChanged(_)
-        | Message::WordClockTerminationChanged(_) => true,
+        | Message::WordClockTerminationChanged(_)
+        | Message::Dim(_) => true,
         other => is_undoable(other),
     }
 }
@@ -19560,6 +19665,23 @@ mod tests {
     }
 
     #[test]
+    fn a_workspace_captures_rate_pitch_dim_and_talkback() {
+        let mut state = new(true, None, None);
+        state.device.settings_mut().sample_rate = 44_100;
+        state.device.settings_mut().pitch_percent = 1.5;
+        state.device.settings_mut().dim = true;
+        state.control_room.main_dim_db = -12.0;
+        state.talkback_on = true;
+
+        let workspace = capture_workspace(&state);
+        assert_eq!(workspace.scene.settings.sample_rate, 44_100);
+        assert_eq!(workspace.scene.settings.pitch_percent, 1.5);
+        assert!(workspace.scene.settings.dim);
+        assert_eq!(workspace.scene.settings.dim_amount_db, -12.0);
+        assert!(workspace.view.talkback_on);
+    }
+
+    #[test]
     fn saving_a_workspace_writes_the_file_and_clears_dirty() {
         let dir = std::env::temp_dir().join(format!(
             "totalcontrol-app-workspace-{}",
@@ -19588,6 +19710,9 @@ mod tests {
         source.collapsed.insert(ChannelId::Playback(0));
         source.snapshot_names[2] = "Stereo".into();
         source.snapshots[2] = Some(source.device.capture_scene());
+        source.talkback_on = true;
+        source.device.settings_mut().sample_rate = 44_100;
+        source.device.settings_mut().pitch_percent = 1.5;
         let workspace = capture_workspace(&source);
 
         let mut target = new(true, None, None);
@@ -19598,6 +19723,9 @@ mod tests {
         assert!(target.collapsed.contains(&ChannelId::Playback(0)));
         assert_eq!(target.snapshot_names[2], "Stereo");
         assert!(target.snapshots[2].is_some());
+        assert!(target.talkback_on);
+        assert_eq!(target.device.settings().sample_rate, 44_100);
+        assert_eq!(target.device.settings().pitch_percent, 1.5);
         assert_eq!(target.workspace_path, Some(PathBuf::from("/tmp/test.tcws")));
         assert!(!target.workspace_dirty);
     }

@@ -1,10 +1,10 @@
 //! Named TotalControl workspaces.
 //!
-//! A workspace is the complete, portable host-side configuration: the
-//! current mixer scene, the eight snapshots, channel labels, groups,
-//! layouts, view state and Control Room preferences.  It is deliberately
-//! separate from the mixer's auto-saved scene and from the unit's six
-//! device-side setups.
+//! A workspace is the portable host-side configuration: the current mixer
+//! scene, the eight snapshots, channel labels, groups, layouts, view state
+//! and Control Room preferences.  It is deliberately separate from the
+//! mixer's auto-saved scene and from the unit's six device-side setups.  A
+//! workspace checks the device model but does not store the serial number.
 //!
 //! The file is JSON with the `.tcws` extension.  Writes are atomic so a
 //! failed save cannot destroy the previous workspace.
@@ -47,6 +47,8 @@ pub struct WorkspaceView {
     pub active_snapshot: Option<usize>,
     pub active_layout: Option<usize>,
     pub collapsed: HashSet<ChannelId>,
+    /// The Talkback button is latched on in this workspace.
+    pub talkback_on: bool,
 }
 
 impl Default for WorkspaceView {
@@ -66,6 +68,7 @@ impl Default for WorkspaceView {
             active_snapshot: None,
             active_layout: None,
             collapsed: HashSet::new(),
+            talkback_on: false,
         }
     }
 }

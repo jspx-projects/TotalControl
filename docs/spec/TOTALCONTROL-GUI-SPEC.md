@@ -113,10 +113,11 @@ while the current one is dirty asks before discarding the changes.
 A workspace contains the current mixer, the eight named snapshots, labels,
 groups, six layout slots, collapsed/expanded strips, view and sidebar state,
 Control Room settings and assignments, virtual-surround settings and window
-size. It excludes undo/redo, open dialogs, transient selections, app
-preferences, sample rate, pitch/varispeed, active Dim and Speaker B states,
-the unit's six device setups and the device serial number. Selecting a
-snapshot slot exposes a name field below its Store action.
+size. It stores the sample rate, pitch/varispeed and active Dim, Speaker B,
+Talkback and Cue states. It excludes undo/redo, open dialogs, transient
+selections, app preferences, the unit's six device setups and the device
+serial number. Selecting a snapshot slot exposes a name field below its
+Store action.
 
 `WORKSPACE` shows `*` while the host state differs from the saved file.
 Menus start below the top bar, so clicking the other top-bar menu switches to
@@ -818,15 +819,15 @@ Recall sets the underlying Main Out level to the configured listening volume
 once; it does not latch. When Dim is engaged, Recall updates the saved pre-Dim
 levels and the current dimmed levels together.
 
-Dim and Speaker B are runtime monitoring states. Applying a scene,
-reconnecting, or a stream-start or sample-rate reapply leaves Dim off and does
-not attenuate the Main Out again; Speaker B keeps its current monitor path.
-The saved scene contains the level that was audible, not a pending Dim
-operation. Speaker B requires assigned Main and
-Speaker B outputs; its button switches the monitor routing between those
-pairs, and clearing the Speaker B assignment also clears Speaker B. The
-`Link to Main` setting makes Speaker B follow Main fader and Recall changes;
-Dim attenuates both speaker pairs whether linked or not, while the Phones
+Dim and Speaker B are part of the current mix, snapshot and workspace. A
+scene captured while Dim is active stores the pre-Dim speaker levels and the
+Dim amount; applying it restores those levels and engages Dim once. Speaker B
+keeps its saved monitor path and is applied after the saved assignments.
+Speaker B requires assigned Main and Speaker B outputs; its button switches
+the monitor routing between those pairs, and clearing the Speaker B
+assignment also clears Speaker B. The `Link to Main` setting makes Speaker B
+follow Main fader and Recall changes; Dim attenuates both speaker pairs
+whether linked or not, while the Phones
 outputs are unaffected.
 
 Mono is a latching monitor check: it mixes the assigned Main Out and Speaker
@@ -982,9 +983,11 @@ one-decimal value display.
 
 `OK` stores the settings in `gui.json` for the selected device. The settings
 are not part of the mixer scene, snapshot, undo stack or OSC scene state.
-`Dim` and `Speaker B` remain runtime state. `Mono` and `Mute FX` are mixer
-scene state. External Input and the Solo/PFL modes are stored as settings;
-their runtime signal paths are not implemented.
+`Dim`, `Speaker B`, `Mono`, `Mute FX`, `Cue` and the sample rate are mixer
+scene and workspace state. Active Talkback is workspace state; the unit's
+six setups and device serial number remain outside the workspace. External
+Input and the Solo/PFL modes are stored as settings; their runtime signal
+paths are not implemented.
 
 ## 13. Latency display
 
