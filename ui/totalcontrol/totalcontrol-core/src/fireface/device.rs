@@ -5948,6 +5948,9 @@ impl RmeDevice for Fireface {
                 // Scene recall must also clear a mute left on the unit.
                 self.set_mute(ChannelId::Output(idx), mute)?;
             }
+            // TotalMix enables the output mute bits in its connect write.
+            // Without this the NN02 mute bits are stored but ignored.
+            self.write_word(ucx::global::MUTE_ENABLE, 1)?;
             // Balance and stereo mode are separate registers from volume.
             for pair in 0..PAIRS {
                 let linked = self.output_linked(pair);
@@ -6358,6 +6361,35 @@ mod tests {
         assert!(w.contains(&Write::Words(vec![(0x1200, 0xfd76)])) ||
                 w.iter().any(|x| matches!(x, Write::Words(v) if v[0].0 == 0x1200)));
         assert!(w.iter().any(|x| matches!(x, Write::Words(v) if v[0] == (0x1202, 1))));
+    }
+
+    #[test]
+    fn ucx_output_mute_writes_the_phones_mode_bit() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_mute(ChannelId::Output(0), true).unwrap();
+        assert!(
+            written_words(&writes).contains(&(0x1802, 1)),
+            "Phones mute mode bit"
+        );
+
+        writes.lock().unwrap().clear();
+        dev.set_mute(ChannelId::Output(0), false).unwrap();
+        assert!(
+            written_words(&writes).contains(&(0x1802, 0)),
+            "Phones mute mode bit cleared"
+        );
+    }
+
+    #[test]
+    fn ucx_connect_enables_output_mute() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let scene = dev.capture_scene();
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        assert!(
+            written_words(&writes).contains(&(ucx::global::MUTE_ENABLE, 1)),
+            "TotalMix enables the output mute bits at connect"
+        );
     }
 
     #[test]
