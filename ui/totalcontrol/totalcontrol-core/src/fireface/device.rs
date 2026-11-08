@@ -1932,16 +1932,18 @@ impl Fireface {
         )
     }
 
-    /// The output mode word: bit 0 = mute, bit 1 = this pair is the Main
-    /// Out. Both bits share `0xNN02`, so every write composes the whole
-    /// word rather than clobbering the Main flag with a mute.
+    /// The output mode word: bit 0 = mute, bit 1 = monitor-muted.
+    ///
+    /// Bit 1 is not an assignment marker.  Only the Main pair is
+    /// monitor-muted, and only while Speaker B is active.  An assigned
+    /// Speaker B pair stays at its normal mode while Speaker B is off;
+    /// writing bit 1 merely because the pair was assigned mutes it.
     fn ucx_write_output_mode(&self, idx: usize, mute: bool) -> Result<(), Error> {
         let pair = idx / 2;
-        let monitoring = self.settings.main_out == Some(pair)
-            || self.settings.main_b_out == Some(pair);
+        let monitor_muted = self.settings.speaker_b && self.settings.main_out == Some(pair);
         self.ucx_write_output_mode_value(
             idx,
-            (mute as u16) | ((monitoring as u16) << 1),
+            (mute as u16) | ((monitor_muted as u16) << 1),
         )
     }
 
@@ -4618,10 +4620,10 @@ impl RmeDevice for Fireface {
         self.set_volume(ChannelId::Output(right), 0, level)
     }
 
-    /// Control Room Assign: the Main Out is marked by bit 1 of the output
-    /// mode word (`0xNN02`), and only one pair carries it. The old pair's
-    /// bit is cleared, the new one's set; each side of the pair gets its
-    /// own word, composed with that channel's mute (capture H51/H52).
+    /// Control Room Assign: Main Out is a host-side monitor assignment on
+    /// the UCX.  The physical output keeps its own submix and mode word;
+    /// only the monitor state word changes.  `0xNN02` bit 1 means
+    /// monitor-muted, not "this pair is Main".
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
@@ -4655,25 +4657,16 @@ impl RmeDevice for Fireface {
             self.set_dim(false)?;
         }
         self.settings.main_out = pair;
-        if let Some(old) = previous {
-            if old < BLOCKS / 2 {
-                let mute = self.outputs.get(old * 2).map(|o| o.mute).unwrap_or(false);
-                self.ucx_write_output_mode(old * 2, mute)?;
-                self.ucx_write_output_mode(old * 2 + 1, mute)?;
-            }
-        }
-        if let Some(pair) = pair {
-            let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
-            self.ucx_write_output_mode(pair * 2, mute)?;
-            self.ucx_write_output_mode(pair * 2 + 1, mute)?;
-        }
+        // Assigning Main is host-side monitor bookkeeping on the UCX.  The
+        // physical output keeps its normal submix; writing the output mode
+        // word here would set bit 1 and mute the newly selected pair.
         self.write_word(0x3f9e, self.monitor_flags())?;
         Ok(())
     }
 
-    /// Assign Main Out B: bit 1 on the chosen pair, plus the control-room
-    /// state word.  The captured state word is `0` while Speaker B is off
-    /// and `6` while it is active.
+    /// Assign Speaker B: the pair is host-side monitor bookkeeping.  The
+    /// control-room state word stays `0` while Speaker B is off; assigning
+    /// a pair must not set that pair's mode bit or mute it.
     fn set_main_out_b(&mut self, pair: Option<usize>) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
@@ -4702,28 +4695,13 @@ impl RmeDevice for Fireface {
             self.set_dim(false)?;
         }
         self.settings.main_b_out = pair;
-        if let Some(old) = previous {
-            if old < BLOCKS / 2 {
-                let mute = self.outputs.get(old * 2).map(|o| o.mute).unwrap_or(false);
-                self.ucx_write_output_mode(old * 2, mute)?;
-                self.ucx_write_output_mode(old * 2 + 1, mute)?;
-            }
+        // Assigning Speaker B is host-side bookkeeping.  Writing NN02 bit 1
+        // here mutes the newly assigned pair; the pair must keep its normal
+        // mode until Speaker B is actually switched on.
+        if pair.is_none() {
+            self.settings.speaker_b = false;
         }
-        match pair {
-            Some(pair) => {
-                let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
-                self.ucx_write_output_mode(pair * 2, mute)?;
-                self.ucx_write_output_mode(pair * 2 + 1, mute)?;
-                self.write_word(0x3d00, if self.settings.speaker_b { 1 } else { 0 })?;
-            }
-            None => {
-                // Clearing the assignment also leaves Speaker B.  The
-                // captured clear writes the old pair's mode words to zero
-                // and 0x3d00 to zero.
-                self.settings.speaker_b = false;
-                self.write_word(0x3d00, 0)?;
-            }
-        }
+        self.write_word(0x3d00, if self.settings.speaker_b { 1 } else { 0 })?;
         Ok(())
     }
 
@@ -4978,22 +4956,19 @@ impl RmeDevice for Fireface {
                 "Speaker B needs an assigned output".into(),
             ));
         };
-        // The mode word carries mute in bit 0 and the monitor routing in
-        // bit 1.  While Speaker B is active the Main pair carries bit 1 and
-        // the B pair does not; while it is inactive the reverse holds.
+        // The mode word carries mute in bit 0 and monitor-muted in bit 1.
+        // Only the Main pair is monitor-muted while Speaker B is active.
+        // Switching Speaker B off restores Main and leaves the B pair at
+        // its normal mode; it must not mute the assigned B pair.
         for idx in [main * 2, main * 2 + 1] {
             let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
-            self.ucx_write_output_mode_value(
-                idx,
-                mute as u16 | if on { 2 } else { 0 },
-            )?;
+            self.ucx_write_output_mode_value(idx, mute as u16 | if on { 2 } else { 0 })?;
         }
-        for idx in [b * 2, b * 2 + 1] {
-            let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
-            self.ucx_write_output_mode_value(
-                idx,
-                mute as u16 | if on { 0 } else { 2 },
-            )?;
+        if on && b != main {
+            for idx in [b * 2, b * 2 + 1] {
+                let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
+                self.ucx_write_output_mode_value(idx, mute as u16)?;
+            }
         }
         self.write_word(0x3d00, if on { 1 } else { 0 })?;
         self.settings.speaker_b = on;
@@ -6405,6 +6380,33 @@ mod tests {
     }
 
     #[test]
+    fn ucx_assigning_main_does_not_write_the_output_mode_bit() {
+        let (mut dev, writes) = open(Model::Ucx);
+        writes.lock().unwrap().clear();
+        dev.set_main_out(Some(1)).unwrap();
+        let w = written_words(&writes);
+        assert!(
+            !w.iter().any(|(reg, _)| *reg == 0x1202 || *reg == 0x1302),
+            "Main assignment must not touch the AN1/2 mode word"
+        );
+        assert!(w.contains(&(0x3f9e, 0)));
+    }
+
+    #[test]
+    fn ucx_assigning_speaker_b_does_not_write_the_output_mode_bit() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        writes.lock().unwrap().clear();
+        dev.set_main_out_b(Some(0)).unwrap();
+        let w = written_words(&writes);
+        assert!(
+            !w.iter().any(|(reg, _)| *reg == 0x1802 || *reg == 0x1902),
+            "Speaker B assignment must not touch the Phones mode word"
+        );
+        assert!(w.contains(&(0x3d00, 0)));
+    }
+
+    #[test]
     fn ucx_main_output_mute_sets_and_clears_the_monitor_flag() {
         let (mut dev, writes) = open(Model::Ucx);
         dev.set_main_out(Some(1)).unwrap();
@@ -6833,9 +6835,12 @@ mod tests {
             let w = writes.lock().unwrap();
             assert!(w.contains(&Write::Words(vec![(0x1202, 0)])));
             assert!(w.contains(&Write::Words(vec![(0x1302, 0)])));
-            assert!(w.contains(&Write::Words(vec![(0x1402, 2)])));
-            assert!(w.contains(&Write::Words(vec![(0x1502, 2)])));
             assert!(w.contains(&Write::Words(vec![(0x3d00, 0)])));
+            assert!(
+                !w.iter().any(|x| matches!(x, Write::Words(v)
+                    if v.iter().any(|(reg, _)| *reg == 0x1402 || *reg == 0x1502))),
+                "switching Speaker B off must not mute the assigned B pair"
+            );
         }
         assert!(!dev.settings().speaker_b);
 
