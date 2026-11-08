@@ -662,9 +662,9 @@ would replace the Main mix with the selected stereo input is not implemented.
 
 | State | Stored in |
 |---|---|
-| Main and Speaker B assignments | TotalControl preferences |
-| Phones 1–4 destinations | TotalControl preferences |
-| Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences |
+| Main and Speaker B assignments | TotalControl preferences; also saved in a workspace |
+| Phones 1–4 destinations | TotalControl preferences; also saved in a workspace |
+| Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences; also saved in a workspace |
 | Dim and Speaker B active state | Runtime only |
 | Talkback and Listenback active state | Runtime only |
 | Mono, Mute FX and the mixer levels | Current mix (snapshot and workspace) |
@@ -716,8 +716,8 @@ cannot be renamed. The hardware channel feeding each destination is listed
 by its own hardware name in the second menu level.
 
 The Main and Speaker B assignments are kept with your TotalControl
-preferences. They are restored at startup and are not changed by loading a
-snapshot or workspace.
+preferences. They are restored at startup. A snapshot does not change them;
+loading a workspace restores the assignments saved in that workspace.
 
 Clicking a Control Room strip — including its name, fader or switches —
 selects it as the current submix, like any other output. Control Room
@@ -779,12 +779,12 @@ term for a mixer state; the interface uses the terms below.
 |---|---|
 | **Current mix** | The live mixer state: routing, faders, EQ, dynamics and FX. It is saved continuously for recovery. |
 | **Snapshot** | One named, saved current mix inside a workspace. |
-| **Workspace** | A complete configuration file: the current mix, snapshots, labels, groups, layouts, view state and Control Room state. |
+| **Workspace** | A portable host-side configuration file: the current mix, snapshots, labels, groups, layouts, view state and Control Room state. |
 | **Device setup** | One of the unit's own six states, separate from host files. |
 
 | Layer | Contains | Stored |
 |---|---|---|
-| **Workspace** | The complete host-side configuration: current mix, the eight named snapshots, labels, groups, layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
+| **Workspace** | The portable host-side configuration: current mix, the eight named snapshots, labels, groups, layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
 | **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace, and in the working `Mix n.json` files |
 | **Auto state** | The current mixer, saved continuously for crash recovery | `auto.json` |
 | **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
@@ -814,7 +814,10 @@ A workspace contains:
 - the virtual surround-output settings;
 - the window size.
 
-Undo/redo history, open dialogs and transient selections are not saved.
+Undo/redo history, open dialogs and transient selections are not saved. A
+workspace also excludes the sample rate, pitch/varispeed, active Dim and
+Speaker B states, the unit's six device setups and the device serial number.
+Loading a workspace leaves those values as they are on the current unit.
 
 Opening a workspace replaces all of the above and applies its mixer to the
 device. If the current workspace has unsaved changes, TotalControl asks before

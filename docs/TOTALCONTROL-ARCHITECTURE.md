@@ -242,7 +242,9 @@ names, channel labels, the four groups, the six layouts, view state, Control
 Room state, virtual-surround settings and window size in one `.tcws` JSON
 file. It is the portable host-side configuration; `gui.json` remains the
 per-installation preference file, `auto.json` the crash-recovery scene, and
-the unit's six setups remain device state.
+the unit's six setups remain device state.  A workspace excludes the sample
+rate, pitch/varispeed, active Dim and Speaker B states, the unit's six device
+setups and the device serial number.
 
 Runtime monitoring state, such as the active Talkback press or a cue selection,
 is not part of the mixer scene or a workspace.

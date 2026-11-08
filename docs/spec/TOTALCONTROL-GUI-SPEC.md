@@ -113,8 +113,10 @@ while the current one is dirty asks before discarding the changes.
 A workspace contains the current mixer, the eight named snapshots, labels,
 groups, six layout slots, collapsed/expanded strips, view and sidebar state,
 Control Room settings and assignments, virtual-surround settings and window
-size. It excludes undo/redo, open dialogs and transient selections. Selecting
-a snapshot slot exposes a name field below its Store action.
+size. It excludes undo/redo, open dialogs, transient selections, app
+preferences, sample rate, pitch/varispeed, active Dim and Speaker B states,
+the unit's six device setups and the device serial number. Selecting a
+snapshot slot exposes a name field below its Store action.
 
 `WORKSPACE` shows `*` while the host state differs from the saved file.
 Menus start below the top bar, so clicking the other top-bar menu switches to

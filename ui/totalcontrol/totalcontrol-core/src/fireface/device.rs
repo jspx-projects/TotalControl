@@ -5504,17 +5504,16 @@ impl RmeDevice for Fireface {
                     || self.outputs[pair * 2 + 1].loopback;
                 self.set_loopback(pair, loopback)?;
             }
-            // Output phase is a per-side register pair; only the inverted
-            // sides need a write (the unit defaults to normal).
+            // Output phase is a per-side register pair.  Write both normal
+            // and inverted values: a scene recall must clear a phase left
+            // inverted on the unit, not only engage one.
             for idx in 0..self.outputs.len() {
                 let inverted = if idx % 2 == 0 {
                     self.outputs[idx].phase_l
                 } else {
                     self.outputs[idx].phase_r
                 };
-                if inverted {
-                    self.set_output_phase(idx, true)?;
-                }
+                self.set_output_phase(idx, inverted)?;
             }
             for idx in 0..self.outputs.len() {
                 if self.outputs[idx].eq.is_some() {
@@ -5539,11 +5538,10 @@ impl RmeDevice for Fireface {
         }
         for idx in 0..self.inputs.len() {
             if !self.is_uc() {
-                // Right-side phase and preamp gain are separate registers
-                // from the left side; a split pair carries both.
-                if self.inputs[idx].phase_r {
-                    self.set_input_phase_right(idx, true)?;
-                }
+                // Phase is a register per side on the UCX.  Write both
+                // values so a recall clears an inversion left on the unit.
+                self.set_phase(idx, self.inputs[idx].phase)?;
+                self.set_input_phase_right(idx, self.inputs[idx].phase_r)?;
                 if idx < 4 {
                     if let Some(gain) = self.inputs[idx].gain_right {
                         self.set_input_gain_right(idx, gain)?;
@@ -5596,6 +5594,19 @@ impl RmeDevice for Fireface {
             self.set_mute(ChannelId::Playback(idx), self.playbacks[idx].mute)?;
         }
         if !self.is_uc() {
+            // FX sends are part of the per-channel scene.  They are separate
+            // registers from the matrix and were previously left at the
+            // unit's live value on recall.
+            for idx in 0..self.inputs.len() {
+                let fx = self.inputs[idx].fx_send_db;
+                self.set_channel_fx_send(ChannelId::Input(idx), fx)?;
+            }
+            for idx in 0..self.playbacks.len() {
+                let fx = self.playbacks[idx].fx_send_db;
+                self.set_channel_fx_send(ChannelId::Playback(idx), fx)?;
+            }
+        }
+        if !self.is_uc() {
             for cell in &scene.matrix_overrides {
                 let Some(channel) = Self::matrix_source_channel(cell.source) else {
                     continue;
@@ -5617,6 +5628,32 @@ impl RmeDevice for Fireface {
             self.write_word(ucx::global::DIM, 0)?;
             self.set_mono(self.settings.mono)?;
             self.set_mute_fx(self.settings.mute_fx)?;
+        }
+        // Solo is part of the scene too.  Apply it after every send and
+        // matrix write, because set_solo rewrites the sends of the other
+        // channels; a scene with no solo channels leaves normal mode on.
+        let soloed: Vec<ChannelId> = self
+            .inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, channel)| channel.solo.then_some(ChannelId::Input(idx)))
+            .chain(
+                self.playbacks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, channel)| {
+                        channel.solo.then_some(ChannelId::Playback(idx))
+                    }),
+            )
+            .chain(
+                self.outputs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, channel)| channel.solo.then_some(ChannelId::Output(idx))),
+            )
+            .collect();
+        for channel in soloed {
+            self.set_solo(channel, true)?;
         }
         if !self.is_uc() {
             self.apply_ucx_preamp_state()?;
@@ -7792,6 +7829,50 @@ mod tests {
             .unwrap()
             .iter()
             .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x00CE, 1487))));
+    }
+
+    #[test]
+    fn ucx_scene_applies_fx_sends_solo_and_phase() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        let mut scene = dev.capture_scene();
+        scene.inputs[0].fx_send_db = -24.0;
+        scene.playbacks[0].fx_send_db = -18.0;
+        scene.inputs[0].phase = true;
+        scene.inputs[0].phase_r = true;
+        scene.outputs[0].phase_l = true;
+        scene.outputs[1].phase_r = true;
+        scene.inputs[0].solo = true;
+
+        dev.apply_scene(&scene).unwrap();
+
+        assert_eq!(dev.inputs()[0].fx_send_db, -24.0);
+        assert_eq!(dev.playbacks()[0].fx_send_db, -18.0);
+        assert!(dev.inputs()[0].phase);
+        assert!(dev.inputs()[0].phase_r);
+        assert!(dev.outputs()[0].phase_l);
+        assert!(dev.outputs()[1].phase_r);
+        assert!(dev.solo(ChannelId::Input(0)).unwrap());
+        assert!(dev.inputs()[0].solo);
+
+        let mut cleared = dev.capture_scene();
+        cleared.inputs[0].fx_send_db = -65.0;
+        cleared.playbacks[0].fx_send_db = -65.0;
+        cleared.inputs[0].phase = false;
+        cleared.inputs[0].phase_r = false;
+        cleared.outputs[0].phase_l = false;
+        cleared.outputs[1].phase_r = false;
+        cleared.inputs[0].solo = false;
+
+        dev.apply_scene(&cleared).unwrap();
+
+        assert_eq!(dev.inputs()[0].fx_send_db, -65.0);
+        assert_eq!(dev.playbacks()[0].fx_send_db, -65.0);
+        assert!(!dev.inputs()[0].phase);
+        assert!(!dev.inputs()[0].phase_r);
+        assert!(!dev.outputs()[0].phase_l);
+        assert!(!dev.outputs()[1].phase_r);
+        assert!(!dev.solo(ChannelId::Input(0)).unwrap());
+        assert!(!dev.inputs()[0].solo);
     }
 
     #[test]
