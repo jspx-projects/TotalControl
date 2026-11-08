@@ -99,8 +99,9 @@ cargo build -p totalcontrol-core --no-default-features --features usb
 ```
 
 The binaries land in `target/release/`: `totalcontrol-gui` and
-`totalcontrol-tui`. Rename or symlink `totalcontrol-gui` to `totalcontrol`
-if you want the shipped desktop entry to start it.
+`totalcontrol-tui`. The RPM installs the GUI as `totalcontrol`; rename or
+symlink `totalcontrol-gui` if a source build should start from the shipped
+desktop entry.
 
 ## License
 

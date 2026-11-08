@@ -196,9 +196,9 @@ bar.
 
 ### Desktop menu entry
 
-The source tree ships `ui/totalcontrol/totalcontrol-gui/assets/totalcontrol.desktop`
-and the matching icons. TotalControl is installed from source at present, so
-install the entry for the current user after building:
+The `totalcontrol` RPM installs the desktop entry and icons into the system
+paths.  If you are running a source build instead, install the entry for the
+current user after building:
 
 ```sh
 cd <checkout>
