@@ -963,7 +963,7 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         // — like several other spacings in this file — doesn't scale;
         // matching that exactly (not just approximately) is the point,
         // since this value feeds a pixel-level centering fix.
-        reserved_right: SETTINGS_TAB_W * scale + theme::SPACE_TIGHT,
+        reserved_right: SETTINGS_TAB_W * scale + 2.0 * theme::SPACE_HAIRLINE * scale,
         modifiers: p.modifiers,
         scale,
         show_track: true,
@@ -1144,10 +1144,14 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
     .spacing(theme::SPACE_TIGHT)
     .align_x(iced::Alignment::Center);
     rows = rows.push(
-        row![fader_widget, icon_col]
-            .spacing(theme::SPACE_TIGHT)
-            .align_y(iced::Alignment::Start)
-            .width(Length::Fill),
+        row![
+            fader_widget,
+            icon_col,
+            iced::widget::Space::new().width(Length::Fixed(theme::SPACE_HAIRLINE * scale)),
+        ]
+        .spacing(theme::SPACE_HAIRLINE * scale)
+        .align_y(iced::Alignment::Start)
+        .width(Length::Fill),
     );
 
     let db_display: Element<'a, Message> = if p.editing {
