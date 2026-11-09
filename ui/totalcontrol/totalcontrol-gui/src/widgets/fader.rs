@@ -139,20 +139,14 @@ impl MeterFrame {
 /// goes before clipping a 2-digit label at `theme::TEXT_MICRO`, checked
 /// via a live screenshot rather than guessed.
 ///
-/// 2026-10-20: the numbers left the meter for a lane of their own. Printed
-/// on the wash they collided with the fill (and, on a linked pair, with the
-/// gap between the two bars), and the wash had to stay translucent just so
-/// they could be read through it. The column is now `[meter][ruler lane]`,
-/// the meter fully opaque; `METER_RULER_W` is still the whole column, so
-/// `layout_x` and the collapsed `vu_meter` keep sizing against one number.
-/// Width of the coloured VU wash.  Kept a little wider than the minimum
-/// needed for the ruler labels so the stereo bars in a linked pair and the
-/// meter against a busy fader remain easy to read at normal zoom.
-const METER_W: f32 = 24.0;
-/// The VU level text lives inside the meter column; there is no separate
-/// ruler lane.
+/// Width of the VU column.  The level text is printed inside it, so this
+/// is also the full ruler width; the space to the track is left to the
+/// level marks, which run from this column's right edge.
+const METER_W: f32 = 13.0;
 const METER_RULER_W: f32 = METER_W;
-const GAP: f32 = 2.0;
+/// Space between the VU column and the fader track.  The horizontal level
+/// marks cross it; a narrower VU therefore gives longer marks.
+const GAP: f32 = 13.0;
 const TRACK_W: f32 = 26.0;
 /// Width a strip fader canvas needs to show the full meter/track group.
 /// `strip::STRIP_W` and the compact tab column are sized against this.
@@ -283,6 +277,10 @@ pub struct Fader<Message> {
     /// main fader uses the default light `FADER`; the thin FX fader uses the
     /// send/return colour, so raising it colours the channel itself.
     pub fill: Color,
+    /// Background of the VU well.  The strip passes a tone slightly darker
+    /// than its own card, so the meter reads as part of the channel rather
+    /// than as a black cut-out.
+    pub meter_bg: Color,
     /// Extra width (at `scale == 1.0`... no, already-scaled pixels, same
     /// as every other field here) that exists *outside* this canvas's own
     /// bounds but should still count when centering the track — the strip
@@ -775,6 +773,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     frame,
                     meter_rect,
                     self.scale,
+                    self.meter_bg,
                     available,
                     meter2.map(|_| meter2_available),
                 );
@@ -823,6 +822,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     .map(|d| d.at(Instant::now()))
                     .unwrap_or(self.value)
             };
+            let marks_left = meter_x + METER_W * self.scale;
             let key = hash_of(|h| {
                 (
                     bounds.width.to_bits(),
@@ -832,7 +832,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     .hash(h);
                 (display_value.to_bits(), self.default_value.to_bits()).hash(h);
                 (self.range.0.to_bits(), self.range.1.to_bits()).hash(h);
-                (state.dragging, track_x.to_bits()).hash(h);
+                (state.dragging, track_x.to_bits(), marks_left.to_bits()).hash(h);
             });
             if state.track_key.replace(key) != key {
                 state.track_cache.clear();
@@ -856,6 +856,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     self.scale,
                     self.fill,
                     self.show_meter,
+                    marks_left,
                 );
             }));
         }
@@ -1000,24 +1001,31 @@ fn draw_meter_chrome(
     frame: &mut Frame,
     r: Rectangle,
     scale: f32,
+    meter_bg: Color,
     available: bool,
     second_available: Option<bool>,
 ) {
     let (left, right) = meter_split(r, scale, second_available.is_some());
-    draw_meter_bar_chrome(frame, left, scale, available);
+    draw_meter_bar_chrome(frame, left, scale, meter_bg, available);
     if let (Some(r2), Some(available2)) = (right, second_available) {
-        draw_meter_bar_chrome(frame, r2, scale, available2);
+        draw_meter_bar_chrome(frame, r2, scale, meter_bg, available2);
     }
 }
 
-fn draw_meter_bar_chrome(frame: &mut Frame, r: Rectangle, scale: f32, available: bool) {
+fn draw_meter_bar_chrome(
+    frame: &mut Frame,
+    r: Rectangle,
+    scale: f32,
+    meter_bg: Color,
+    available: bool,
+) {
     // The VU well starts level with the fader channel; the OVR LEDs sit
     // above it inside the strip rather than extending the well upward.
     frame.fill(
         &Path::new(|b| {
             b.rounded_rectangle(r.position(), r.size(), (METER_RADIUS * scale).into())
         }),
-        Color::from_rgb8(0x08, 0x08, 0x0a),
+        meter_bg,
     );
     if !available {
         let dash_w = r.width * 0.5;
@@ -1206,6 +1214,7 @@ fn draw_track(
     scale: f32,
     fill_color: Color,
     show_scale: bool,
+    marks_left: f32,
 ) {
     // One line per fader: the slot *is* the rail, for the main fader and the
     // thin FX fader alike. There is no second, thinner rail inside it.
@@ -1244,8 +1253,11 @@ fn draw_track(
     // green -3 marks remain ruler-only; the cap is painted over them.
     if show_scale {
         let line_h = (1.0 * scale).max(1.0);
-        let margin = (1.0 * scale).max(1.0);
         let under = (5.0 * scale).max(2.0);
+        // Start at the VU column's right edge and run through the track and
+        // a little under the cap, so the gap between the two elements is
+        // the printed level scale rather than dead space.
+        let mark_w = (r.x + under - marks_left).max(1.0 * scale);
         for db in RULER_TICKS {
             let value = 10f32.powf(db / 20.0);
             let y = track_value_y(r, value, range);
@@ -1257,8 +1269,8 @@ fn draw_track(
                 Color::from_rgba8(0xff, 0xff, 0xff, 0.24)
             };
             frame.fill_rectangle(
-                Point::new(r.x - margin, y - line_h / 2.0),
-                Size::new(margin + under, line_h),
+                Point::new(marks_left, y - line_h / 2.0),
+                Size::new(mark_w, line_h),
                 color,
             );
         }
@@ -1351,14 +1363,7 @@ fn draw_level_text(frame: &mut Frame, r: Rectangle, scale: f32) {
         frame.fill_text(canvas::Text {
             content: label,
             position: Point::new(r.x + r.width / 2.0, y),
-            color: if db == 0.0 {
-                theme::TEXT_PRIMARY
-            } else {
-                Color {
-                    a: 0.85,
-                    ..theme::TEXT_SEC
-                }
-            },
+            color: theme::TEXT_PRIMARY,
             size: (theme::TEXT_MICRO * scale).into(),
             align_x: advanced_text::Alignment::Center,
             align_y: iced::alignment::Vertical::Center,

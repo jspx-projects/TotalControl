@@ -191,8 +191,7 @@ from a terminal:
 totalcontrol
 ```
 
-The window opens on the Quick view. The Mixer and Matrix views are in the top
-bar.
+The window opens on the Mixer view. Quick and Matrix are in the top bar.
 
 ### Desktop menu entry
 
@@ -318,7 +317,8 @@ mix.
 
 Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the
-meter grows to fill the space.
+meter grows to fill the space. If a slideout is open on that channel, it
+closes first; the strip narrows after the panel has slid away.
 
 The fader range is -65 to +6 dB. Its value is shown in a dB readout under
 the fader, without a unit suffix. Double-clicking that readout opens a

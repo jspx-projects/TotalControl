@@ -26,7 +26,8 @@ end-user manual is [`../TOTALCONTROL-Manual.md`](../TOTALCONTROL-Manual.md).
 
 ## 1. Mixer layout
 
-TotalControl presents three channel rows:
+The Mixer is the default view on startup. TotalControl presents three channel
+rows:
 
 1. Hardware Inputs
 2. Software Playback
@@ -301,8 +302,9 @@ channels) shares the strip's control width; an output never shows `M` alone.
 - The strip's submix box spans the strip width at the strip height, with the
   bus name vertically centred at the left and the arrow at the right.
 - The dB readout under the main fader is centred on the fader track and has
-  no unit suffix; the numeric scale stays in the lane beside the track. The
-  collapse button sits at the right edge of the readout row.
+  no unit suffix; the numeric scale is printed inside the VU element, and
+  the level marks run from its right edge to the track. The collapse button
+  sits at the right edge of the readout row.
 
 ### 2.6 Pointer gestures
 
@@ -317,6 +319,10 @@ double click on a channel name starts a rename, on the strip background
 collapses the strip, and on a Matrix cell toggles the cell between off and
 unity. Ordinary push buttons act once per click and have no separate double
 click.
+
+When a collapse starts on a channel with an open slideout, the slideout
+closes first; the width tween starts after the panel has finished sliding
+away.
 
 ### 2.7 Meters
 
@@ -336,9 +342,12 @@ channel.
   decaying; its colour follows the same green/yellow/red bands;
 - the **OVR segment** at the top, which lights from -0.1 dBFS.
 
-The numeric level text is centred in the VU channel at 60, 40, 20, 10, 6 and
-0.  There is no +3 text label.  The text is an inscription: the moving bar
-covers it.  The VU element has no level stripes or tick marks.
+The VU well is one shade darker than the channel card; it is not a separate
+black panel.  The numeric level text is centred in the VU channel at 60, 40,
+20, 10, 6 and 0.  There is no +3 text label.  The text is an inscription:
+the moving bar covers it.  The labels use the primary text tone so they stay
+legible on both the well and the green bar.  The VU element has no level
+stripes or tick marks.
 
 Peak hold applies only to the peak line. The RMS bar is never held; it
 continues to follow the RMS value. The whole region above 0 dB is red. The
@@ -357,12 +366,12 @@ are post-fader and go to zero when the output is muted.
 
 #### 2.7.2 Fader scale
 
-The fader scale is a separate element.  It uses the same -65 dB to +6 dB
-range as the VU element, so each VU label and the matching fader mark share
-one vertical centre line.  The scale has an unlabelled green tick at -3 dB,
+The fader scale uses the same -65 dB to +6 dB range as the VU element, so
+each VU label and the matching fader mark share one vertical centre line.  The scale has an unlabelled green tick at -3 dB,
 the full-scale-sine RMS target, and a red tick at +3 dB.
-Each tick is one colour and continues a little way under the fader cap; the
-cap covers the line at its current level. The cap centre line is dark grey,
+Each tick starts at the VU element's right edge, crosses the mark lane and
+continues a little way under the fader cap; the cap covers the line at its
+current level. The cap centre line is dark grey,
 aligns with the tick, spans the complete cap width and is twice the thickness
 of the other cap ridges (2 px at zoom 1). A fixed 0 dB tick also sits on the
 right side of the fader.
@@ -432,7 +441,7 @@ zoom.  The content box is 78 px wide.
 
 | Element | x | Width |
 |---|---:|---:|
-| VU element, labels centred | 0 | 24 |
+| VU element, labels centred | 0 | 13 |
 | fader track area | 26 | 26 |
 | fader slot | 35.5 | 7 |
 | fader cap | 28 | 22 |
@@ -447,9 +456,11 @@ zoom.  The content box is 78 px wide.
 
 The T1, T2, T3, M1 and B1 rows centre on x = 39; M1 uses the same two 38 px
 cells as T3, but with no outline or fill.  The VU element occupies the left
-column at x = 0.  The fader track also centres on x = 39: its group is the
-24 px VU element, a 2 px gap and the 26 px track, starting at x = 0.  The
-level labels are centred in the VU channel; the moving bars cover them.
+column at x = 0 and is 13 px wide.  The fader track is at x = 26 and centres
+on x = 39.  The 13 px between the VU element's right edge and the track is
+the level-mark lane; each mark runs from that right edge through the track
+and a little under the cap.  The level labels are centred in the VU channel;
+the moving bars cover them.
 
 A linked pair draws two bars with a 2 px gap; a split or mono channel shows
 one bar.  The OVR segment occupies the top 6 px of the VU element, inside its
@@ -482,11 +493,10 @@ x = 66.  The B1 minimize button follows the same rule: its glyph column is
 x = 59..78 and its face reaches x = 90.
 
 The FX fader has no level marks and no ruler: no tick marks, no 0 dB
-reference tick; only its coloured rail and cap are drawn.  The outer column
-uses 2 px spacing.  The gap under MR1 is 8 px
-and the tabs inside MR3–MR5 use 6 px spacing.  A missing tab keeps its slot
-where a later element depends on it: an output gets an empty MR2, so the gear
-and the UCX tabs stay on the input grid.
+reference tick; only its coloured rail and cap are drawn.  The gap under MR1
+is 8 px and the tabs inside MR3–MR5 use 6 px spacing.  A missing tab keeps
+its slot where a later element depends on it: an output gets an empty MR2,
+so the gear and the UCX tabs stay on the input grid.
 
 #### 2.8.5 Channel kinds
 

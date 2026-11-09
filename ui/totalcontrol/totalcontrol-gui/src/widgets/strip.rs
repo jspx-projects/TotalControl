@@ -980,6 +980,11 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         top_inset: 0.0,
         show_meter: true,
         fill: theme::FADER,
+        meter_bg: if p.active_surface {
+            theme::METER_WELL_ACTIVE
+        } else {
+            theme::METER_WELL
+        },
         // The explicit columns below replace the old reserved-right
         // derivation; the strip layout owns the horizontal placement.
         reserved_right: 0.0,
@@ -1114,10 +1119,11 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             top_inset: 0.0,
             show_meter: false,
             // Same dark slot as the main fader, but a smaller body.
-                fill: match cid {
+            fill: match cid {
                 ChannelId::Output(_) => theme::MGREEN,
                 _ => theme::PHANTOM,
             },
+            meter_bg: theme::METER_WELL,
             reserved_right: 0.0,
             columns: None,
             modifiers: p.modifiers,

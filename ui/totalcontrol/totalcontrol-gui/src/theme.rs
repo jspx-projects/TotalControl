@@ -23,6 +23,11 @@ pub const SURFACE: Color = Color::from_rgb8(0x24, 0x25, 0x2a);
 pub const SURFACE_HI: Color = Color::from_rgb8(0x2d, 0x2e, 0x33);
 /// Active input, playback, and selected output strip surface.
 pub const SUBMIX_ACTIVE: Color = Color::from_rgb8(0x3a, 0x3b, 0x42);
+/// VU well on a normal strip: one shade below `SURFACE`, not a black cut-out.
+pub const METER_WELL: Color = Color::from_rgb8(0x1e, 0x1f, 0x23);
+/// VU well on an active input/playback strip: one shade below
+/// `SUBMIX_ACTIVE`.
+pub const METER_WELL_ACTIVE: Color = Color::from_rgb8(0x33, 0x34, 0x3a);
 /// Slideout-tab face when the panel is closed.
 pub const SURFACE_LOW: Color = Color::from_rgb8(0x20, 0x21, 0x26);
 /// Hairlines and card borders.

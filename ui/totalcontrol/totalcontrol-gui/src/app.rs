@@ -2368,6 +2368,10 @@ pub struct TotalControl {
     /// one is still sliding out.  It opens after that shrink finishes, so
     /// switching Settings ↔ EQ ↔ Trim never snaps the old panel away.
     pending_flyout: Option<(ChannelId, strip::FlyoutKind)>,
+    /// Channels queued to collapse after their open slideouts finish
+    /// closing.  Collapsing a strip with a panel first slides the panel
+    /// away, then starts the width tween.
+    pending_collapse: Option<Vec<ChannelId>>,
     /// Manual UI zoom for the mixer/matrix views — every text size and
     /// widget dimension there is multiplied by this. Changed only by
     /// `ZoomIn`/`ZoomOut`/`ZoomReset`/Ctrl+molette (`zoom`); it is NOT tied
@@ -3086,7 +3090,7 @@ pub fn new_with_device(
         sel_out: 0,
         sel_out_side: 0,
         last_panel_out: None,
-        view: View::Quick,
+        view: View::Mixer,
         quick_channel: ChannelId::Input(0),
         editing: None,
         edit_buf: String::new(),
@@ -3109,6 +3113,7 @@ pub fn new_with_device(
         flyout_anim: HashMap::new(),
         stereo_anim: HashMap::new(),
         pending_flyout: None,
+        pending_collapse: None,
         ui_scale: theme::SCALE_DEFAULT,
         fullscreen: false,
         // Matches `window::Settings::size` in main.rs — updated for real
@@ -7171,6 +7176,15 @@ fn open_flyout(
     kind: strip::FlyoutKind,
     now: Instant,
 ) -> bool {
+    // Opening a panel on a strip that is waiting to collapse cancels the
+    // queued collapse; the user's latest action wins.
+    if state
+        .pending_collapse
+        .as_ref()
+        .is_some_and(|group| group.contains(&cid))
+    {
+        state.pending_collapse = None;
+    }
     if kind == strip::FlyoutKind::Route {
         let old_routes: Vec<_> = state
             .flyout_open
@@ -9311,16 +9325,47 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::ToggleCollapse(cid) => {
             select_strip(state, cid);
             let target = !state.collapsed.contains(&cid);
-            if state.selected.len() > 1 && state.selected.contains(&cid) {
+            let group: Vec<ChannelId> =
+                if state.selected.len() > 1 && state.selected.contains(&cid) {
+                    state.selected.iter().copied().collect()
+                } else {
+                    vec![cid]
+                };
+            if target {
+                let now = Instant::now();
+                let open: Vec<_> = state
+                    .flyout_open
+                    .iter()
+                    .filter(|&&(c, _)| group.contains(&c))
+                    .copied()
+                    .collect();
+                let closing = state
+                    .flyout_anim
+                    .iter()
+                    .any(|(&(c, _), a)| group.contains(&c) && a.is_settling(now));
+                if !open.is_empty() || closing {
+                    // Let every panel finish sliding out before narrowing
+                    // the strips it belonged to.
+                    state.pending_flyout = None;
+                    for (c, kind) in open {
+                        begin_flyout_close(state, c, kind, now);
+                    }
+                    state.pending_collapse = Some(group);
+                } else {
+                    state.pending_collapse = None;
+                    for sel in group {
+                        set_collapsed(state, sel, target);
+                    }
+                }
+            } else {
+                state.pending_collapse = None;
                 // Uniform target for the whole group — the opposite of
                 // what the clicked strip currently is — rather than each
                 // toggling its own state independently, which would leave
                 // them out of sync with each other.
-                for sel in state.selected.clone() {
+                for sel in group {
                     set_collapsed(state, sel, target);
                 }
-            } else {
-                set_collapsed(state, cid, target);
             }
         }
         Message::ToggleFlyout(cid, kind) => {
@@ -9350,6 +9395,21 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 .is_some_and(|a| a.elapsed_ms(now) >= a.max_ms)
             {
                 state.assign_anim = None;
+            }
+            if let Some(group) = state.pending_collapse.clone() {
+                let waiting = group.iter().any(|cid| {
+                    state.flyout_open.iter().any(|(c, _)| c == cid)
+                        || state
+                            .flyout_anim
+                            .iter()
+                            .any(|(&(c, _), a)| c == *cid && a.is_settling(now))
+                });
+                if !waiting {
+                    state.pending_collapse = None;
+                    for cid in group {
+                        set_collapsed(state, cid, true);
+                    }
+                }
             }
             if let Some((cid, kind)) = state.pending_flyout {
                 let still_closing = state.flyout_anim.iter().any(|(&(c, k), a)| {
@@ -10377,6 +10437,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.hovered_strip = None;
     state.matrix_hover = None;
     state.pending_flyout = None;
+    state.pending_collapse = None;
     state.flyout_anim.clear();
     state.collapse_anim.clear();
     state.stereo_anim.clear();
@@ -10615,6 +10676,7 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
     if !state.collapse_anim.is_empty()
         || !state.flyout_anim.is_empty()
         || !state.stereo_anim.is_empty()
+        || state.pending_collapse.is_some()
         || state.fx_anim.is_some()
         || state.assign_anim.is_some()
     {
@@ -20150,6 +20212,41 @@ mod tests {
         assert_eq!(state.device.inputs()[4].trim, 0.0, "no boost");
         let _ = update(&mut state, Message::TrimChanged(ChannelId::Input(4), -99.0));
         assert_eq!(state.device.inputs()[4].trim, -65.0, "floor");
+    }
+
+    #[test]
+    fn a_fresh_state_opens_on_the_mixer() {
+        let state = new(true, None, None);
+        assert_eq!(state.view, View::Mixer);
+    }
+
+    #[test]
+    fn collapsing_a_channel_closes_its_slideout_first() {
+        let mut state = new(true, None, None);
+        let cid = ChannelId::Input(0);
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(cid, strip::FlyoutKind::Settings),
+        );
+        assert!(state
+            .flyout_open
+            .contains(&(cid, strip::FlyoutKind::Settings)));
+
+        let _ = update(&mut state, Message::ToggleCollapse(cid));
+        assert!(!state.collapsed.contains(&cid));
+        assert!(!state
+            .flyout_open
+            .contains(&(cid, strip::FlyoutKind::Settings)));
+        assert!(state
+            .pending_collapse
+            .as_ref()
+            .is_some_and(|group| group.contains(&cid)));
+
+        // The flyout has finished sliding away.
+        state.flyout_anim.clear();
+        let _ = update(&mut state, Message::CollapseTick);
+        assert!(state.collapsed.contains(&cid));
+        assert_eq!(state.pending_collapse, None);
     }
 
     #[test]

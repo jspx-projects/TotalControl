@@ -31,7 +31,7 @@ pub const DB_READOUT_H: f32 = 14.0;
 pub const SUBMIX_H: f32 = 18.0;
 
 pub const VU_X: f32 = 0.0;
-pub const VU_W: f32 = 24.0;
+pub const VU_W: f32 = 13.0;
 pub const TRACK_X: f32 = 26.0;
 pub const TRACK_W: f32 = 26.0;
 /// Full meter + gap + track canvas, from the content's left edge.
@@ -248,7 +248,8 @@ mod tests {
         approx(l.fader_canvas.width, FADER_CANVAS_W);
         assert!(inside(l.fader_canvas, l.vu));
         assert!(inside(l.fader_canvas, l.fader));
-        approx(l.vu.x + l.vu.width + 2.0, l.fader.x);
+        approx(l.fader.x, CONTENT_X + TRACK_X);
+        assert!(l.vu.x + l.vu.width < l.fader.x);
         approx(l.fader.x + l.fader.width / 2.0, l.centre_x());
     }
 
