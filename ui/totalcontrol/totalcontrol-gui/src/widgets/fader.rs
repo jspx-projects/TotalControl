@@ -943,11 +943,9 @@ const METER_ZONES: [(f32, Color); 3] = [
     (TOP_DB, theme::MRED),
 ];
 
-/// Fill opacity. It used to be 0.55 so the ruler's numbers could be read
-/// *through* the wash; they have their own lane now (`RULER_LANE_W`), so
-/// the fill is all but solid, with just enough give to sit in the dark
-/// well instead of glaring.
-const FILL_ALPHA: f32 = 0.92;
+/// The bars are opaque; the scale labels are drawn underneath and may be
+/// hidden by a raised bar, exactly like printed marks behind a moving meter.
+const FILL_ALPHA: f32 = 1.0;
 
 /// A full-width wash spanning the whole ruler column — not a slim pill
 /// off to one side — precisely so `draw_ruler`'s numbers can be
@@ -1364,7 +1362,7 @@ fn draw_level_text(frame: &mut Frame, r: Rectangle, scale: f32) {
         frame.fill_text(canvas::Text {
             content: label,
             position: Point::new(r.x + r.width / 2.0, y),
-            color: theme::TEXT_PRIMARY,
+            color: theme::VU_LABEL,
             size: (theme::TEXT_MICRO * scale).into(),
             align_x: advanced_text::Alignment::Center,
             align_y: iced::alignment::Vertical::Center,

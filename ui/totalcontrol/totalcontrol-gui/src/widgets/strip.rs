@@ -12,7 +12,7 @@ use totalcontrol_core::ChannelId;
 use crate::app::{short_label, Message};
 use crate::theme;
 use crate::widgets::fader::{fader, vu_meter, BusSlot, Fader, FaderColumns, MeterFrame};
-use crate::widgets::layout::{ChannelKind, Features, StripLayout};
+use crate::widgets::layout::{ChannelKind, Features, StripLayout, SUBMIX_H};
 use crate::widgets::knob::{knob, Knob};
 
 /// Base sizes at `scale == 1.0` (`theme::SCALE_DEFAULT`) — every dimension
@@ -59,11 +59,13 @@ fn db_of(linear: f32) -> f32 {
 /// old flat offset existed to add. Empirically measured the same way the
 /// original number was (pixel-measuring a collapsed and an adjacent full
 /// strip side by side in a live screenshot), not derived on paper.
-/// Fixed chrome of a collapsed strip: outer padding, the four row gaps, the
-/// rotated name, and the mute, solo and expand rows.  The meter absorbs the
-/// rest so a collapsed strip and a full strip share the same `STRIP_H`.
-const COLLAPSED_CHROME_H: f32 = theme::SPACE_SM * 2.0
-    + theme::SPACE_HAIRLINE * 4.0
+/// Fixed chrome of a collapsed strip: top padding, the five row gaps, the
+/// rotated name, the mute, solo and expand rows, and the unused bottom slot
+/// that matches B2.  The meter absorbs the rest, so the expand button lands
+/// on B1 and the strip keeps the full strip's `STRIP_H`.
+const COLLAPSED_CHROME_H: f32 = theme::SPACE_SM
+    + SUBMIX_H
+    + theme::SPACE_HAIRLINE * 5.0
     + ROTATED_LABEL_LEN
     + ICON_BTN_H * 3.0;
 const COLLAPSED_METER_H: f32 = STRIP_H - COLLAPSED_CHROME_H;
@@ -781,6 +783,9 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             .width(Length::Fill)
             .center_x(Length::Fill),
         expand_btn,
+        // B2-sized slot: unused today, aligned with the full strip's submix
+        // selector so the expand button sits on the same line as B1.
+        iced::widget::Space::new().height(Length::Fixed(SUBMIX_H * p.scale)),
     ]
     .spacing(theme::SPACE_HAIRLINE)
     .width(Length::Fill)
@@ -794,7 +799,12 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
                 p.type_tag.map(|(_, c)| c),
                 p.active_surface,
             ))
-            .padding([theme::SPACE_SM * p.scale, theme::SPACE_MD * p.scale])
+            .padding(iced::Padding {
+                top: theme::SPACE_SM * p.scale,
+                right: theme::SPACE_MD * p.scale,
+                bottom: 0.0,
+                left: theme::SPACE_MD * p.scale,
+            })
             .width(Length::Fixed(w * p.scale))
             .height(Length::Fixed(STRIP_H * p.scale))
             .clip(true),
@@ -1292,6 +1302,24 @@ mod tests {
     fn collapsed_strip_fills_the_standard_strip_height() {
         assert!((COLLAPSED_METER_H + COLLAPSED_CHROME_H - STRIP_H).abs() < f32::EPSILON);
         assert!(COLLAPSED_METER_H > 0.0);
+    }
+
+    #[test]
+    fn collapsed_expand_button_sits_on_the_full_strip_b1_line() {
+        let full = StripLayout::for_kind(ChannelKind::Input, 1.0, Features::default());
+        let plus_y = theme::SPACE_SM
+            + ROTATED_LABEL_LEN
+            + theme::SPACE_HAIRLINE
+            + ICON_BTN_H * 2.0
+            + theme::SPACE_HAIRLINE * 2.0
+            + COLLAPSED_METER_H
+            + theme::SPACE_HAIRLINE;
+        assert!((plus_y - full.db_readout.y).abs() < f32::EPSILON);
+        let bottom = plus_y
+            + ICON_BTN_H
+            + theme::SPACE_HAIRLINE
+            + SUBMIX_H;
+        assert!((bottom - STRIP_H).abs() < f32::EPSILON);
     }
 
     #[test]

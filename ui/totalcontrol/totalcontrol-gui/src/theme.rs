@@ -28,8 +28,13 @@ pub const METER_WELL: Color = Color::from_rgb8(0x1e, 0x1f, 0x23);
 /// VU well on an active input/playback strip: one shade below
 /// `SUBMIX_ACTIVE`.
 pub const METER_WELL_ACTIVE: Color = Color::from_rgb8(0x33, 0x34, 0x3a);
-/// Slideout-tab face when the panel is closed.
+/// Slideout-tab face when its panel is open.
 pub const SURFACE_LOW: Color = Color::from_rgb8(0x20, 0x21, 0x26);
+/// Slideout-tab face on hover: lighter than the open face, still darker
+/// than the channel surface.
+pub const TAB_FACE_HOVER: Color = Color::from_rgb8(0x22, 0x23, 0x28);
+/// VU scale labels: one step below the primary text tone.
+pub const VU_LABEL: Color = Color::from_rgb8(0xd5, 0xd6, 0xda);
 /// Hairlines and card borders.
 pub const BORDER: Color = Color::from_rgb8(0x36, 0x37, 0x3d);
 /// The mark's white, softened a touch for body text.
@@ -560,14 +565,15 @@ pub fn stereo_button_state(
 pub fn panel_tab(active: bool, lit: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        // The tab face marks a button that opens a slideout.  It is always
-        // visible and reaches the strip's right edge in the layout; the
-        // open panel uses the brighter surface.
-        let background = Some(Background::Color(if active {
-            SURFACE
+        // At rest the tab is only its glyph.  Hover gives it a light face;
+        // an open panel keeps the darker face that reaches the strip edge.
+        let background = if hovered {
+            Some(Background::Color(TAB_FACE_HOVER))
+        } else if active {
+            Some(Background::Color(SURFACE_LOW))
         } else {
-            SURFACE_LOW
-        }));
+            None
+        };
         button::Style {
             background,
             // Orange means "active setting", not "hovered" or "open".

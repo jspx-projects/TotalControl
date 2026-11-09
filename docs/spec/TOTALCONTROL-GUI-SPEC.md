@@ -262,12 +262,14 @@ applies to Dynamics, Auto Level, Reverb and Echo.
 
 - The settings gear is a 20×26 tab with a 14 px glyph.
 - Trim, EQ and Dynamics use the 20×22 tab with a 13 px glyph.
-- The active tab carries the panel's dark surface behind its glyph. The face
-  of every slideout tab (`T`, gear, `EQ`, `D`) extends from its 20 px column
-  to the complete right edge of the channel; the glyph stays centred in the
-  column, not in the extended face. The channel minimize button follows the
-  same rule: its glyph stays centred in its B1 column and its face reaches
-  the channel's right edge.
+- A slideout tab shows only its glyph at rest.  Hover gives it a face one
+  step lighter than the open face and still darker than the channel surface.
+  An open slideout keeps the darker face behind its tab.  When a face is
+  drawn it extends from the 20 px column to the complete right edge of the
+  channel; the glyph stays centred in the column, not in the extended face.
+  The channel minimize button follows the same right-edge rule: its glyph
+  stays centred in its B1 column and its face reaches the channel's right
+  edge.
 - The T, EQ and D tabs keep their glyph only, in orange, while their setting
   is active and the slideout is closed: trim below 0 dB, EQ enabled, or
   dynamics on. While the slideout is open the tab carries no orange; the
@@ -277,7 +279,7 @@ applies to Dynamics, Auto Level, Reverb and Echo.
   open panel.
 - Outlines belong to buttons, not slideout tabs. A slideout tab never draws
   a button outline or a copy of the panel-open marker. Hover brightens the
-  glyph but never uses orange.
+  glyph and adds the lighter hover face, but never uses orange.
 - The T, gear, EQ and D tabs keep the same fixed slot with the slideout open
   or closed. Only the panel grows beside them; the tabs themselves never
   move.
@@ -347,10 +349,10 @@ whether it carries one bar or two.
 
 The VU well is one shade darker than the channel card; it is not a separate
 black panel.  The numeric level text is centred in the VU channel at 60, 40,
-20, 10, 6 and 0.  There is no +3 text label.  The text is an inscription:
-the moving bar covers it.  The labels use the primary text tone so they stay
-legible on both the well and the green bar.  The VU element has no level
-stripes or tick marks.
+20, 10, 6 and 0.  There is no +3 text label.  The labels use a light grey one
+step below the primary text tone.  The bars are opaque; a raised bar may
+hide the labels underneath.  The VU element has no level stripes or tick
+marks.
 
 Peak hold applies only to the peak line. The RMS bar is never held; it
 continues to follow the RMS value. The whole region above 0 dB is red. The
@@ -594,10 +596,11 @@ value by the same delta.
 #### 2.8.8 Collapsed strip
 
 The collapsed strip is a separate 44 × 350 layout: rotated name, `M`, `S` or
-`CUE`, a VU element and a `+` expand button.  It does not use the T/M/B grid.
-The VU element keeps the normal well colour: a linked pair shows two bars, a
-mono or split channel shows one full-width bar, and the labels stay centred
-in the element.
+`CUE`, a VU element, a `+` expand button and an unused bottom slot.  It does
+not use the T/M/B grid.  The bottom slot is 18 px, the same height as B2, so
+the `+` button sits on the B1 line.  The VU element keeps the normal well
+colour: a linked pair shows two bars, a mono or split channel shows one
+full-width bar, and the labels stay centred in the element.
 
 ## 3. Runtime reference
 

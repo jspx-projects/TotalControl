@@ -306,6 +306,10 @@ A channel strip shows, left to right:
   (dynamics), when the unit provides them;
 - a **thin FX fader** at the top of that column, when the unit has an FX bus.
 
+The `T`, gear, `EQ` and `D` tabs show only their glyphs at rest. Hovering
+gives them a slightly darker face; an open slideout keeps a dark face behind
+its tab.
+
 The strength readouts refresh four times a second; the meter bars keep moving
 smoothly. Mute silences a channel without moving its fader; unmuting restores
 the same level. Solo silences the other inputs and software playbacks while
@@ -320,7 +324,8 @@ the fader folds a strip so only its channel name and meter remain, and the
 meter grows to fill the space. If a slideout is open on that channel, it
 closes first; the strip narrows after the panel has slid away. The collapsed
 meter keeps the normal VU well colour: a linked pair shows two bars, a mono
-channel shows one full-width bar.
+channel shows one full-width bar. The bottom slot is reserved, so the `+`
+button sits at the same height as the full strip's collapse button.
 
 The fader range is -65 to +6 dB. Its value is shown in a dB readout under
 the fader, without a unit suffix. Double-clicking that readout opens a
