@@ -77,7 +77,9 @@ The schema tests enforce:
 
 ## Changing the layout
 
-1. Change the logical constants or slot rules in
+### Developer workflow
+
+1. Change the logical defaults or slot rules in
    `ui/totalcontrol/totalcontrol-layout/src/lib.rs`.
 2. Add or update the relevant invariant test.
 3. Render the preview:
@@ -91,6 +93,45 @@ The schema tests enforce:
    `magick preview.svg preview.png`.
 4. Review the rendered sheet.
 5. Only then change runtime slot filling.
+
+### User configuration
+
+The intended single configuration file is:
+
+```text
+$XDG_CONFIG_HOME/totalcontrol/gui-layout.json
+# normally ~/.config/totalcontrol/gui-layout.json
+```
+
+The checked-in complete example is
+[`docs/examples/gui-layout.json`](../examples/gui-layout.json).  It contains:
+
+- `geometry`: logical row heights, content box, slots, fader canvas and tab
+  columns;
+- `visual`: text sizes, tab glyph sizes, knob size, fader slot and cap sizes;
+- `colors`: the semantic colour categories;
+- `templates`: the channel set with kind, stereo flag and feature presence.
+
+Render a candidate file without rebuilding the preview:
+
+```sh
+cd ui/totalcontrol
+cargo run -p totalcontrol-layout --bin channel-preview -- \
+    --config ~/.config/totalcontrol/gui-layout.json \
+    /tmp/my-layout.svg 2
+```
+
+Or ask the preview to write the current built-in defaults as a starting
+point:
+
+```sh
+cargo run -p totalcontrol-layout --bin channel-preview -- \
+    --example /tmp/gui-layout.json
+```
+
+The preview rejects an invalid schema or non-positive geometry with a
+diagnostic and does not render a broken sheet.  The runtime loader is the
+next step; until it lands, this configuration affects the preview only.
 
 The runtime imports the same `StripLayout`; it must not calculate geometry
 independently.

@@ -171,8 +171,23 @@ quick raster review:
 magick /tmp/channel-preview.svg /tmp/channel-preview.png
 ```
 
-The command renders the standard template set and the semantic preview
-colour categories.  See
+Render a candidate configuration without rebuilding:
+
+```sh
+cargo run -p totalcontrol-layout --bin channel-preview -- \
+    --config ~/.config/totalcontrol/gui-layout.json \
+    /tmp/my-layout.svg 2
+```
+
+Write the current built-in defaults as a starting example:
+
+```sh
+cargo run -p totalcontrol-layout --bin channel-preview -- \
+    --example /tmp/gui-layout.json
+```
+
+The complete example is also at
+[`examples/gui-layout.json`](examples/gui-layout.json).  See
 [`spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md)
 for the schema and the change workflow.
 
