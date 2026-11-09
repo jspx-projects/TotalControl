@@ -208,12 +208,11 @@ apart; empty slots use the same heights and gaps.
 | Software playback | FX send | `0x47A0` family, linear, `+0x41` mirror | orange |
 | Hardware output | FX return | `NN03`, 0.1 dB | green |
 
-Both faders slide in a dark slot drawn by the fader: the main fader's rail
-inside a wider slot, the small one as a single thinner line scaled with its
-smaller cap. Its rail fills with the send/return colour as it is raised, so an
-untouched control shows no colour at all.  The thin FX fader has no level
-marks and no ruler: no tick marks, no 0 dB reference tick; only its coloured
-rail and cap are drawn.
+Both faders slide in a dark fader slot of the same width.  The slot fill
+carries the send/return colour as it is raised, so an untouched control shows
+no colour at all.  The thin FX fader has no level marks and no ruler: no tick
+marks, no 0 dB reference tick; only its coloured slot fill and cap are
+drawn.
 
 The main fader's value sits in the strip's bottom row, centred on the fader
 track; the collapse button sits at the right edge of that row.
@@ -388,6 +387,11 @@ stops at -64.5 dB at the bottom of the track.  The position below that
 selects the -65 dB value, shown as inf; the shared scale mapping keeps the
 VU labels and fader marks on the same line.
 
+The narrow dark groove under the cap is the **fader slot**.  The channel
+fader and the thin FX fader use the same slot width: 4.3 px at zoom 1.  The
+slot is slightly lighter than the page black; the fill below the cap carries
+the level.
+
 ### 2.8 Channel layout model
 
 #### 2.8.1 Grid and scaling
@@ -455,7 +459,7 @@ zoom.  The content box is 78 px wide.
 |---|---:|---:|
 | VU element, labels centred | 0 | 13 |
 | fader track area | 26 | 26 |
-| fader slot | 35.5 | 7 |
+| fader slot | 36.8 | 4.3 |
 | fader cap | 28 | 22 |
 | right-hand control column | 56 | 20 |
 | pan or balance knob box | 12 | 54 |
@@ -507,8 +511,8 @@ x = 66.  The B1 minimize button follows the same rule: its glyph column is
 x = 59..78 and its face reaches x = 90.
 
 The FX fader has no level marks and no ruler: no tick marks, no 0 dB
-reference tick; only its coloured rail and cap are drawn.  The gap under MR1
-is 8 px and the tabs inside MR3–MR5 use 6 px spacing.  A missing tab keeps
+reference tick; only its coloured slot fill and cap are drawn.  The gap under
+MR1 is 8 px and the tabs inside MR3–MR5 use 6 px spacing.  A missing tab keeps
 its slot where a later element depends on it: an output gets an empty MR2,
 so the gear and the UCX tabs stay on the input grid.
 

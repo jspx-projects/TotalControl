@@ -11,7 +11,10 @@ use totalcontrol_core::ChannelId;
 
 use crate::app::{short_label, Message};
 use crate::theme;
-use crate::widgets::fader::{fader, vu_meter, BusSlot, Fader, FaderColumns, MeterFrame};
+use crate::widgets::fader::{
+    fader, vu_meter, BusSlot, Fader, FaderColumns, MeterFrame, CHANNEL_SLOT_W, FX_FADER_SCALE,
+    FX_SLOT_W,
+};
 use crate::widgets::layout::{ChannelKind, Features, StripLayout, SUBMIX_H};
 use crate::widgets::knob::{knob, Knob};
 
@@ -1011,6 +1014,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         top_inset: 0.0,
         show_meter: true,
         fill: theme::FADER,
+        slot_w: CHANNEL_SLOT_W,
         meter_bg: if p.active_surface {
             theme::METER_WELL_ACTIVE
         } else {
@@ -1154,12 +1158,13 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
                 ChannelId::Output(_) => theme::MGREEN,
                 _ => theme::PHANTOM,
             },
+            slot_w: FX_SLOT_W,
             meter_bg: theme::METER_WELL,
             reserved_right: 0.0,
             columns: None,
             modifiers: p.modifiers,
             // A smaller body: the cap and rail scale down with it.
-            scale: scale * 0.62,
+            scale: scale * FX_FADER_SCALE,
             show_track: true,
             label: None,
             label_color: theme::TEXT_SEC,

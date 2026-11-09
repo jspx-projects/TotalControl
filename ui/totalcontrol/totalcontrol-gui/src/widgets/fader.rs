@@ -293,6 +293,9 @@ pub struct Fader<Message> {
     /// main fader uses the default light `FADER`; the thin FX fader uses the
     /// send/return colour, so raising it colours the channel itself.
     pub fill: Color,
+    /// Width of the dark fader slot in canvas-local logical units.  The
+    /// channel fader and the thin FX fader use the same effective width.
+    pub slot_w: f32,
     /// Background of the VU well.  The strip passes a tone slightly darker
     /// than its own card, so the meter reads as part of the channel rather
     /// than as a black cut-out.
@@ -872,6 +875,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     self.scale,
                     self.fill,
                     self.show_meter,
+                    self.slot_w,
                     marks_left,
                 );
             }));
@@ -1204,6 +1208,12 @@ const SLOT_W: f32 = 7.0;
 const CAP_W: f32 = 22.0;
 const CAP_H: f32 = 15.0;
 const CAP_RADIUS: f32 = 3.0;
+/// The FX fader draws its slot and cap at this fraction of the channel
+/// fader's scale.  The channel fader uses only the same slot width, not a
+/// smaller cap or track.
+pub(crate) const FX_FADER_SCALE: f32 = 0.62;
+pub(crate) const FX_SLOT_W: f32 = SLOT_W;
+pub(crate) const CHANNEL_SLOT_W: f32 = SLOT_W * FX_FADER_SCALE;
 /// Right-side length of the 0 dB reference mark, beyond the fader track.
 const REF_RIGHT_W: f32 = 5.0;
 
@@ -1228,11 +1238,12 @@ fn draw_track(
     scale: f32,
     fill_color: Color,
     show_scale: bool,
+    slot_w: f32,
     marks_left: f32,
 ) {
     // One line per fader: the slot *is* the rail, for the main fader and the
     // thin FX fader alike. There is no second, thinner rail inside it.
-    let rail_w = SLOT_W * scale;
+    let rail_w = slot_w * scale;
     let cap_w = CAP_W * scale;
     let cap_h = CAP_H * scale;
     let cap_radius = CAP_RADIUS * scale;
@@ -1248,10 +1259,10 @@ fn draw_track(
     // above the cap — the main fader and the thin FX fader look like the
     // same piece of hardware at two sizes.
     let slot = Path::rectangle(
-        Point::new(cx - (SLOT_W * scale) / 2.0, r.y),
-        Size::new(SLOT_W * scale, r.height),
+        Point::new(cx - (slot_w * scale) / 2.0, r.y),
+        Size::new(slot_w * scale, r.height),
     );
-    frame.fill(&slot, theme::BG_DEEP);
+    frame.fill(&slot, theme::FADER_SLOT);
 
     // Filled portion of the rail, from the bottom up to the cap.
     if raw_y < r.y + r.height {

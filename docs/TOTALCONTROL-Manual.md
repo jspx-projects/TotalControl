@@ -329,9 +329,12 @@ the `+` button sits at the same height as the full strip's collapse button;
 the face is reserved for future information.
 
 The fader range is -65 to +6 dB. The lowest cap position is -64.5 dB; the
-position below it is -65 dB and reads as inf. Its value is shown in a dB
-readout under the fader, without a unit suffix. Double-clicking that readout
-opens a numeric entry field.
+position below it is -65 dB and reads as inf. The narrow dark channel under
+the cap is the **fader slot**. The channel fader and the thin FX fader use
+the same slot width; the slot is slightly lighter than the page black, and
+the fill below the cap shows the level. Its value is shown in a dB readout
+under the fader, without a unit suffix. Double-clicking that readout opens a
+numeric entry field.
 
 Output strips also carry a **balance** knob that pans the output pair
 between its two channels; it appears only while the pair is linked.
@@ -536,9 +539,9 @@ FX bus. It lights while the column is out. Every input and playback strip can
 send to it:
 
 - the thin fader at the top of the strip (or `send FX` in the Settings
-  panel) is the send level; its rail fills orange when raised;
+  panel) is the send level; its fader slot fills orange when raised;
 - an output strip's thin fader (or `return FX`) is how loud the FX return
-  plays on that output; its rail fills green when raised.
+  plays on that output; its fader slot fills green when raised.
 
 The column holds **Reverb** and **Echo**, each with an on/off switch and a
 type menu. Both carry the controls TotalMix FX provides: predelay, room

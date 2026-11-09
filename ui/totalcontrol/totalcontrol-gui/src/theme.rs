@@ -17,6 +17,9 @@ use iced::{Background, Border, Color, Shadow};
 // see the reference-totalmix-ui-assets memory) and read as a different
 // product than the icon on the taskbar.
 pub const BG_DEEP: Color = Color::from_rgb8(0x0e, 0x0e, 0x10);
+/// The dark groove of a fader: just off the page black, so the slot reads
+/// as a channel without becoming a black cut-out.
+pub const FADER_SLOT: Color = Color::from_rgb8(0x13, 0x14, 0x17);
 /// Resting face of a black button.  One step above the page/rail black so
 /// controls read as raised without turning into grey blocks.
 pub const BUTTON_FACE: Color = Color::from_rgb8(0x19, 0x1a, 0x1e);
