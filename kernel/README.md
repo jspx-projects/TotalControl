@@ -1,4 +1,4 @@
-# `snd-fireface-uc` — Fireface UC/UCX transport module
+# `snd-fireface-uc` — Fireface UC/UCX and Babyface-classic transport module
 
 The kernel module is a transport core:
 
@@ -23,9 +23,11 @@ notes are in the archive (`docs/archive/`).
 | Fireface UC AP | `0424:3fc6` / `2a39:3fc6` | isochronous IF0 | 0 |
 | Fireface UCX | `0424:3fc9` / `2a39:3fc9` | isochronous IF0 (default) | 0 |
 | Fireface UCX | `0424:3fc9` / `2a39:3fc9` | interrupt IF5 (`ucx_if5=1`) | 5 |
+| Babyface-classic | `2a39:3fc7` | isochronous IF0 | 0 |
 
 One module instance handles several physical devices; each gets its own card,
-PCM device and hwdep node.
+PCM device and hwdep node.  The Babyface-classic ALSA card ID is `Babyface`;
+the longer model name is used for the card and PCM names.
 
 ## Build
 
@@ -97,6 +99,8 @@ available for the update.
 
 - UC interrupt and isochronous transports.
 - UCX isochronous and interrupt transports.
+- Babyface-classic isochronous transport (12 capture / 14 playback words at
+  1×), USB-MIDI and the IF1 `0x85` DSP meter stream.
 - UC EP0 vendor requests, UCX IF1 register words, and raw meter/state/status
   events.
 - UC output-latch detection and engine restart.
