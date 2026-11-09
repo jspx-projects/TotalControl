@@ -193,14 +193,13 @@ below the column, not between the fader and the buttons.
 The symbols sit on one grid shared by all strips.  Every strip has a main
 fader; the column is anchored to it, below the FX fader when the unit has an
 FX bus and directly below the fader top otherwise.  The column holds the
-symbols the unit has, in the fixed order `T`, settings gear, `EQ`, `D` — the
-UC has `T` and the gear, the UCX has all four.  The hardware-input row is the
-reference, and every other strip places its symbols at the same absolute
-heights.  A channel without one of them keeps an empty slot of the same
-height and gap, so no symbol below moves.  The gap below the FX fader is
-`theme::SPACE_LG` plus the column's own spacing (12 px at scale 1) and the
-symbols are `theme::SPACE_MD` (6 px) apart; empty slots use the same heights
-and gaps.
+symbols the channel can have, in the fixed order `T`, settings gear, `EQ`,
+`D`.  The UC has `T` and the gear; the UCX adds `EQ` and `D` on inputs and
+outputs.  Software playback has `T` and the gear.  A hardware output without
+`T` keeps an empty `T` slot so the gear, `EQ` and `D` stay on the shared
+grid.  The gap below the FX fader is `theme::SPACE_LG` plus the column's own
+spacing (12 px at scale 1) and the symbols are `theme::SPACE_MD` (6 px)
+apart; empty slots use the same heights and gaps.
 
 | Strip | Fader | Register | Fill |
 |---|---|---|---|
@@ -213,7 +212,8 @@ inside a wider slot, the small one as a single thinner line scaled with its
 smaller cap. Its rail fills with the send/return colour as it is raised, so an
 untouched control shows no colour at all.
 
-The main fader's value sits at the strip's bottom-left, under its scale.
+The main fader's value sits in the strip's bottom row, centred on the fader
+track; the collapse button sits at the right edge of that row.
 
 Dragging a fader or knob keeps the ordinary pointer; the grab hand is not
 used, since it covers the values it hovers over.
@@ -257,9 +257,10 @@ applies to Dynamics, Auto Level, Reverb and Echo.
 
 ### 2.4 Tab appearance
 
-- The settings gear is a 28×26 tab with a 19 px glyph.
-- Trim, EQ and Dynamics use the 24×22 tab.
-- The active tab carries the panel's dark surface behind its glyph.
+- The settings gear is a 20×26 tab with a 14 px glyph.
+- Trim, EQ and Dynamics use the 20×22 tab with a 13 px glyph.
+- The active tab carries the panel's dark surface behind its glyph; that
+  surface extends 6 px beyond each side of the tab slot.
 - The T, EQ and D tabs keep their glyph only, in orange, while their setting
   is active and the slideout is closed: trim below 0 dB, EQ enabled, or
   dynamics on. While the slideout is open the tab carries no orange; the
@@ -343,6 +344,180 @@ reading, the send fader and selected submix do not. Hardware output meters
 are post-fader and go to zero when the output is muted. A linked pair shows
 one bar per channel; each bar measures its own channel, so linking does not
 copy an input signal or meter value to its sibling.
+
+### 2.8 Channel layout model
+
+#### 2.8.1 Grid and scaling
+
+A channel is a three-area (Top, Middle, Bottom) by three-column (Left,
+Centre, Right) grid.  An element is named `ACr`, where `A` is the area, `C`
+the column and `r` the row within that area; `r` is omitted when the area has
+one row.  `TC1` is the name, `TL3` the left button of the third Top row and
+`MR4` the fourth element of the right Middle stack.
+
+The full strip is 90 × 350 px at zoom 1.0.  Its content box is 78 × 334 px:
+6 px left and right padding, 4 px top padding and 12 px bottom padding.  The
+collapsed strip is 44 × 350 px.  Every dimension, font size and gap is
+multiplied by the UI zoom (`0.75..1.75`); the aspect ratio is invariant.
+
+Rows are separated by 1 px.  The Centre column is the reference centre line
+for the Top rows and the Bottom readout.  Columns are centred on their own
+line.  A feature that is absent keeps its slot, so an element below it does
+not move.
+
+#### 2.8.2 Vertical rows
+
+| Ref | Element | Column | Nominal height at zoom 1 |
+|---|---|---|---:|
+| T1 | channel name and type tag | C | 13 |
+| T2 | pan or balance knob | C | 54 |
+| T3 | `M`/`S` pair, or `M`/`CUE` pair | L / R | 18 |
+| M | fader and right-hand control column | L / C / R | 206 |
+| B1 | dB readout and collapse button | C / R | 14 |
+| B2 | submix selector, input and playback only | C | 24 |
+
+The nominal rows plus their five gaps and the top and bottom padding total
+350 px.
+B2 is a 6 px top inset plus an 18 px control.  A hardware-output strip has no
+B2 and leaves that 24 px row and its gap empty, so B1 keeps the same height
+on every channel kind.
+
+#### 2.8.3 Horizontal columns
+
+These positions are content-local x coordinates at zoom 1.0; multiply by the
+zoom.  The content box is 78 px wide.
+
+| Element | x | Width |
+|---|---:|---:|
+| VU wash (one or two bars) | 0 | 13 |
+| ruler lane | 14 | 14 |
+| fader track area | 30 | 26 |
+| fader slot | 39.5 | 7 |
+| fader cap | 32 | 22 |
+| right-hand control column | 56 | 20 |
+| pan or balance knob box | 12 | 54 |
+| T3 left button | 0 | 38 |
+| T3 right button | 40 | 38 |
+| B1 collapse button | 59 | 19 |
+| B2 submix selector | 0 | 78 |
+
+The T1, T2, T3 and B1 rows centre on x = 39.  The fader track centres on
+x = 43: the meter/ruler group and the 26 px track area need 56 px, while the
+fader canvas has 55 px after the 20 px control column, two 1 px gaps and the
+1 px trailing spacer.  The canvas keeps the meter on the card and the track
+takes the remaining space, so the track centre is four pixels right of the
+reference centre line.  This is the current exception to the centre-column
+rule.
+
+The VU wash is split into two bars for a linked pair, one bar per channel,
+with a 2 px gap.  A split or mono channel shows one left-aligned bar.  The
+6 px OVR block sits above the wash with a 2 px gap; the meter/ruler column
+reserves 8 px at the top for it.
+
+#### 2.8.4 Right-hand stack
+
+The right-hand column starts level with the top of the fader.  It holds:
+
+| Ref | Element | Height at zoom 1 | Present on |
+|---|---|---:|---|
+| MR1 | FX send or FX return fader | 67 | every strip with an FX bus |
+| MR2 | `T` trim tab | 22 | inputs and software playback |
+| MR3 | settings gear | 26 | every strip |
+| MR4 | `EQ` tab | 22 | UCX inputs and outputs |
+| MR5 | `D` dynamics tab | 22 | UCX inputs and outputs |
+
+The outer column uses 2 px spacing.  The gap under MR1 is 8 px and the tabs
+inside MR3–MR5 use 6 px spacing.  A missing tab keeps its slot where a later
+element depends on it: an output gets an empty MR2, so the gear and the UCX
+tabs stay on the input grid.
+
+#### 2.8.5 Channel kinds
+
+| Ref | Input | Software playback | Hardware output |
+|---|---|---|---|
+| T1 | name | name | name |
+| T2 | pan | pan | balance, when the backend supports it |
+| T3 | `M` `S` | `M` `S` | `M` `CUE` |
+| ML | VU meter and ruler | VU meter and ruler | VU meter and ruler |
+| MC | fader and cap | fader and cap | fader and cap |
+| MR1 | FX send | FX send | FX return |
+| MR2 | `T` | `T` | empty |
+| MR3 | gear | gear | gear |
+| MR4 | `EQ` on the UCX | empty | `EQ` on the UCX |
+| MR5 | `D` on the UCX | empty | `D` on the UCX |
+| B1 | dB and collapse | dB and collapse | dB and collapse |
+| B2 | submix selector | submix selector | empty |
+
+A linked pair is one strip and shows two VU bars.  A split pair is two
+adjacent strips; each has one VU bar and its own fader.  The Control Room
+output strips use the hardware-output layout; their stereo link is locked.
+
+#### 2.8.6 Examples
+
+Input, linked pair, UCX:
+
+```text
+┌──────────────────────────────────────┐
+│                TC1 name              │  T1
+│                TC2 pan               │  T2
+│        TL3 [ M ]   [ S ] TR3         │  T3
+│  ML meter │ MC fader │ MR1 FX send   │  M
+│   + ruler │   + cap  │ MR2 T         │
+│           │          │ MR3 gear      │
+│           │          │ MR4 EQ        │
+│           │          │ MR5 D         │
+│            BC1 0.0       BR1 [-]      │  B1
+│            BC2 [ Main  ▸ ]            │  B2
+└──────────────────────────────────────┘
+```
+
+Software playback, linked pair, UCX:
+
+```text
+┌──────────────────────────────────────┐
+│                TC1 name              │  T1
+│                TC2 pan               │  T2
+│        TL3 [ M ]   [ S ] TR3         │  T3
+│  ML meter │ MC fader │ MR1 FX send   │  M
+│   + ruler │   + cap  │ MR2 T         │
+│           │          │ MR3 gear      │
+│           │          │ MR4 empty     │
+│           │          │ MR5 empty     │
+│            BC1 0.0       BR1 [-]      │  B1
+│            BC2 [ Main  ▸ ]            │  B2
+└──────────────────────────────────────┘
+```
+
+Hardware output, linked pair, UCX:
+
+```text
+┌──────────────────────────────────────┐
+│                TC1 name              │  T1
+│              TC2 balance             │  T2
+│        TL3 [ M ]   [ CUE ] TR3       │  T3
+│  ML meter │ MC fader │ MR1 FX return │  M
+│   + ruler │   + cap  │ MR2 empty      │
+│           │          │ MR3 gear      │
+│           │          │ MR4 EQ        │
+│           │          │ MR5 D         │
+│            BC1 0.0       BR1 [-]      │  B1
+│            (no B2)                    │
+└──────────────────────────────────────┘
+```
+
+#### 2.8.7 Knobs
+
+All strip and panel knobs use the same widget and print their value in the
+knob face.  Drag vertically to turn, scroll over the knob to nudge, hold
+Shift for fine movement and double-click to reset.  A linked input pair's
+gain knob prints the left value above the right value; it remains one
+control, so dragging or scrolling changes the left value and moves the right
+value by the same delta.
+
+#### 2.8.8 Collapsed strip
+
+The collapsed strip is a separate 44 × 350 layout: rotated name, `M`, `S` or
+`CUE`, one VU meter and a `+` expand button.  It does not use the T/M/B grid.
 
 ## 3. Runtime reference
 
