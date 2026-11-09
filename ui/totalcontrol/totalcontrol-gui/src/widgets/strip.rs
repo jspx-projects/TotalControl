@@ -1321,6 +1321,36 @@ mod tests {
     }
 
     #[test]
+    fn preview_visual_tokens_match_the_gui() {
+        let visual = totalcontrol_layout::VISUAL;
+        assert_eq!(theme::TEXT_MD, visual.name_size);
+        assert_eq!(theme::TEXT_SM, visual.button_text_size);
+        assert_eq!(theme::TEXT_XS, visual.readout_size);
+        assert_eq!(theme::TEXT_MICRO, visual.micro_size);
+        assert_eq!(SETTINGS_GLYPH, visual.gear_glyph_size);
+        let close = |a: f32, b: f32| assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        close(crate::widgets::fader::CHANNEL_SLOT_W, visual.fader_slot_w);
+        close(
+            crate::widgets::fader::FX_SLOT_W * crate::widgets::fader::FX_FADER_SCALE,
+            visual.fader_slot_w,
+        );
+        close(crate::widgets::fader::CAP_W, visual.fader_cap_w);
+        close(crate::widgets::fader::CAP_H, visual.fader_cap_h);
+        close(
+            crate::widgets::fader::CAP_W * crate::widgets::fader::FX_FADER_SCALE,
+            visual.fx_cap_w,
+        );
+        close(
+            crate::widgets::fader::CAP_H * crate::widgets::fader::FX_FADER_SCALE,
+            visual.fx_cap_h,
+        );
+        close(
+            crate::widgets::knob::DIAMETER,
+            visual.knob_diameter,
+        );
+    }
+
+    #[test]
     fn collapsed_expand_button_sits_on_the_full_strip_b1_line() {
         let full = StripLayout::for_kind(ChannelKind::Input, 1.0, Features::default());
         let plus_y = theme::SPACE_SM

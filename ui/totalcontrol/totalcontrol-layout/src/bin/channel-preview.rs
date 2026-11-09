@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use totalcontrol_layout::{
-    ChannelKind, ColorScheme, Rect, TemplateSpec, MONO_BAR_RATIO, TEMPLATES, VU_LABELS,
+    ChannelKind, ColorScheme, Rect, TemplateSpec, MONO_BAR_RATIO, TEMPLATES, VISUAL, VU_LABELS,
 };
 
 fn main() {
@@ -76,6 +76,15 @@ fn sheet(scale: f32) -> String {
         draw_template(&mut svg, *spec, x, y, scale, &colors);
     }
 
+    let footer_y = margin + header + card_h + 16.0 * scale;
+    let _ = write!(
+        svg,
+        r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}">Geometry from totalcontrol-layout; colours from the semantic preview scheme. Dynamic states and slideouts are not shown.</text>"#,
+        x = margin,
+        y = footer_y,
+        color = colors.text.secondary,
+        size = 8.0 * scale,
+    );
     let _ = write!(svg, "</svg>");
     svg
 }
@@ -108,7 +117,7 @@ fn draw_template(
         translated(layout.name, ox, oy),
         sample_name(spec),
         c.text.primary,
-        10.0 * scale,
+        VISUAL.name_size * scale,
     );
 
     let pan = translated(layout.pan, ox, oy);
@@ -117,12 +126,27 @@ fn draw_template(
         r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="{face}" stroke="{border}" stroke-width="{sw:.1}"/>"#,
         cx = pan.centre_x(),
         cy = pan.centre_y(),
-        r = 20.0 * scale,
-        face = "#303138",
-        border = c.surface.border,
+        r = VISUAL.knob_diameter * scale / 2.0,
+        face = c.control.knob_face,
+        border = c.control.knob_border,
         sw = 1.0 * scale,
     );
-    draw_text(svg, pan, "C", c.text.secondary, 9.0 * scale);
+    let _ = write!(
+        svg,
+        r#"<line x1="{cx:.1}" y1="{top:.1}" x2="{cx:.1}" y2="{tick:.1}" stroke="{color}" stroke-width="{sw:.1}"/>"#,
+        cx = pan.centre_x(),
+        top = pan.centre_y() - VISUAL.knob_diameter * scale / 2.0,
+        tick = pan.centre_y() - VISUAL.knob_diameter * scale / 2.0 - 3.0 * scale,
+        color = c.text.secondary,
+        sw = 1.0 * scale,
+    );
+    draw_text(
+        svg,
+        pan,
+        "C",
+        c.text.primary,
+        VISUAL.knob_label_size * scale,
+    );
 
     let labels = if matches!(spec.kind, ChannelKind::Output) {
         ["M", "CUE"]
@@ -132,12 +156,25 @@ fn draw_template(
     for (slot, label) in layout.buttons.iter().zip(labels) {
         let r = translated(*slot, ox, oy);
         fill_rect(svg, r, c.control.button_face, c.surface.border, 3.0 * scale);
-        draw_text(svg, r, label, c.text.secondary, 7.5 * scale);
+        draw_text(
+            svg,
+            r,
+            label,
+            c.text.secondary,
+            VISUAL.button_text_size * scale,
+        );
     }
 
     for (slot, value) in layout.readouts.iter().zip(["-12.3", "-9.8"]) {
         let r = translated(*slot, ox, oy);
-        draw_text_aligned(svg, r, value, c.text.secondary, 7.0 * scale, "end");
+        draw_text_aligned(
+            svg,
+            r,
+            value,
+            c.text.secondary,
+            VISUAL.readout_size * scale,
+            "end",
+        );
     }
 
     let vu = translated(layout.vu, ox, oy);
@@ -188,12 +225,12 @@ fn draw_template(
             x = vu.centre_x(),
             y = y,
             color = c.text.primary,
-            size = 5.2 * scale,
+            size = VISUAL.micro_size * scale,
         );
     }
 
     let track = translated(layout.fader, ox, oy);
-    let slot_w = 4.3 * scale;
+    let slot_w = VISUAL.fader_slot_w * scale;
     let slot = Rect::new(
         track.centre_x() - slot_w / 2.0,
         track.y,
@@ -207,23 +244,44 @@ fn draw_template(
         c.control.fader_slot,
         1.0 * scale,
     );
-    let cap_centre = slot.y + slot.height * 0.44;
+    let cap_centre = track.bottom() - track.height * db_to_t(0.0);
     let fill = Rect::new(slot.x, cap_centre, slot.width, slot.bottom() - cap_centre);
     fill_rect(svg, fill, c.control.fader_fill, c.control.fader_fill, 0.0);
     let cap = Rect::new(
         track.centre_x() - 11.0 * scale,
-        cap_centre - 7.5 * scale,
-        22.0 * scale,
-        15.0 * scale,
+        cap_centre - VISUAL.fader_cap_h * scale / 2.0,
+        VISUAL.fader_cap_w * scale,
+        VISUAL.fader_cap_h * scale,
     );
     fill_rect(svg, cap, "#c9cbd1", "#8b8e96", 2.0 * scale);
+    for i in 1..=3 {
+        let y = cap.y + cap.height * i as f32 / 4.0;
+        let (x, w, h) = if i == 2 {
+            (cap.x, cap.width, (2.0 * scale).max(2.0))
+        } else {
+            (
+                cap.x + 3.0 * scale,
+                cap.width - 6.0 * scale,
+                (1.0 * scale).max(1.0),
+            )
+        };
+        let _ = write!(
+            svg,
+            r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="{color}"/>"#,
+            x = x,
+            y = y - h / 2.0,
+            w = w,
+            h = h,
+            color = if i == 2 { "#4a4c52" } else { "#3d3e43" },
+        );
+    }
 
     // Graduations sit to the left of the slot.  +3 / -3 are half length;
     // the white 0 dB mark is repeated at the right edge of the slot.
     let under = 5.0 * scale;
     let vu = translated(layout.vu, ox, oy);
     let mark_w = ((track.x + under - vu.right()).max(1.0)) * 0.60;
-    for db in [-60.0f32, -40.0, -20.0, -10.0, -6.0, 0.0, 3.0] {
+    for db in [-60.0f32, -40.0, -20.0, -10.0, -6.0, -3.0, 0.0, 3.0] {
         let y = track.bottom() - track.height * db_to_t(db);
         let w = if db == 3.0 || db == -3.0 {
             mark_w * 0.5
@@ -262,13 +320,8 @@ fn draw_template(
 
     if let Some(fx) = layout.fx {
         let fx = translated(fx, ox, oy);
-        let fx_slot_w = 4.3 * scale;
-        let fx_slot = Rect::new(
-            fx.centre_x() - fx_slot_w / 2.0,
-            fx.y,
-            fx_slot_w,
-            fx.height,
-        );
+        let fx_slot_w = VISUAL.fader_slot_w * scale;
+        let fx_slot = Rect::new(fx.centre_x() - fx_slot_w / 2.0, fx.y, fx_slot_w, fx.height);
         fill_rect(
             svg,
             fx_slot,
@@ -276,8 +329,8 @@ fn draw_template(
             c.control.fader_slot,
             1.0 * scale,
         );
-        let fx_cap_h = 9.3 * scale;
-        let fx_cap_w = 13.6 * scale;
+        let fx_cap_h = VISUAL.fx_cap_h * scale;
+        let fx_cap_w = VISUAL.fx_cap_w * scale;
         let fx_cap_centre = fx.y + fx.height * 0.38;
         let fx_fill = Rect::new(
             fx_slot.x,
@@ -314,7 +367,18 @@ fn draw_template(
             // At rest a tab shows only its glyph; the dark face is used for
             // hover or while its slideout is open.
             let _ = face;
-            draw_text(svg, glyph, tab_labels[index], c.text.secondary, 7.5 * scale);
+            let glyph_size = if index == 1 {
+                VISUAL.gear_glyph_size
+            } else {
+                VISUAL.tab_glyph_size
+            };
+            draw_text(
+                svg,
+                glyph,
+                tab_labels[index],
+                c.text.secondary,
+                glyph_size * scale,
+            );
         } else {
             let outline = Rect::new(glyph.x, glyph.y, glyph.width, glyph.height);
             let _ = write!(
@@ -332,7 +396,7 @@ fn draw_template(
     }
 
     let db = translated(layout.db_readout, ox, oy);
-    draw_text(svg, db, "0.0", c.text.primary, 7.0 * scale);
+    draw_text(svg, db, "0.0", c.text.primary, VISUAL.readout_size * scale);
     let minus = translated(layout.collapse_face, ox, oy);
     fill_rect(
         svg,
@@ -352,25 +416,22 @@ fn draw_template(
             c.surface.border,
             4.0 * scale,
         );
-        draw_text(svg, bar, "Phones 7/8", c.text.secondary, 7.0 * scale);
+        draw_text(
+            svg,
+            bar,
+            "Phones 7/8",
+            c.text.secondary,
+            VISUAL.readout_size * scale,
+        );
         let _ = write!(
             svg,
             r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="end" dominant-baseline="middle">▸</text>"#,
             x = bar.right() - 5.0 * scale,
             y = bar.centre_y(),
             color = c.text.secondary,
-            size = 7.0 * scale,
+            size = VISUAL.readout_size * scale,
         );
     }
-
-    let _ = write!(
-        svg,
-        r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="middle">M1 values refresh 4×/s</text>"#,
-        x = card.centre_x(),
-        y = card.bottom() + 12.0 * scale,
-        color = c.text.secondary,
-        size = 7.0 * scale,
-    );
 }
 
 fn sample_name(spec: TemplateSpec) -> &'static str {

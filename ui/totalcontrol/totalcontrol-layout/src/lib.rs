@@ -419,6 +419,42 @@ impl StripLayout {
     }
 }
 
+/// Shared visual tokens used by the preview and checked against the GUI by
+/// parity tests.  Keeping them here prevents the preview from quietly
+/// shrinking or re-proportioning controls that were tuned live.
+#[derive(Clone, Copy, Debug)]
+pub struct VisualTokens {
+    pub name_size: f32,
+    pub button_text_size: f32,
+    pub readout_size: f32,
+    pub micro_size: f32,
+    pub tab_glyph_size: f32,
+    pub gear_glyph_size: f32,
+    pub knob_diameter: f32,
+    pub knob_label_size: f32,
+    pub fader_slot_w: f32,
+    pub fader_cap_w: f32,
+    pub fader_cap_h: f32,
+    pub fx_cap_w: f32,
+    pub fx_cap_h: f32,
+}
+
+pub const VISUAL: VisualTokens = VisualTokens {
+    name_size: 13.0,
+    button_text_size: 11.0,
+    readout_size: 10.0,
+    micro_size: 8.0,
+    tab_glyph_size: 13.0,
+    gear_glyph_size: 14.0,
+    knob_diameter: 42.0,
+    knob_label_size: 15.0,
+    fader_slot_w: 4.34,
+    fader_cap_w: 22.0,
+    fader_cap_h: 15.0,
+    fx_cap_w: 13.64,
+    fx_cap_h: 9.3,
+};
+
 /// Ruler labels in the VU channel, top to bottom.
 pub const VU_LABELS: [(f32, &str); 6] = [
     (0.0, "0"),
@@ -448,6 +484,8 @@ pub struct TextColors {
 #[derive(Clone, Copy, Debug)]
 pub struct ControlColors {
     pub button_face: &'static str,
+    pub knob_face: &'static str,
+    pub knob_border: &'static str,
     pub fader_slot: &'static str,
     pub fader_fill: &'static str,
     pub tab_face: &'static str,
@@ -491,6 +529,8 @@ impl Default for ColorScheme {
             },
             control: ControlColors {
                 button_face: "#191a1e",
+                knob_face: "#1a1b1f",
+                knob_border: "#36373d",
                 fader_slot: "#131417",
                 fader_fill: "#36373c",
                 tab_face: "#202126",

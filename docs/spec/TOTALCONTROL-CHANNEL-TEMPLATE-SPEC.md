@@ -103,10 +103,28 @@ The preview uses a semantic colour scheme with five categories:
 |---|---|
 | surface | app background, card, active card, border |
 | text | primary, secondary |
-| control | button face, fader slot, fader fill, tab face |
+| control | button face, knob face, knob border, fader slot, fader fill, tab face |
 | accent | mute, solo, cue |
 | meter | green, yellow, red |
 
 The GUI theme will consume the same categories in a follow-up change.  Until
 then the preview palette is the design reference for the colour grouping,
 not a second runtime theme.
+
+## Fidelity
+
+`VisualTokens` in the schema holds the tuned visual values: text sizes, tab
+glyph sizes, knob size, fader slot width and main/FX cap dimensions.  A GUI
+test compares the preview tokens with the runtime constants so a live tweak
+cannot silently diverge.
+
+The preview is a layout proof, not a pixel copy of the iced renderer.  It
+shares geometry, dimensions, semantic colours and text sizes.  Font
+rasterisation, shadows, hover timing, meter interpolation and open slideouts
+are not reproduced.  Use the preview to approve structure; use
+`ui/totalcontrol/tools/ui-shot.sh` or the live GUI to approve final pixels.
+
+The next fidelity step, if needed, is to extract a shared draw list from the
+live canvas widgets and have both the iced renderer and the SVG preview
+consume it.  Sharing the iced widget code directly would require an offscreen
+iced renderer and is a larger change.

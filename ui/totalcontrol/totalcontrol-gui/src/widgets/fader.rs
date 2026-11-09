@@ -1209,8 +1209,8 @@ fn draw_meter_bar(
 /// The narrow recessed channel a compact (no-meter) fader slides in — one
 /// dark strip, not a wide slot.
 const SLOT_W: f32 = 7.0;
-const CAP_W: f32 = 22.0;
-const CAP_H: f32 = 15.0;
+pub(crate) const CAP_W: f32 = 22.0;
+pub(crate) const CAP_H: f32 = 15.0;
 const CAP_RADIUS: f32 = 3.0;
 /// The FX fader draws its slot and cap at this fraction of the channel
 /// fader's scale.  The channel fader uses only the same slot width, not a
