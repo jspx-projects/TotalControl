@@ -15,7 +15,7 @@ use crate::widgets::fader::{
     fader, vu_meter, BusSlot, Fader, FaderColumns, MeterFrame, CHANNEL_SLOT_W, FX_FADER_SCALE,
     FX_SLOT_W,
 };
-use crate::widgets::layout::{ChannelKind, Features, StripLayout, SUBMIX_H};
+use crate::widgets::layout::{ChannelKind, Features, Rect, StripLayout, SUBMIX_H};
 use crate::widgets::knob::{knob, Knob};
 
 /// Base sizes at `scale == 1.0` (`theme::SCALE_DEFAULT`) — every dimension
@@ -372,8 +372,8 @@ pub(crate) fn hint<'a>(
 /// Place one element at a slot from `StripLayout`.
 fn pinned<'a>(
     content: impl Into<Element<'a, Message>>,
-    rect: Rectangle,
-    card: Rectangle,
+    rect: Rect,
+    card: Rect,
 ) -> Element<'a, Message> {
     Pin::new(
         container(content.into())
@@ -871,6 +871,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         scale,
         Features {
             fx: p.fx_level.is_some(),
+            ..Features::default()
         },
     );
     let card = layout.card;

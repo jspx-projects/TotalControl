@@ -398,6 +398,9 @@ is visible without a bright white rail; the cap stays light.
 
 ### 2.8 Channel layout model
 
+The executable template schema and the layout preview are defined in
+[`TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md).
+
 #### 2.8.1 Grid and scaling
 
 A channel is a three-area (Top, Middle, Bottom) by three-column (Left,
