@@ -339,10 +339,10 @@ The VU meter is one element.  Its channel spans the complete element height.
 The OVR segment occupies the top of that channel, inside the element bounds;
 no part of the element is drawn outside them.  The level scale runs from
 -65 dB at the bottom to +6 dB at the top over the complete channel height,
-behind the OVR segment.  A mono or split channel shows one full-width bar; a
-linked pair shows two bars with a small gap, one per channel.  Each bar
-measures its own channel.  The level labels are centred in the VU element
-whether it carries one bar or two.
+behind the OVR segment.  A mono or split channel shows one centred bar just
+wide enough to cover the level text; a linked pair shows two bars with a
+small gap, one per channel.  Each bar measures its own channel.  The level
+labels are centred in the VU element whether it carries one bar or two.
 
 - an **RMS bar** with a slow time constant, coloured in three bands: green
   below -3 dB, yellow from -3 dB to 0 dB and red above 0 dB;
@@ -486,7 +486,8 @@ at the cap end and clear of the VU.  The level labels are centred in the VU
 channel; the moving bars cover them.
 
 A linked pair draws two bars with a 2 px gap; a split or mono channel shows
-one full-width bar.  The labels stay centred in the element in both cases.
+one centred bar just wide enough to cover the level text.  The labels stay
+centred in the element in both cases.
 The OVR segment occupies the top 6 px of the VU element, inside its bounds;
 the level scale runs the full element height behind it.
 
@@ -617,8 +618,9 @@ The collapsed strip is a separate 44 × 350 layout: rotated name, `M`, `S` or
 does not use the T/M/B grid.  The face is 18 px high, spans the collapsed
 card width, and uses the normal button face shape and colour; it carries no
 control yet.  It puts the `+` button on the B1 line.  The VU element keeps
-the normal well colour: a linked pair shows two bars, a mono or split channel
-shows one full-width bar, and the labels stay centred in the element.
+the normal well colour: a linked pair shows two bars, a mono or split
+channel shows one centred bar covering the level text, and the labels stay
+centred in the element.
 
 ## 3. Runtime reference
 

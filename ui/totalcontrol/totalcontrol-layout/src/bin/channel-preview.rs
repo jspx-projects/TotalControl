@@ -7,7 +7,9 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use totalcontrol_layout::{ChannelKind, ColorScheme, Rect, TemplateSpec, TEMPLATES, VU_LABELS};
+use totalcontrol_layout::{
+    ChannelKind, ColorScheme, Rect, TemplateSpec, MONO_BAR_RATIO, TEMPLATES, VU_LABELS,
+};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -145,10 +147,14 @@ fn draw_template(
     let bar_w = if bars == 2 {
         (vu.width - gap) / 2.0
     } else {
-        vu.width
+        vu.width * MONO_BAR_RATIO
     };
     for index in 0..bars {
-        let bx = vu.x + index as f32 * (bar_w + gap);
+        let bx = if bars == 2 {
+            vu.x + index as f32 * (bar_w + gap)
+        } else {
+            vu.centre_x() - bar_w / 2.0
+        };
         let bar = Rect::new(bx, vu.y, bar_w, vu.height);
         let level = 0.72 - index as f32 * 0.08;
         let filled = Rect::new(
@@ -211,35 +217,73 @@ fn draw_template(
         15.0 * scale,
     );
     fill_rect(svg, cap, "#c9cbd1", "#8b8e96", 2.0 * scale);
-    // 0 dB tick and the marks enough to show the geometry.
+
+    // Graduations sit to the left of the slot.  +3 / -3 are half length;
+    // the white 0 dB mark is repeated at the right edge of the slot.
+    let under = 5.0 * scale;
+    let vu = translated(layout.vu, ox, oy);
+    let mark_w = ((track.x + under - vu.right()).max(1.0)) * 0.60;
     for db in [-60.0f32, -40.0, -20.0, -10.0, -6.0, 0.0, 3.0] {
         let y = track.bottom() - track.height * db_to_t(db);
-        let mark_w = if db == 3.0 { 5.0 * scale } else { 10.0 * scale };
+        let w = if db == 3.0 || db == -3.0 {
+            mark_w * 0.5
+        } else {
+            mark_w
+        };
+        let color = if db == 3.0 {
+            c.meter.red
+        } else if db == -3.0 {
+            c.meter.green
+        } else if db == 0.0 {
+            "#f2f3f5"
+        } else {
+            "#6b6d75"
+        };
         let _ = write!(
             svg,
             r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="{color}"/>"#,
-            x = track.right() - mark_w,
+            x = track.x + under - w,
             y = y - 0.5 * scale,
-            w = mark_w,
+            w = w,
             h = 1.0 * scale,
-            color = if db == 3.0 { c.meter.red } else { "#6b6d75" },
         );
     }
+    let ref_y = track.bottom() - track.height * db_to_t(0.0);
+    let right_x = track.centre_x() + slot_w / 2.0 + 1.0 * scale;
+    let _ = write!(
+        svg,
+        r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="{color}"/>"#,
+        x = right_x,
+        y = ref_y - 0.5 * scale,
+        w = 5.0 * scale,
+        h = 1.0 * scale,
+        color = "#f2f3f5",
+    );
 
     if let Some(fx) = layout.fx {
         let fx = translated(fx, ox, oy);
+        let fx_slot_w = 4.3 * scale;
+        let fx_slot = Rect::new(
+            fx.centre_x() - fx_slot_w / 2.0,
+            fx.y,
+            fx_slot_w,
+            fx.height,
+        );
         fill_rect(
             svg,
-            fx,
+            fx_slot,
             c.control.fader_slot,
             c.control.fader_slot,
             1.0 * scale,
         );
+        let fx_cap_h = 9.3 * scale;
+        let fx_cap_w = 13.6 * scale;
+        let fx_cap_centre = fx.y + fx.height * 0.38;
         let fx_fill = Rect::new(
-            fx.x,
-            fx.y + 16.0 * scale,
-            fx.width,
-            fx.height - 16.0 * scale,
+            fx_slot.x,
+            fx_cap_centre,
+            fx_slot.width,
+            fx_slot.bottom() - fx_cap_centre,
         );
         let fx_color = if matches!(spec.kind, ChannelKind::Output) {
             c.accent.cue
@@ -248,10 +292,10 @@ fn draw_template(
         };
         fill_rect(svg, fx_fill, fx_color, fx_color, 0.0);
         let fx_cap = Rect::new(
-            fx.centre_x() - 5.0 * scale,
-            fx.y + 12.0 * scale,
-            10.0 * scale,
-            8.0 * scale,
+            fx.centre_x() - fx_cap_w / 2.0,
+            fx_cap_centre - fx_cap_h / 2.0,
+            fx_cap_w,
+            fx_cap_h,
         );
         fill_rect(svg, fx_cap, "#c9cbd1", "#8b8e96", 1.0 * scale);
     }

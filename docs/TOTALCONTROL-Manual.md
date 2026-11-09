@@ -325,7 +325,7 @@ the fader folds a strip so only its channel name and meter remain, and the
 meter grows to fill the space. If a slideout is open on that channel, it
 closes first; the strip narrows after the panel has slid away. The collapsed
 meter keeps the normal VU well colour: a linked pair shows two bars, a mono
-channel shows one full-width bar. A dark display face spans the bottom, so
+channel shows one centred bar covering the level text. A dark display face spans the bottom, so
 the `+` button sits at the same height as the full strip's collapse button;
 the face is reserved for future information.
 

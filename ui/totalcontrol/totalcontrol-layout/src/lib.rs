@@ -86,6 +86,9 @@ pub const SUBMIX_H: f32 = 18.0;
 
 pub const VU_X: f32 = 0.0;
 pub const VU_W: f32 = 13.0;
+/// A mono bar is centred and only wide enough to cover the level labels;
+/// a linked pair still uses the full VU width split into two bars.
+pub const MONO_BAR_RATIO: f32 = 0.60;
 pub const TRACK_X: f32 = 26.0;
 pub const TRACK_W: f32 = 26.0;
 pub const FADER_CANVAS_W: f32 = 55.0;
