@@ -377,10 +377,11 @@ the column and `r` the row within that area; `r` is omitted when the area has
 one row.  `TC1` is the name, `TL3` the left button of the third Top row and
 `MR4` the fourth element of the right Middle stack.
 
-The full strip is 90 × 350 px at zoom 1.0.  Its content box is 78 × 334 px:
-6 px left and right padding, 4 px top padding and 12 px bottom padding.  The
-collapsed strip is 44 × 350 px.  Every dimension, font size and gap is
-multiplied by the UI zoom (`0.75..1.75`); the aspect ratio is invariant.
+The full strip is 90 × 350 px at zoom 1.0.  The Top, Middle and B1 rows use a
+78 px-wide content box with 6 px left and right padding and 4 px top padding;
+there is no bottom padding.  B2 spans the full 90 px card width at the bottom
+edge.  The collapsed strip is 44 × 350 px.  Every dimension, font size and gap
+is multiplied by the UI zoom (`0.75..1.75`); the aspect ratio is invariant.
 
 Rows are separated by 1 px.  The Centre column is the reference centre line
 for the Top rows and the Bottom readout.  Columns are centred on their own
