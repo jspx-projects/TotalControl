@@ -14416,7 +14416,7 @@ fn dynamics_popover(
     let toggle = |on: bool, msg: Message| -> Element<'static, Message> {
         button(text(if on { "ON" } else { "OFF" }).size(theme::TEXT_XS * scale))
             .padding([0.0, theme::SPACE_SM * scale])
-            .style(theme::toggle_button(on, theme::ACCENT))
+            .style(theme::toggle_button(on, theme::PHANTOM))
             .on_press(msg)
             .into()
     };
@@ -14727,7 +14727,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
         row![
             button(text("EQ").size(theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                .style(theme::toggle_button(eq.enabled, theme::ACCENT))
+                .style(theme::toggle_button(eq.enabled, theme::PHANTOM))
                 .on_press(Message::EqEnabled(cid, !eq.enabled)),
             text(if eq.enabled { "enabled" } else { "bypassed" })
                 .size(theme::TEXT_XS * scale)

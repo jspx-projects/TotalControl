@@ -271,8 +271,10 @@ applies to Dynamics, Auto Level, Reverb and Echo.
 - The T, EQ and D tabs keep their glyph only, in orange, while their setting
   is active and the slideout is closed: trim below 0 dB, EQ enabled, or
   dynamics on. While the slideout is open the tab carries no orange; the
-  panel's own on/off control is the single indication. The gear tab only
-  marks the open panel.
+  panel's own on/off control is the single indication. That control uses the
+  orange highlight while it is active: the EQ button when EQ is enabled and
+  the Dynamics ON button while dynamics is on. The gear tab only marks the
+  open panel.
 - Outlines belong to buttons, not slideout tabs. A slideout tab never draws
   a button outline or a copy of the panel-open marker. Hover brightens the
   glyph but never uses orange.
@@ -332,9 +334,10 @@ The VU meter is one element.  Its channel spans the complete element height.
 The OVR segment occupies the top of that channel, inside the element bounds;
 no part of the element is drawn outside them.  The level scale runs from
 -65 dB at the bottom to +6 dB at the top over the complete channel height,
-behind the OVR segment.  A mono or split channel shows one bar; a linked pair
-shows two bars with a small gap, one per channel.  Each bar measures its own
-channel.
+behind the OVR segment.  A mono or split channel shows one full-width bar; a
+linked pair shows two bars with a small gap, one per channel.  Each bar
+measures its own channel.  The level labels are centred in the VU element
+whether it carries one bar or two.
 
 - an **RMS bar** with a slow time constant, coloured in three bands: green
   below -3 dB, yellow from -3 dB to 0 dB and red above 0 dB;
@@ -369,10 +372,11 @@ are post-fader and go to zero when the output is muted.
 The fader scale uses the same -65 dB to +6 dB range as the VU element, so
 each VU label and the matching fader mark share one vertical centre line.  The scale has an unlabelled green tick at -3 dB,
 the full-scale-sine RMS target, and a red tick at +3 dB.
-Each tick starts at the VU element's right edge, crosses the mark lane and
-continues a little way under the fader cap; the cap covers the line at its
-current level. The cap centre line is dark grey,
-aligns with the tick, spans the complete cap width and is twice the thickness
+Each tick occupies 60% of the span from the VU element's right edge to a
+little under the fader cap, anchored at the cap end; its left end stays clear
+of the VU.  The cap covers the line at its current level. The cap centre
+line is dark grey, aligns with the tick, spans the complete cap width and is
+twice the thickness
 of the other cap ridges (2 px at zoom 1). A fixed 0 dB tick also sits on the
 right side of the fader.
 
@@ -458,16 +462,18 @@ The T1, T2, T3, M1 and B1 rows centre on x = 39; M1 uses the same two 38 px
 cells as T3, but with no outline or fill.  The VU element occupies the left
 column at x = 0 and is 13 px wide.  The fader track is at x = 26 and centres
 on x = 39.  The 13 px between the VU element's right edge and the track is
-the level-mark lane; each mark runs from that right edge through the track
-and a little under the cap.  The level labels are centred in the VU channel;
-the moving bars cover them.
+the level-mark lane; each mark occupies 60% of the lane-to-cap span, anchored
+at the cap end and clear of the VU.  The level labels are centred in the VU
+channel; the moving bars cover them.
 
 A linked pair draws two bars with a 2 px gap; a split or mono channel shows
-one bar.  The OVR segment occupies the top 6 px of the VU element, inside its
-bounds; the level scale runs the full element height behind it.
+one full-width bar.  The labels stay centred in the element in both cases.
+The OVR segment occupies the top 6 px of the VU element, inside its bounds;
+the level scale runs the full element height behind it.
 
-M1 is drawn as text only, right-aligned inside each cell.  The left cell is
-the left channel and the right cell is the right channel; no `L` or `R`
+M1 is drawn as text only, right-aligned inside each cell with a 2 px right
+inset so the values sit inside the edges of the T3 buttons above.  The left
+cell is the left channel and the right cell is the right channel; no `L` or `R`
 prefix is printed.  The cell width accommodates `-99.0`; values of 100 and
 above omit the fractional part (`100`, `120`).  The values refresh every
 0.25 s; the VU bars continue at the meter tick rate.  B2 spans the full
@@ -588,7 +594,10 @@ value by the same delta.
 #### 2.8.8 Collapsed strip
 
 The collapsed strip is a separate 44 × 350 layout: rotated name, `M`, `S` or
-`CUE`, one VU meter and a `+` expand button.  It does not use the T/M/B grid.
+`CUE`, a VU element and a `+` expand button.  It does not use the T/M/B grid.
+The VU element keeps the normal well colour: a linked pair shows two bars, a
+mono or split channel shows one full-width bar, and the labels stay centred
+in the element.
 
 ## 3. Runtime reference
 

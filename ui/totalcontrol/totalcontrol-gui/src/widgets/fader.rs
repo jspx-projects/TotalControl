@@ -976,15 +976,15 @@ const FILL_ALPHA: f32 = 0.92;
 /// Splits the meter column into one full-width bar, or two thin bars for a
 /// linked stereo pair.
 fn meter_split(r: Rectangle, scale: f32, second: bool) -> (Rectangle, Option<Rectangle>) {
-    // Every bar is half the wash column, whether the channel is mono or
-    // stereo.  A mono channel shows one left-aligned bar, not a full-width
-    // bar that reads as two stereo bars merged together.
+    // A mono channel uses the whole VU element; a linked pair splits it
+    // into two bars with a small gap.  The labels are centred in `r` in
+    // both cases, so the mono bar and its labels share the same centre.
+    if !second {
+        return (r, None);
+    }
     let gap = 2.0 * scale;
     let half_w = ((r.width - gap) / 2.0).max(0.0);
     let left = Rectangle::new(r.position(), Size::new(half_w, r.height));
-    if !second {
-        return (left, None);
-    }
     (
         left,
         Some(Rectangle::new(
@@ -1254,10 +1254,11 @@ fn draw_track(
     if show_scale {
         let line_h = (1.0 * scale).max(1.0);
         let under = (5.0 * scale).max(2.0);
-        // Start at the VU column's right edge and run through the track and
-        // a little under the cap, so the gap between the two elements is
-        // the printed level scale rather than dead space.
-        let mark_w = (r.x + under - marks_left).max(1.0 * scale);
+        // Keep the right end anchored under the cap and shorten the mark
+        // to 60% of the VU-to-cap span, so it stays clear of the VU text.
+        let full_w = (r.x + under - marks_left).max(1.0 * scale);
+        let mark_w = full_w * 0.60;
+        let mark_x = r.x + under - mark_w;
         for db in RULER_TICKS {
             let value = 10f32.powf(db / 20.0);
             let y = track_value_y(r, value, range);
@@ -1269,7 +1270,7 @@ fn draw_track(
                 Color::from_rgba8(0xff, 0xff, 0xff, 0.24)
             };
             frame.fill_rectangle(
-                Point::new(marks_left, y - line_h / 2.0),
+                Point::new(mark_x, y - line_h / 2.0),
                 Size::new(mark_w, line_h),
                 color,
             );
@@ -1399,10 +1400,13 @@ where
 /// (fader, mute/solo, pan) for a glance-only level readout.
 struct VuMeter {
     level: MeterFrame,
+    meter2: Option<MeterFrame>,
+    meter2_available: bool,
     scale: f32,
     available: bool,
     bus: Option<(Arc<Mutex<MeterSnapshot>>, BusSlot)>,
     meter_trim: f32,
+    meter_bg: Color,
 }
 
 impl<Message> canvas::Program<Message> for VuMeter {
@@ -1460,6 +1464,15 @@ impl<Message> canvas::Program<Message> for VuMeter {
             self.level
         };
         let (top, peak) = (level.shown(Instant::now()), level.peak);
+        let available = self.available || self.bus.is_some();
+        draw_meter_chrome(
+            &mut frame,
+            meter_rect,
+            self.scale,
+            self.meter_bg,
+            available,
+            self.meter2.map(|_| self.meter2_available),
+        );
         draw_level_text(&mut frame, meter_rect, self.scale);
         draw_meter(
             &mut frame,
@@ -1467,30 +1480,35 @@ impl<Message> canvas::Program<Message> for VuMeter {
             top,
             peak,
             self.scale,
-            self.available || self.bus.is_some(),
-            // Collapsed strips are a glance-only view with no room for a
-            // second bar even if this were a linked pair — out of scope
-            // for this pass, single-bar only here.
-            None,
+            available,
+            self.meter2
+                .map(|m| (m.shown(Instant::now()), m.peak, self.meter2_available)),
         );
         vec![frame.into_geometry()]
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn vu_meter<'a, Message: 'a>(
     level: MeterFrame,
+    meter2: Option<MeterFrame>,
+    meter2_available: bool,
     height: f32,
     scale: f32,
     available: bool,
     bus: Option<(Arc<Mutex<MeterSnapshot>>, BusSlot)>,
     meter_trim: f32,
+    meter_bg: Color,
 ) -> Element<'a, Message> {
     Canvas::new(VuMeter {
         level,
+        meter2,
+        meter2_available,
         scale,
         available,
         bus,
         meter_trim,
+        meter_bg,
     })
     .width(Length::Fixed(METER_RULER_W * scale))
     .height(Length::Fixed(height))
@@ -1656,10 +1674,13 @@ mod tests {
         let bus = Arc::new(Mutex::new(MeterSnapshot::default()));
         let meter = VuMeter {
             level: MeterFrame::still(0.0),
+            meter2: None,
+            meter2_available: false,
             scale: 1.0,
             available: true,
             bus: Some((Arc::clone(&bus), BusSlot::Input(0))),
             meter_trim: 0.0,
+            meter_bg: theme::METER_WELL,
         };
         let mut state = None;
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(20.0, 100.0));
@@ -1752,12 +1773,14 @@ mod tests {
     }
 
     #[test]
-    fn mono_meter_bar_has_one_stereo_bar_width() {
+    fn mono_meter_bar_fills_the_vu_element() {
         let r = Rectangle::new(Point::new(10.0, 20.0), Size::new(METER_W, 200.0));
         let (mono, _) = meter_split(r, 1.0, false);
-        let (stereo_left, _) = meter_split(r, 1.0, true);
-        assert!((mono.width - stereo_left.width).abs() < f32::EPSILON);
-        assert!((mono.height - r.height).abs() < f32::EPSILON);
+        assert_eq!(mono, r);
+        let (stereo_left, stereo_right) = meter_split(r, 1.0, true);
+        let stereo_right = stereo_right.expect("a stereo meter has a right bar");
+        assert!(stereo_left.width < mono.width);
+        assert!((stereo_left.width - stereo_right.width).abs() < f32::EPSILON);
     }
 
     #[test]

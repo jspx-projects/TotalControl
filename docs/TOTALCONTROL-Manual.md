@@ -318,7 +318,9 @@ mix.
 Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the
 meter grows to fill the space. If a slideout is open on that channel, it
-closes first; the strip narrows after the panel has slid away.
+closes first; the strip narrows after the panel has slid away. The collapsed
+meter keeps the normal VU well colour: a linked pair shows two bars, a mono
+channel shows one full-width bar.
 
 The fader range is -65 to +6 dB. Its value is shown in a dB readout under
 the fader, without a unit suffix. Double-clicking that readout opens a
@@ -478,7 +480,8 @@ into. The tab lights while trim is active, and its tooltip shows the value.
 
 EQ is available on every hardware input and hardware output. The panel shows
 the response plot with three coloured segments — red low, green mid, blue
-high — built from the three band frequencies.
+high — built from the three band frequencies. The panel's EQ button is
+orange while EQ is enabled.
 
 Three bands, each with gain, frequency and width:
 
@@ -516,7 +519,8 @@ The panel has:
 - an **auto level** row: on/off, maximum gain 0–18 dB, headroom 3–12 dB and
   rise time 0.1–9.9 s.
 
-A change to any knob updates the whole dynamics block of that channel.
+The ON button at the top is orange while dynamics is on. A change to any
+knob updates the whole dynamics block of that channel.
 
 ## 9. FX: sends, reverb and echo
 

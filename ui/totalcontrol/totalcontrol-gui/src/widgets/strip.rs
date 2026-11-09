@@ -393,6 +393,10 @@ fn strength_cell<'a>(value: Option<f32>, w: f32, h: f32, scale: f32) -> Element<
     )
     .width(Length::Fixed(w))
     .height(Length::Fixed(h))
+    .padding(iced::Padding {
+        right: theme::SPACE_TIGHT * scale,
+        ..iced::Padding::ZERO
+    })
     .align_x(iced::Alignment::End)
     .align_y(iced::Alignment::Center)
     .into()
@@ -761,11 +765,18 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         second_slot,
         container(vu_meter(
             p.meter,
+            p.meter2,
+            p.meter2_available,
             COLLAPSED_METER_H * scale,
             scale,
             p.meter_available,
             p.meter_bus.clone().zip(p.meter_slot),
             p.meter_trim,
+            if p.active_surface {
+                theme::METER_WELL_ACTIVE
+            } else {
+                theme::METER_WELL
+            },
         ))
             .width(Length::Fill)
             .center_x(Length::Fill),
