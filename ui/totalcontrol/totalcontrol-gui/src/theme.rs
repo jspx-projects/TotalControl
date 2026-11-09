@@ -58,6 +58,17 @@ pub const ACCENT_DIM: Color = Color::from_rgb8(0x37, 0x38, 0x3e);
 /// Fader cap and rail silver, from the icon's highlight (#d9d9d9
 /// family): the brightest neutral in the chrome.
 pub const FADER: Color = Color::from_rgb8(0xc9, 0xcb, 0xd1);
+
+/// The filled part of a channel fader slot: only a little lighter than the
+/// channel card, so the level is visible without a bright white rail.
+pub fn fader_fill(active_surface: bool) -> Color {
+    let base = if active_surface {
+        SUBMIX_ACTIVE
+    } else {
+        SURFACE
+    };
+    blend(base, FADER, 0.12)
+}
 pub const MGREEN: Color = Color::from_rgb8(0x3d, 0xd6, 0x8c);
 pub const MRED: Color = Color::from_rgb8(0xe5, 0x48, 0x4d);
 /// 48V uses its own orange so phantom power is distinct from the

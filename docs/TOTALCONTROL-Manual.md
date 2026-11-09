@@ -331,8 +331,10 @@ the face is reserved for future information.
 The fader range is -65 to +6 dB. The lowest cap position is -64.5 dB; the
 position below it is -65 dB and reads as inf. The narrow dark channel under
 the cap is the **fader slot**. The channel fader and the thin FX fader use
-the same slot width; the slot is slightly lighter than the page black, and
-the fill below the cap shows the level. Its value is shown in a dB readout
+the same slot width; the slot is slightly lighter than the page black. The
+fill below the cap is only a little lighter than the channel surface, so it
+shows the level without a bright white rail; the cap stays light. Its value
+is shown in a dB readout
 under the fader, without a unit suffix. Double-clicking that readout opens a
 numeric entry field.
 
@@ -353,13 +355,15 @@ Each meter has two indicators, following TotalMix FX:
 Peak hold applies only to the peak line. The RMS bar is not held and keeps
 following the RMS signal. Falling levels use a 20 dB/s release.
 
-The meter scale runs from -60 dB at the bottom to +6 dB at the top. The
+The meter scale runs from -65 dB at the bottom to +6 dB at the top. The
 whole area above 0 dB is red. The ruler has an unlabelled green tick at
 -3 dB, the full-scale-sine RMS target, and a red tick beside the +3 dB
-label. Each tick is one colour and extends a little under the fader cap;
-the cap covers the line at its current level. The cap's centre line aligns
-with the ticks, and a fixed 0 dB tick is also on the right side of the
-fader. A level below -60 dB reads as silence and does not draw a peak line.
+label. The green and red ticks are half the length of the other
+graduations. Each tick extends a little under the fader cap; the cap covers
+the line at its current level. The 0 dB tick is slightly brighter and is
+repeated just to the right of the fader slot. The cap's centre line aligns
+with the ticks. A level below -65 dB reads as silence and does not draw a
+peak line.
 If the device disconnects, the meters fall to silence instead of freezing.
 
 Input and playback meters are pre-fader and post-trim: they show the signal

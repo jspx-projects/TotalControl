@@ -1013,7 +1013,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         height: fader_h,
         top_inset: 0.0,
         show_meter: true,
-        fill: theme::FADER,
+        fill: theme::fader_fill(p.active_surface),
         slot_w: CHANNEL_SLOT_W,
         meter_bg: if p.active_surface {
             theme::METER_WELL_ACTIVE

@@ -378,19 +378,21 @@ The scale has an unlabelled green tick at -3 dB, the full-scale-sine RMS
 target, and a red tick at +3 dB.
 Each tick occupies 60% of the span from the VU element's right edge to a
 little under the fader cap, anchored at the cap end; its left end stays clear
-of the VU.  The cap covers the line at its current level. The cap centre
-line is dark grey, aligns with the tick, spans the complete cap width and is
-twice the thickness
-of the other cap ridges (2 px at zoom 1). A fixed 0 dB tick also sits on the
-right side of the fader.  The cap has a physical half-height, so its centre
+of the VU.  The green and red ticks are half the length of the other
+graduations and share the same right end.  The 0 dB graduation is slightly
+whiter and is repeated just right of the fader slot.  The cap covers the line
+at its current level. The cap centre line is dark grey, aligns with the tick,
+spans the complete cap width and is twice the thickness
+of the other cap ridges (2 px at zoom 1).  The cap has a physical half-height, so its centre
 stops at -64.5 dB at the bottom of the track.  The position below that
 selects the -65 dB value, shown as inf; the shared scale mapping keeps the
 VU labels and fader marks on the same line.
 
 The narrow dark groove under the cap is the **fader slot**.  The channel
 fader and the thin FX fader use the same slot width: 4.3 px at zoom 1.  The
-slot is slightly lighter than the page black; the fill below the cap carries
-the level.
+slot is slightly lighter than the page black.  The channel fader's fill
+below the cap is only slightly lighter than the channel surface, so the level
+is visible without a bright white rail; the cap stays light.
 
 ### 2.8 Channel layout model
 

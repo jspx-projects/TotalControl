@@ -1283,7 +1283,6 @@ fn draw_track(
         // to 60% of the VU-to-cap span, so it stays clear of the VU text.
         let full_w = (r.x + under - marks_left).max(1.0 * scale);
         let mark_w = full_w * 0.60;
-        let mark_x = r.x + under - mark_w;
         for db in RULER_TICKS {
             let value = 10f32.powf(db / 20.0);
             let y = track_value_y(r, value, range);
@@ -1291,12 +1290,21 @@ fn draw_track(
                 theme::MRED
             } else if db == -3.0 {
                 theme::MGREEN
+            } else if db == 0.0 {
+                Color::from_rgba8(0xff, 0xff, 0xff, 0.82)
             } else {
                 Color::from_rgba8(0xff, 0xff, 0xff, 0.24)
             };
+            // The +3 and -3 marks are half length and right-aligned; all
+            // other graduations keep the full length.
+            let w = if db == METER_RED_DB || db == -3.0 {
+                mark_w * 0.5
+            } else {
+                mark_w
+            };
             frame.fill_rectangle(
-                Point::new(mark_x, y - line_h / 2.0),
-                Size::new(mark_w, line_h),
+                Point::new(r.x + under - w, y - line_h / 2.0),
+                Size::new(w, line_h),
                 color,
             );
         }
@@ -1309,13 +1317,15 @@ fn draw_track(
     if show_scale {
         let ref_y = safe_clamp(pos_of(default_value), r.y, r.y + r.height);
         let guide_h = (1.0 * scale).max(1.0);
-        let right_x = r.x + r.width + (2.0 * scale).max(1.0);
+        // Repeat the brighter 0 dB line just outside the fader slot's right
+        // edge, still inside the track.
+        let right_x = cx + (slot_w * scale) / 2.0 + (1.0 * scale).max(1.0);
         frame.fill_rectangle(
             Point::new(right_x, ref_y - guide_h / 2.0),
             Size::new((REF_RIGHT_W * scale).max(2.0), guide_h),
             Color {
-                a: 0.62,
-                ..theme::TEXT_SEC
+                a: 0.85,
+                ..theme::TEXT_PRIMARY
             },
         );
     }
