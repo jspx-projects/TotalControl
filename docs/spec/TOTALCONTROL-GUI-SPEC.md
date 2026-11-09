@@ -372,15 +372,18 @@ not move.
 | T1 | channel name and type tag | C | 13 |
 | T2 | pan or balance knob | C | 54 |
 | T3 | `M`/`S` pair, or `M`/`CUE` pair | L / R | 18 |
-| M | fader and right-hand control column | L / C / R | 206 |
+| M1 | channel strength readouts, L and R | L / R | 18 |
+| M2 | VU, fader and right-hand stack | L / C / R | 187 |
 | B1 | dB readout and collapse button | C / R | 14 |
 | B2 | submix selector, input and playback only | C | 24 |
 
-The nominal rows plus their five gaps and the top and bottom padding total
-350 px.
-B2 is a 6 px top inset plus an 18 px control.  A hardware-output strip has no
-B2 and leaves that 24 px row and its gap empty, so B1 keeps the same height
-on every channel kind.
+The nominal rows plus their six gaps and the top and bottom padding total
+350 px.  M1 is two 38 px readout cells with a 2 px gap, matching the T3
+buttons.  The VU scale, fader track and FX fader share one top line.  The VU
+OVR strip sits above that line in the 8 px reserve at the top of M2.  B2 is a
+6 px top inset plus an 18 px control.  A hardware-output strip has no B2 and
+leaves that 24 px row and its gap empty, so B1 keeps the same height on every
+channel kind.
 
 #### 2.8.3 Horizontal columns
 
@@ -398,16 +401,18 @@ zoom.  The content box is 78 px wide.
 | pan or balance knob box | 12 | 54 |
 | T3 left button | 0 | 38 |
 | T3 right button | 40 | 38 |
+| M1 left readout | 0 | 38 |
+| M1 right readout | 40 | 38 |
 | B1 collapse button | 59 | 19 |
 | B2 submix selector | 0 | 78 |
 
-The T1, T2, T3 and B1 rows centre on x = 39.  The fader track centres on
-x = 43: the meter/ruler group and the 26 px track area need 56 px, while the
-fader canvas has 55 px after the 20 px control column, two 1 px gaps and the
-1 px trailing spacer.  The canvas keeps the meter on the card and the track
-takes the remaining space, so the track centre is four pixels right of the
-reference centre line.  This is the current exception to the centre-column
-rule.
+The T1, T2, T3, M1 and B1 rows centre on x = 39; M1 uses the same two 38 px
+cells as T3.  The fader track centres on x = 43: the meter/ruler group and
+the 26 px track area need 56 px, while the fader canvas has 55 px after the
+20 px control column, two 1 px gaps and the 1 px trailing spacer.  The canvas
+keeps the meter on the card and the track takes the remaining space, so the
+track centre is four pixels right of the reference centre line.  This is the
+current exception to the centre-column rule.
 
 The VU wash is split into two bars for a linked pair, one bar per channel,
 with a 2 px gap.  A split or mono channel shows one left-aligned bar.  The
@@ -416,11 +421,12 @@ reserves 8 px at the top for it.
 
 #### 2.8.4 Right-hand stack
 
-The right-hand column starts level with the top of the fader.  It holds:
+The right-hand column starts level with the top of the VU scale and the fader
+track; the VU OVR strip sits above that line.  It holds:
 
 | Ref | Element | Height at zoom 1 | Present on |
 |---|---|---:|---|
-| MR1 | FX send or FX return fader | 67 | every strip with an FX bus |
+| MR1 | FX send or FX return fader | 58 | every strip with an FX bus |
 | MR2 | `T` trim tab | 22 | inputs and software playback |
 | MR3 | settings gear | 26 | every strip |
 | MR4 | `EQ` tab | 22 | UCX inputs and outputs |
@@ -438,6 +444,7 @@ tabs stay on the input grid.
 | T1 | name | name | name |
 | T2 | pan | pan | balance, when the backend supports it |
 | T3 | `M` `S` | `M` `S` | `M` `CUE` |
+| M1 | L/R readouts | L/R readouts | L/R readouts |
 | ML | VU meter and ruler | VU meter and ruler | VU meter and ruler |
 | MC | fader and cap | fader and cap | fader and cap |
 | MR1 | FX send | FX send | FX return |
@@ -461,7 +468,8 @@ Input, linked pair, UCX:
 │                TC1 name              │  T1
 │                TC2 pan               │  T2
 │        TL3 [ M ]   [ S ] TR3         │  T3
-│  ML meter │ MC fader │ MR1 FX send   │  M
+│       M1 [ L -6.0 ]  [ R -6.0 ]      │  M1
+│  ML meter │ MC fader │ MR1 FX send   │  M2
 │   + ruler │   + cap  │ MR2 T         │
 │           │          │ MR3 gear      │
 │           │          │ MR4 EQ        │
@@ -478,7 +486,8 @@ Software playback, linked pair, UCX:
 │                TC1 name              │  T1
 │                TC2 pan               │  T2
 │        TL3 [ M ]   [ S ] TR3         │  T3
-│  ML meter │ MC fader │ MR1 FX send   │  M
+│       M1 [ L -6.0 ]  [ R -6.0 ]      │  M1
+│  ML meter │ MC fader │ MR1 FX send   │  M2
 │   + ruler │   + cap  │ MR2 T         │
 │           │          │ MR3 gear      │
 │           │          │ MR4 empty     │
@@ -495,7 +504,8 @@ Hardware output, linked pair, UCX:
 │                TC1 name              │  T1
 │              TC2 balance             │  T2
 │        TL3 [ M ]   [ CUE ] TR3       │  T3
-│  ML meter │ MC fader │ MR1 FX return │  M
+│       M1 [ L -6.0 ]  [ R -6.0 ]      │  M1
+│  ML meter │ MC fader │ MR1 FX return │  M2
 │   + ruler │   + cap  │ MR2 empty      │
 │           │          │ MR3 gear      │
 │           │          │ MR4 EQ        │
