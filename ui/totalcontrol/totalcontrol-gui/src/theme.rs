@@ -92,6 +92,8 @@ pub const KNOB_GREEN: Color = Color::from_rgb8(0x2f, 0xa8, 0x6e);
 /// azure, but inside the EQ they mean band 1/2/3, not clip/signal/mute.
 pub const EQ_BAND: [Color; 3] = [MRED, MGREEN, MUTE_COLOR];
 pub const SOLO_COLOR: Color = Color::from_rgb8(0xf0, 0xb4, 0x29);
+/// Cue is the green member of the M/S/CUE outline family.
+pub const CUE_COLOR: Color = MGREEN;
 /// Text on an engaged (white) toggle and on the active nav pill: the
 /// near-black of the tile behind the mark.
 pub const ON_ACTIVE: Color = Color::from_rgb8(0x10, 0x10, 0x12);
@@ -565,6 +567,11 @@ pub fn stereo_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> b
     outline_toggle(active, PHANTOM)
 }
 
+/// CUE uses the same outline language as Stereo, in green.
+pub fn cue_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    outline_toggle(active, CUE_COLOR)
+}
+
 /// `stereo_button` with a locked form.  A Control Room channel's pair is
 /// always stereo, so its control is permanently engaged and not pressable;
 /// the locked style ignores the disabled state so the orange outline and
@@ -657,6 +664,39 @@ pub fn armed_toggle_button(
             };
         }
         plain_toggle(active, active_color, theme, status)
+    }
+}
+
+/// The channel M/S/CUE family: an engaged button is an outline like the
+/// Stereo switch, not a filled pill.  `armed` keeps the dim tint used when
+/// a sidebar master has switched the function off.
+pub fn armed_outline_toggle(
+    active: bool,
+    armed: bool,
+    active_color: Color,
+) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    let outline = outline_toggle(active, active_color);
+    move |theme, status| {
+        if armed && !active {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            let mut background =
+                blend(BUTTON_FACE, active_color, if hovered { 0.28 } else { 0.18 });
+            if matches!(status, button::Status::Pressed) {
+                background = blend(background, Color::BLACK, PRESS_DARKEN);
+            }
+            return button::Style {
+                background: Some(Background::Color(background)),
+                text_color: blend(TEXT_SEC, active_color, 0.65),
+                border: Border {
+                    color: blend(BORDER, active_color, 0.6),
+                    width: 1.0,
+                    radius: RADIUS_SM.into(),
+                },
+                shadow: Shadow::default(),
+                snap: false,
+            };
+        }
+        outline(theme, status)
     }
 }
 

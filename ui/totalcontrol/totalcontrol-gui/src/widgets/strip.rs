@@ -297,7 +297,7 @@ pub struct StripParams<'a> {
     /// PFL replaces Solo for this input strip (Control Room setting).
     pub pfl: bool,
     /// Off, but held for the sidebar's Mute / Solo master to bring back
-    /// (`theme::armed_toggle_button`). Set by `app::finish_params`.
+    /// (`theme::armed_outline_toggle`). Set by `app::finish_params`.
     pub mute_armed: bool,
     pub solo_armed: bool,
     pub cue: bool,
@@ -696,7 +696,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         button(centered_label("M", theme::TEXT_XS * scale))
             .width(Length::Fill)
             .height(btn_h)
-            .style(theme::armed_toggle_button(p.mute, p.mute_armed, theme::MUTE_COLOR))
+            .style(theme::armed_outline_toggle(p.mute, p.mute_armed, theme::MUTE_COLOR))
             .on_press(Message::Mute(cid, !p.mute)),
         if p.mute_armed {
             "Mute (switched off by the M master, which brings it back)"
@@ -712,7 +712,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         ))
         .width(Length::Fill)
         .height(btn_h)
-        .style(theme::armed_toggle_button(p.solo, p.solo_armed, theme::SOLO_COLOR))
+        .style(theme::armed_outline_toggle(p.solo, p.solo_armed, theme::SOLO_COLOR))
         .on_press(Message::Solo(cid, !p.solo)),
         if p.pfl {
             "PFL (pre-fader listen) to the Cue/PFL target"
@@ -746,7 +746,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         button(centered_label("CUE", theme::TEXT_XS * scale))
             .width(Length::Fill)
             .height(btn_h)
-            .style(theme::toggle_button(p.cue, theme::ACCENT))
+            .style(theme::cue_button(p.cue))
             .on_press(Message::CueChanged(cid, !p.cue)),
         "CUE — exclusively monitor this output's submix through the Cue/PFL target",
         scale,
@@ -891,7 +891,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         button(centered_label("M", theme::TEXT_SM * scale))
             .width(Length::Fill)
             .height(btn_h)
-            .style(theme::armed_toggle_button(p.mute, p.mute_armed, theme::MUTE_COLOR))
+            .style(theme::armed_outline_toggle(p.mute, p.mute_armed, theme::MUTE_COLOR))
             .on_press(Message::Mute(cid, !p.mute)),
         if p.mute_armed {
             "Mute (switched off by the M master, which brings it back)"
@@ -911,7 +911,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         ))
         .width(Length::Fill)
         .height(btn_h)
-        .style(theme::armed_toggle_button(p.solo, p.solo_armed, theme::SOLO_COLOR))
+        .style(theme::armed_outline_toggle(p.solo, p.solo_armed, theme::SOLO_COLOR))
         .on_press(Message::Solo(cid, !p.solo)),
         if p.pfl {
             "PFL (pre-fader listen) to the Cue/PFL target"
@@ -926,7 +926,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         button(centered_label("CUE", theme::TEXT_SM * scale))
             .width(Length::Fill)
             .height(btn_h)
-            .style(theme::toggle_button(p.cue, theme::ACCENT))
+            .style(theme::cue_button(p.cue))
             .on_press(Message::CueChanged(cid, !p.cue)),
         "CUE — exclusively monitor this output's submix through the Cue/PFL target",
         scale,

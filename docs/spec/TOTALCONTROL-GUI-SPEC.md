@@ -296,7 +296,9 @@ There are two sizing families, one per surface:
 Standard controls use one width per stack or panel: a single button spans it;
 a pair in one row splits it with one gap. Menu rows share the menu width.
 Black button faces use a raised near-black, one step lighter than the page
-and rail black.
+and rail black.  Engaged channel `M`, `S` and `CUE` buttons are outlines, not
+filled pills: the face stays dark, and the border and text take mute blue,
+solo yellow or cue green respectively.
 Slideout tabs (`T`, gear, `EQ`, `D`) and the channel minimize button keep
 their fixed glyph column; their faces extend to the channel's right edge
 (§2.4). Compact navigation and utility buttons keep their own fixed or

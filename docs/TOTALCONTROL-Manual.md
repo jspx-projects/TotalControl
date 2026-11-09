@@ -317,7 +317,8 @@ the soloed channel keeps its fader; releasing the last solo restores the
 others. The Cue button on a hardware output copies that output's submix into
 the selected `Cue/PFL to` target, so you can listen to any hardware output
 through the monitor output. Cue is exclusive; releasing it restores the target
-mix.
+mix. An engaged Mute button is outlined blue, Solo yellow and Cue green; the
+button face stays dark.
 
 Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the
