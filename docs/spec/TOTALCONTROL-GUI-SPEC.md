@@ -296,6 +296,8 @@ There are two sizing families, one per surface:
 
 Standard controls use one width per stack or panel: a single button spans it;
 a pair in one row splits it with one gap. Menu rows share the menu width.
+Black button faces use a raised near-black, one step lighter than the page
+and rail black.
 Slideout tabs (`T`, gear, `EQ`, `D`) and the channel minimize button keep
 their fixed glyph column; their faces extend to the channel's right edge
 (§2.4). Compact navigation and utility buttons keep their own fixed or
@@ -372,15 +374,19 @@ are post-fader and go to zero when the output is muted.
 #### 2.7.2 Fader scale
 
 The fader scale uses the same -65 dB to +6 dB range as the VU element, so
-each VU label and the matching fader mark share one vertical centre line.  The scale has an unlabelled green tick at -3 dB,
-the full-scale-sine RMS target, and a red tick at +3 dB.
+each VU label and the matching fader mark share one vertical centre line.
+The scale has an unlabelled green tick at -3 dB, the full-scale-sine RMS
+target, and a red tick at +3 dB.
 Each tick occupies 60% of the span from the VU element's right edge to a
 little under the fader cap, anchored at the cap end; its left end stays clear
 of the VU.  The cap covers the line at its current level. The cap centre
 line is dark grey, aligns with the tick, spans the complete cap width and is
 twice the thickness
 of the other cap ridges (2 px at zoom 1). A fixed 0 dB tick also sits on the
-right side of the fader.
+right side of the fader.  The cap has a physical half-height, so its centre
+stops at -64.5 dB at the bottom of the track.  The position below that
+selects the -65 dB value, shown as inf; the shared scale mapping keeps the
+VU labels and fader marks on the same line.
 
 ### 2.8 Channel layout model
 
@@ -596,11 +602,12 @@ value by the same delta.
 #### 2.8.8 Collapsed strip
 
 The collapsed strip is a separate 44 × 350 layout: rotated name, `M`, `S` or
-`CUE`, a VU element, a `+` expand button and an unused bottom slot.  It does
-not use the T/M/B grid.  The bottom slot is 18 px, the same height as B2, so
-the `+` button sits on the B1 line.  The VU element keeps the normal well
-colour: a linked pair shows two bars, a mono or split channel shows one
-full-width bar, and the labels stay centred in the element.
+`CUE`, a VU element, a `+` expand button and a dark bottom display face.  It
+does not use the T/M/B grid.  The face is 18 px high, spans the collapsed
+card width, and uses the normal button face shape and colour; it carries no
+control yet.  It puts the `+` button on the B1 line.  The VU element keeps
+the normal well colour: a linked pair shows two bars, a mono or split channel
+shows one full-width bar, and the labels stay centred in the element.
 
 ## 3. Runtime reference
 

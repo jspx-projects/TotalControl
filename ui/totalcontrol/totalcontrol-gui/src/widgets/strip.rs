@@ -783,28 +783,38 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             .width(Length::Fill)
             .center_x(Length::Fill),
         expand_btn,
-        // B2-sized slot: unused today, aligned with the full strip's submix
-        // selector so the expand button sits on the same line as B1.
-        iced::widget::Space::new().height(Length::Fixed(SUBMIX_H * p.scale)),
     ]
     .spacing(theme::SPACE_HAIRLINE)
     .width(Length::Fill)
     .align_x(iced::Alignment::Center);
 
+    let content = container(rows)
+        .padding(iced::Padding {
+            top: theme::SPACE_SM * p.scale,
+            right: theme::SPACE_MD * p.scale,
+            bottom: 0.0,
+            left: theme::SPACE_MD * p.scale,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed((STRIP_H - SUBMIX_H) * p.scale));
+    // B2-sized display face: spans the collapsed card exactly like the
+    // normal channel's submix selector, but carries no control yet.
+    let footer = container(iced::widget::Space::new())
+        .style(theme::display_face)
+        .width(Length::Fill)
+        .height(Length::Fixed(SUBMIX_H * p.scale));
+    let card = column![content, footer]
+        .width(Length::Fill)
+        .height(Length::Fixed(STRIP_H * p.scale));
+
     mouse_area(
-        container(rows)
+        container(card)
             .style(theme::strip_panel(
                 p.selected,
                 p.hovered,
                 p.type_tag.map(|(_, c)| c),
                 p.active_surface,
             ))
-            .padding(iced::Padding {
-                top: theme::SPACE_SM * p.scale,
-                right: theme::SPACE_MD * p.scale,
-                bottom: 0.0,
-                left: theme::SPACE_MD * p.scale,
-            })
             .width(Length::Fixed(w * p.scale))
             .height(Length::Fixed(STRIP_H * p.scale))
             .clip(true),

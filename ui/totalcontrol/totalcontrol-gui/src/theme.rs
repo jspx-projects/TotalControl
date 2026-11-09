@@ -17,6 +17,9 @@ use iced::{Background, Border, Color, Shadow};
 // see the reference-totalmix-ui-assets memory) and read as a different
 // product than the icon on the taskbar.
 pub const BG_DEEP: Color = Color::from_rgb8(0x0e, 0x0e, 0x10);
+/// Resting face of a black button.  One step above the page/rail black so
+/// controls read as raised without turning into grey blocks.
+pub const BUTTON_FACE: Color = Color::from_rgb8(0x19, 0x1a, 0x1e);
 /// Standard channel-strip surface.
 pub const SURFACE: Color = Color::from_rgb8(0x24, 0x25, 0x2a);
 /// Hover surface for controls and strips.
@@ -213,6 +216,21 @@ pub fn panel(_theme: &iced::Theme) -> container::Style {
         text_color: Some(TEXT_PRIMARY),
         shadow: Shadow::default(),
         snap: false,
+    }
+}
+
+/// The inert dark face at the foot of a collapsed strip.  It uses the
+/// normal button face and shape so future footer content has a defined
+/// surface without adding a control today.
+pub fn display_face(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(BUTTON_FACE)),
+        border: Border {
+            color: BORDER,
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        ..container::Style::default()
     }
 }
 
@@ -483,7 +501,7 @@ fn outline_toggle(
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let pressed = matches!(status, button::Status::Pressed);
-        let mut background = if hovered { SURFACE_HI } else { BG_DEEP };
+        let mut background = if hovered { SURFACE_HI } else { BUTTON_FACE };
         if pressed {
             background = blend(background, Color::BLACK, PRESS_DARKEN);
         }
@@ -642,7 +660,7 @@ fn plain_toggle(
     } else if hovered {
         SURFACE_HI
     } else {
-        BG_DEEP
+        BUTTON_FACE
     };
     if pressed {
         background = blend(background, Color::BLACK, PRESS_DARKEN);
@@ -758,7 +776,7 @@ pub fn segment_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> 
         } else if hovered {
             SURFACE
         } else {
-            BG_DEEP
+            BUTTON_FACE
         };
         let border_color = if active || hovered { FADER } else { BORDER };
 
@@ -878,9 +896,9 @@ pub fn chip_button(open: bool) -> impl Fn(&iced::Theme, button::Status) -> butto
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let background = match status {
-            button::Status::Pressed => blend(BG_DEEP, Color::BLACK, PRESS_DARKEN),
-            button::Status::Hovered => blend(BG_DEEP, SURFACE_HI, 0.5),
-            _ => BG_DEEP,
+            button::Status::Pressed => blend(BUTTON_FACE, Color::BLACK, PRESS_DARKEN),
+            button::Status::Hovered => blend(BUTTON_FACE, SURFACE_HI, 0.5),
+            _ => BUTTON_FACE,
         };
         button::Style {
             background: Some(Background::Color(background)),

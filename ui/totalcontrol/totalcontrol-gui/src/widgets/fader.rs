@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::device_service::MeterSnapshot;
 use crate::theme;
+use crate::widgets::layout::MIDDLE_H;
 
 fn trim_factor(db: f32) -> f32 {
     10f32.powf(db.clamp(-65.0, 0.0) / 20.0)
@@ -181,20 +182,35 @@ const SNAP_PX: f32 = 2.0;
 /// 0/-6/-10 ruler ticks together). The track spans FLOOR_DB .. +6 dB
 /// (TOP_DB), TotalMix's fader range.
 const FLOOR_DB: f32 = -65.0;
+/// The cap has a physical half-height, so its centre cannot travel all the
+/// way to the track end.  This fraction is reserved at each end; the bottom
+/// 0.5 dB is remapped into it so the lowest cap position reads -64.5 dB,
+/// with -65 dB reserved for the `inf` value below that.
+const CAP_T: f32 = (CAP_H / 2.0) / MIDDLE_H;
+const FADER_BOTTOM_DB: f32 = -64.5;
 /// The fader's top: +6 dB (2.0 linear) like TotalMix, not 0 dB.
 const TOP_DB: f32 = 6.0;
 const TAPER_K: f32 = 0.6;
 
 fn db_to_t(db: f32) -> f32 {
     let db = db.clamp(FLOOR_DB, TOP_DB);
-    let x = ((db - TOP_DB) / (FLOOR_DB - TOP_DB)).clamp(0.0, 1.0);
-    (1.0 - x.powf(TAPER_K)).clamp(0.0, 1.0)
+    if db <= FADER_BOTTOM_DB {
+        // The short cap-hidden segment below the last visible position.
+        let x = (db - FLOOR_DB) / (FADER_BOTTOM_DB - FLOOR_DB);
+        return (x * CAP_T).clamp(0.0, CAP_T);
+    }
+    let x = ((db - TOP_DB) / (FADER_BOTTOM_DB - TOP_DB)).clamp(0.0, 1.0);
+    let t = (1.0 - x.powf(TAPER_K)).clamp(0.0, 1.0);
+    CAP_T + (1.0 - CAP_T) * t
 }
 
 fn t_to_db(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
-    let x = (1.0 - t).powf(1.0 / TAPER_K);
-    (TOP_DB + x * (FLOOR_DB - TOP_DB)).clamp(FLOOR_DB, TOP_DB)
+    if t <= CAP_T {
+        return FLOOR_DB + (t / CAP_T) * (FADER_BOTTOM_DB - FLOOR_DB);
+    }
+    let x = (1.0 - (t - CAP_T) / (1.0 - CAP_T)).powf(1.0 / TAPER_K);
+    (TOP_DB + x * (FADER_BOTTOM_DB - TOP_DB)).clamp(FADER_BOTTOM_DB, TOP_DB)
 }
 
 pub(crate) fn vol_to_t(vol: f32) -> f32 {
@@ -1779,6 +1795,15 @@ mod tests {
         let stereo_right = stereo_right.expect("a stereo meter has a right bar");
         assert!(stereo_left.width < mono.width);
         assert!((stereo_left.width - stereo_right.width).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_lowest_cap_position_is_minus_64_5_db() {
+        assert!((t_to_db(CAP_T) + 64.5).abs() < 1e-4);
+        assert!((t_to_db(0.0) + 65.0).abs() < 1e-4);
+        let lowest = 10f32.powf(-64.5 / 20.0);
+        assert!((vol_to_t(lowest) - CAP_T).abs() < 1e-4);
+        assert!((db_to_t(-64.5) - CAP_T).abs() < 1e-4);
     }
 
     #[test]

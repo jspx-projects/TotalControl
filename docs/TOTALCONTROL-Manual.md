@@ -324,12 +324,14 @@ the fader folds a strip so only its channel name and meter remain, and the
 meter grows to fill the space. If a slideout is open on that channel, it
 closes first; the strip narrows after the panel has slid away. The collapsed
 meter keeps the normal VU well colour: a linked pair shows two bars, a mono
-channel shows one full-width bar. The bottom slot is reserved, so the `+`
-button sits at the same height as the full strip's collapse button.
+channel shows one full-width bar. A dark display face spans the bottom, so
+the `+` button sits at the same height as the full strip's collapse button;
+the face is reserved for future information.
 
-The fader range is -65 to +6 dB. Its value is shown in a dB readout under
-the fader, without a unit suffix. Double-clicking that readout opens a
-numeric entry field.
+The fader range is -65 to +6 dB. The lowest cap position is -64.5 dB; the
+position below it is -65 dB and reads as inf. Its value is shown in a dB
+readout under the fader, without a unit suffix. Double-clicking that readout
+opens a numeric entry field.
 
 Output strips also carry a **balance** knob that pans the output pair
 between its two channels; it appears only while the pair is linked.
