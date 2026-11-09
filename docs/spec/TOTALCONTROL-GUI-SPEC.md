@@ -313,39 +313,46 @@ click.
 
 ### 2.7 Meters
 
-Each channel meter has the two TotalMix indicators:
+#### 2.7.1 VU meter element
+
+The VU meter is one element.  Its top segment is the OVR indicator, at the
+top of the channel.  A 2 px gap separates it from the level channel, which
+runs from -65 dB at the bottom to +6 dB at the top.  A mono or split channel
+shows one bar; a linked pair shows two bars with a small gap, one per
+channel.  Each bar measures its own channel.
 
 - an **RMS bar** with a slow time constant, coloured in three bands: green
   below -3 dB, yellow from -3 dB to 0 dB and red above 0 dB;
 - a **peak line** with zero attack, held for a fixed two seconds and then
   decaying; its colour follows the same green/yellow/red bands;
-- a **fixed red OVR block** at the top of the meter channel, which lights
-  from -0.1 dBFS.
+- the **OVR segment** at the top, which lights from -0.1 dBFS.
+
+The numeric level text is centred in the VU channel at 60, 40, 20, 10, 6 and
+0.  There is no +3 text label.  The text is an inscription: the moving bar
+covers it.  The VU element has no level stripes or tick marks.
 
 Peak hold applies only to the peak line. The RMS bar is never held; it
-continues to follow the RMS value. The meter scale runs from -60 dB at the
-bottom to +6 dB at the top; below -60 dB reads as silence. The whole region
-above 0 dB is red. The level text is printed inside the VU channel and
-right-aligned; the moving wash covers it. The scale has an unlabelled green
-tick at -3 dB, the full-scale-sine RMS target, and a red tick at +3 dB. Each
-tick is one colour and continues a little way under the fader cap; the cap
-covers the line at its current level. The cap centre line aligns with the
-tick, and a fixed 0 dB tick also sits on the right side of the fader. There
-is no separate red guide across the meter bar.
-The bar is mathematically correct RMS, so a full-scale sine reads about
--3 dB; no RMS +3 dB shift is applied.
+continues to follow the RMS value. The whole region above 0 dB is red. The
+bar is mathematically correct RMS, so a full-scale sine reads about -3 dB;
+no RMS +3 dB shift is applied. There is no separate red guide across the
+meter bar.
 
 Falling levels use a 20 dB/s release. The peak hold is fixed at two seconds.
-The OVR block lights from -0.1 dBFS; there is no configurable hold time or
+The OVR segment lights from -0.1 dBFS; there is no configurable hold time or
 OVR sample count. If the device disconnects, the meters fall to silence with
 the normal release instead of freezing at their last reading.
 
 Input and playback meters are pre-fader and post-trim: the trim changes the
 reading, the send fader and selected submix do not. Hardware output meters
-are post-fader and go to zero when the output is muted. A linked pair shows
-two contiguous bars with no gap, one per channel; each bar measures its own
-channel, so linking does not copy an input signal or meter value to its
-sibling.
+are post-fader and go to zero when the output is muted.
+
+#### 2.7.2 Fader scale
+
+The fader scale is a separate element.  The scale has an unlabelled green
+tick at -3 dB, the full-scale-sine RMS target, and a red tick at +3 dB.
+Each tick is one colour and continues a little way under the fader cap; the
+cap covers the line at its current level. The cap centre line aligns with the
+tick, and a fixed 0 dB tick also sits on the right side of the fader.
 
 ### 2.8 Channel layout model
 
@@ -367,7 +374,7 @@ for the Top rows and the Bottom readout.  Columns are centred on their own
 line.  A feature that is absent keeps its slot, so an element below it does
 not move.
 
-Channel elements never overlap.  The level stripes and the level text are
+Channel elements never overlap.  The VU bars and the level text are
 inscriptions rather than controls: the moving VU wash and the fader cap may
 cover them.
 
@@ -400,7 +407,7 @@ zoom.  The content box is 78 px wide.
 
 | Element | x | Width |
 |---|---:|---:|
-| VU channel, labels inside | 11 | 13 |
+| VU element, labels centred | 11 | 13 |
 | fader track area | 26 | 26 |
 | fader slot | 35.5 | 7 |
 | fader cap | 28 | 22 |
@@ -415,13 +422,14 @@ zoom.  The content box is 78 px wide.
 
 The T1, T2, T3, M1 and B1 rows centre on x = 39; M1 uses the same two 38 px
 cells as T3, but with no outline or fill.  The fader track also centres on
-x = 39: its group is the 13 px VU channel, a 2 px gap and the 26 px track,
-starting at x = 11.  The level labels are printed inside the VU channel and
-right-aligned; the moving wash covers them.
+x = 39: its group is the 13 px VU element, a 2 px gap and the 26 px track,
+starting at x = 11.  The level labels are centred in the VU channel; the
+moving bars cover them.
 
-A linked pair draws two contiguous bars with no gap; a split or mono channel
-shows one bar.  The 6 px OVR block sits above the wash with a 2 px gap; the
-VU column reserves 8 px at the top for it.
+A linked pair draws two bars with a 2 px gap; a split or mono channel shows
+one bar.  The OVR segment is the top of the VU element; the level channel
+starts 2 px below it.  The VU element includes the 6 px OVR segment and its
+2 px gap.
 
 M1 is drawn as text only, right-aligned inside each cell.  The left cell is
 the left channel and the right cell is the right channel; no `L` or `R`
@@ -456,7 +464,7 @@ and the UCX tabs stay on the input grid.
 | T2 | pan | pan | balance, when the backend supports it |
 | T3 | `M` `S` | `M` `S` | `M` `CUE` |
 | M1 | text-only L/R readouts | text-only L/R readouts | text-only L/R readouts |
-| ML | VU meter with labels | VU meter with labels | VU meter with labels |
+| ML | VU element, labels centred | VU element, labels centred | VU element, labels centred |
 | MC | fader and cap | fader and cap | fader and cap |
 | MR1 | FX send | FX send | FX return |
 | MR2 | `T` | `T` | empty |
@@ -466,8 +474,8 @@ and the UCX tabs stay on the input grid.
 | B1 | dB and collapse | dB and collapse | dB and collapse |
 | B2 | full-width bottom bar | full-width bottom bar | empty |
 
-A linked pair is one strip and shows two contiguous VU bars.  A split pair
-is two adjacent strips; each has one VU bar and its own fader.  The Control Room
+A linked pair is one strip and shows two VU bars with a small gap.  A split
+pair is two adjacent strips; each has one VU bar and its own fader.  The Control Room
 output strips use the hardware-output layout; their stereo link is locked.
 
 #### 2.8.6 Examples
