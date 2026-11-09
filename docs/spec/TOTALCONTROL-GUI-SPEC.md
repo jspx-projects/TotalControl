@@ -315,11 +315,13 @@ click.
 
 #### 2.7.1 VU meter element
 
-The VU meter is one element.  Its top segment is the OVR indicator, at the
-top of the channel.  A 2 px gap separates it from the level channel, which
-runs from -65 dB at the bottom to +6 dB at the top.  A mono or split channel
-shows one bar; a linked pair shows two bars with a small gap, one per
-channel.  Each bar measures its own channel.
+The VU meter is one element.  Its channel spans the complete element height.
+The OVR segment occupies the top of that channel, inside the element bounds;
+no part of the element is drawn outside them.  The level scale runs from
+-65 dB at the bottom to +6 dB at the top over the complete channel height,
+behind the OVR segment.  A mono or split channel shows one bar; a linked pair
+shows two bars with a small gap, one per channel.  Each bar measures its own
+channel.
 
 - an **RMS bar** with a slow time constant, coloured in three bands: green
   below -3 dB, yellow from -3 dB to 0 dB and red above 0 dB;
@@ -374,9 +376,13 @@ for the Top rows and the Bottom readout.  Columns are centred on their own
 line.  A feature that is absent keeps its slot, so an element below it does
 not move.
 
-Channel elements never overlap.  The VU bars and the level text are
-inscriptions rather than controls: the moving VU wash and the fader cap may
-cover them.
+Channel elements never overlap, and every part of an element is inside its
+own bounds.  The VU bars and the level text are inscriptions rather than
+controls: the moving VU wash and the fader cap may cover them.
+
+When vertical space is short, the VU element and the channel fader are
+scaled down together by the same factor; their level scales stay aligned and
+no other element changes size.
 
 #### 2.8.2 Vertical rows
 
@@ -392,10 +398,10 @@ cover them.
 
 The nominal rows plus their six gaps and the 4 px top padding total 350 px;
 there is no bottom padding.  M1 is two 38 px readout cells with a 2 px gap,
-matching the T3 buttons, but drawn as text only.  The VU scale, fader track
-and FX fader share one top line.  The VU OVR strip sits above that line in the
-8 px reserve at the top of M2.  B1 sits directly below M2 and the fader track
-ends above it, so the cap never covers the readout.  B2 is a full-width 18 px
+matching the T3 buttons, but drawn as text only.  The VU element, fader track
+and FX fader all start at the top of M2.  The VU OVR segment is inside the VU
+element at its top.  B1 sits directly below M2 and the fader track ends above
+it, so the cap never covers the readout.  B2 is a full-width 18 px
 bar flush with the card's bottom edge and clipped by the card radius.
 A hardware-output strip has no B2 and leaves that 18 px row and its gap empty,
 so B1 keeps the same height on every channel kind.
@@ -427,9 +433,8 @@ starting at x = 11.  The level labels are centred in the VU channel; the
 moving bars cover them.
 
 A linked pair draws two bars with a 2 px gap; a split or mono channel shows
-one bar.  The OVR segment is the top of the VU element; the level channel
-starts 2 px below it.  The VU element includes the 6 px OVR segment and its
-2 px gap.
+one bar.  The OVR segment occupies the top 6 px of the VU element, inside its
+bounds; the level scale runs the full element height behind it.
 
 M1 is drawn as text only, right-aligned inside each cell.  The left cell is
 the left channel and the right cell is the right channel; no `L` or `R`
@@ -439,8 +444,8 @@ width at the bottom edge; its name takes the space to the left of the arrow.
 
 #### 2.8.4 Right-hand stack
 
-The right-hand column starts level with the top of the VU scale and the fader
-track; the VU OVR strip sits above that line.  It holds:
+The right-hand column starts level with the top of the VU element and the
+fader track.  It holds:
 
 | Ref | Element | Height at zoom 1 | Present on |
 |---|---|---:|---|
