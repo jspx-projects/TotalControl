@@ -385,7 +385,8 @@ graduations and share the same right end.  The 0 dB graduation is slightly
 whiter and is repeated just right of the fader slot.  The cap covers the line
 at its current level. The cap centre line is dark grey, aligns with the tick,
 spans the complete cap width and is twice the thickness
-of the other cap ridges (2 px at zoom 1).  The cap has a physical half-height, so its centre
+of the other cap ridges (2 px at zoom 1).  The two outer ridges are inset from
+the cap ends and lighter than the centre line.  The cap has a physical half-height, so its centre
 stops at -64.5 dB at the bottom of the track.  The position below that
 selects the -65 dB value, shown as inf; the shared scale mapping keeps the
 VU labels and fader marks on the same line.

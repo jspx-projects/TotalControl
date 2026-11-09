@@ -363,8 +363,9 @@ label. The green and red ticks are half the length of the other
 graduations. Each tick extends a little under the fader cap; the cap covers
 the line at its current level. The 0 dB tick is slightly brighter and is
 repeated just to the right of the fader slot. The cap's centre line aligns
-with the ticks. A level below -65 dB reads as silence and does not draw a
-peak line.
+with the ticks; the two outer cap ridges are inset and lighter than the
+centre line. A level below -65 dB reads as silence and does not draw a peak
+line.
 If the device disconnects, the meters fall to silence instead of freezing.
 
 Input and playback meters are pre-fader and post-trim: they show the signal

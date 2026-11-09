@@ -272,7 +272,11 @@ fn draw_template(
             y = y - h / 2.0,
             w = w,
             h = h,
-            color = if i == 2 { "#4a4c52" } else { "#3d3e43" },
+            color = if i == 2 {
+                c.control.cap_centre
+            } else {
+                c.control.cap_ridge
+            },
         );
     }
 

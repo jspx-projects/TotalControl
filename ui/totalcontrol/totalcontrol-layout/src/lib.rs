@@ -488,6 +488,8 @@ pub struct ControlColors {
     pub knob_border: &'static str,
     pub fader_slot: &'static str,
     pub fader_fill: &'static str,
+    pub cap_ridge: &'static str,
+    pub cap_centre: &'static str,
     pub tab_face: &'static str,
 }
 
@@ -533,6 +535,8 @@ impl Default for ColorScheme {
                 knob_border: "#36373d",
                 fader_slot: "#131417",
                 fader_fill: "#36373c",
+                cap_ridge: "#97989d",
+                cap_centre: "#4a4c52",
                 tab_face: "#202126",
             },
             accent: AccentColors {
