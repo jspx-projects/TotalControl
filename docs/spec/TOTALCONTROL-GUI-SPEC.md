@@ -363,7 +363,9 @@ one vertical centre line.  The scale has an unlabelled green tick at -3 dB,
 the full-scale-sine RMS target, and a red tick at +3 dB.
 Each tick is one colour and continues a little way under the fader cap; the
 cap covers the line at its current level. The cap centre line aligns with the
-tick, and a fixed 0 dB tick also sits on the right side of the fader.
+tick, spans the complete cap width and is twice the thickness of the other
+cap ridges (2 px at zoom 1). A fixed 0 dB tick also sits on the right side of
+the fader.
 
 ### 2.8 Channel layout model
 
