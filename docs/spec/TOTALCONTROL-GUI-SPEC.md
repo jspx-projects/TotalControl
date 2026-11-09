@@ -210,7 +210,8 @@ apart; empty slots use the same heights and gaps.
 Both faders slide in a dark slot drawn by the fader: the main fader's rail
 inside a wider slot, the small one as a single thinner line scaled with its
 smaller cap. Its rail fills with the send/return colour as it is raised, so an
-untouched control shows no colour at all.
+untouched control shows no colour at all.  The thin FX fader has no level
+marks and no ruler; only its coloured rail and cap are drawn.
 
 The main fader's value sits in the strip's bottom row, centred on the fader
 track; the collapse button sits at the right edge of that row.
@@ -350,8 +351,10 @@ are post-fader and go to zero when the output is muted.
 
 #### 2.7.2 Fader scale
 
-The fader scale is a separate element.  The scale has an unlabelled green
-tick at -3 dB, the full-scale-sine RMS target, and a red tick at +3 dB.
+The fader scale is a separate element.  It uses the same -65 dB to +6 dB
+range as the VU element, so each VU label and the matching fader mark share
+one vertical centre line.  The scale has an unlabelled green tick at -3 dB,
+the full-scale-sine RMS target, and a red tick at +3 dB.
 Each tick is one colour and continues a little way under the fader cap; the
 cap covers the line at its current level. The cap centre line aligns with the
 tick, and a fixed 0 dB tick also sits on the right side of the fader.
@@ -379,6 +382,11 @@ not move.
 Channel elements never overlap, and every part of an element is inside its
 own bounds.  The VU bars and the level text are inscriptions rather than
 controls: the moving VU wash and the fader cap may cover them.
+
+The VU element and the channel fader share one vertical dB scale and always
+have the same top, bottom and height.  The vertical centre of each VU level
+label is on the fader mark for the same level; a label at 60 and the fader
+mark at 60 are the same line.
 
 When vertical space is short, the VU element and the channel fader are
 scaled down together by the same factor; their level scales stay aligned and
