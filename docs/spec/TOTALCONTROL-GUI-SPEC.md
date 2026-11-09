@@ -211,7 +211,8 @@ Both faders slide in a dark slot drawn by the fader: the main fader's rail
 inside a wider slot, the small one as a single thinner line scaled with its
 smaller cap. Its rail fills with the send/return colour as it is raised, so an
 untouched control shows no colour at all.  The thin FX fader has no level
-marks and no ruler; only its coloured rail and cap are drawn.
+marks and no ruler: no tick marks, no 0 dB reference tick; only its coloured
+rail and cap are drawn.
 
 The main fader's value sits in the strip's bottom row, centred on the fader
 track; the collapse button sits at the right edge of that row.
@@ -260,8 +261,12 @@ applies to Dynamics, Auto Level, Reverb and Echo.
 
 - The settings gear is a 20×26 tab with a 14 px glyph.
 - Trim, EQ and Dynamics use the 20×22 tab with a 13 px glyph.
-- The active tab carries the panel's dark surface behind its glyph; that
-  surface extends 6 px beyond each side of the tab slot.
+- The active tab carries the panel's dark surface behind its glyph. The face
+  of every slideout tab (`T`, gear, `EQ`, `D`) extends from its 20 px column
+  to the complete right edge of the channel; the glyph stays centred in the
+  column, not in the extended face. The channel minimize button follows the
+  same rule: its glyph stays centred in its B1 column and its face reaches
+  the channel's right edge.
 - The T, EQ and D tabs keep their glyph only, in orange, while their setting
   is active and the slideout is closed: trim below 0 dB, EQ enabled, or
   dynamics on. While the slideout is open the tab carries no orange; the
@@ -273,7 +278,7 @@ applies to Dynamics, Auto Level, Reverb and Echo.
 - The T, gear, EQ and D tabs keep the same fixed slot with the slideout open
   or closed. Only the panel grows beside them; the tabs themselves never
   move.
-- The glyph is centred in the tab before and after opening.
+- The glyph is centred on its column before and after opening.
 
 ### 2.5 Control sizing
 
@@ -286,11 +291,12 @@ There are two sizing families, one per surface:
 
 Standard controls use one width per stack or panel: a single button spans it;
 a pair in one row splits it with one gap. Menu rows share the menu width.
-Slideout tabs (`T`, gear, `EQ`, `D`), the channel minimize button and compact
-navigation and utility buttons keep their own fixed or label-sized size. A
-strip's `M`/`S` pair (hardware inputs and software playback) or `M`/`CUE` pair
-(hardware outputs, including Control Room channels) shares the strip's control
-width; an output never shows `M` alone.
+Slideout tabs (`T`, gear, `EQ`, `D`) and the channel minimize button keep
+their fixed glyph column; their faces extend to the channel's right edge
+(§2.4). Compact navigation and utility buttons keep their own fixed or
+label-sized size. A strip's `M`/`S` pair (hardware inputs and software
+playback) or `M`/`CUE` pair (hardware outputs, including Control Room
+channels) shares the strip's control width; an output never shows `M` alone.
 
 - The strip's submix box spans the strip width at the strip height, with the
   bus name vertically centred at the left and the arrow at the right.
@@ -448,7 +454,8 @@ M1 is drawn as text only, right-aligned inside each cell.  The left cell is
 the left channel and the right cell is the right channel; no `L` or `R`
 prefix is printed.  The cell width accommodates `-99.0`; values of 100 and
 above omit the fractional part (`100`, `120`).  B2 spans the full 90 px card
-width at the bottom edge; its name takes the space to the left of the arrow.
+width at the bottom edge; its label is always centred on the channel width
+and the arrow sits at the right edge.
 
 #### 2.8.4 Right-hand stack
 
@@ -463,8 +470,14 @@ fader track.  It holds:
 | MR4 | `EQ` tab | 22 | UCX inputs and outputs |
 | MR5 | `D` dynamics tab | 22 | UCX inputs and outputs |
 
-The FX fader has no level marks and no ruler; only its coloured rail and cap
-are drawn.  The outer column uses 2 px spacing.  The gap under MR1 is 8 px
+The 20 px column is the glyph column.  The `T`/gear/`EQ`/`D` tab faces extend
+from x = 56 to the card's right edge (x = 90); the glyph stays centred at
+x = 66.  The B1 minimize button follows the same rule: its glyph column is
+x = 59..78 and its face reaches x = 90.
+
+The FX fader has no level marks and no ruler: no tick marks, no 0 dB
+reference tick; only its coloured rail and cap are drawn.  The outer column
+uses 2 px spacing.  The gap under MR1 is 8 px
 and the tabs inside MR3–MR5 use 6 px spacing.  A missing tab keeps its slot
 where a later element depends on it: an output gets an empty MR2, so the gear
 and the UCX tabs stay on the input grid.
@@ -507,7 +520,7 @@ Input, linked pair, UCX:
 │               │          │ MR4 EQ      │
 │               │          │ MR5 D       │
 │            BC1 0.0       BR1 [-]      │  B1
-│ BC2 [ Main  ▸ ]                       │  B2
+│ BC2 [        Main         ▸ ]         │  B2
 └──────────────────────────────────────┘
 ```
 
@@ -525,7 +538,7 @@ Software playback, linked pair, UCX:
 │               │          │ MR4 empty   │
 │               │          │ MR5 empty   │
 │            BC1 0.0       BR1 [-]      │  B1
-│ BC2 [ Main  ▸ ]                       │  B2
+│ BC2 [        Main         ▸ ]         │  B2
 └──────────────────────────────────────┘
 ```
 
