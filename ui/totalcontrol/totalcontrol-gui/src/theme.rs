@@ -23,6 +23,8 @@ pub const SURFACE: Color = Color::from_rgb8(0x24, 0x25, 0x2a);
 pub const SURFACE_HI: Color = Color::from_rgb8(0x2d, 0x2e, 0x33);
 /// Active input, playback, and selected output strip surface.
 pub const SUBMIX_ACTIVE: Color = Color::from_rgb8(0x3a, 0x3b, 0x42);
+/// Slideout-tab face when the panel is closed.
+pub const SURFACE_LOW: Color = Color::from_rgb8(0x20, 0x21, 0x26);
 /// Hairlines and card borders.
 pub const BORDER: Color = Color::from_rgb8(0x36, 0x37, 0x3d);
 /// The mark's white, softened a touch for body text.
@@ -201,6 +203,19 @@ pub fn panel(_theme: &iced::Theme) -> container::Style {
         text_color: Some(TEXT_PRIMARY),
         shadow: Shadow::default(),
         snap: false,
+    }
+}
+
+/// A reserved but currently inactive tab slot.
+pub fn empty_slot(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: None,
+        border: Border {
+            color: BORDER,
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        ..container::Style::default()
     }
 }
 
@@ -540,13 +555,14 @@ pub fn stereo_button_state(
 pub fn panel_tab(active: bool, lit: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        // The rectangle is the tab of the open slideout: show it only while
-        // that slideout is visible.  Hover changes the glyph, not the box.
-        let background = if active {
-            Some(Background::Color(SURFACE))
+        // The tab face marks a button that opens a slideout.  It is always
+        // visible and reaches the strip's right edge in the layout; the
+        // open panel uses the brighter surface.
+        let background = Some(Background::Color(if active {
+            SURFACE
         } else {
-            None
-        };
+            SURFACE_LOW
+        }));
         button::Style {
             background,
             // Orange means "active setting", not "hovered" or "open".

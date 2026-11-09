@@ -2316,6 +2316,14 @@ pub struct TotalControl {
     /// Host-computed output levels (power sum of routed sources ×
     /// faders) — same ballistics as the input/playback meters.
     pub output_meters: Vec<MeterAnim>,
+    /// Snapshot of the two M1 strength readouts per channel, refreshed at
+    /// `STRENGTH_READOUT_MS` instead of at the meter tick rate.  Indexing
+    /// matches the meter vectors; `[0]` is the left channel and `[1]` the
+    /// right channel of a linked pair.
+    pub strength_inputs: Vec<[Option<f32>; 2]>,
+    pub strength_playbacks: Vec<[Option<f32>; 2]>,
+    pub strength_outputs: Vec<[Option<f32>; 2]>,
+    pub strength_at: Instant,
     /// UCX FX bus meters: send and return.
     pub fx_meters: [MeterAnim; 2],
     /// UCX FX bus overload indicators: send and return.
@@ -2835,6 +2843,10 @@ const OSC_LOG_MAX: usize = 500;
 /// timed in real milliseconds rather than "per tick" so it stays correct if
 /// that interval ever changes.
 const METER_TICK_MS: f32 = 50.0;
+/// Refresh interval for the numerical strength fields.  The meters keep
+/// animating at the fast tick, but the numbers are easier to read when
+/// they move four times a second.
+const STRENGTH_READOUT_MS: u64 = 250;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
@@ -2850,6 +2862,28 @@ const METER_PEAK_HOLD_MS: f32 = 2000.0;
 const PEAK_RELEASE_START: f32 = 0.26;
 const PEAK_RELEASE_END: f32 = 0.06;
 const PEAK_RELEASE_MS: f32 = 260.0;
+
+/// Copy the current meter values into the slow M1 readout layout.  A linked
+/// pair carries its right-hand value in the left channel's `[1]` slot; split
+/// channels leave it empty.
+fn strength_snapshot(
+    meters: &[MeterAnim],
+    linked: impl Fn(usize) -> bool,
+) -> Vec<[Option<f32>; 2]> {
+    meters
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let left = Some(m.frame().value);
+            let right = if i % 2 == 0 && linked(i / 2) {
+                meters.get(i + 1).map(|r| r.frame().value)
+            } else {
+                None
+            };
+            [left, right]
+        })
+        .collect()
+}
 
 /// Per-channel VU ballistics state.
 #[derive(Clone, Copy, Debug)]
@@ -3063,6 +3097,10 @@ pub fn new_with_device(
         playback_tap,
         playback_tap_channels: 0,
         output_meters: vec![MeterAnim::new(); n_outputs],
+        strength_inputs: vec![[None, None]; n_inputs],
+        strength_playbacks: vec![[None, None]; n_playbacks],
+        strength_outputs: vec![[None, None]; n_outputs],
+        strength_at: Instant::now(),
         fx_meters: [MeterAnim::new(), MeterAnim::new()],
         fx_overload: [false, false],
         collapsed: HashSet::new(),
@@ -8153,6 +8191,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 m.step_elapsed(fx_levels[i]);
             }
             state.fx_overload = state.device.fx_overload().unwrap_or([false, false]);
+            // The numerical strength fields read a slower snapshot than the
+            // meters: 250 ms keeps them legible while the bars stay smooth.
+            if state.strength_at.elapsed() >= Duration::from_millis(STRENGTH_READOUT_MS) {
+                state.strength_at = Instant::now();
+                state.strength_inputs = strength_snapshot(&state.input_meters, |pair| {
+                    state.device.input_pair_linked(pair)
+                });
+                state.strength_playbacks = strength_snapshot(&state.playback_meters, |pair| {
+                    state.device.playback_linked(pair)
+                });
+                state.strength_outputs = strength_snapshot(&state.output_meters, |pair| {
+                    state.device.output_linked(pair)
+                });
+            }
             // Meter motion does not need the whole view rebuilt: the
             // fader canvases interpolate between these keyframes and ask
             // for their own redraws (see `widgets::fader`).  The idle tick
@@ -10342,6 +10394,10 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.input_meters = vec![MeterAnim::new(); state.device.inputs().len()];
     state.playback_meters = vec![MeterAnim::new(); state.device.playbacks().len()];
     state.output_meters = vec![MeterAnim::new(); state.device.outputs().len()];
+    state.strength_inputs = vec![[None, None]; state.device.inputs().len()];
+    state.strength_playbacks = vec![[None, None]; state.device.playbacks().len()];
+    state.strength_outputs = vec![[None, None]; state.device.outputs().len()];
+    state.strength_at = Instant::now();
     state.fx_meters = [MeterAnim::new(), MeterAnim::new()];
     state.fx_overload = [false, false];
     state.playback_tap = if state.device.is_mock() || state.device.has_device_playback_meters() {
@@ -12761,6 +12817,7 @@ fn strip_params<'a>(
         meter_available: false,
         meter2: None,
         meter2_available: false,
+        readout: [None, None],
         meter_bus,
         meter_slot,
         meter_trim: 0.0,
@@ -12788,9 +12845,6 @@ fn strip_params<'a>(
         has_trim: false,
         trim: 0.0,
         trim_tip: String::new(),
-        slot_trim: true,
-        slot_eq: false,
-        slot_dyn: false,
         has_phase: false,
         phase: false,
         loopback: false,
@@ -12896,6 +12950,11 @@ fn strip_params<'a>(
                     .map(MeterAnim::frame)
                     .unwrap_or_else(|| fader::MeterFrame::still(0.0)),
                 meter_available: state.device.has_input_meter(i),
+                readout: state
+                    .strength_inputs
+                    .get(i)
+                    .copied()
+                    .unwrap_or([None, None]),
                 meter_trim: ch.trim,
                 has_48v,
                 has_pad: caps.input_pad && ch.has_pad,
@@ -12984,6 +13043,11 @@ fn strip_params<'a>(
                     .map(MeterAnim::frame)
                     .unwrap_or_else(|| fader::MeterFrame::still(0.0)),
                 meter_available: playback_meter_available(state, i),
+                readout: state
+                    .strength_playbacks
+                    .get(i)
+                    .copied()
+                    .unwrap_or([None, None]),
                 meter_trim: ch.trim,
                 stereo_linked: state.device.playback_linked(i / 2),
                 mute: ch.mute,
@@ -13050,6 +13114,11 @@ fn strip_params<'a>(
                 // when every nonzero crosspoint feeding this pair has
                 // a real meter (see `output_meter_available`).
                 meter_available: output_meter_available(state, i),
+                readout: state
+                    .strength_outputs
+                    .get(i)
+                    .copied()
+                    .unwrap_or([None, None]),
                 has_eq: ch.eq.is_some(),
                 eq_enabled: ch.eq.is_some_and(|e| e.enabled),
                 has_dynamics: caps.dynamics && ch.dynamics.is_some(),
@@ -17635,7 +17704,7 @@ mod tests {
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, MeterAnim, Message, PwClock,
-        METER_RELEASE_DB_S, RateChoice, RowMode, View, rate_choices,
+        METER_RELEASE_DB_S, RateChoice, RowMode, View, rate_choices, strength_snapshot,
         ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
         control_room_visual_width,
         is_control_room_cid, strip_params, ResetMix, OptionsMenu, WorkspaceMenu,
@@ -18412,6 +18481,21 @@ mod tests {
             "one attack tick should jump most of the way: {}",
             m.frame().value
         );
+    }
+
+    #[test]
+    fn strength_snapshot_links_pairs_and_leaves_split_empty() {
+        let mut m = vec![MeterAnim::new(); 3];
+        m[0].step(0.5);
+        m[1].step(0.25);
+        m[2].step(0.1);
+        let v: Vec<f32> = m.iter().map(|m| m.frame().value).collect();
+        let snap = strength_snapshot(&m, |pair| pair == 0);
+        assert_eq!(snap[0], [Some(v[0]), Some(v[1])]);
+        assert_eq!(snap[1], [Some(v[1]), None]);
+        assert_eq!(snap[2], [Some(v[2]), None]);
+        let split = strength_snapshot(&m, |_| false);
+        assert_eq!(split[0], [Some(v[0]), None]);
     }
 
     #[test]

@@ -362,10 +362,10 @@ range as the VU element, so each VU label and the matching fader mark share
 one vertical centre line.  The scale has an unlabelled green tick at -3 dB,
 the full-scale-sine RMS target, and a red tick at +3 dB.
 Each tick is one colour and continues a little way under the fader cap; the
-cap covers the line at its current level. The cap centre line aligns with the
-tick, spans the complete cap width and is twice the thickness of the other
-cap ridges (2 px at zoom 1). A fixed 0 dB tick also sits on the right side of
-the fader.
+cap covers the line at its current level. The cap centre line is dark grey,
+aligns with the tick, spans the complete cap width and is twice the thickness
+of the other cap ridges (2 px at zoom 1). A fixed 0 dB tick also sits on the
+right side of the fader.
 
 ### 2.8 Channel layout model
 
@@ -380,7 +380,9 @@ one row.  `TC1` is the name, `TL3` the left button of the third Top row and
 The full strip is 90 × 350 px at zoom 1.0.  The Top, Middle and B1 rows use a
 78 px-wide content box with 6 px left and right padding and 4 px top padding;
 there is no bottom padding.  B2 spans the full 90 px card width at the bottom
-edge.  The collapsed strip is 44 × 350 px.  Every dimension, font size and gap
+edge.  The slideout-tab and minimize faces are the right-hand exception:
+their glyphs stay in the content box, but the face extends through the right
+padding to the card edge.  The collapsed strip is 44 × 350 px.  Every dimension, font size and gap
 is multiplied by the UI zoom (`0.75..1.75`); the aspect ratio is invariant.
 
 Rows are separated by 1 px.  The Centre column is the reference centre line
@@ -430,7 +432,7 @@ zoom.  The content box is 78 px wide.
 
 | Element | x | Width |
 |---|---:|---:|
-| VU element, labels centred | 11 | 13 |
+| VU element, labels centred | 0 | 24 |
 | fader track area | 26 | 26 |
 | fader slot | 35.5 | 7 |
 | fader cap | 28 | 22 |
@@ -440,14 +442,14 @@ zoom.  The content box is 78 px wide.
 | T3 right button | 40 | 38 |
 | M1 left readout | 0 | 38 |
 | M1 right readout | 40 | 38 |
-| B1 collapse button | 59 | 19 |
+| B1 collapse glyph | 59 | 19 |
 | B2 submix selector | 0 | 90 |
 
 The T1, T2, T3, M1 and B1 rows centre on x = 39; M1 uses the same two 38 px
-cells as T3, but with no outline or fill.  The fader track also centres on
-x = 39: its group is the 13 px VU element, a 2 px gap and the 26 px track,
-starting at x = 11.  The level labels are centred in the VU channel; the
-moving bars cover them.
+cells as T3, but with no outline or fill.  The VU element occupies the left
+column at x = 0.  The fader track also centres on x = 39: its group is the
+24 px VU element, a 2 px gap and the 26 px track, starting at x = 0.  The
+level labels are centred in the VU channel; the moving bars cover them.
 
 A linked pair draws two bars with a 2 px gap; a split or mono channel shows
 one bar.  The OVR segment occupies the top 6 px of the VU element, inside its
@@ -456,9 +458,10 @@ bounds; the level scale runs the full element height behind it.
 M1 is drawn as text only, right-aligned inside each cell.  The left cell is
 the left channel and the right cell is the right channel; no `L` or `R`
 prefix is printed.  The cell width accommodates `-99.0`; values of 100 and
-above omit the fractional part (`100`, `120`).  B2 spans the full 90 px card
-width at the bottom edge; its label is always centred on the channel width
-and the arrow sits at the right edge.
+above omit the fractional part (`100`, `120`).  The values refresh every
+0.25 s; the VU bars continue at the meter tick rate.  B2 spans the full
+90 px card width at the bottom edge; its label is always centred on the
+channel width and the arrow sits at the right edge.
 
 #### 2.8.4 Right-hand stack
 

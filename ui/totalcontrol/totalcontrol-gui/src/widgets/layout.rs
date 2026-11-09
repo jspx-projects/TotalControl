@@ -1,8 +1,8 @@
 //! Shared geometry for a full channel strip.
 //!
 //! This is the executable form of `docs/spec/TOTALCONTROL-GUI-SPEC.md` §2.8.
-//! It is deliberately not wired into rendering yet: this commit pins the
-//! contract in tests before the widgets migrate to it.
+//! `strip` lays every full strip out from this model; the tests pin the
+//! geometry so element work cannot silently move a neighbouring control.
 
 #![allow(dead_code)]
 
@@ -30,16 +30,18 @@ pub const MIDDLE_H: f32 = 205.0;
 pub const DB_READOUT_H: f32 = 14.0;
 pub const SUBMIX_H: f32 = 18.0;
 
-pub const VU_X: f32 = 11.0;
-pub const VU_W: f32 = 13.0;
+pub const VU_X: f32 = 0.0;
+pub const VU_W: f32 = 24.0;
 pub const TRACK_X: f32 = 26.0;
 pub const TRACK_W: f32 = 26.0;
+/// Full meter + gap + track canvas, from the content's left edge.
+pub const FADER_CANVAS_W: f32 = 55.0;
 pub const TAB_X: f32 = 56.0;
 pub const TAB_W: f32 = 20.0;
 pub const TAB_FACE_W: f32 = STRIP_W - (CONTENT_X + TAB_X);
 pub const FX_W: f32 = 26.0 * 0.62;
 pub const FX_H: f32 = 66.0;
-pub const TAB_TOP_WITH_FX: f32 = FX_H + 12.0;
+pub const TAB_TOP_WITH_FX: f32 = FX_H + 8.0;
 pub const TAB_H: f32 = 22.0;
 pub const GEAR_H: f32 = 26.0;
 pub const TAB_GAP: f32 = 6.0;
@@ -75,6 +77,9 @@ pub struct StripLayout {
     pub buttons: [Rectangle; 2],
     pub readouts: [Rectangle; 2],
     pub vu: Rectangle,
+    /// The full meter+ruler+track canvas.  `fader` is the track rectangle
+    /// inside it.
+    pub fader_canvas: Rectangle,
     pub fader: Rectangle,
     pub fx: Option<Rectangle>,
     /// Glyph columns for T, gear, EQ, D.
@@ -112,6 +117,7 @@ impl StripLayout {
         ];
         let middle_y = readouts_y + READOUT_H + ROW_GAP;
         let vu = r(CONTENT_X + VU_X, middle_y, VU_W, MIDDLE_H);
+        let fader_canvas = r(CONTENT_X, middle_y, FADER_CANVAS_W, MIDDLE_H);
         let fader = r(CONTENT_X + TRACK_X, middle_y, TRACK_W, MIDDLE_H);
         let fx = features
             .fx
@@ -173,6 +179,7 @@ impl StripLayout {
             buttons,
             readouts,
             vu,
+            fader_canvas,
             fader,
             fx,
             tab_glyphs,
@@ -237,6 +244,10 @@ mod tests {
         approx(l.vu.y + l.vu.height, l.fader.y + l.fader.height);
         approx(l.vu.width, VU_W);
         approx(l.fader.width, TRACK_W);
+        approx(l.fader_canvas.x, CONTENT_X);
+        approx(l.fader_canvas.width, FADER_CANVAS_W);
+        assert!(inside(l.fader_canvas, l.vu));
+        assert!(inside(l.fader_canvas, l.fader));
         approx(l.vu.x + l.vu.width + 2.0, l.fader.x);
         approx(l.fader.x + l.fader.width / 2.0, l.centre_x());
     }
@@ -339,6 +350,7 @@ mod tests {
                 l.readouts[0],
                 l.readouts[1],
                 l.vu,
+                l.fader_canvas,
                 l.fader,
                 l.db_readout,
                 l.collapse_glyph,
@@ -376,6 +388,6 @@ mod tests {
         let l = layout(ChannelKind::Output);
         assert!(l.fx.is_some());
         assert!(l.submix.is_none());
-        approx(l.tab_glyphs[0].y, 189.0);
+        approx(l.tab_glyphs[0].y, l.vu.y + FX_H + 8.0);
     }
 }

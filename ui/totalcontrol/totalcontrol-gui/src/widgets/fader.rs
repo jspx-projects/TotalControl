@@ -148,10 +148,10 @@ impl MeterFrame {
 /// Width of the coloured VU wash.  Kept a little wider than the minimum
 /// needed for the ruler labels so the stereo bars in a linked pair and the
 /// meter against a busy fader remain easy to read at normal zoom.
-const METER_W: f32 = 13.0;
-const LANE_GAP: f32 = 1.0;
-const RULER_LANE_W: f32 = 14.0;
-const METER_RULER_W: f32 = METER_W + LANE_GAP + RULER_LANE_W;
+const METER_W: f32 = 24.0;
+/// The VU level text lives inside the meter column; there is no separate
+/// ruler lane.
+const METER_RULER_W: f32 = METER_W;
 const GAP: f32 = 2.0;
 const TRACK_W: f32 = 26.0;
 /// Width a strip fader canvas needs to show the full meter/track group.
@@ -186,7 +186,7 @@ const SNAP_PX: f32 = 2.0;
 /// the sharp knee a two-segment mapping produces (which crowded the
 /// 0/-6/-10 ruler ticks together). The track spans FLOOR_DB .. +6 dB
 /// (TOP_DB), TotalMix's fader range.
-const FLOOR_DB: f32 = -60.0;
+const FLOOR_DB: f32 = -65.0;
 /// The fader's top: +6 dB (2.0 linear) like TotalMix, not 0 dB.
 const TOP_DB: f32 = 6.0;
 const TAPER_K: f32 = 0.6;
@@ -245,6 +245,14 @@ pub(crate) fn t_to_vol(t: f32) -> f32 {
     }
 }
 
+/// Logical (unscaled) left edge of the meter and fader track inside the
+/// fader canvas.
+#[derive(Clone, Copy, Debug)]
+pub struct FaderColumns {
+    pub meter_x: f32,
+    pub track_x: f32,
+}
+
 pub struct Fader<Message> {
     pub value: f32,
     pub range: (f32, f32),
@@ -285,6 +293,9 @@ pub struct Fader<Message> {
     /// `0.0` from that call site). See `layout_x`'s own doc comment for
     /// why this is needed at all, not just cosmetic tuning.
     pub reserved_right: f32,
+    /// Explicit meter/track columns for the strip layout.  `None` keeps the
+    /// derived layout used by the compact/matrix fader.
+    pub columns: Option<FaderColumns>,
     pub modifiers: Modifiers,
     pub scale: f32,
     /// `false` skips drawing the groove/cap entirely — the click/drag/
@@ -348,6 +359,9 @@ impl<Message> Fader<Message> {
     /// negative-x fix this replaced (never let the meter go negative;
     /// shift the whole group right instead of letting it clip).
     fn layout_x(&self, bounds_width: f32) -> (f32, f32) {
+        if let Some(columns) = self.columns {
+            return (columns.track_x * self.scale, columns.meter_x * self.scale);
+        }
         let true_center = (bounds_width + self.reserved_right) / 2.0;
         let track_x = true_center - (TRACK_W * self.scale) / 2.0;
         if !self.show_meter {
@@ -434,8 +448,6 @@ pub struct State {
     /// only) and the rail with its cap (value, default, range, drag). A
     /// mixer has ~70 faders and nearly all of them sit still, yet each
     /// re-tessellated its ruler text and rail on every redraw.
-    ruler_cache: canvas::Cache,
-    ruler_key: std::cell::Cell<u64>,
     track_cache: canvas::Cache,
     track_key: std::cell::Cell<u64>,
     /// The meter's static chrome: the dark well behind the level and the
@@ -766,6 +778,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     available,
                     meter2.map(|_| meter2_available),
                 );
+                draw_level_text(frame, meter_rect, self.scale);
             }));
         }
 
@@ -799,27 +812,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
         }
         layers.push(frame.into_geometry());
 
-        // Static layer 1: the ruler's ticks and numbers.
-        if self.show_meter {
-            let key = hash_of(|h| {
-                (
-                    bounds.width.to_bits(),
-                    bounds.height.to_bits(),
-                    self.scale.to_bits(),
-                )
-                    .hash(h);
-                meter_x.to_bits().hash(h);
-            });
-            if state.ruler_key.replace(key) != key {
-                state.ruler_cache.clear();
-            }
-            layers.push(state.ruler_cache.draw(renderer, bounds.size(), |frame| {
-                let (_, ruler_rect) = meter_column(meter_x, bounds.height, self.scale);
-                draw_ruler(frame, ruler_rect, self.scale);
-            }));
-        }
-
-        // Static layer 2: the rail and its cap, which only move with the
+        // Static layer 1: the rail and its cap, which only move with the
         // value.
         if self.show_track {
             let display_value = if state.dragging {
@@ -885,26 +878,20 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
 /// Splits the meter/ruler column starting at `x` into the bar itself and
 /// the lane the dB numbers sit in, right of it (next to the fader track).
 fn meter_column(x: f32, height: f32, scale: f32) -> (Rectangle, Rectangle) {
-    // Reserve the top strip for the separate OVR LEDs.  The VU itself starts
-    // below that gap, so its +6 dB top is below the LEDs rather than under
-    // them.
+    // The VU element spans its complete height.  The OVR segment is drawn
+    // inside the top of the same column, not above it.
     let top = meter_top_reserve(scale);
     let height = (height - top).max(0.0);
     let meter = Rectangle::new(Point::new(x, top), Size::new(METER_W * scale, height));
-    let ruler = Rectangle::new(
-        Point::new(x + (METER_W + LANE_GAP) * scale, top),
-        Size::new(RULER_LANE_W * scale, height),
-    );
-    (meter, ruler)
+    (meter, meter)
 }
 
 const METER_RADIUS: f32 = 2.0;
 const CLIP_H: f32 = 6.0;
 /// Space between the top of the VU scale and the separate OVR LEDs.
-const OVR_GAP: f32 = 2.0;
 
-pub(crate) fn meter_top_reserve(scale: f32) -> f32 {
-    (CLIP_H + OVR_GAP) * scale
+pub(crate) fn meter_top_reserve(_scale: f32) -> f32 {
+    0.0
 }
 /// TotalMix's peak/over meter extends 6 dB above full scale.  The +3 dB
 /// mark is the red ruler tick between the 0 dB and +6 dB ends.
@@ -924,7 +911,7 @@ const RULER_TICKS: [f32; 8] = [
     0.0,
     METER_RED_DB,
 ];
-const RULER_LABEL_TICKS: [f32; 7] = [-60.0, -40.0, -20.0, -10.0, -6.0, 0.0, METER_RED_DB];
+const RULER_LABEL_TICKS: [f32; 6] = [-60.0, -40.0, -20.0, -10.0, -6.0, 0.0];
 
 /// `f32::clamp` panics if `lo > hi` — which a plain `min - margin, max -
 /// margin` pair can produce for a single bad frame: iced 0.14 has a layout
@@ -1279,18 +1266,21 @@ fn draw_track(
 
     // The fader's own centre line is the alignment mark; it is drawn as
     // part of the cap below.  Keep a fixed 0 dB reference tick on the right
-    // side of the channel as well, matching the ruler's 0 dB tick.
-    let ref_y = safe_clamp(pos_of(default_value), r.y, r.y + r.height);
-    let guide_h = (1.0 * scale).max(1.0);
-    let right_x = r.x + r.width + (2.0 * scale).max(1.0);
-    frame.fill_rectangle(
-        Point::new(right_x, ref_y - guide_h / 2.0),
-        Size::new((REF_RIGHT_W * scale).max(2.0), guide_h),
-        Color {
-            a: 0.62,
-            ..theme::TEXT_SEC
-        },
-    );
+    // side of the channel as well, matching the ruler's 0 dB tick.  The FX
+    // fader has no marks at all, so this is gated by `show_scale`.
+    if show_scale {
+        let ref_y = safe_clamp(pos_of(default_value), r.y, r.y + r.height);
+        let guide_h = (1.0 * scale).max(1.0);
+        let right_x = r.x + r.width + (2.0 * scale).max(1.0);
+        frame.fill_rectangle(
+            Point::new(right_x, ref_y - guide_h / 2.0),
+            Size::new((REF_RIGHT_W * scale).max(2.0), guide_h),
+            Color {
+                a: 0.62,
+                ..theme::TEXT_SEC
+            },
+        );
+    }
 
     // Cap — flat + ridged, like a real fader cap grip, no heavy bevel.
     let cap_left = cx - cap_w / 2.0;
@@ -1314,18 +1304,27 @@ fn draw_track(
     // position marker (thin bright line, like the reference line on some
     // analog console fader caps) rather than a fourth separate line drawn
     // on top of it at the same y.
-    for i in 1..=3 {
-        let y = cap_top + (cap_h / 4.0) * i as f32;
-        let ridge = Path::rectangle(
-            Point::new(cap_left + 3.0 * scale, y - 0.5),
-            Size::new(cap_w - 6.0 * scale, 1.0),
-        );
-        let color = if i == 2 {
-            Color::from_rgba8(0xff, 0xff, 0xff, 0.65)
-        } else {
-            Color::from_rgba8(0x00, 0x00, 0x00, 0.25)
-        };
-        frame.fill(&ridge, color);
+    if show_scale {
+        for i in 1..=3 {
+            let y = cap_top + (cap_h / 4.0) * i as f32;
+            let (x, w, h) = if i == 2 {
+                // Centre line: twice the thickness, full cap width.
+                (cap_left, cap_w, (2.0 * scale).max(2.0))
+            } else {
+                (
+                    cap_left + 3.0 * scale,
+                    cap_w - 6.0 * scale,
+                    (1.0 * scale).max(1.0),
+                )
+            };
+            let ridge = Path::rectangle(Point::new(x, y - h / 2.0), Size::new(w, h));
+            let color = if i == 2 {
+                Color::from_rgb8(0x4a, 0x4c, 0x52)
+            } else {
+                Color::from_rgba8(0x00, 0x00, 0x00, 0.25)
+            };
+            frame.fill(&ridge, color);
+        }
     }
 
     frame.stroke(
@@ -1334,51 +1333,10 @@ fn draw_track(
     );
 }
 
-/// Drawn on top of the (translucent, see `FILL_ALPHA`) meter wash, so it
-/// needs to stay legible against whatever color is lit behind it —
-/// numbers centered in the same rect `draw_meter` just filled, TotalMix-
-/// style, rather than pushed into their own lane to one side of it. The
-/// tick dash sits at the rect's own right edge — right where the fader
-/// track begins right after it (see `Fader::layout_x`), the same
-/// "shared between the meter and the fader" position the reference uses.
-fn draw_ruler(frame: &mut Frame, r: Rectangle, scale: f32) {
-    // Keep the tick's right edge fixed and shorten its left end by a
-    // further 20% from the previous width (22% of the original length).
-    let full_line_w = (8.0 * scale).max(3.0);
-    let previous_line_w = full_line_w * 0.2744;
-    let line_w = previous_line_w * 0.8;
-    let line_h = (1.0 * scale).max(1.0);
-    let margin = (1.0 * scale).max(1.0);
-    // Centre the tick in the free space between the number and the fader
-    // track.  The track begins one `GAP` after the ruler lane.
-    let track_start = r.x + r.width + GAP * scale;
-    let line_right = track_start - margin;
-    let line_x = line_right - line_w;
-    // Keep the number at the previous position, leaving more space between
-    // the number and the shorter tick.
-    let label_x = line_right - previous_line_w - margin;
-    // Measured against the *full* height, matching `draw_track`'s own
-    // `pos_of` (the fader cap) and `draw_meter`'s fill: all three agree on
-    // where a given dB value sits.
-    for db in RULER_TICKS {
-        let y = safe_clamp(
-            meter_y(r, db),
-            r.y + 4.0 * scale,
-            r.y + r.height - 4.0 * scale,
-        );
-        let color = if db == METER_RED_DB {
-            theme::MRED
-        } else if db == -3.0 {
-            theme::MGREEN
-        } else {
-            Color::from_rgba8(0xff, 0xff, 0xff, 0.24)
-        };
-        frame.fill_rectangle(
-            Point::new(line_x, y - line_h / 2.0),
-            Size::new(line_w, line_h),
-            color,
-        );
-    }
+/// The VU level text, centred inside the meter column.  It is drawn before
+/// the dynamic level bar, so the bar covers it as it rises.  There are no
+/// tick marks inside the VU element.
+fn draw_level_text(frame: &mut Frame, r: Rectangle, scale: f32) {
     for db in RULER_LABEL_TICKS {
         let y = safe_clamp(
             meter_y(r, db),
@@ -1387,15 +1345,12 @@ fn draw_ruler(frame: &mut Frame, r: Rectangle, scale: f32) {
         );
         let label = if db == 0.0 {
             "0".to_string()
-        } else if db == METER_RED_DB {
-            format!("+{}", db as i32)
         } else {
             format!("{}", -db as i32)
         };
         frame.fill_text(canvas::Text {
             content: label,
-            position: Point::new(label_x, y),
-            // 0 dB is the reference the cap rests on: one step brighter.
+            position: Point::new(r.x + r.width / 2.0, y),
             color: if db == 0.0 {
                 theme::TEXT_PRIMARY
             } else {
@@ -1405,7 +1360,7 @@ fn draw_ruler(frame: &mut Frame, r: Rectangle, scale: f32) {
                 }
             },
             size: (theme::TEXT_MICRO * scale).into(),
-            align_x: advanced_text::Alignment::Right,
+            align_x: advanced_text::Alignment::Center,
             align_y: iced::alignment::Vertical::Center,
             ..canvas::Text::default()
         });
@@ -1493,13 +1448,14 @@ impl<Message> canvas::Program<Message> for VuMeter {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let (meter_rect, ruler_rect) = meter_column(0.0, bounds.height, self.scale);
+        let (meter_rect, _) = meter_column(0.0, bounds.height, self.scale);
         let level = if self.bus.is_some() {
             state.as_ref().map(|s| s.left).unwrap_or(self.level)
         } else {
             self.level
         };
         let (top, peak) = (level.shown(Instant::now()), level.peak);
+        draw_level_text(&mut frame, meter_rect, self.scale);
         draw_meter(
             &mut frame,
             meter_rect,
@@ -1512,7 +1468,6 @@ impl<Message> canvas::Program<Message> for VuMeter {
             // for this pass, single-bar only here.
             None,
         );
-        draw_ruler(&mut frame, ruler_rect, self.scale);
         vec![frame.into_geometry()]
     }
 }

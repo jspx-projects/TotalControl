@@ -301,23 +301,26 @@ A channel strip shows, left to right:
 - a **submix label box** on inputs and playback channels; it selects the bus
   being written (see [section 4](#4-how-the-mixer-works-submixes));
 - **mute** and **solo** (outputs use mute and **cue**);
+- two **strength readouts** showing the current left and right channel level;
 - a **level fader** with a meter beside it;
-
-Mute silences a channel without moving its fader; unmuting restores the same
-level. Solo silences the other inputs and software playbacks while the soloed
-channel keeps its fader; releasing the last solo restores the others.
-The Cue button on a hardware output copies that output's submix into the
-selected `Cue/PFL to` target, so you can listen to any hardware output through
-the monitor output. Cue is exclusive; releasing it restores the target mix.
 - a column of small buttons: `T` (trim), the settings gear, `EQ` and `D`
   (dynamics), when the unit provides them;
 - a **thin FX fader** at the top of that column, when the unit has an FX bus.
+
+The strength readouts refresh four times a second; the meter bars keep moving
+smoothly. Mute silences a channel without moving its fader; unmuting restores
+the same level. Solo silences the other inputs and software playbacks while
+the soloed channel keeps its fader; releasing the last solo restores the
+others. The Cue button on a hardware output copies that output's submix into
+the selected `Cue/PFL to` target, so you can listen to any hardware output
+through the monitor output. Cue is exclusive; releasing it restores the target
+mix.
 
 Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the
 meter grows to fill the space.
 
-The fader range is -60 to +6 dB. Its value is shown in a dB readout under
+The fader range is -65 to +6 dB. Its value is shown in a dB readout under
 the fader, without a unit suffix. Double-clicking that readout opens a
 numeric entry field.
 
