@@ -345,31 +345,29 @@ button face stays dark.
 
 ### The masters
 
-The sidebar's `M`, `S`/`F` and `F` buttons are the three masters, drawn as
-outlines in their own colour: mute blue, solo orange and fader-group silver.
-A master that is switched off takes a muted version of its colour.
+The sidebar's `M`, `S`/`F` and `F` buttons are the three masters, each drawn
+in the colour of the channel control it stands for: mute blue, solo yellow and
+the fader group's own colour. They are the same size as the sidebar's other
+buttons. A master that is switched off takes a muted version of its colour.
 
-`M` and `S` are on when TotalControl starts. Mute a channel and it joins the
-global mute set; `M` stays lit and the channel goes quiet. Press `M` and the
-whole set is switched off without being forgotten: the master and every held
-channel show the pause mark before the `M`, and the channels become audible
-again. Press `M` again and the same channels are muted as a group. While the
-master shows the pause mark, clicking a channel's mute does not silence it;
-the click only adds or removes that channel from the set, so you can prepare
-the group before applying it. While the set is applied, unmuting a member
-takes it out of the set. The mute master works on every routing, not only the
-submix you are looking at.
+The mute and solo groups build themselves. You do not have to set anything
+up: every channel you mute joins the global mute group, and every channel you
+solo joins the global solo group. All you need to remember is the button.
 
-`S` follows the same pattern over the current submix. It also starts on, the
-first solo joins the set, and a press suspends the set with the pause mark
-after the `S`. While suspended, clicking a channel's solo only adds it to the
-set. In PFL mode the same button becomes the PFL master: it shows `F` while an
-input is listening, and pressing it cancels the active PFL rather than
-restoring it.
+`M` is on when TotalControl starts. Press it and the whole mute group switches
+off for the moment: the master and every held channel show the pause mark
+before the `M`, and the channels become audible again. Press `M` again and the
+same channels are muted together. The mute group works on every routing, not
+only the submix you are looking at.
 
-Both masters can be switched off before they hold anything. That is the way to
-build a set without muting or soloing as you go: switch the master off, click
-the channels you want, then switch it back on to apply them together.
+The pause mark means the group is being remembered, not cleared. Clicking a
+channel that is already in the group toggles it and takes it out of the
+group; the rest of the group is unaffected. Muting a channel that is not in
+the group mutes it as usual and adds it, even while the group is off.
+
+`S` works the same way for solos over the current submix. In PFL mode the same
+button becomes the PFL master: it shows `F` while an input is listening, and
+pressing it cancels the active PFL rather than restoring it.
 
 `F` is different: it gangs faders and remembers the group, but has no pause
 face. Shift+click a strip to add it to the global fader group; the first

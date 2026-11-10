@@ -266,7 +266,13 @@ pub fn sidebar(state: &TotalControl) -> Element<'_, Message> {
             // The device card is folded away with the panel; its settings
             // stay one click off.
             hint(
-                button(text("\u{2699}").size(theme::TEXT_SM * scale).center())
+                button(
+                    text("\u{2699}")
+                        .size(theme::TEXT_SM * scale)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .center(),
+                )
                     .padding(0)
                     .width(Length::Fixed(TOGGLE_W * scale))
                     .height(Length::Fixed(TOGGLE_H * scale))
@@ -363,7 +369,7 @@ pub fn sidebar(state: &TotalControl) -> Element<'_, Message> {
 fn zoom_bar(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     let pct = format!("{:.0}%", state.ui_scale * 100.0);
     let cell = |label: &'static str| {
-        button(text(label).size(theme::TEXT_SM * scale).center())
+        button(text(label).size(theme::TEXT_SM * scale).width(Length::Fill).center())
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
             .width(Length::Fixed(26.0 * scale))
     };
@@ -377,7 +383,7 @@ fn zoom_bar(state: &TotalControl, scale: f32) -> Element<'_, Message> {
                 scale,
             ),
             hint(
-                button(text(pct).size(theme::TEXT_XS * scale).center())
+                button(text(pct).size(theme::TEXT_XS * scale).width(Length::Fill).center())
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                     .width(Length::Fill)
                     .style(theme::ghost_button)
@@ -569,7 +575,7 @@ pub(crate) fn clock_line(state: &TotalControl, clock_source: &str) -> String {
 fn undo_redo_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     row![
         hint(
-            button(text("\u{2039} undo").size(theme::TEXT_XS * scale).center())
+            button(text("\u{2039} undo").size(theme::TEXT_XS * scale).width(Length::Fill).center())
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                 .width(Length::Fill)
                 .style(theme::ghost_button)
@@ -578,7 +584,7 @@ fn undo_redo_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             scale,
         ),
         hint(
-            button(text("redo \u{203a}").size(theme::TEXT_XS * scale).center())
+            button(text("redo \u{203a}").size(theme::TEXT_XS * scale).width(Length::Fill).center())
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                 .width(Length::Fill)
                 .style(theme::ghost_button)
@@ -592,19 +598,18 @@ fn undo_redo_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     .into()
 }
 
-/// The global row, TotalMix's Mute/Solo/Fader masters plus the hardware
-/// Dim. All four report real state, so all keep `toggle_button`'s full
-/// fill when lit.
+/// The global row, TotalMix's Mute/Solo/Fader masters.
 ///
-/// * `M` lights while any channel is muted; a press clears those mutes and
-///   the next one brings them back (`Message::GlobalMuteToggle`). In
-///   between, it and the channels it holds show as armed (dimmed outline,
-///   `theme::armed_toggle_button`), as TotalMix keeps them marked.
+/// * `M` is on from the start and its group is automatic: every mute joins
+///   it. A press unmutes the whole group and shows the pause mark; the next
+///   press mutes it again (`Message::GlobalMuteToggle`). A click on a member
+///   toggles it and takes it out of the group.
 /// * `S` is the same for solos (`Message::GlobalSoloToggle`).
-/// * `F` is TotalMix's temporary fader group: Shift-click a strip or its
-///   fader to add or remove it, and the members' caps turn yellow. Lit while
-///   a group exists, a press clears it; with nothing selected it is disabled,
-///   since there is nothing to clear.
+/// * `F` is the global fader group: Shift+click a strip or its fader to add
+///   or remove it, and the members' caps take the group colour. A press
+///   ungangs the members and hides the colour without forgetting them; the
+///   next press brings both back. With nothing selected it is disabled,
+///   since there is nothing to gang.
 /// * `DIM` flips `RmeDevice::set_dim`, the switch the front-panel DIM
 ///   button toggles, which had no on-screen control at all. RME-protocol
 ///   only, so it is absent in Class Compliant mode.
@@ -614,7 +619,9 @@ fn master_cell<'a>(
     scale: f32,
 ) -> iced::widget::Button<'a, Message> {
     button(content)
-        .padding(theme::SPACE_SM * scale)
+        // The same box as the other sidebar buttons; the content fills it
+        // so the label centres in both axes.
+        .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
         .width(Length::Fill)
 }
 
@@ -634,43 +641,53 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         theme::muted(theme::mute_color())
     };
     let solo_color = if solo_applied {
-        theme::SOLO_MASTER
+        theme::solo_color()
     } else {
-        theme::muted(theme::SOLO_MASTER)
+        theme::muted(theme::solo_color())
+    };
+    let fader_color = theme::group_temporary();
+    // Text fills the cell so its own centre alignment is the cell's centre.
+    let letter = |ch: &'static str| {
+        text(ch)
+            .size(theme::TEXT_XS * scale)
+            .width(Length::Fill)
+            .center()
     };
     let mute_content: Element<'_, Message> = if mute_pause {
-        row![
-            pause_mark(mute_color, scale),
-            text("M").size(theme::TEXT_SM * scale)
-        ]
-        .spacing(theme::SPACE_TIGHT * scale)
-        .align_y(Alignment::Center)
+        container(
+            row![
+                pause_mark(mute_color, scale),
+                text("M").size(theme::TEXT_XS * scale)
+            ]
+            .spacing(theme::SPACE_TIGHT * scale)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .align_x(Alignment::Center)
         .into()
     } else {
-        text("M").size(theme::TEXT_SM * scale).into()
+        letter("M").into()
     };
-    let solo_content: Element<'_, Message> = if pfl {
-        if any_solo {
-            text("F").size(theme::TEXT_SM * scale).into()
-        } else {
+    let solo_content: Element<'_, Message> = if pfl && any_solo {
+        text("F")
+            .size(theme::TEXT_XS * scale)
+            .width(Length::Fill)
+            .center()
+            .into()
+    } else if pfl || solo_pause {
+        container(
             row![
-                text("S").size(theme::TEXT_SM * scale),
+                text("S").size(theme::TEXT_XS * scale),
                 pause_mark(solo_color, scale)
             ]
             .spacing(theme::SPACE_TIGHT * scale)
-            .align_y(Alignment::Center)
-            .into()
-        }
-    } else if solo_pause {
-        row![
-            text("S").size(theme::TEXT_SM * scale),
-            pause_mark(solo_color, scale)
-        ]
-        .spacing(theme::SPACE_TIGHT * scale)
-        .align_y(Alignment::Center)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .align_x(Alignment::Center)
         .into()
     } else {
-        text("S").size(theme::TEXT_SM * scale).into()
+        letter("S").into()
     };
     let r = row![
         hint(
@@ -686,7 +703,7 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         ),
         hint(
             master_cell(solo_content, scale)
-                .style(theme::master_button(solo_applied, theme::SOLO_MASTER))
+                .style(theme::master_button(solo_applied, theme::solo_color()))
                 .on_press(Message::GlobalSoloToggle),
             if pfl && any_solo {
                 "PFL master: cancel the active PFL"
@@ -700,9 +717,16 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             scale,
         ),
         hint(
-            master_cell(text("F").size(theme::TEXT_SM * scale).into(), scale)
-                .style(theme::master_button(state.fader_ganged, theme::FADER))
-                .on_press_maybe(has_group.then_some(Message::FaderGroupToggle)),
+            master_cell(
+                text("F")
+                    .size(theme::TEXT_XS * scale)
+                    .width(Length::Fill)
+                    .center()
+                    .into(),
+                scale,
+            )
+            .style(theme::master_button(state.fader_ganged, fader_color))
+            .on_press_maybe(has_group.then_some(Message::FaderGroupToggle)),
             if state.fader_ganged {
                 "Fader master: ungang the stored group"
             } else if has_group {
@@ -929,13 +953,13 @@ fn segmented_row<'a>(
     scale: f32,
 ) -> Element<'a, Message> {
     segment_track(
-        button(text(left_label).size(theme::TEXT_XS * scale).center())
+        button(text(left_label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
             .width(Length::Fill)
             .style(theme::segment_cell(left_active))
             .on_press_maybe(on_left)
             .into(),
-        button(text(right_label).size(theme::TEXT_XS * scale).center())
+        button(text(right_label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
             .width(Length::Fill)
             .style(theme::segment_cell(!left_active))
@@ -951,7 +975,7 @@ fn segmented<'a>(cells: &[(&'a str, bool, Option<Message>)], scale: f32) -> Elem
     let mut r = row![].spacing(theme::SPACE_HAIRLINE * scale);
     for (label, lit, msg) in cells {
         r = r.push(
-            button(text(*label).size(theme::TEXT_XS * scale).center())
+            button(text(*label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                 .width(Length::Fill)
                 .style(theme::segment_cell(*lit))
@@ -1287,7 +1311,7 @@ fn groups_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             let flashing = state.group_edit.is_some()
                 && (target.is_none() || is_target);
             let lit = if flashing { state.group_flash } else { linked };
-            button(text(label).size(theme::TEXT_XS * scale).center())
+            button(text(label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
                 .padding(theme::SPACE_TIGHT * scale)
                 .width(Length::Fill)
                 .style(theme::toggle_button(lit, colour))
@@ -1312,12 +1336,12 @@ fn groups_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     };
     body = body.push(
         row![
-            button(text(edit_label).size(theme::TEXT_XS * scale).center())
+            button(text(edit_label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
                 .style(theme::segment_button(state.group_edit.is_some()))
                 .on_press(Message::GroupEditToggle),
-            button(text("clear").size(theme::TEXT_XS * scale).center())
+            button(text("clear").size(theme::TEXT_XS * scale).width(Length::Fill).center())
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
                 .style(theme::ghost_button)

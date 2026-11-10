@@ -5286,10 +5286,9 @@ fn temporary_group_peers(state: &TotalControl, cid: ChannelId) -> Vec<ChannelId>
         .collect()
 }
 
-/// Whether `cid`'s mute is held off by the Mute master: the master's last
-/// press cleared it, and nothing has been muted since (a new mute makes the
-/// master's next press clear that one instead, so the old set is no longer
-/// what it would bring back).
+/// Whether `cid` is a member of the suspended Mute master: it is unmuted
+/// and shows the pause mark. A click on it toggles the channel and removes
+/// it from the set.
 pub(crate) fn mute_armed(state: &TotalControl, cid: ChannelId) -> bool {
     state.mute_master.suspended
         && state.mute_master.members.contains(&cid)
@@ -8637,59 +8636,36 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::Mute(cid, m) => {
-            if state.mute_master.suspended {
-                // Suspended master: a click copies its paused state, so the
-                // channel stays unmuted and gains the pause.  Clicking a
-                // member removes it again.
-                if let Some(pos) = state.mute_master.members.iter().position(|c| *c == cid) {
-                    state.mute_master.members.remove(pos);
-                } else {
-                    state.mute_master.members.push(cid);
-                }
-                set_channel_mute(state, cid, false);
-                notify_osc(state, OscOutbound::Mute(cid, false));
-            } else {
-                select_strip(state, cid);
-                set_channel_mute(state, cid, m);
-                notify_osc(state, OscOutbound::Mute(cid, m));
-                // While the master is engaged, a muted channel is a member.
-                if m {
-                    if !state.mute_master.members.contains(&cid) {
-                        state.mute_master.members.push(cid);
-                    }
-                } else {
-                    state.mute_master.members.retain(|c| *c != cid);
-                }
-                for other in propagation_set(state, cid, sidebar::GroupLink::Mute) {
-                    set_channel_mute(state, other, m);
-                    notify_osc(state, OscOutbound::Mute(other, m));
-                }
+            // The group is automatic: muting always mutes the channel and
+            // joins it, whatever the master's state. Clicking a member
+            // toggles it and takes it out of the group again.
+            if let Some(pos) = state.mute_master.members.iter().position(|c| *c == cid) {
+                state.mute_master.members.remove(pos);
+            } else if m {
+                state.mute_master.members.push(cid);
+            }
+            select_strip(state, cid);
+            set_channel_mute(state, cid, m);
+            notify_osc(state, OscOutbound::Mute(cid, m));
+            for other in propagation_set(state, cid, sidebar::GroupLink::Mute) {
+                set_channel_mute(state, other, m);
+                notify_osc(state, OscOutbound::Mute(other, m));
             }
         }
         Message::Solo(cid, s) => {
-            if state.solo_master.suspended {
-                if let Some(pos) = state.solo_master.members.iter().position(|c| *c == cid) {
-                    state.solo_master.members.remove(pos);
-                } else {
-                    state.solo_master.members.push(cid);
-                }
-                set_channel_solo(state, cid, false);
-                notify_osc(state, OscOutbound::Solo(cid, false));
-            } else {
-                select_strip(state, cid);
-                set_channel_solo(state, cid, s);
-                notify_osc(state, OscOutbound::Solo(cid, s));
-                if s {
-                    if !state.solo_master.members.contains(&cid) {
-                        state.solo_master.members.push(cid);
-                    }
-                } else {
-                    state.solo_master.members.retain(|c| *c != cid);
-                }
-                for other in propagation_set(state, cid, sidebar::GroupLink::Solo) {
-                    set_channel_solo(state, other, s);
-                    notify_osc(state, OscOutbound::Solo(other, s));
-                }
+            // Same automatic group as mute: a solo always solos and joins,
+            // a member click toggles it and removes it.
+            if let Some(pos) = state.solo_master.members.iter().position(|c| *c == cid) {
+                state.solo_master.members.remove(pos);
+            } else if s {
+                state.solo_master.members.push(cid);
+            }
+            select_strip(state, cid);
+            set_channel_solo(state, cid, s);
+            notify_osc(state, OscOutbound::Solo(cid, s));
+            for other in propagation_set(state, cid, sidebar::GroupLink::Solo) {
+                set_channel_solo(state, other, s);
+                notify_osc(state, OscOutbound::Solo(other, s));
             }
         }
         Message::GlobalMuteToggle => {
@@ -8711,7 +8687,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                 }
                 // Suspending an empty set is allowed: it gives the pause
-                // face, from which the next channel mute only arms the set.
+                // face. A later mute joins the set as usual.
                 state.mute_master.suspended = true;
                 for cid in state.mute_master.members.clone() {
                     set_channel_mute(state, cid, false);
@@ -8747,7 +8723,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                 }
                 // Suspending an empty set is allowed: it gives the pause
-                // face, from which the next channel solo only arms the set.
+                // face. A later solo joins the set as usual.
                 state.solo_master.suspended = true;
                 for cid in state.solo_master.members.clone() {
                     set_channel_solo(state, cid, false);
@@ -19601,7 +19577,7 @@ mod tests {
     }
 
     #[test]
-    fn channels_held_by_the_mute_master_show_as_armed() {
+    fn muting_while_the_master_is_off_mutes_and_joins_the_set() {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
         let other = ChannelId::Playback(0);
@@ -19610,11 +19586,12 @@ mod tests {
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(mute_armed(&state, a), "held off by the master");
         assert!(!mute_armed(&state, other), "never muted, never armed");
-        // A fresh mute while suspended joins the held set; it stays off and
-        // the existing member remains held too.
+        // The group is automatic: a new mute mutes at once and joins, while
+        // the existing member stays held with the pause glyph.
         let _ = update(&mut state, Message::Mute(other, true));
-        assert!(!channel_is_muted(&state, other), "new member stays off");
-        assert!(mute_armed(&state, other), "and shows the pause glyph");
+        assert!(channel_is_muted(&state, other), "a new mute mutes at once");
+        assert!(state.mute_master.members.contains(&other));
+        assert!(!mute_armed(&state, other), "a muted member is not paused");
         assert!(mute_armed(&state, a), "the held set survives a new member");
     }
 
@@ -19660,7 +19637,7 @@ mod tests {
     }
 
     #[test]
-    fn a_click_while_the_solo_master_is_suspended_extends_the_set() {
+    fn a_solo_while_the_master_is_off_solos_and_joins_the_set() {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
         let c = ChannelId::Input(8);
@@ -19669,13 +19646,15 @@ mod tests {
         assert!(!any_channel_soloed(&state));
         assert!(state.solo_master.suspended);
 
-        // While suspended a click adds the channel and leaves it silent.
+        // The group is automatic: a new solo solos at once and joins, while
+        // the existing member stays held with the pause glyph.
         let _ = update(&mut state, Message::Solo(c, true));
-        assert!(!channel_is_soloed(&state, c), "the set member stays off");
+        assert!(channel_is_soloed(&state, c), "a new solo solos at once");
         assert!(state.solo_master.members.contains(&c));
-        assert!(solo_armed(&state, c), "it shows the pause glyph");
+        assert!(!solo_armed(&state, c), "a soloed member is not paused");
+        assert!(solo_armed(&state, a), "the held set survives a new member");
 
-        // The next press engages the whole set.
+        // The next press applies the whole set.
         let _ = update(&mut state, Message::GlobalSoloToggle);
         assert!(channel_is_soloed(&state, a));
         assert!(channel_is_soloed(&state, c));
@@ -19701,6 +19680,48 @@ mod tests {
         assert!(channel_is_soloed(&state, b), "the solo master mirrors it");
         assert!(!state.solo_master.suspended);
         assert!(state.solo_master.members.contains(&b));
+    }
+
+    #[test]
+    fn a_held_mute_member_click_toggles_it_and_leaves_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        let _ = update(&mut state, Message::Mute(a, true));
+        let _ = update(&mut state, Message::Mute(b, true));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(mute_armed(&state, a));
+
+        let _ = update(&mut state, Message::Mute(a, true));
+        assert!(channel_is_muted(&state, a), "the member switches on");
+        assert!(
+            !state.mute_master.members.contains(&a),
+            "and leaves the set"
+        );
+        assert!(mute_armed(&state, b), "the rest of the set is untouched");
+    }
+
+    #[test]
+    fn a_held_solo_member_click_toggles_it_and_leaves_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        let _ = update(&mut state, Message::Solo(a, true));
+        let _ = update(&mut state, Message::Solo(b, true));
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(solo_armed(&state, a));
+
+        let _ = update(&mut state, Message::Solo(a, true));
+        assert!(channel_is_soloed(&state, a), "the member switches on");
+        assert!(
+            !state.solo_master.members.contains(&a),
+            "and leaves the set"
+        );
+        assert!(solo_armed(&state, b), "the rest of the set is untouched");
     }
 
     #[test]

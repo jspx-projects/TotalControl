@@ -48,19 +48,19 @@ its own collapse toggle.
 
 The global row is `M`, `S`/`F`, `F`.
 
-The left button is the **Mute master**. It is lit from the first frame with an
-empty set. A channel mute joins the set; while the master is lit the channel
-mutes, and unmuting a member removes it. A press suspends the set: every
+The left button is the **Mute master**. Membership is automatic: every channel
+mute joins the set, and while the master is lit the channel mutes. The master
+is lit from the first frame with an empty set. A press suspends the set: every
 member unmutes and the master and each held channel show the pause mark;
-pressing it again mutes the set. While suspended, a click on a channel's mute
-adds or removes it from the set and leaves that channel unmuted. The master
-can also be switched off while the set is empty. The set is global: it
-silences the channel on every routing.
+pressing it again mutes the set. A member click toggles that channel and
+removes it from the set; muting any other channel mutes it and adds it,
+whatever the master's state. The master can also be switched off while the set
+is empty. The set is global: it silences the channel on every routing.
 
 The middle button is the **Solo master**, the same machine with the pause mark
-after the letter, over the current submix; it is also lit from the first frame.
-In PFL mode it shows `F` while an input is listening; a press then cancels the
-active PFL and does not restore it.
+after the letter, over the current submix; it is also lit from the first frame
+and its membership is automatic. In PFL mode it shows `F` while an input is
+listening; a press then cancels the active PFL and does not restore it.
 
 The right `F` is the **global fader group** master, not the FX panel.
 Shift+click a strip adds or removes it; the first member turns `F` on. A plain
@@ -73,11 +73,12 @@ their own, hardware-output faders with theirs, so a group spanning rows moves
 one row at a time. It never affects the stored fader groups `1`–`4`; an empty
 group leaves `F` off.
 
-The three masters are outline switches in their own colour — mute blue, solo
-orange, fader silver — and take a muted version of that hue while off. Mute
-and solo are lit from the first frame; switching one off always shows the
-pause mark. The pause mark is two short, thick bars, half the label height:
-before the `M`, after the `S`.
+The three masters are outline switches in the colour of the channel control
+they stand for — mute blue, solo yellow, fader-group colour — and take a muted
+version of that hue while off. They use the normal sidebar button box and
+centre their label in both axes. Mute and solo are lit from the first frame;
+switching one off always shows the pause mark. The pause mark is two short,
+thick bars, half the label height: before the `M`, after the `S`.
 
 The `groups` card has four rows of storage places: `M1`–`M4` for the mute
 link, `S1`–`S4` for the solo link and `1`–`4` for the fader link, with `edit`
@@ -1515,6 +1516,10 @@ beyond the window.
 
 - Every channel control has a defined effect in the mixer model and its device
   path.
+- Every button centres its label horizontally and vertically in the button
+  face; an icon-only button centres the icon. The three masters and the group
+  storage cells use the normal sidebar button height. Menu items are the one
+  exception: they keep their text left-aligned.
 - Engaged controls use their defined style: orange outline for Stereo, Inst,
   AutoSet, FX Return and Loopback; green outline for Phase; orange arc for
   gain, pan and output balance; solo colour for Dynamics.
