@@ -12042,11 +12042,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // setting is not a blind choice; the latency line below adds the
     // hardware buffer and chain.
     let auto_label = if clock.effective_quantum() > 0 {
-        format!(
-            "Auto ({} samples, {:.1} ms)",
-            clock.effective_quantum(),
-            clock.latency_ms()
-        )
+        format!("Auto ({} samples)", clock.effective_quantum())
     } else {
         "Auto".to_string()
     };
