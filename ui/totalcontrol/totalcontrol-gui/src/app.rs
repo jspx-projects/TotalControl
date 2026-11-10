@@ -10613,6 +10613,9 @@ const TICK_IDLE: Duration = Duration::from_millis(100);
 /// canvases redraw from the shared bus themselves, so the view only needs
 /// an occasional pass for connection/autosave/OSC and non-canvas readouts.
 const TICK_SERVICE: Duration = Duration::from_secs(1);
+/// The M1 strength readouts refresh four times a second; the tick is their
+/// only clock when the device service owns metering.
+const TICK_READOUT: Duration = Duration::from_millis(250);
 /// How long after the last change the tick stays fast: longer than the
 /// meters' release, so a fading peak is drawn to the end.
 const ACTIVE_FOR: Duration = Duration::from_millis(1500);
