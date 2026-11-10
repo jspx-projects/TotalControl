@@ -32,6 +32,11 @@ pub struct InputChannel {
     pub volumes: Vec<f32>,
     /// Pan per output pair (-100 .. 100). Length = number of output pairs.
     pub pans: Vec<i8>,
+    /// Linked-pair balance per output block (-100 .. 100), length
+    /// 2 × output pairs. The balance is its own value, like TotalMix's
+    /// per-source per-output pan, so it survives a fader at 0.
+    #[serde(default)]
+    pub balance: Vec<i8>,
     /// FX send in dB (-65..0, 0 = max). Per channel on the UCX (`NN01`).
     #[serde(default = "default_fx_send_channel_db")]
     pub fx_send_db: f32,
@@ -433,6 +438,10 @@ pub struct PlaybackChannel {
     pub volumes: Vec<f32>,
     /// Pan per output pair (-100 .. 100).
     pub pans: Vec<i8>,
+    /// Linked-pair balance per output block (-100 .. 100), length
+    /// 2 × output pairs, kept when the pair volume is 0.
+    #[serde(default)]
+    pub balance: Vec<i8>,
     /// FX send in dB (-65..0, 0 = max). Per channel on the UCX (`0x47A0`
     /// family, linear on the wire).
     #[serde(default = "default_fx_send_channel_db")]
@@ -518,6 +527,7 @@ impl InputChannel {
             channel_type,
             volumes: vec![1.0; outputs],
             pans: vec![0; outputs],
+            balance: vec![0; outputs * 2],
             fx_send_db: default_fx_send_channel_db(),
             phantom: false,
             pad: false,
@@ -551,6 +561,7 @@ impl PlaybackChannel {
             name: name.to_string(),
             volumes: vec![1.0; outputs],
             pans: vec![0; outputs],
+            balance: vec![0; outputs * 2],
             fx_send_db: default_fx_send_channel_db(),
             split: false,
             trim: 0.0,

@@ -488,7 +488,8 @@ Input and playback pairs can be linked. When linked:
 
 - the fader shows the louder channel of the pair and moving it shifts both
   channels together, preserving their level difference;
-- the pair's balance is visible and adjustable from one knob;
+- the pair's balance is visible and adjustable from one knob, and keeps its
+  setting at any fader level;
 - the gain knob moves both preamps by the same step, preserving any offset
   between them, and shows both values;
 - mute, solo, FX send, EQ, low cut and dynamics settings are shared from the
@@ -499,6 +500,16 @@ Input and playback pairs can be linked. When linked:
 Splitting a pair sets the two channels hard left and right for panning into
 a submix and gives each channel its own fader. Re-linking restores the pair
 level and balance you had before the split.
+
+When the current submix is one channel of a split output pair, a linked
+pair's balance works on that mono output alone. The two outputs start hard
+left and hard right, each carrying its own side of the source; turn the
+balance towards the centre on one of them to send both sides there, and the
+other keeps its own setting.
+
+Linking the output pair again returns each source to its natural side, with
+the pair balance following the two levels. Splitting again starts the mono
+outputs hard left and hard right.
 
 Output pairs behave the same way: the balance knob exists only while
 linked, and splitting converts the pair level and balance into two
