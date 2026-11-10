@@ -619,17 +619,15 @@ fn master_cell<'a>(
 }
 
 fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
-    let any_mute = crate::app::any_channel_muted(state);
     let any_solo = crate::app::any_channel_soloed(state);
     let has_group = crate::app::temporary_group_exists(state);
     let pfl = state.control_room.pfl_replaces_solo;
-    // A master is lit only while it is engaged and something is held. Idle
-    // (empty) and suspended (stored but off) both show the pause glyph; while
-    // suspended it is the muted, armed face.
-    let mute_applied = any_mute && !state.mute_master.suspended;
-    let mute_pause = state.mute_master.suspended || !any_mute;
-    let solo_applied = any_solo && !state.solo_master.suspended;
-    let solo_pause = !pfl && (state.solo_master.suspended || !any_solo);
+    // Mute and solo start lit and have no idle face: `applied` means the
+    // stored set is switched on, `pause` means it is suspended.
+    let mute_applied = !state.mute_master.suspended;
+    let mute_pause = state.mute_master.suspended;
+    let solo_applied = !state.solo_master.suspended;
+    let solo_pause = !pfl && state.solo_master.suspended;
     let mute_color = if mute_applied {
         theme::mute_color()
     } else {
@@ -703,9 +701,15 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         ),
         hint(
             master_cell(text("F").size(theme::TEXT_SM * scale).into(), scale)
-                .style(theme::master_button(has_group, theme::FADER))
-                .on_press_maybe(has_group.then_some(Message::ClearSelection)),
-            "Temporary fader group (Shift-click strips): clear it",
+                .style(theme::master_button(state.fader_ganged, theme::FADER))
+                .on_press_maybe(has_group.then_some(Message::FaderGroupToggle)),
+            if state.fader_ganged {
+                "Fader master: ungang the stored group"
+            } else if has_group {
+                "Fader master: gang the Shift-clicked channels"
+            } else {
+                "Shift-click a strip to build the fader group"
+            },
             scale,
         ),
     ]

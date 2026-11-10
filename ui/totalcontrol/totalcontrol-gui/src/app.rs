@@ -1983,14 +1983,15 @@ pub enum Message {
     EditChanged(String),
     EditCommit,
 
-    /// Ctrl/Shift+click on a strip's non-control area toggles its
-    /// selection membership; a plain click there is a no-op (so
-    /// double-click-to-collapse on a selected strip isn't disrupted by an
-    /// intervening deselect on the first press).
+    /// Shift+click on a strip's non-control area adds or removes it from
+    /// the global fader group; a plain click moves the focus only and
+    /// leaves the group alone.
     StripClicked(ChannelId),
-    /// Plain click on genuinely empty page background clears the
-    /// selection — see `page()`.
+    /// Plain click on genuinely empty page background clears the focused
+    /// strip — see `page()`.
     ClearSelection,
+    /// Gang or ungang the stored global fader group (`F`).
+    FaderGroupToggle,
     /// The cursor just entered (`Some`) or left (`None`) a strip's card —
     /// drives the hover border/glow. See `TotalControl::hovered_strip`.
     StripHovered(Option<ChannelId>),
@@ -2491,22 +2492,21 @@ pub struct TotalControl {
     /// inside `RESIZE_THROTTLE` of the last applied one) — flushed by the
     /// next due resize or the next `Message::Tick`. See `apply_pending_resize`.
     pending_resize_width: Option<f32>,
-    /// Multi-selected strips — Ctrl+click toggles just the clicked strip,
-    /// Shift+click selects the whole range from `select_anchor` (standard
-    /// file-manager convention), click empty background to clear.
-    /// Mute/solo/collapse/volume/pan applied to any selected strip apply
-    /// to the whole selection at once.
+    /// The stored global fader group: every Shift+clicked strip, in all
+    /// three rows. The first member is added by Shift+click; a plain click
+    /// never changes it. Ganging and the member colour are gated by
+    /// `fader_ganged` (the `F` master), so an unganged group still exists.
     pub selected: HashSet<ChannelId>,
-    /// The strip a plain click last focused.  Cursor Up/Down nudge this
-    /// channel (or all of `selected` when a multi-selection exists), the
-    /// way TotalMix's keyboard control works.  Kept separate from
-    /// `selected` so a plain click does not turn into a multi-selection.
+    /// Whether the stored fader group is ganged (`F` lit). While off the
+    /// members keep their membership but lose the colour and no fader
+    /// moves another.
+    pub fader_ganged: bool,
+    /// The strip a plain click last focused. Cursor Up/Down nudges it (and
+    /// its ganged row peers), the way TotalMix's keyboard control works.
+    /// Kept separate from `selected` so a plain click does not join or
+    /// clear the fader group.
     pub focus_channel: Option<ChannelId>,
-    /// The strip a future Shift+click's range is measured from — the
-    /// most recent strip explicitly Ctrl- or Shift-clicked. Not moved by
-    /// Shift+click itself, so repeated Shift+clicks pivot around the same
-    /// point (letting you grow/shrink a range interactively) the way
-    /// Explorer/Finder do.
+    /// The strip a Shift+click last added to the fader group.
     pub select_anchor: Option<ChannelId>,
     /// Which strip the cursor is currently over, if any — drives the hover
     /// border/glow in `theme::strip_panel`. Plain `container::Style`
@@ -3175,6 +3175,7 @@ pub fn new_with_device(
         last_resize_applied: None,
         pending_resize_width: None,
         selected: HashSet::new(),
+        fader_ganged: false,
         focus_channel: None,
         select_anchor: None,
         hovered_strip: None,
@@ -3582,6 +3583,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         snapshots,
         groups: state.groups.clone(),
         temporary_group: state.selected.iter().copied().collect(),
+        fader_ganged: state.fader_ganged,
         layouts: state.layouts.clone(),
         labels: state.labels.iter().map(|(c, l)| (*c, l.clone())).collect(),
         view: WorkspaceView {
@@ -3685,6 +3687,7 @@ fn apply_workspace_state(
     state.groups = workspace.groups.clone();
     state.group_edit = None;
     state.selected = workspace.temporary_group.iter().copied().collect();
+    state.fader_ganged = workspace.fader_ganged && !state.selected.is_empty();
     state.select_anchor = None;
     state.layouts = workspace.layouts.clone();
     state.active_layout = workspace.view.active_layout;
@@ -5255,35 +5258,32 @@ pub(crate) fn any_channel_muted(state: &TotalControl) -> bool {
     all_channel_ids(state).into_iter().any(|cid| channel_is_muted(state, cid))
 }
 
-/// Whether two or more channels of one kind are selected.  The temporary
-/// fader group gangs within a row only: inputs with inputs, software
-/// playbacks with playbacks, outputs with outputs.
+/// Whether the global fader group has any member. The group exists as soon
+/// as the first strip is Shift+clicked, even before it has a peer to gang.
 pub(crate) fn temporary_group_exists(state: &TotalControl) -> bool {
-    [ChannelId::Input(0), ChannelId::Playback(0), ChannelId::Output(0)]
-        .iter()
-        .any(|probe| {
-            let kind = std::mem::discriminant(probe);
-            state
-                .selected
-                .iter()
-                .filter(|channel| std::mem::discriminant(*channel) == kind)
-                .count()
-                > 1
-        })
+    !state.selected.is_empty()
 }
 
-/// Whether `cid` is part of a temporary group of its own kind.
+/// Whether `cid` is a member whose group is ganged — the condition for the
+/// member colour. An unganged group keeps its members but shows no colour.
 fn temporary_group_contains(state: &TotalControl, cid: ChannelId) -> bool {
-    if !state.selected.contains(&cid) {
-        return false;
+    state.fader_ganged && state.selected.contains(&cid)
+}
+
+/// The other members of `cid`'s row in the ganged global fader group.
+/// Ganging is within one kind only: inputs with inputs, software playbacks
+/// with playbacks, hardware outputs with outputs.
+fn temporary_group_peers(state: &TotalControl, cid: ChannelId) -> Vec<ChannelId> {
+    if !state.fader_ganged || !state.selected.contains(&cid) {
+        return Vec::new();
     }
     let kind = std::mem::discriminant(&cid);
     state
         .selected
         .iter()
-        .filter(|channel| std::mem::discriminant(*channel) == kind)
-        .count()
-        > 1
+        .copied()
+        .filter(|other| *other != cid && std::mem::discriminant(other) == kind)
+        .collect()
 }
 
 /// Whether `cid`'s mute is held off by the Mute master: the master's last
@@ -5324,20 +5324,11 @@ fn propagation_set(
     link: sidebar::GroupLink,
 ) -> HashSet<ChannelId> {
     let mut set = HashSet::new();
-    // The multi-selection is TotalMix's *temporary fader* group: it gangs
-    // faders only, and only within one row — inputs with inputs, software
-    // playbacks with playbacks, outputs with outputs.
-    if link == sidebar::GroupLink::Fader && state.selected.contains(&cid) {
-        let kind = std::mem::discriminant(&cid);
-        let peers: Vec<ChannelId> = state
-            .selected
-            .iter()
-            .copied()
-            .filter(|other| std::mem::discriminant(other) == kind)
-            .collect();
-        if peers.len() > 1 {
-            set.extend(peers);
-        }
+    // The global fader group gangs level only, and only within one row —
+    // inputs with inputs, software playbacks with playbacks, outputs with
+    // outputs. Its stored membership is ignored while `F` is off.
+    if link == sidebar::GroupLink::Fader {
+        set.extend(temporary_group_peers(state, cid));
     }
     for g in &state.groups {
         let linked = match link {
@@ -5382,31 +5373,16 @@ fn apply_grouped_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v:
     set_channel_volume(state, cid, out, v);
     notify_osc(state, OscOutbound::Volume(cid, out, v));
     for sel in others {
-        let cur = state.device.volume(sel, out).unwrap_or(0.0)
+        // Hardware outputs carry their own index instead of a submix.
+        let peer_out = match sel {
+            ChannelId::Output(i) => i,
+            _ => out,
+        };
+        let cur = state.device.volume(sel, peer_out).unwrap_or(0.0)
             * trim_factor(channel_trim(state, sel));
         let new_vol = db_to_vol(vol_to_db(cur) + delta_db).clamp(0.0, 2.0);
-        set_channel_volume(state, sel, out, new_vol);
-        notify_osc(state, OscOutbound::Volume(sel, out, new_vol));
-    }
-}
-
-/// Same relative-delta grouping as `apply_grouped_volume`, for pan.
-fn apply_grouped_pan(state: &mut TotalControl, cid: ChannelId, out: usize, pan: i8) {
-    let others = propagation_set(state, cid, sidebar::GroupLink::Fader);
-    if others.is_empty() {
-        set_channel_pan(state, cid, out, pan);
-        notify_osc(state, OscOutbound::Pan(cid, out, pan));
-        return;
-    }
-    let old = i16::from(channel_pan(state, cid, out));
-    let delta = i16::from(pan) - old;
-    set_channel_pan(state, cid, out, pan);
-    notify_osc(state, OscOutbound::Pan(cid, out, pan));
-    for sel in others {
-        let cur = i16::from(channel_pan(state, sel, out));
-        let new = (cur + delta).clamp(-100, 100) as i8;
-        set_channel_pan(state, sel, out, new);
-        notify_osc(state, OscOutbound::Pan(sel, out, new));
+        set_channel_volume(state, sel, peer_out, new_vol);
+        notify_osc(state, OscOutbound::Volume(sel, peer_out, new_vol));
     }
 }
 
@@ -7470,6 +7446,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::EditChanged(_)
             | Message::StripClicked(_)
             | Message::ClearSelection
+            | Message::FaderGroupToggle
             | Message::StripHovered(_)
             | Message::OscReady(_)
 
@@ -7689,6 +7666,7 @@ fn changes_workspace(message: &Message) -> bool {
             | Message::GroupClear
             | Message::StripClicked(_)
             | Message::ClearSelection
+            | Message::FaderGroupToggle
             | Message::ControlRoomMuteFx(_)
             | Message::ControlRoomMono(_)
             | Message::ControlRoomRecall
@@ -7788,17 +7766,13 @@ fn selected_output_channel(state: &TotalControl) -> usize {
     }
 }
 
-/// Select a strip the way a plain click does.  The strip's own controls
+/// Focus a strip the way a plain click does.  The strip's own controls
 /// (mute, solo, the flyout buttons, the fader, the knobs) call this too, so
-/// a click anywhere on a channel selects it; on a hardware output it also
-/// shows that output's submix.  A strip that is already part of a
-/// multi-selection keeps the selection, so group edits still work.
+/// a click anywhere on a channel focuses it; on a hardware output it also
+/// shows that output's submix.  The global fader group is not touched: only
+/// Shift+click adds or removes its members.
 fn select_strip(state: &mut TotalControl, cid: ChannelId) {
     state.focus_channel = Some(cid);
-    if !state.selected.contains(&cid) {
-        state.selected.clear();
-        state.selected.insert(cid);
-    }
     state.select_anchor = Some(cid);
     if let ChannelId::Output(i) = cid {
         if state.device.outputs_one_per_pair() {
@@ -8736,13 +8710,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         state.mute_master.members.push(cid);
                     }
                 }
-                // An idle master has nothing to suspend.
-                if !state.mute_master.members.is_empty() {
-                    state.mute_master.suspended = true;
-                    for cid in state.mute_master.members.clone() {
-                        set_channel_mute(state, cid, false);
-                        notify_osc(state, OscOutbound::Mute(cid, false));
-                    }
+                // Suspending an empty set is allowed: it gives the pause
+                // face, from which the next channel mute only arms the set.
+                state.mute_master.suspended = true;
+                for cid in state.mute_master.members.clone() {
+                    set_channel_mute(state, cid, false);
+                    notify_osc(state, OscOutbound::Mute(cid, false));
                 }
             }
         }
@@ -8773,13 +8746,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         state.solo_master.members.push(cid);
                     }
                 }
-                // An idle master has nothing to suspend.
-                if !state.solo_master.members.is_empty() {
-                    state.solo_master.suspended = true;
-                    for cid in state.solo_master.members.clone() {
-                        set_channel_solo(state, cid, false);
-                        notify_osc(state, OscOutbound::Solo(cid, false));
-                    }
+                // Suspending an empty set is allowed: it gives the pause
+                // face, from which the next channel solo only arms the set.
+                state.solo_master.suspended = true;
+                for cid in state.solo_master.members.clone() {
+                    set_channel_solo(state, cid, false);
+                    notify_osc(state, OscOutbound::Solo(cid, false));
                 }
             }
         }
@@ -8892,10 +8864,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::RmeSelect(cid, on) => {
             if on {
                 state.selected.insert(cid);
+                state.fader_ganged = true;
                 state.focus_channel = Some(cid);
                 state.select_anchor = Some(cid);
             } else {
                 state.selected.remove(&cid);
+                state.fader_ganged = !state.selected.is_empty();
                 if state.focus_channel == Some(cid) {
                     state.focus_channel = state.selected.iter().next().copied();
                 }
@@ -9476,12 +9450,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.last_activity = Instant::now();
         }
         Message::NudgeVolume(delta_db) => {
-            let targets: Vec<ChannelId> = if !state.selected.is_empty() {
-                state.selected.iter().copied().collect()
-            } else if let Some(cid) = state.focus_channel {
-                vec![cid]
-            } else {
-                Vec::new()
+            let targets: Vec<ChannelId> = match state.focus_channel {
+                Some(cid) => {
+                    let mut targets = vec![cid];
+                    targets.extend(temporary_group_peers(state, cid));
+                    targets
+                }
+                None => Vec::new(),
             };
             for cid in targets {
                 let out = match cid {
@@ -9512,43 +9487,36 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::Reset(cid, out, default_vol) => {
             select_strip(state, cid);
-            if state.selected.len() > 1 && state.selected.contains(&cid) {
-                // Reset means "back to default" for the whole group, not a
-                // relative move — every selected fader snaps to the same
-                // absolute value, unlike a drag which preserves balance.
-                for sel in state.selected.clone() {
-                    set_channel_volume(state, sel, out, default_vol);
-                    notify_osc(state, OscOutbound::Volume(sel, out, default_vol));
-                }
-            } else {
-                set_channel_volume(state, cid, out, default_vol);
-                notify_osc(state, OscOutbound::Volume(cid, out, default_vol));
+            let peers = temporary_group_peers(state, cid);
+            // Reset means "back to default" for the whole ganged row, not a
+            // relative move — every member snaps to the same absolute value,
+            // unlike a drag which preserves balance.
+            for sel in std::iter::once(cid).chain(peers) {
+                let peer_out = match sel {
+                    ChannelId::Output(i) => i,
+                    _ => out,
+                };
+                set_channel_volume(state, sel, peer_out, default_vol);
+                notify_osc(state, OscOutbound::Volume(sel, peer_out, default_vol));
             }
             if state.drag_range.is_some_and(|(dc, _, _)| dc == cid) {
                 state.drag_range = None;
             }
         }
-        Message::PanChanged(cid, out, pan) => {            apply_grouped_pan(state, cid, out, pan);
+        // The global fader group gangs level only; pan stays per channel.
+        Message::PanChanged(cid, out, pan) => {
+            set_channel_pan(state, cid, out, pan);
+            notify_osc(state, OscOutbound::Pan(cid, out, pan));
         }
-        Message::PanReset(cid, out) => {            if state.selected.len() > 1 && state.selected.contains(&cid) {
-                for sel in state.selected.clone() {
-                    set_channel_pan(state, sel, out, 0);
-                    notify_osc(state, OscOutbound::Pan(sel, out, 0));
-                }
-            } else {
-                set_channel_pan(state, cid, out, 0);
-                notify_osc(state, OscOutbound::Pan(cid, out, 0));
-            }
+        Message::PanReset(cid, out) => {
+            set_channel_pan(state, cid, out, 0);
+            notify_osc(state, OscOutbound::Pan(cid, out, 0));
         }
         Message::ToggleCollapse(cid) => {
             select_strip(state, cid);
             let target = !state.collapsed.contains(&cid);
-            let group: Vec<ChannelId> =
-                if state.selected.len() > 1 && state.selected.contains(&cid) {
-                    state.selected.iter().copied().collect()
-                } else {
-                    vec![cid]
-                };
+            // Folding is per channel; the fader group gangs level only.
+            let group: Vec<ChannelId> = vec![cid];
             if target {
                 let now = Instant::now();
                 let open: Vec<_> = state
@@ -9661,23 +9629,33 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 );
                 return Task::none();
             }
-            state.focus_channel = Some(cid);
             if state.modifiers.shift() {
-                // Shift+click adds or removes this strip from the temporary
-                // fader group (the selection), RME's gesture. There is no
-                // range-select and no Ctrl+click: one additive gesture.
+                // Shift+click adds or removes this strip in the global
+                // fader group for its row and turns the group on, RME's
+                // gesture. There is no range-select and no Ctrl+click.
                 if !state.selected.remove(&cid) {
                     state.selected.insert(cid);
                 }
+                state.fader_ganged = !state.selected.is_empty();
                 state.select_anchor = Some(cid);
-            } else {
-                // Plain click: this strip becomes the selection.
-                select_strip(state, cid);
             }
+            // Both gestures focus the strip; a plain click leaves the
+            // stored fader group exactly as it was.
+            select_strip(state, cid);
         }
         Message::ClearSelection => {
-            state.selected.clear();
+            // Empty background clears the focused strip, not the stored
+            // fader group.
+            state.focus_channel = None;
             state.select_anchor = None;
+        }
+        Message::FaderGroupToggle => {
+            // `F` gangs or ungangs the stored group; an empty group has
+            // nothing to toggle and leaves the master off.
+            if !state.selected.is_empty() {
+                state.fader_ganged = !state.fader_ganged;
+            }
+            state.last_activity = Instant::now();
         }
         Message::StripHovered(h) => state.hovered_strip = h,
         Message::EditStart(cid, buf) => {
@@ -13240,7 +13218,7 @@ fn strip_params<'a>(
         collapsed: state.collapsed.contains(&cid),
         collapse_anim: state.collapse_anim.get(&cid).copied(),
         scale: state.ui_scale,
-        selected: state.selected.contains(&cid),
+        selected: state.focus_channel == Some(cid),
         hovered: state.hovered_strip == Some(cid),
         active_surface: false,
         name_custom: false,
@@ -19154,17 +19132,20 @@ mod tests {
         let b = ChannelId::Input(4);
         state.selected.insert(a);
         state.selected.insert(b);
+        state.fader_ganged = true;
         let workspace = capture_workspace(&state);
 
         // Through the file format, not only the struct.
         let json = serde_json::to_string(&workspace).unwrap();
         let back: crate::workspaces::Workspace = serde_json::from_str(&json).unwrap();
         assert_eq!(back.temporary_group.len(), 2, "the set is serialized");
+        assert!(back.fader_ganged, "the ganged state is serialized");
 
         let mut other = new(true, None, None);
         apply_workspace(&mut other, &back, std::path::PathBuf::from("test.tcws")).unwrap();
         assert!(other.selected.contains(&a));
         assert!(other.selected.contains(&b));
+        assert!(other.fader_ganged);
     }
 
     #[test]
@@ -19638,10 +19619,13 @@ mod tests {
     }
 
     #[test]
-    fn global_mute_master_does_nothing_with_nothing_to_restore() {
+    fn global_mute_master_suspends_even_an_empty_set() {
         let mut state = new(true, None, None);
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(!any_channel_muted(&state), "it never mutes everything");
+        assert!(state.mute_master.suspended, "the master switches off");
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!state.mute_master.suspended, "a second press switches it on");
     }
 
     #[test]
@@ -19699,15 +19683,17 @@ mod tests {
     }
 
     #[test]
-    fn the_first_mute_and_solo_light_their_master_and_join_the_set() {
+    fn the_first_mute_and_solo_join_the_lit_master() {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
         let b = ChannelId::Input(4);
+        assert!(!state.mute_master.suspended, "the mute master starts on");
+        assert!(!state.solo_master.suspended, "the solo master starts on");
         assert!(state.mute_master.members.is_empty());
         assert!(state.solo_master.members.is_empty());
 
         let _ = update(&mut state, Message::Mute(a, true));
-        assert!(channel_is_muted(&state, a), "an idle master mutes at once");
+        assert!(channel_is_muted(&state, a), "a lit master mutes at once");
         assert!(!state.mute_master.suspended);
         assert!(state.mute_master.members.contains(&a));
 
@@ -19769,6 +19755,7 @@ mod tests {
         state.selected.insert(input);
         state.selected.insert(other_input);
         state.selected.insert(output);
+        state.fader_ganged = true;
         let output_before = state.device.outputs()[0].volume;
 
         let _ = update(&mut state, Message::VolumeChanged(input, 0, 0.5));
@@ -19784,17 +19771,79 @@ mod tests {
     }
 
     #[test]
-    fn a_temporary_group_needs_two_faders_of_the_same_row() {
+    fn the_fader_master_gangs_one_member_and_ignores_an_empty_group() {
         let mut state = new(true, None, None);
         state.selected.insert(ChannelId::Input(0));
-        assert!(!temporary_group_exists(&state), "one fader is not a group");
-        state.selected.insert(ChannelId::Output(0));
+        assert!(temporary_group_exists(&state), "one Shift+click makes a member");
+        assert!(!state.fader_ganged, "a stored group starts off");
+
+        let _ = update(&mut state, Message::FaderGroupToggle);
+        assert!(state.fader_ganged, "F gangs the stored group");
+        let _ = update(&mut state, Message::FaderGroupToggle);
+        assert!(!state.fader_ganged, "a second press ungangs it");
+
+        state.selected.clear();
+        let _ = update(&mut state, Message::FaderGroupToggle);
+        assert!(!state.fader_ganged, "an empty group has nothing to gang");
+    }
+
+    #[test]
+    fn a_plain_click_leaves_the_shift_clicked_group_alone() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+        let _ = update(&mut state, Message::StripClicked(a));
+        state.modifiers = iced::keyboard::Modifiers::default();
+        let _ = update(&mut state, Message::StripClicked(b));
+
+        assert!(state.selected.contains(&a), "the group member stays");
+        assert!(!state.selected.contains(&b), "the plain click does not join");
+        assert_eq!(state.focus_channel, Some(b), "the plain click moves the focus");
+        assert!(state.fader_ganged, "a Shift+click turns the group on");
+    }
+
+    #[test]
+    fn the_fader_master_gangs_level_but_not_pan() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.selected.insert(a);
+        state.selected.insert(b);
+        state.fader_ganged = true;
+        let pan_before = super::channel_pan(&state, b, 0);
+
+        let _ = update(&mut state, Message::PanChanged(a, 0, 60));
+        assert_eq!(super::channel_pan(&state, b, 0), pan_before, "pan stays per channel");
+
+        // A fader move propagates the same relative amount: halving a's
+        // level halves b's, whatever their absolute starting points.
+        let a_shown = state.device.inputs()[0].volumes[0]
+            * trim_factor(channel_trim(&state, a));
+        let b_before = state.device.inputs()[4].volumes[0];
+        let _ = update(&mut state, Message::VolumeChanged(a, 0, a_shown * 0.5));
+        let b_after = state.device.inputs()[4].volumes[0];
         assert!(
-            !temporary_group_exists(&state),
-            "one input and one output are two groups of one"
+            (b_after - b_before * 0.5).abs() < 1e-3,
+            "level follows the group: b {b_before} -> {b_after}"
         );
-        state.selected.insert(ChannelId::Input(4));
-        assert!(temporary_group_exists(&state), "two inputs make a group");
+    }
+
+    #[test]
+    fn an_unganged_group_does_not_move_its_members() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.selected.insert(a);
+        state.selected.insert(b);
+        state.fader_ganged = false;
+        let b_before = state.device.inputs()[4].volumes[0];
+
+        let _ = update(&mut state, Message::VolumeChanged(a, 0, 0.4));
+        assert_eq!(
+            state.device.inputs()[4].volumes[0], b_before,
+            "F off leaves the other fader alone"
+        );
     }
 
     #[test]
@@ -20755,8 +20804,8 @@ mod tests {
         let out = state.device.outputs().len() - 1;
         let cid = ChannelId::Output(out);
         let _ = update(&mut state, Message::StripClicked(cid));
-        assert!(state.selected.contains(&cid));
         assert_eq!(state.focus_channel, Some(cid));
+        assert!(state.selected.is_empty(), "a plain click does not join the group");
         assert_eq!(
             state.sel_out,
             if state.device.outputs_one_per_pair() { out } else { out / 2 }
@@ -20771,7 +20820,7 @@ mod tests {
         let cid = ChannelId::Output(out);
         let _ = update(&mut state, Message::ToggleFlyout(cid, strip::FlyoutKind::Settings));
         assert_eq!(state.focus_channel, Some(cid));
-        assert!(state.selected.contains(&cid));
+        assert!(state.selected.is_empty(), "a control click does not join the group");
         assert_eq!(
             state.sel_out,
             if state.device.outputs_one_per_pair() { out } else { out / 2 }
@@ -20784,7 +20833,7 @@ mod tests {
         state.sel_out = 2;
         let cid = ChannelId::Input(1);
         let _ = update(&mut state, Message::Mute(cid, true));
-        assert!(state.selected.contains(&cid));
+        assert_eq!(state.focus_channel, Some(cid));
         assert_eq!(state.sel_out, 2);
     }
 
@@ -21499,16 +21548,14 @@ mod tests {
         let _ = update(&mut state, Message::StripClicked(left));
         assert_eq!(state.sel_out, 1);
         assert_eq!(state.sel_out_side, 0);
-        assert!(state.selected.contains(&left));
-        assert!(!state.selected.contains(&right));
+        assert_eq!(state.focus_channel, Some(left));
         assert!(strip_params(&state, left, state.sel_out).active_surface);
         assert!(!strip_params(&state, right, state.sel_out).active_surface);
 
         let _ = update(&mut state, Message::StripClicked(right));
         assert_eq!(state.sel_out, 1);
         assert_eq!(state.sel_out_side, 1);
-        assert!(state.selected.contains(&right));
-        assert!(!state.selected.contains(&left));
+        assert_eq!(state.focus_channel, Some(right));
         assert!(!strip_params(&state, left, state.sel_out).active_surface);
         assert!(strip_params(&state, right, state.sel_out).active_surface);
     }
