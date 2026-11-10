@@ -10804,27 +10804,29 @@ fn handle_global_event(
 // ── View ─────────────────────────────────────────────────────────
 
 thread_local! {
-    static VIEW_WINDOW: std::cell::RefCell<(std::time::Instant, u32)> =
-        std::cell::RefCell::new((std::time::Instant::now(), 0));
+    static VIEW_WINDOW: std::cell::RefCell<(std::time::Instant, u32, f32)> =
+        std::cell::RefCell::new((std::time::Instant::now(), 0, 0.0));
 }
 
 /// Count full view builds per second when `TOTALCONTROL_PROFILE` is set.
-fn profile_view_build(state: &TotalControl) {
+fn profile_view_build(state: &TotalControl, build_ms: f32) {
     VIEW_WINDOW.with(|cell| {
         let mut window = cell.borrow_mut();
         window.1 += 1;
+        window.2 += build_ms;
         let elapsed = window.0.elapsed();
         if elapsed >= Duration::from_secs(1) {
             eprintln!(
-                "profile: builds/s={:.1} tick={:?} hidden={} bus={} active={} osc={}",
+                "profile: builds/s={:.1} build_ms={:.2} tick={:?} hidden={} bus={} active={} osc={}",
                 window.1 as f32 / elapsed.as_secs_f32(),
+                window.2 / window.1 as f32,
                 tick_interval(state),
                 state.window_hidden,
                 state.meter_bus.is_some(),
                 is_active(state),
                 state.osc_config.is_some()
             );
-            *window = (Instant::now(), 0);
+            *window = (Instant::now(), 0, 0.0);
         }
     });
 }
@@ -10834,10 +10836,16 @@ fn profiling() -> bool {
     *ON.get_or_init(|| std::env::var_os("TOTALCONTROL_PROFILE").is_some())
 }
 
-pub fn view(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
+pub fn view(state: &TotalControl, window: window::Id) -> Element<'_, Message> {
+    let started = Instant::now();
+    let element = view_inner(state, window);
     if profiling() {
-        profile_view_build(state);
+        profile_view_build(state, started.elapsed().as_secs_f32() * 1000.0);
     }
+    element
+}
+
+fn view_inner(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
     let top = top_bar(state);
     let now = Instant::now();
     let fx_width = fx_slot(state, now);
