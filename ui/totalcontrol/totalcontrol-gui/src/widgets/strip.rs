@@ -419,11 +419,20 @@ fn strength_cell<'a>(value: Option<f32>, w: f32, h: f32, scale: f32) -> Element<
     .into()
 }
 
+/// Below this the readout shows silence.  The meter's own scale ends at
+/// -65 dB, well above it; only the ballistics' decay tail reaches lower,
+/// where it used to print values such as -122.0 and -900.0.  The cell is
+/// sized for a five-character figure, which -99.0 is.
+const READOUT_FLOOR_DB: f32 = -99.0;
+
 fn strength_text(linear: f32) -> String {
     if linear <= 0.0 {
         return "-∞".to_string();
     }
     let db = 20.0 * linear.log10();
+    if db <= READOUT_FLOOR_DB {
+        return "-∞".to_string();
+    }
     if db >= 100.0 {
         format!("{db:.0}")
     } else {
@@ -1385,6 +1394,17 @@ mod tests {
     use super::*;
 
     use std::time::Duration;
+
+    #[test]
+    fn a_dead_meter_reads_silence_not_a_denormal_tail() {
+        // The bar falls exponentially towards zero, so a silent channel
+        // passes through values no meter can show.  The readout must read
+        // silence there instead of printing -122.0 or -900.0.
+        assert_eq!(strength_text(0.0), "-∞");
+        assert_eq!(strength_text(10f32.powf(-120.0 / 20.0)), "-∞");
+        assert_eq!(strength_text(10f32.powf(-80.0 / 20.0)), "-80.0");
+        assert_eq!(strength_text(10f32.powf(-6.0 / 20.0)), "-6.0");
+    }
 
     #[test]
     fn collapsed_strip_fills_the_standard_strip_height() {
