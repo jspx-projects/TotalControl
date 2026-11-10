@@ -10600,10 +10600,6 @@ const TICK_HIDDEN: Duration = Duration::from_millis(250);
 /// auto-save, the front panel); anything that changes the screen switches
 /// back to a faster tick at once.
 const TICK_IDLE: Duration = Duration::from_millis(100);
-/// Housekeeping cadence once the device service owns the meters: the
-/// canvases redraw from the shared bus themselves, so the view only needs
-/// an occasional pass for connection/autosave/OSC and non-canvas readouts.
-const TICK_SERVICE: Duration = Duration::from_secs(1);
 /// The metered idle tick: one clock that drives the M1 readouts and the
 /// periodic housekeeping, so they cannot beat against each other.
 const TICK_READOUT: Duration = Duration::from_millis(250);
