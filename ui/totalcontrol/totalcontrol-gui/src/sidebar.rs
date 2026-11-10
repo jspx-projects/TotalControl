@@ -621,12 +621,11 @@ fn master_cell<'a>(
 fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     let any_mute = crate::app::any_channel_muted(state);
     let any_solo = crate::app::any_channel_soloed(state);
-    // A master is "applied" only while its set is engaged; idle or suspended
-    // it shows the pause mark in the muted hue (TotalMix rests that way).
     let has_group = crate::app::temporary_group_exists(state);
     let pfl = state.control_room.pfl_replaces_solo;
-    // A master is "applied" only while its set is engaged; idle or suspended
-    // it shows the pause mark in the muted hue (TotalMix rests that way).
+    // A master is lit only while it is engaged and something is held. Idle
+    // (empty) and suspended (stored but off) both show the pause glyph; while
+    // suspended it is the muted, armed face.
     let mute_applied = any_mute && !state.mute_master.suspended;
     let mute_pause = state.mute_master.suspended || !any_mute;
     let solo_applied = any_solo && !state.solo_master.suspended;

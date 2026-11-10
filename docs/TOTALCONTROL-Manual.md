@@ -350,12 +350,13 @@ outlines in their own colour: mute blue, solo orange, temporary fader group
 silver. While a master is idle its label and outline take a muted version of
 that colour.
 
-`M` lights while any channel is muted. Pressing it stores those mutes and
-suspends them: the master and every held channel show the pause mark and the
-channels stay unmuted. While it is suspended, clicking a channel's mute adds
-or removes it from the held set and leaves it unmuted. Pressing `M` again
-engages the whole set; switching a held member's mute off by hand removes it
-from the set. The mute master silences its channels on every routing.
+`M` rests idle, showing the pause mark. The first channel mute lights it and
+joins the set; while it is lit, every channel you mute joins the set and
+unmuting a member removes it. Pressing `M` stores those mutes and suspends
+them: the master and every held channel show the pause mark and the channels
+stay unmuted. While it is suspended, clicking a channel's mute adds or removes
+it from the held set and leaves it unmuted. Pressing `M` again engages the
+whole set. The mute master silences its channels on every routing.
 
 An idle master — nothing active, no set engaged — shows the pause mark in its
 muted colour, which is how TotalMix rests after a reset; the plain letter
@@ -363,9 +364,10 @@ appears only while the set is applied. The mark is two short, thick bars, half
 the label height, placed after the `S` so the two masters read differently at
 a glance.
 
-`S` works the same way over the channels in the current submix. In PFL mode
-the same button is the PFL master: it shows `F` while an input is listening,
-and pressing it cancels the active PFL rather than restoring it.
+`S` works the same way over the channels in the current submix: the first solo
+lights it and joins the set, and a press suspends the set. In PFL mode the same
+button is the PFL master: it shows `F` while an input is listening, and
+pressing it cancels the active PFL rather than restoring it.
 
 `F` lights while the temporary fader group exists. Shift+click a strip or its
 fader to add or remove it; the members' fader caps are marked, and pressing

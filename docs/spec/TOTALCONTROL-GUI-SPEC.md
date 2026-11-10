@@ -48,18 +48,18 @@ its own collapse toggle.
 
 The global row is `M`, `S`/`F`, `F`.
 
-The left button is the **Mute master**. It lights while any channel is muted.
-A press stores the muted channels, suspends them and shows the pause mark on
-the master and on every held channel; a further press engages them again.
-While it is suspended, a click on a channel's mute adds or removes it from the
-held set and leaves that channel unmuted; switching a held member's mute off
-removes it from the set. The set is global: it silences the channel on every
-routing.
+The left button is the **Mute master**. It is idle, with the pause mark, while
+no channel is muted. The first channel mute lights it and joins the set; while
+it is lit, muting a channel joins the set and unmuting a member removes it. A
+press suspends the set: every member unmutes and the master and each held
+channel show the pause mark; a further press engages it again. While suspended,
+a click on a channel's mute adds or removes it from the set and leaves that
+channel unmuted. The set is global: it silences the channel on every routing.
 
 The middle button is the **Solo master**, the same machine with the pause mark
-after the letter, over the current submix. In PFL mode it shows `F` while an
-input is listening; a press then cancels the active PFL and does not restore
-it.
+after the letter, over the current submix; the first solo lights it and joins
+the set. In PFL mode it shows `F` while an input is listening; a press then
+cancels the active PFL and does not restore it.
 
 The right `F` is the **temporary fader group**, not the FX panel. It lights
 while the group exists; Shift+click a strip or its fader adds or removes it,

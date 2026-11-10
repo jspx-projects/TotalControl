@@ -2292,9 +2292,11 @@ pub struct GroupEdit {
     pub pending: Vec<ChannelId>,
 }
 
-/// One master's stored set. While `suspended`, the members are held off:
-/// they are not muted (or soloed) but stay marked with the pause glyph, and
-/// clicking a member's button adds or removes it from the set.
+/// One master's stored set. The resting master is idle: not suspended, empty,
+/// and drawn with the dimmed pause glyph. A channel mute/solo joins the set and
+/// lights the master; pressing the master suspends the set (members unmuted,
+/// pause glyph) and pressing it again re-applies it. While suspended, clicking
+/// a member's button removes it from the set.
 #[derive(Debug, Clone, Default)]
 pub struct MasterSet {
     pub members: Vec<ChannelId>,
@@ -8662,8 +8664,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::Mute(cid, m) => {
             if state.mute_master.suspended {
-                // Building the held set: a click adds or removes the
-                // channel and leaves its mute off, with the pause glyph.
+                // Suspended master: a click copies its paused state, so the
+                // channel stays unmuted and gains the pause.  Clicking a
+                // member removes it again.
                 if let Some(pos) = state.mute_master.members.iter().position(|c| *c == cid) {
                     state.mute_master.members.remove(pos);
                 } else {
@@ -8675,8 +8678,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 select_strip(state, cid);
                 set_channel_mute(state, cid, m);
                 notify_osc(state, OscOutbound::Mute(cid, m));
-                if !m {
-                    // Switching a held member off removes it from the set.
+                // While the master is engaged, a muted channel is a member.
+                if m {
+                    if !state.mute_master.members.contains(&cid) {
+                        state.mute_master.members.push(cid);
+                    }
+                } else {
                     state.mute_master.members.retain(|c| *c != cid);
                 }
                 for other in propagation_set(state, cid, sidebar::GroupLink::Mute) {
@@ -8698,7 +8705,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 select_strip(state, cid);
                 set_channel_solo(state, cid, s);
                 notify_osc(state, OscOutbound::Solo(cid, s));
-                if !s {
+                if s {
+                    if !state.solo_master.members.contains(&cid) {
+                        state.solo_master.members.push(cid);
+                    }
+                } else {
                     state.solo_master.members.retain(|c| *c != cid);
                 }
                 for other in propagation_set(state, cid, sidebar::GroupLink::Solo) {
@@ -8709,27 +8720,29 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::GlobalMuteToggle => {
             if state.mute_master.suspended {
-                // Engage the held set.
-                let members = std::mem::take(&mut state.mute_master.members);
+                // Engage: mute every member; the set is kept.
                 state.mute_master.suspended = false;
-                for cid in members {
+                for cid in state.mute_master.members.clone() {
                     set_channel_mute(state, cid, true);
                     notify_osc(state, OscOutbound::Mute(cid, true));
                 }
             } else {
-                let muted: Vec<ChannelId> = all_channel_ids(state)
-                    .into_iter()
-                    .filter(|&cid| channel_is_muted(state, cid))
-                    .collect();
-                if !muted.is_empty() {
-                    for &cid in &muted {
+                // Suspend: every member unmutes and keeps the pause mark.
+                // A mute that arrived from another path is a member too.
+                for cid in all_channel_ids(state) {
+                    if channel_is_muted(state, cid)
+                        && !state.mute_master.members.contains(&cid)
+                    {
+                        state.mute_master.members.push(cid);
+                    }
+                }
+                // An idle master has nothing to suspend.
+                if !state.mute_master.members.is_empty() {
+                    state.mute_master.suspended = true;
+                    for cid in state.mute_master.members.clone() {
                         set_channel_mute(state, cid, false);
                         notify_osc(state, OscOutbound::Mute(cid, false));
                     }
-                    state.mute_master = MasterSet {
-                        members: muted,
-                        suspended: true,
-                    };
                 }
             }
         }
@@ -8747,26 +8760,26 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
                 state.solo_master = MasterSet::default();
             } else if state.solo_master.suspended {
-                let members = std::mem::take(&mut state.solo_master.members);
                 state.solo_master.suspended = false;
-                for cid in members {
+                for cid in state.solo_master.members.clone() {
                     set_channel_solo(state, cid, true);
                     notify_osc(state, OscOutbound::Solo(cid, true));
                 }
             } else {
-                let soloed: Vec<ChannelId> = all_channel_ids(state)
-                    .into_iter()
-                    .filter(|&cid| channel_is_soloed(state, cid))
-                    .collect();
-                if !soloed.is_empty() {
-                    for &cid in &soloed {
+                for cid in all_channel_ids(state) {
+                    if channel_is_soloed(state, cid)
+                        && !state.solo_master.members.contains(&cid)
+                    {
+                        state.solo_master.members.push(cid);
+                    }
+                }
+                // An idle master has nothing to suspend.
+                if !state.solo_master.members.is_empty() {
+                    state.solo_master.suspended = true;
+                    for cid in state.solo_master.members.clone() {
                         set_channel_solo(state, cid, false);
                         notify_osc(state, OscOutbound::Solo(cid, false));
                     }
-                    state.solo_master = MasterSet {
-                        members: soloed,
-                        suspended: true,
-                    };
                 }
             }
         }
@@ -19360,7 +19373,13 @@ mod tests {
         assert!(channel_is_muted(&state, a));
         assert!(channel_is_muted(&state, b));
         assert!(!state.mute_master.suspended);
-        assert!(state.mute_master.members.is_empty(), "the set was used up");
+        assert!(state.mute_master.members.contains(&a));
+        assert!(state.mute_master.members.contains(&b));
+        assert_eq!(
+            state.mute_master.members.len(),
+            4,
+            "the set persists, including the stereo partners"
+        );
     }
 
     #[test]
@@ -19677,6 +19696,49 @@ mod tests {
         assert!(channel_is_soloed(&state, a));
         assert!(channel_is_soloed(&state, c));
         assert!(!state.solo_master.suspended);
+    }
+
+    #[test]
+    fn the_first_mute_and_solo_light_their_master_and_join_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        assert!(state.mute_master.members.is_empty());
+        assert!(state.solo_master.members.is_empty());
+
+        let _ = update(&mut state, Message::Mute(a, true));
+        assert!(channel_is_muted(&state, a), "an idle master mutes at once");
+        assert!(!state.mute_master.suspended);
+        assert!(state.mute_master.members.contains(&a));
+
+        let _ = update(&mut state, Message::Solo(b, true));
+        assert!(channel_is_soloed(&state, b), "the solo master mirrors it");
+        assert!(!state.solo_master.suspended);
+        assert!(state.solo_master.members.contains(&b));
+    }
+
+    #[test]
+    fn switching_a_soloed_member_off_removes_it_from_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        // Mono, so the partner does not solo the pair again.
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        let _ = update(&mut state, Message::Solo(a, true));
+        let _ = update(&mut state, Message::Solo(b, true));
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(channel_is_soloed(&state, a));
+
+        let _ = update(&mut state, Message::Solo(a, false));
+        assert!(!state.solo_master.members.contains(&a));
+        assert!(state.solo_master.members.contains(&b));
+
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(!channel_is_soloed(&state, a));
+        assert!(channel_is_soloed(&state, b));
     }
 
     #[test]
