@@ -7765,7 +7765,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::CollapseTick
                 | Message::EnginePoll
                 | Message::EngineRead(..)
-                    | Message::FollowRead(..)
+                | Message::FollowRead(..)
                 | Message::OscLog(_)
                 | Message::OscRmeIn(_, _)
                 | Message::OscGlobalIn(_)
@@ -7880,6 +7880,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             | Message::EnginePoll
             | Message::EngineRead(..)
             | Message::FollowRead(..)
+            // Device-service traffic is not the user doing something: a
+            // snapshot or a meter wake must not hold the mixer at the fast
+            // tick for another 1.5 s.
+            | Message::DeviceUpdated
+            | Message::MeterWake
     ) {
         state.last_activity = Instant::now();
     }
