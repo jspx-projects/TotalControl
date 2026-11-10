@@ -25,12 +25,21 @@ fn main() {
     }
 
     if let Some(path) = example_path {
-        let config = GuiLayoutConfig::default();
+        let config = GuiLayoutConfig::example();
+        let schema_path = path.with_file_name(totalcontrol_layout::SCHEMA_FILE_NAME);
         if let Err(error) = std::fs::write(&path, config.to_pretty_json()) {
             eprintln!("could not write {}: {error}", path.display());
             std::process::exit(1);
         }
+        if let Err(error) = std::fs::write(&schema_path, totalcontrol_layout::SCHEMA_JSON) {
+            eprintln!("could not write {}: {error}", schema_path.display());
+            std::process::exit(1);
+        }
         println!("wrote example {}", path.display());
+        println!(
+            "wrote schema {} (referenced by the example)",
+            schema_path.display()
+        );
         return;
     }
 

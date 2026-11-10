@@ -1,4 +1,5 @@
 {
+  "$schema": "../schema/gui-layout.schema.json",
   "schema": 1,
   "geometry": {
     "strip_w": 90.0,

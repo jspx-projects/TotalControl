@@ -115,7 +115,7 @@ pub const COLLAPSE_W: f32 = 19.0;
 /// Logical geometry at zoom 1.0.  The defaults are the shipped GUI; a
 /// configuration file may override any field.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LayoutMetrics {
     pub strip_w: f32,
     pub strip_h: f32,
@@ -212,6 +212,7 @@ impl ChannelKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Features {
     /// The unit has an FX bus, so the thin MR1 fader exists.
     pub fx: bool,
@@ -277,6 +278,7 @@ impl TemplateId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateSpec {
     pub id: TemplateId,
     pub kind: ChannelKind,
@@ -520,36 +522,58 @@ impl StripLayout {
 
     /// All visible element rectangles, for preview and invariant checks.
     pub fn element_rects(&self) -> Vec<Rect> {
-        let mut slots = vec![
-            self.name,
-            self.pan,
-            self.buttons[0],
-            self.buttons[1],
-            self.readouts[0],
-            self.readouts[1],
-            self.vu,
-            self.fader_canvas,
-            self.fader,
-            self.db_readout,
-            self.collapse_glyph,
-            self.collapse_face,
+        self.elements().into_iter().map(|(_, rect)| rect).collect()
+    }
+
+    /// Visible elements with stable names, used by the invariant checks and
+    /// the configuration diagnostics.
+    pub fn elements(&self) -> Vec<(&'static str, Rect)> {
+        let mut elements = vec![
+            ("name", self.name),
+            ("pan", self.pan),
+            ("button_left", self.buttons[0]),
+            ("button_right", self.buttons[1]),
+            ("readout_left", self.readouts[0]),
+            ("readout_right", self.readouts[1]),
+            ("vu", self.vu),
+            ("fader_canvas", self.fader_canvas),
+            ("fader", self.fader),
+            ("db_readout", self.db_readout),
+            ("collapse_glyph", self.collapse_glyph),
+            ("collapse_face", self.collapse_face),
         ];
         if let Some(fx) = self.fx {
-            slots.push(fx);
+            elements.push(("fx", fx));
         }
-        slots.extend(self.tab_glyphs);
-        slots.extend(self.tab_faces);
+        for (index, glyph) in self.tab_glyphs.iter().enumerate() {
+            elements.push((TAB_GLYPH_NAMES[index], *glyph));
+            elements.push((TAB_FACE_NAMES[index], self.tab_faces[index]));
+        }
         if let Some(submix) = self.submix {
-            slots.push(submix);
+            elements.push(("submix", submix));
         }
-        slots
+        elements
     }
 }
+
+const TAB_GLYPH_NAMES: [&str; 4] = [
+    "tab_glyph_trim",
+    "tab_glyph_settings",
+    "tab_glyph_eq",
+    "tab_glyph_dynamics",
+];
+const TAB_FACE_NAMES: [&str; 4] = [
+    "tab_face_trim",
+    "tab_face_settings",
+    "tab_face_eq",
+    "tab_face_dynamics",
+];
 
 /// Shared visual tokens used by the preview and checked against the GUI by
 /// parity tests.  Keeping them here prevents the preview from quietly
 /// shrinking or re-proportioning controls that were tuned live.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct VisualTokens {
     pub name_size: f32,
     pub button_text_size: f32,
@@ -595,6 +619,7 @@ pub const VU_LABELS: [(f32, &str); 6] = [
 /// A compact set of semantic colour categories for the preview.  The
 /// runtime theme will adopt the same categories in its own focused change.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct SurfaceColors {
     pub app_background: String,
     pub card: String,
@@ -603,12 +628,14 @@ pub struct SurfaceColors {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct TextColors {
     pub primary: String,
     pub secondary: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct ControlColors {
     pub button_face: String,
     pub knob_face: String,
@@ -621,6 +648,7 @@ pub struct ControlColors {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct AccentColors {
     pub mute: String,
     pub solo: String,
@@ -628,6 +656,7 @@ pub struct AccentColors {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct MeterColors {
     pub green: String,
     pub yellow: String,
@@ -635,6 +664,7 @@ pub struct MeterColors {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct ColorScheme {
     pub surface: SurfaceColors,
     pub text: TextColors,
@@ -677,6 +707,38 @@ impl Default for ColorScheme {
                 red: "#d94a4a".into(),
             },
         }
+    }
+}
+
+/// A category omitted from a document takes the shipped scheme, so a single
+/// token can be overridden on its own.
+impl Default for SurfaceColors {
+    fn default() -> Self {
+        ColorScheme::default().surface
+    }
+}
+
+impl Default for TextColors {
+    fn default() -> Self {
+        ColorScheme::default().text
+    }
+}
+
+impl Default for ControlColors {
+    fn default() -> Self {
+        ColorScheme::default().control
+    }
+}
+
+impl Default for AccentColors {
+    fn default() -> Self {
+        ColorScheme::default().accent
+    }
+}
+
+impl Default for MeterColors {
+    fn default() -> Self {
+        ColorScheme::default().meter
     }
 }
 
@@ -838,6 +900,15 @@ impl Default for VisualTokens {
 /// Schema version of the shared GUI layout configuration.
 pub const CONFIG_SCHEMA: u32 = 1;
 
+/// Name the preview uses for the schema file written beside an example
+/// document.
+pub const SCHEMA_FILE_NAME: &str = "gui-layout.schema.json";
+
+/// JSON Schema for [`GuiLayoutConfig`], embedded so the preview can write it
+/// next to an example file and the tests can keep it in step with the
+/// compiled defaults.
+pub const SCHEMA_JSON: &str = include_str!("../../../../docs/schema/gui-layout.schema.json");
+
 fn config_schema() -> u32 {
     CONFIG_SCHEMA
 }
@@ -846,13 +917,26 @@ fn default_templates() -> Vec<TemplateSpec> {
     TEMPLATES.to_vec()
 }
 
+/// A `#rrggbb` colour literal; the preview writes the string straight into
+/// SVG, so anything else is rejected rather than rendered as black.
+fn is_hex_color(value: &str) -> bool {
+    match value.strip_prefix('#') {
+        Some(hex) => hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()),
+        None => false,
+    }
+}
+
 /// One JSON document for the complete GUI layout and its visual scheme.
 ///
 /// The same document is consumed by the preview and, from the next runtime
-/// step, by the GUI.  Missing fields fall back to the compiled defaults.
+/// step, by the GUI.  Missing fields fall back to the compiled defaults and
+/// unknown fields are rejected.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GuiLayoutConfig {
+    /// Optional editor hint; it has no effect on rendering.
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema_url: Option<String>,
     #[serde(default = "config_schema")]
     pub schema: u32,
     pub geometry: LayoutMetrics,
@@ -865,6 +949,7 @@ pub struct GuiLayoutConfig {
 impl Default for GuiLayoutConfig {
     fn default() -> Self {
         Self {
+            schema_url: None,
             schema: CONFIG_SCHEMA,
             geometry: LayoutMetrics::default(),
             visual: VISUAL,
@@ -875,6 +960,15 @@ impl Default for GuiLayoutConfig {
 }
 
 impl GuiLayoutConfig {
+    /// Starting document for the preview's `--example`; it points at the
+    /// schema file written beside it.
+    pub fn example() -> Self {
+        Self {
+            schema_url: Some(SCHEMA_FILE_NAME.to_string()),
+            ..Self::default()
+        }
+    }
+
     pub fn from_json(text: &str) -> Result<Self, String> {
         let config: Self =
             serde_json::from_str(text).map_err(|error| format!("invalid JSON: {error}"))?;
@@ -900,7 +994,7 @@ impl GuiLayoutConfig {
             ));
         }
         let m = &self.geometry;
-        let values = [
+        let sizes = [
             ("strip_w", m.strip_w),
             ("strip_h", m.strip_h),
             ("content_w", m.content_w),
@@ -924,9 +1018,76 @@ impl GuiLayoutConfig {
             ("gear_h", m.gear_h),
             ("collapse_w", m.collapse_w),
         ];
-        for (name, value) in values {
+        for (name, value) in sizes {
             if !value.is_finite() || value <= 0.0 {
                 return Err(format!("geometry.{name} must be a positive number"));
+            }
+        }
+        let offsets = [
+            ("content_x", m.content_x),
+            ("content_y", m.content_y),
+            ("row_gap", m.row_gap),
+            ("pan_x", m.pan_x),
+            ("button_gap", m.button_gap),
+            ("db_x", m.db_x),
+            ("vu_x", m.vu_x),
+            ("track_x", m.track_x),
+            ("tab_x", m.tab_x),
+            ("tab_top_with_fx", m.tab_top_with_fx),
+            ("tab_gap", m.tab_gap),
+            ("collapse_x", m.collapse_x),
+        ];
+        for (name, value) in offsets {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("geometry.{name} must be zero or positive"));
+            }
+        }
+        let tokens = [
+            ("name_size", self.visual.name_size),
+            ("button_text_size", self.visual.button_text_size),
+            ("readout_size", self.visual.readout_size),
+            ("micro_size", self.visual.micro_size),
+            ("tab_glyph_size", self.visual.tab_glyph_size),
+            ("gear_glyph_size", self.visual.gear_glyph_size),
+            ("knob_diameter", self.visual.knob_diameter),
+            ("knob_label_size", self.visual.knob_label_size),
+            ("fader_slot_w", self.visual.fader_slot_w),
+            ("fader_cap_w", self.visual.fader_cap_w),
+            ("fader_cap_h", self.visual.fader_cap_h),
+            ("fx_cap_w", self.visual.fx_cap_w),
+            ("fx_cap_h", self.visual.fx_cap_h),
+        ];
+        for (name, value) in tokens {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(format!("visual.{name} must be a positive number"));
+            }
+        }
+        let c = &self.colors;
+        let colors = [
+            ("surface.app_background", &c.surface.app_background),
+            ("surface.card", &c.surface.card),
+            ("surface.card_active", &c.surface.card_active),
+            ("surface.border", &c.surface.border),
+            ("text.primary", &c.text.primary),
+            ("text.secondary", &c.text.secondary),
+            ("control.button_face", &c.control.button_face),
+            ("control.knob_face", &c.control.knob_face),
+            ("control.knob_border", &c.control.knob_border),
+            ("control.fader_slot", &c.control.fader_slot),
+            ("control.fader_fill", &c.control.fader_fill),
+            ("control.cap_ridge", &c.control.cap_ridge),
+            ("control.cap_centre", &c.control.cap_centre),
+            ("control.tab_face", &c.control.tab_face),
+            ("accent.mute", &c.accent.mute),
+            ("accent.solo", &c.accent.solo),
+            ("accent.cue", &c.accent.cue),
+            ("meter.green", &c.meter.green),
+            ("meter.yellow", &c.meter.yellow),
+            ("meter.red", &c.meter.red),
+        ];
+        for (name, value) in colors {
+            if !is_hex_color(value) {
+                return Err(format!("colors.{name} must be a #rrggbb value"));
             }
         }
         if self.templates.is_empty() {
@@ -937,6 +1098,52 @@ impl GuiLayoutConfig {
             if !ids.insert(template.id) {
                 return Err(format!("duplicate template id {:?}", template.id));
             }
+        }
+        for template in &self.templates {
+            let layout = self.layout(*template, 1.0);
+            for (name, rect) in layout.elements() {
+                if !layout.card.contains(rect) {
+                    return Err(format!(
+                        "template {:?}: the {} element leaves the {} x {} card",
+                        template.id, name, m.strip_w, m.strip_h
+                    ));
+                }
+            }
+            let centred = |name: &str, rect: Rect, hint: &str| {
+                if (rect.centre_x() - layout.centre_x()).abs() > 0.01 {
+                    return Err(format!(
+                        "template {:?}: {name} must sit on the content centre line, {hint}",
+                        template.id
+                    ));
+                }
+                Ok(())
+            };
+            centred(
+                "geometry.pan_x and pan_w",
+                layout.pan,
+                "pan_x = (content_w - pan_w) / 2",
+            )?;
+            centred(
+                "geometry.db_x and db_w",
+                layout.db_readout,
+                "db_x = (content_w - db_w) / 2",
+            )?;
+            centred(
+                "geometry.track_x and track_w",
+                layout.fader,
+                "track_x = (content_w - track_w) / 2",
+            )?;
+            let pair = Rect::new(
+                layout.buttons[0].x,
+                layout.buttons[0].y,
+                layout.buttons[1].right() - layout.buttons[0].x,
+                layout.buttons[0].height,
+            );
+            centred(
+                "geometry.button_w and button_gap",
+                pair,
+                "content_w = 2 * button_w + button_gap",
+            )?;
         }
         Ok(())
     }
@@ -999,5 +1206,237 @@ mod config_tests {
         let json = GuiLayoutConfig::default().to_pretty_json();
         let parsed = GuiLayoutConfig::from_json(&json).expect("round trip");
         assert_eq!(parsed, GuiLayoutConfig::default());
+    }
+
+    #[test]
+    fn an_empty_document_uses_the_built_in_layout() {
+        let config = GuiLayoutConfig::from_json("{}").expect("empty document loads");
+        assert_eq!(config.geometry, LayoutMetrics::default());
+        assert_eq!(config.visual, VISUAL);
+        assert_eq!(config.colors, ColorScheme::default());
+        assert_eq!(config.templates, TEMPLATES);
+    }
+
+    #[test]
+    fn the_example_document_references_the_embedded_schema() {
+        let config =
+            GuiLayoutConfig::from_json(include_str!("../../../../docs/examples/gui-layout.json"))
+                .expect("example config loads");
+        let url = config.schema_url.expect("example names its schema");
+        let example_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../docs/examples")
+            .canonicalize()
+            .expect("docs/examples exists");
+        let schema_path = example_dir.join(&url);
+        assert!(
+            schema_path.is_file(),
+            "{} is missing",
+            schema_path.display()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&schema_path).expect("schema reads"),
+            SCHEMA_JSON,
+            "the referenced schema and the embedded copy differ"
+        );
+    }
+
+    #[test]
+    fn unknown_fields_are_rejected() {
+        let text = r#"{"geometry": {"strip_w": 90.0, "stip_h": 350.0}}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("typo is rejected");
+        assert!(error.contains("stip_h"), "{error}");
+
+        let text = r#"{"templates": [{"id": "InputMono", "kind": "Input", "features": {"fx": true, "trim": true, "eq": true, "dynamics": true, "extra": false}, "stereo": false}]}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("unknown feature is rejected");
+        assert!(error.contains("extra"), "{error}");
+    }
+
+    #[test]
+    fn offsets_visual_tokens_and_colours_are_validated() {
+        let mut config = GuiLayoutConfig::default();
+        config.geometry.tab_x = -1.0;
+        let error = config.validate().expect_err("negative offset");
+        assert!(error.contains("geometry.tab_x"), "{error}");
+
+        let mut config = GuiLayoutConfig::default();
+        config.visual.fader_slot_w = 0.0;
+        let error = config.validate().expect_err("zero token");
+        assert!(error.contains("visual.fader_slot_w"), "{error}");
+
+        let mut config = GuiLayoutConfig::default();
+        config.colors.accent.mute = "blue".into();
+        let error = config.validate().expect_err("named colour");
+        assert!(error.contains("colors.accent.mute"), "{error}");
+
+        let mut config = GuiLayoutConfig::default();
+        config.colors.meter.red = "#d94a4".into();
+        assert!(config.validate().is_err(), "short hex colour");
+    }
+
+    #[test]
+    fn partial_documents_override_single_fields() {
+        let config = GuiLayoutConfig::from_json(r##"{"colors": {"accent": {"solo": "#ffcc00"}}}"##)
+            .expect("partial colour document loads");
+        assert_eq!(config.colors.accent.solo, "#ffcc00");
+        assert_eq!(
+            config.colors.accent.mute,
+            ColorScheme::default().accent.mute
+        );
+        assert_eq!(config.colors.surface, SurfaceColors::default());
+        assert_eq!(config.geometry, LayoutMetrics::default());
+
+        let config = GuiLayoutConfig::from_json(r#"{"visual": {"knob_diameter": 46.0}}"#)
+            .expect("partial visual document loads");
+        assert_eq!(config.visual.knob_diameter, 46.0);
+        assert_eq!(config.visual.fader_slot_w, VISUAL.fader_slot_w);
+    }
+
+    #[test]
+    fn a_layout_that_leaves_the_card_is_rejected() {
+        let mut config = GuiLayoutConfig::default();
+        config.geometry.middle_h = 400.0;
+        let error = config.validate().expect_err("taller middle overflows");
+        assert!(error.contains("leaves the"), "{error}");
+
+        let mut config = GuiLayoutConfig::default();
+        config.geometry.track_x = 10.0;
+        let error = config.validate().expect_err("off-centre track");
+        assert!(error.contains("track_x"), "{error}");
+    }
+
+    /// The schema document is the editor-facing reference, so its property
+    /// names and defaults must match the compiled model exactly.
+    #[test]
+    fn the_schema_document_matches_the_compiled_defaults() {
+        let schema: serde_json::Value =
+            serde_json::from_str(SCHEMA_JSON).expect("schema is valid JSON");
+        let defaults = serde_json::to_value(GuiLayoutConfig::default()).expect("defaults");
+        let properties = object_property(&schema, "properties");
+        let mut documented: Vec<&str> = properties.keys().map(String::as_str).collect();
+        documented.retain(|name| *name != "$schema");
+        documented.sort_unstable();
+        let mut compiled: Vec<&str> = defaults
+            .as_object()
+            .expect("defaults are an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        compiled.sort_unstable();
+        assert_eq!(documented, compiled, "top-level fields differ");
+
+        for section in ["geometry", "visual", "colors"] {
+            compare_schema_defaults(
+                section,
+                object_property(property(&properties, section), "properties"),
+                &defaults[section],
+            );
+        }
+
+        let template = value_property(property(&properties, "templates"), "items");
+        let template_properties = object_property(template, "properties");
+        let features = property(&template_properties, "features");
+        let feature_properties = object_property(features, "properties");
+        let mut documented: Vec<&str> = feature_properties.keys().map(String::as_str).collect();
+        documented.sort_unstable();
+        let mut required = string_list(value_property(features, "required"));
+        required.sort_unstable();
+        assert_eq!(
+            documented, required,
+            "feature fields and required list differ"
+        );
+
+        let mut documented = string_list(property(&template_properties, "id"));
+        documented.sort_unstable();
+        let mut compiled: Vec<String> = TEMPLATES
+            .iter()
+            .map(|spec| {
+                serde_json::to_value(spec.id)
+                    .expect("template id serializes")
+                    .as_str()
+                    .expect("template id is a string")
+                    .to_string()
+            })
+            .collect();
+        compiled.sort_unstable();
+        assert!(!compiled.is_empty());
+        assert_eq!(documented, compiled, "template ids differ");
+    }
+
+    fn property<'a>(
+        object: &'a serde_json::Map<String, serde_json::Value>,
+        key: &str,
+    ) -> &'a serde_json::Value {
+        object
+            .get(key)
+            .unwrap_or_else(|| panic!("schema is missing {key}"))
+    }
+
+    fn value_property<'a>(value: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+        value
+            .get(key)
+            .unwrap_or_else(|| panic!("schema is missing {key}"))
+    }
+
+    fn object_property<'a>(
+        value: &'a serde_json::Value,
+        key: &str,
+    ) -> &'a serde_json::Map<String, serde_json::Value> {
+        value
+            .get(key)
+            .and_then(|value| value.as_object())
+            .unwrap_or_else(|| panic!("schema value is missing the {key} object"))
+    }
+
+    fn string_list(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_array()
+            .or_else(|| {
+                value
+                    .get("enum")
+                    .and_then(|enumeration| enumeration.as_array())
+            })
+            .unwrap_or_else(|| panic!("expected a string list, got {value}"))
+            .iter()
+            .map(|entry| entry.as_str().expect("string entry").to_string())
+            .collect()
+    }
+
+    fn compare_schema_defaults(
+        path: &str,
+        properties: &serde_json::Map<String, serde_json::Value>,
+        value: &serde_json::Value,
+    ) {
+        let object = value.as_object().expect("section is an object");
+        let mut documented: Vec<&str> = properties.keys().map(String::as_str).collect();
+        documented.sort_unstable();
+        let mut compiled: Vec<&str> = object.keys().map(String::as_str).collect();
+        compiled.sort_unstable();
+        assert_eq!(documented, compiled, "{path}: fields differ");
+        for (key, actual) in object {
+            let property = property(properties, key);
+            let full = format!("{path}.{key}");
+            match actual {
+                serde_json::Value::Object(_) => {
+                    compare_schema_defaults(&full, object_property(property, "properties"), actual)
+                }
+                serde_json::Value::Number(number) => {
+                    let documented = property
+                        .get("default")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or_else(|| panic!("{full}: no documented default"));
+                    assert_eq!(
+                        documented as f32,
+                        number.as_f64().expect("number") as f32,
+                        "{full}: default differs"
+                    );
+                }
+                serde_json::Value::String(text) => assert_eq!(
+                    property.get("default").and_then(|value| value.as_str()),
+                    Some(text.as_str()),
+                    "{full}: default differs"
+                ),
+                other => panic!("{full}: unexpected default {other}"),
+            }
+        }
     }
 }
