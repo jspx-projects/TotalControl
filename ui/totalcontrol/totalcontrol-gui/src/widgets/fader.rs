@@ -582,7 +582,14 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if self.click_selects {
-                    // A group session is open: every click picks the strip.
+                    // A group session is open: a click on *this* fader picks
+                    // the strip.  The bounds check is essential: without it
+                    // the first fader in the tree would capture every press
+                    // in the window and no other control could be clicked.
+                    if cursor.position_over(bounds).is_none() {
+                        return None;
+                    }
+                    log::debug!("fader: click selects the strip");
                     return self.on_select.as_ref().map(|on_select| {
                         canvas::Action::publish(on_select()).and_capture()
                     });

@@ -7494,6 +7494,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::SnapshotNameChanged(_)
             | Message::GroupEditToggle
             | Message::GroupLinkToggle(..)
+            | Message::GroupFlash
             | Message::GroupClear
             | Message::LayoutClicked(_)
             | Message::LayoutStore
@@ -9520,14 +9521,25 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::StripClicked(cid) => {
+            log::debug!(
+                "strip click {cid:?} shift={} edit={:?}",
+                state.modifiers.shift(),
+                state.group_edit.as_ref().map(|e| e.target)
+            );
             // While a storage place flashes, clicks build its membership
             // instead of touching the selection (RME's modal setup).
             if let Some(edit) = state.group_edit.as_mut().filter(|e| e.target.is_some()) {
+                let before = edit.pending.len();
                 if let Some(pos) = edit.pending.iter().position(|c| *c == cid) {
                     edit.pending.remove(pos);
                 } else {
                     edit.pending.push(cid);
                 }
+                log::debug!(
+                    "groups: click {cid:?} with target {:?}: pending {before} -> {}",
+                    edit.target,
+                    edit.pending.len()
+                );
                 return Task::none();
             }
             state.focus_channel = Some(cid);
@@ -10353,13 +10365,18 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::GroupEditToggle => match state.group_edit.take() {
             Some(edit) => {
+                log::debug!("groups: end edit, target {:?}", edit.target);
                 if let Some((group, link)) = edit.target {
                     apply_group_edit(state, group, link, edit.pending);
                 }
             }
-            None => state.group_edit = Some(GroupEdit::default()),
+            None => {
+                log::debug!("groups: begin edit");
+                state.group_edit = Some(GroupEdit::default());
+            }
         },
         Message::GroupLinkToggle(idx, link) => {
+            log::debug!("groups: storage cell {idx} {link:?}");
             if let Some(edit) = state.group_edit.clone() {
                 // Moving to another storage place commits the one being
                 // filled, so a session can build F1, M1 and S1 in turn.
@@ -10385,6 +10402,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_rme_page3(state);
         }
         Message::GroupClear => {
+            log::debug!("groups: clear");
             state.groups = Default::default();
             state.group_edit = None;
             notify_rme_page3(state);
