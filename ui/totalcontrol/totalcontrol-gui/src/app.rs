@@ -2198,9 +2198,7 @@ pub enum Message {
     /// Select how the graph rate is chosen: `Auto`, `Follow`, or a fixed
     /// rate (which arrives through [`Message::EngineRate`]).
     EngineRateMode(EngineRateMode),
-    /// Read the PipeWire graph while Follow is active.
-    FollowPoll,
-    /// The graph read from `FollowPoll`.
+    /// A PipeWire graph snapshot that differs from the last one seen.
     FollowRead(Option<totalcontrol_core::pw_follow::GraphSnapshot>),
     /// Force PipeWire's quantum (buffer size in samples), `0` = default.
     EngineQuantum(u32),
@@ -2318,8 +2316,8 @@ pub struct TotalControl {
     /// Host-computed output levels (power sum of routed sources ×
     /// faders) — same ballistics as the input/playback meters.
     pub output_meters: Vec<MeterAnim>,
-    /// Snapshot of the two M1 strength readouts per channel, refreshed at
-    /// `STRENGTH_READOUT_MS` instead of at the meter tick rate.  Indexing
+    /// Snapshot of the two M1 strength readouts per channel, refreshed on
+    /// the 250 ms metered tick.  Indexing
     /// matches the meter vectors; `[0]` is the left channel and `[1]` the
     /// right channel of a linked pair.
     pub strength_inputs: Vec<[Option<f32>; 2]>,
@@ -2852,7 +2850,9 @@ const METER_TICK_MS: f32 = 50.0;
 /// Refresh interval for the numerical strength fields.  The meters keep
 /// animating at the fast tick, but the numbers are easier to read when
 /// they move four times a second.
-const STRENGTH_READOUT_MS: u64 = 200;
+/// Below the 250 ms metered tick, so the tick is the readout's clock and no
+/// tick is skipped by a timing race.
+const STRENGTH_READOUT_GUARD_MS: u64 = 200;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
@@ -7421,7 +7421,6 @@ fn is_undoable(message: &Message) -> bool {
             | Message::EngineQuantum(_)
             | Message::EnginePoll
             | Message::EngineRead(..)
-            | Message::FollowPoll
             | Message::FollowRead(..)
             | Message::RenameStart(_)
             | Message::RenameChanged(_)
@@ -7766,8 +7765,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::CollapseTick
                 | Message::EnginePoll
                 | Message::EngineRead(..)
-                | Message::FollowPoll
-                | Message::FollowRead(..)
+                    | Message::FollowRead(..)
                 | Message::OscLog(_)
                 | Message::OscRmeIn(_, _)
                 | Message::OscGlobalIn(_)
@@ -7881,7 +7879,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::Tick
             | Message::EnginePoll
             | Message::EngineRead(..)
-            | Message::FollowPoll
             | Message::FollowRead(..)
     ) {
         state.last_activity = Instant::now();
@@ -8233,7 +8230,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // The numerical strength fields read the tick's snapshot.  The
             // guard is shorter than the 250 ms metered tick so no tick is
             // skipped; the tick is their clock, not a second timer.
-            if state.strength_at.elapsed() >= Duration::from_millis(STRENGTH_READOUT_MS) {
+            if state.strength_at.elapsed() >= Duration::from_millis(STRENGTH_READOUT_GUARD_MS) {
                 state.strength_at = Instant::now();
                 state.strength_inputs = strength_snapshot(&state.input_meters, |pair| {
                     state.device.input_pair_linked(pair)
@@ -9921,18 +9918,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 .map(|e| e.effective_rate())
                 .unwrap_or(state.engine_force_rate);
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(shown as i32)]);
-        }
-        Message::FollowPoll => {
-            if state.device.is_mock()
-                || state.engine_rate_mode != EngineRateMode::Follow
-                || !state.device.rate_follows_sound_server()
-            {
-                return Task::none();
-            }
-            return Task::perform(
-                async { totalcontrol_core::pw_follow::read_graph() },
-                Message::FollowRead,
-            );
         }
         Message::FollowRead(graph) => {
             if state.device.is_mock()
