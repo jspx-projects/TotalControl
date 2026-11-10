@@ -2852,7 +2852,7 @@ const METER_TICK_MS: f32 = 50.0;
 /// Refresh interval for the numerical strength fields.  The meters keep
 /// animating at the fast tick, but the numbers are easier to read when
 /// they move four times a second.
-const STRENGTH_READOUT_MS: u64 = 250;
+const STRENGTH_READOUT_MS: u64 = 200;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
@@ -8230,8 +8230,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 m.step_elapsed(fx_levels[i]);
             }
             state.fx_overload = state.device.fx_overload().unwrap_or([false, false]);
-            // The numerical strength fields read a slower snapshot than the
-            // meters: 250 ms keeps them legible while the bars stay smooth.
+            // The numerical strength fields read the tick's snapshot.  The
+            // guard is shorter than the 250 ms metered tick so no tick is
+            // skipped; the tick is their clock, not a second timer.
             if state.strength_at.elapsed() >= Duration::from_millis(STRENGTH_READOUT_MS) {
                 state.strength_at = Instant::now();
                 state.strength_inputs = strength_snapshot(&state.input_meters, |pair| {
@@ -10613,6 +10614,9 @@ const TICK_IDLE: Duration = Duration::from_millis(100);
 /// canvases redraw from the shared bus themselves, so the view only needs
 /// an occasional pass for connection/autosave/OSC and non-canvas readouts.
 const TICK_SERVICE: Duration = Duration::from_secs(1);
+/// The metered idle tick: one clock that drives the M1 readouts and the
+/// periodic housekeeping, so they cannot beat against each other.
+const TICK_READOUT: Duration = Duration::from_millis(250);
 /// How long after the last change the tick stays fast: longer than the
 /// meters' release, so a fading peak is drawn to the end.
 const ACTIVE_FOR: Duration = Duration::from_millis(1500);
