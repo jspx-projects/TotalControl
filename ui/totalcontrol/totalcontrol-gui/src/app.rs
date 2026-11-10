@@ -7699,6 +7699,19 @@ fn select_strip(state: &mut TotalControl, cid: ChannelId) {
     }
 }
 
+/// Poll the PipeWire graph at 4 Hz and yield only when it changes.
+fn follow_graph_stream() -> impl iced::futures::Stream<Item = Option<totalcontrol_core::pw_follow::GraphSnapshot>> {
+    iced::futures::stream::unfold((None, false), |(last, seeded)| async move {
+        loop {
+            let graph = totalcontrol_core::pw_follow::read_graph();
+            if !seeded || graph != last {
+                return Some((graph.clone(), (graph, true)));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+}
+
 pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
     // A host change whose confirming snapshot never arrived (a rejected
     // command, or a stopped service) must not capture a later snapshot.
@@ -10673,11 +10686,10 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
         };
         subs.push(iced::time::every(poll).map(|_| Message::EnginePoll));
         if state.engine_rate_mode == EngineRateMode::Follow && !state.device.is_mock() {
-            // Graph changes are cheap to observe compared with a card-rate
-            // poll; 4 Hz keeps the 300 ms stabilization delay responsive.
-            subs.push(
-                iced::time::every(Duration::from_millis(250)).map(|_| Message::FollowPoll),
-            );
+            // Poll the graph at 4 Hz but only deliver a message when the
+            // snapshot changes: otherwise every poll rebuilt the whole view
+            // to draw the same pixels.
+            subs.push(Subscription::run(follow_graph_stream).map(Message::FollowRead));
         }
     }
     // Only running while a collapse/expand transition is actually in
