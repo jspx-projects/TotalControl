@@ -350,14 +350,15 @@ outlines in their own colour: mute blue, solo orange and fader-group silver.
 A master that is switched off takes a muted version of its colour.
 
 `M` and `S` are on when TotalControl starts. Mute a channel and it joins the
-global mute set; `M` stays lit. Press `M` and the whole set goes quiet without
-being forgotten: the master and every held channel show the pause mark before
-the `M`, and the channels become audible again. Press `M` again and the same
-channels are muted as a group. While the master shows the pause mark, clicking
-a channel's mute does not silence it; the click only adds or removes that
-channel from the set, so you can prepare the group before applying it. While
-the set is applied, unmuting a member takes it out of the set. The mute master
-works on every routing, not only the submix you are looking at.
+global mute set; `M` stays lit and the channel goes quiet. Press `M` and the
+whole set is switched off without being forgotten: the master and every held
+channel show the pause mark before the `M`, and the channels become audible
+again. Press `M` again and the same channels are muted as a group. While the
+master shows the pause mark, clicking a channel's mute does not silence it;
+the click only adds or removes that channel from the set, so you can prepare
+the group before applying it. While the set is applied, unmuting a member
+takes it out of the set. The mute master works on every routing, not only the
+submix you are looking at.
 
 `S` follows the same pattern over the current submix. It also starts on, the
 first solo joins the set, and a press suspends the set with the pause mark
