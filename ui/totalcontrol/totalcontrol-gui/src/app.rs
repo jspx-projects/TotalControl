@@ -5270,6 +5270,30 @@ fn temporary_group_contains(state: &TotalControl, cid: ChannelId) -> bool {
     state.fader_ganged && state.selected.contains(&cid)
 }
 
+/// The channels a mute or solo click switches together: the channel itself
+/// and its partner when the pair is linked. The master's group stores both,
+/// so clicking either half removes the pair from the group.
+fn paired_channels(state: &TotalControl, cid: ChannelId) -> Vec<ChannelId> {
+    match cid {
+        ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => {
+            vec![ChannelId::Input(i & !1), ChannelId::Input(i | 1)]
+        }
+        ChannelId::Playback(i) if state.device.playback_linked(i / 2) => {
+            vec![
+                ChannelId::Playback(i & !1),
+                ChannelId::Playback(i | 1),
+            ]
+        }
+        ChannelId::Output(i) if state.device.output_linked(i / 2) => {
+            vec![
+                ChannelId::Output(i & !1),
+                ChannelId::Output(i | 1),
+            ]
+        }
+        _ => vec![cid],
+    }
+}
+
 /// The other members of `cid`'s row in the ganged global fader group.
 /// Ganging is within one kind only: inputs with inputs, software playbacks
 /// with playbacks, hardware outputs with outputs.
@@ -8638,11 +8662,23 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::Mute(cid, m) => {
             // The group is automatic: muting always mutes the channel and
             // joins it, whatever the master's state. Clicking a member
-            // toggles it and takes it out of the group again.
-            if let Some(pos) = state.mute_master.members.iter().position(|c| *c == cid) {
-                state.mute_master.members.remove(pos);
+            // toggles it and takes it out of the group again. A linked pair
+            // joins and leaves together.
+            let targets = paired_channels(state, cid);
+            let member = targets
+                .iter()
+                .any(|target| state.mute_master.members.contains(target));
+            if member {
+                state
+                    .mute_master
+                    .members
+                    .retain(|channel| !targets.contains(channel));
             } else if m {
-                state.mute_master.members.push(cid);
+                for target in targets {
+                    if !state.mute_master.members.contains(&target) {
+                        state.mute_master.members.push(target);
+                    }
+                }
             }
             select_strip(state, cid);
             set_channel_mute(state, cid, m);
@@ -8653,12 +8689,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::Solo(cid, s) => {
-            // Same automatic group as mute: a solo always solos and joins,
-            // a member click toggles it and removes it.
-            if let Some(pos) = state.solo_master.members.iter().position(|c| *c == cid) {
-                state.solo_master.members.remove(pos);
+            // Same automatic group as mute, with the same pair handling.
+            let targets = paired_channels(state, cid);
+            let member = targets
+                .iter()
+                .any(|target| state.solo_master.members.contains(target));
+            if member {
+                state
+                    .solo_master
+                    .members
+                    .retain(|channel| !targets.contains(channel));
             } else if s {
-                state.solo_master.members.push(cid);
+                for target in targets {
+                    if !state.solo_master.members.contains(&target) {
+                        state.solo_master.members.push(target);
+                    }
+                }
             }
             select_strip(state, cid);
             set_channel_solo(state, cid, s);
@@ -8678,16 +8724,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
             } else {
                 // Suspend: every member unmutes and keeps the pause mark.
-                // A mute that arrived from another path is a member too.
-                for cid in all_channel_ids(state) {
-                    if channel_is_muted(state, cid)
-                        && !state.mute_master.members.contains(&cid)
-                    {
-                        state.mute_master.members.push(cid);
-                    }
-                }
-                // Suspending an empty set is allowed: it gives the pause
-                // face. A later mute joins the set as usual.
+                // Only the stored members are touched; a channel removed
+                // from the group stays out even if it was muted afterwards.
                 state.mute_master.suspended = true;
                 for cid in state.mute_master.members.clone() {
                     set_channel_mute(state, cid, false);
@@ -8715,15 +8753,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     notify_osc(state, OscOutbound::Solo(cid, true));
                 }
             } else {
-                for cid in all_channel_ids(state) {
-                    if channel_is_soloed(state, cid)
-                        && !state.solo_master.members.contains(&cid)
-                    {
-                        state.solo_master.members.push(cid);
-                    }
-                }
-                // Suspending an empty set is allowed: it gives the pause
-                // face. A later solo joins the set as usual.
+                // Only the stored members are suspended; a solo removed
+                // from the group stays out.
                 state.solo_master.suspended = true;
                 for cid in state.solo_master.members.clone() {
                     set_channel_solo(state, cid, false);
@@ -19680,6 +19711,61 @@ mod tests {
         assert!(channel_is_soloed(&state, b), "the solo master mirrors it");
         assert!(!state.solo_master.suspended);
         assert!(state.solo_master.members.contains(&b));
+    }
+
+    #[test]
+    fn a_linked_mute_pair_leaves_the_group_in_both_states() {
+        let mut state = new(true, None, None);
+        let left = ChannelId::Input(0);
+        let right = ChannelId::Input(1);
+
+        // Master on: clicking either half toggles and removes the pair.
+        let _ = update(&mut state, Message::Mute(left, true));
+        assert!(state.mute_master.members.contains(&left));
+        assert!(state.mute_master.members.contains(&right), "the pair rides along");
+        let _ = update(&mut state, Message::Mute(right, false));
+        assert!(!state.mute_master.members.contains(&left));
+        assert!(!state.mute_master.members.contains(&right));
+        assert!(!channel_is_muted(&state, left));
+
+        // Master off: the pair is held, then a click switches it on and
+        // removes it. A later off press must not collect it again.
+        let _ = update(&mut state, Message::Mute(left, true));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(mute_armed(&state, right), "the pair is held together");
+        let _ = update(&mut state, Message::Mute(left, true));
+        assert!(!state.mute_master.members.contains(&left));
+        assert!(!state.mute_master.members.contains(&right));
+        assert!(channel_is_muted(&state, right));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(state.mute_master.members.is_empty(), "removed stays removed");
+    }
+
+    #[test]
+    fn a_linked_solo_pair_leaves_the_group_in_both_states() {
+        let mut state = new(true, None, None);
+        let left = ChannelId::Input(0);
+        let right = ChannelId::Input(1);
+
+        let _ = update(&mut state, Message::Solo(left, true));
+        assert!(state.solo_master.members.contains(&left));
+        assert!(state.solo_master.members.contains(&right), "the pair rides along");
+        let _ = update(&mut state, Message::Solo(right, false));
+        assert!(!state.solo_master.members.contains(&left));
+        assert!(!state.solo_master.members.contains(&right));
+        assert!(!channel_is_soloed(&state, left));
+
+        let _ = update(&mut state, Message::Solo(left, true));
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(solo_armed(&state, right), "the pair is held together");
+        let _ = update(&mut state, Message::Solo(left, true));
+        assert!(!state.solo_master.members.contains(&left));
+        assert!(!state.solo_master.members.contains(&right));
+        assert!(channel_is_soloed(&state, right));
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(state.solo_master.members.is_empty(), "removed stays removed");
     }
 
     #[test]

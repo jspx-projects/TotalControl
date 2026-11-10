@@ -362,8 +362,9 @@ only the submix you are looking at.
 
 The pause mark means the group is being remembered, not cleared. Clicking a
 channel that is already in the group toggles it and takes it out of the
-group; the rest of the group is unaffected. Muting a channel that is not in
-the group mutes it as usual and adds it, even while the group is off.
+group; a linked stereo pair goes with it, and the rest of the group is
+unaffected. Muting a channel that is not in the group mutes it as usual and
+adds it, even while the group is off.
 
 `S` works the same way for solos over the current submix. In PFL mode the same
 button becomes the PFL master: it shows `F` while an input is listening, and

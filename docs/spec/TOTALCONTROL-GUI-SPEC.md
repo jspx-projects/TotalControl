@@ -53,8 +53,8 @@ mute joins the set, and while the master is lit the channel mutes. The master
 is lit from the first frame with an empty set. A press suspends the set: every
 member unmutes and the master and each held channel show the pause mark;
 pressing it again mutes the set. A member click toggles that channel and
-removes it from the set; muting any other channel mutes it and adds it,
-whatever the master's state. The master can also be switched off while the set
+removes it from the set, a linked pair leaving together; muting any other
+channel mutes it and adds it, whatever the master's state. The master can also be switched off while the set
 is empty. The set is global: it silences the channel on every routing.
 
 The middle button is the **Solo master**, the same machine with the pause mark
