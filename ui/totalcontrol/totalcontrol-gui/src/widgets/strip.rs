@@ -714,13 +714,16 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
     let btn_h = ICON_BTN_H * scale;
 
     let mute_btn = hint(
-        button(centered_label("M", theme::TEXT_XS * scale))
+        button(centered_label(
+            if p.mute_armed { "|| M" } else { "M" },
+            theme::TEXT_XS * scale,
+        ))
             .width(Length::Fill)
             .height(btn_h)
             .style(theme::armed_outline_toggle(p.mute, p.mute_armed, theme::mute_color()))
             .on_press(Message::Mute(cid, !p.mute)),
         if p.mute_armed {
-            "Mute (switched off by the M master, which brings it back)"
+            "Mute (held by the M master; its next press brings it back)"
         } else {
             "Mute"
         },
@@ -728,7 +731,13 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
     );
     let solo_btn = hint(
         button(centered_label(
-            if p.pfl { "PFL" } else { "S" },
+            if p.pfl {
+                "PFL"
+            } else if p.solo_armed {
+                "S ||"
+            } else {
+                "S"
+            },
             theme::TEXT_XS * scale,
         ))
         .width(Length::Fill)
@@ -738,7 +747,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         if p.pfl {
             "PFL (pre-fader listen) to the Cue/PFL target"
         } else if p.solo_armed {
-            "Solo (switched off by the S master, which brings it back)"
+            "Solo (held by the S master; its next press brings it back)"
         } else {
             "Solo"
         },
@@ -935,13 +944,16 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     );
 
     let mute_btn = hint(
-        button(centered_label("M", theme::TEXT_SM * scale))
+        button(centered_label(
+            if p.mute_armed { "|| M" } else { "M" },
+            theme::TEXT_SM * scale,
+        ))
             .width(Length::Fill)
             .height(btn_h)
             .style(theme::armed_outline_toggle(p.mute, p.mute_armed, theme::mute_color()))
             .on_press(Message::Mute(cid, !p.mute)),
         if p.mute_armed {
-            "Mute (switched off by the M master, which brings it back)"
+            "Mute (held by the M master; its next press brings it back)"
         } else {
             "Mute"
         },
@@ -949,8 +961,14 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     );
     let solo_btn = hint(
         button(centered_label(
-            if p.pfl { "PFL" } else { "S" },
             if p.pfl {
+                "PFL"
+            } else if p.solo_armed {
+                "S ||"
+            } else {
+                "S"
+            },
+            if p.pfl || p.solo_armed {
                 theme::TEXT_XS * scale
             } else {
                 theme::TEXT_SM * scale
@@ -963,7 +981,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         if p.pfl {
             "PFL (pre-fader listen) to the Cue/PFL target"
         } else if p.solo_armed {
-            "Solo (switched off by the S master, which brings it back)"
+            "Solo (held by the S master; its next press brings it back)"
         } else {
             "Solo"
         },

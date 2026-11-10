@@ -332,7 +332,9 @@ its tab.
 The strength readouts refresh four times a second; the meter bars keep moving
 smoothly. A readout shows one decimal place, except for levels of magnitude
 100 dB or more, which are printed without a fraction (`100`, `120`, `-150`).
-Silence — and anything below the unit's -150.5 dBFS floor — reads `-∞`. Mute silences a channel without moving its fader; unmuting restores
+Silence — and anything below the unit's -150.5 dBFS floor — reads `-∞`.
+
+Mute silences a channel without moving its fader; unmuting restores
 the same level. Solo silences the other inputs and software playbacks while
 the soloed channel keeps its fader; releasing the last solo restores the
 others. The Cue button on a hardware output copies that output's submix into
@@ -340,6 +342,29 @@ the selected `Cue/PFL to` target, so you can listen to any hardware output
 through the monitor output. Cue is exclusive; releasing it restores the target
 mix. An engaged Mute button is outlined blue, Solo yellow and Cue green; the
 button face stays dark.
+
+### The masters
+
+The sidebar's `M`, `S`/`F` and `F` buttons are the three masters, drawn as
+outlines in their own colour: mute blue, solo orange, temporary fader group
+silver. While a master is idle its label and outline take a muted version of
+that colour.
+
+`M` lights while any channel is muted. Pressing it stores those mutes and
+suspends them: the master and every held channel show `|| M` and the channels
+stay unmuted. While it is suspended, clicking a channel's mute adds or removes
+it from the held set and leaves it unmuted. Pressing `M` again engages the
+whole set; switching a held member's mute off by hand removes it from the set.
+The mute master silences its channels on every routing.
+
+`S` works the same way, with the pause mark after the letter (`S ||`), over
+the channels in the current submix. In PFL mode the same button is the PFL
+master: it shows `F` while an input is listening, and pressing it cancels the
+active PFL rather than restoring it.
+
+`F` lights while the temporary fader group exists. Shift+click a strip or its
+fader to add or remove it; the members' fader caps are marked, and pressing
+`F` clears the group. It does not affect the stored fader groups `1`–`4`.
 
 Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the

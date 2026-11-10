@@ -698,6 +698,39 @@ pub fn stereo_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> b
     outline_toggle(active, PHANTOM)
 }
 
+/// The Control Strip masters (Mute, Solo/PFL, temporary Fader): the same
+/// outline switch as the stereo button, in their functional colour, with a
+/// muted version of the same hue while the master is idle.
+pub fn master_button(
+    active: bool,
+    color: Color,
+) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let pressed = matches!(status, button::Status::Pressed);
+        let mut background = if hovered { SURFACE_HI } else { button_face() };
+        if pressed {
+            background = blend(background, Color::BLACK, PRESS_DARKEN);
+        }
+        let muted = Color { a: 0.42, ..color };
+        button::Style {
+            background: Some(Background::Color(background)),
+            text_color: if active { color } else { muted },
+            border: Border {
+                color: if active { color } else { muted },
+                width: 1.0,
+                radius: RADIUS_SM.into(),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+}
+
+/// The Solo master is orange, distinct from the yellow idle outline of the
+/// strip's own Solo button.
+pub const SOLO_MASTER: Color = Color::from_rgb8(0xdf, 0x8a, 0x3c);
+
 /// CUE uses the same outline language as Stereo, in green.
 pub fn cue_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     outline_toggle(active, cue_color())

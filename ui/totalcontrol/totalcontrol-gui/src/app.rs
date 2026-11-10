@@ -2292,6 +2292,15 @@ pub struct GroupEdit {
     pub pending: Vec<ChannelId>,
 }
 
+/// One master's stored set. While `suspended`, the members are held off:
+/// they are not muted (or soloed) but stay marked with the pause glyph, and
+/// clicking a member's button adds or removes it from the set.
+#[derive(Debug, Clone, Default)]
+pub struct MasterSet {
+    pub members: Vec<ChannelId>,
+    pub suspended: bool,
+}
+
 pub struct TotalControl {
     pub device: DeviceHandle,
     /// The layout document, or the built-in defaults when none loads.
@@ -2638,14 +2647,10 @@ pub struct TotalControl {
     pub snapshots: [Option<Scene>; 8],
     /// User-visible names of the eight Mix slots.
     pub snapshot_names: [String; 8],
-    /// Which channels `Message::GlobalSoloToggle` most recently cleared
-    /// — restored on the next press if nothing's been soloed again in
-    /// the meantime. Empty when there's nothing to restore.
-    pub last_cleared_solos: Vec<ChannelId>,
-    /// Which channels `Message::GlobalMuteToggle` most recently
-    /// unmuted, muted again on the next press if nothing has been muted in
-    /// the meantime. Empty when there's nothing to restore.
-    pub last_cleared_mutes: Vec<ChannelId>,
+    /// The Solo master's stored set (see `MasterSet`).
+    pub solo_master: MasterSet,
+    /// The Mute master's stored set.
+    pub mute_master: MasterSet,
     /// Whether the mix has changed since `active_snapshot` was recalled
     /// or stored: TotalMix flashes the slot ("As soon as the mixer state
     /// is changed the button starts flashing"), the sidebar marks it.
@@ -3233,8 +3238,8 @@ pub fn new_with_device(
         stored_snapshots: std::array::from_fn(|i| snapshots[i].is_some()),
         snapshots,
         snapshot_names: std::array::from_fn(|i| format!("Mix {}", i + 1)),
-        last_cleared_solos: Vec::new(),
-        last_cleared_mutes: Vec::new(),
+        solo_master: MasterSet::default(),
+        mute_master: MasterSet::default(),
         snapshot_dirty: false,
         row_mode: RowMode::Three,
         sync_direction,
@@ -5253,16 +5258,16 @@ pub(crate) fn any_channel_muted(state: &TotalControl) -> bool {
 /// master's next press clear that one instead, so the old set is no longer
 /// what it would bring back).
 pub(crate) fn mute_armed(state: &TotalControl, cid: ChannelId) -> bool {
-    state.last_cleared_mutes.contains(&cid)
+    state.mute_master.suspended
+        && state.mute_master.members.contains(&cid)
         && !channel_is_muted(state, cid)
-        && !any_channel_muted(state)
 }
 
 /// The same for the Solo master and `cid`'s solo.
 pub(crate) fn solo_armed(state: &TotalControl, cid: ChannelId) -> bool {
-    state.last_cleared_solos.contains(&cid)
+    state.solo_master.suspended
+        && state.solo_master.members.contains(&cid)
         && !channel_is_soloed(state, cid)
-        && !any_channel_soloed(state)
 }
 
 /// Whether at least one channel is currently soloed — drives the
@@ -5286,7 +5291,12 @@ fn propagation_set(
     link: sidebar::GroupLink,
 ) -> HashSet<ChannelId> {
     let mut set = HashSet::new();
-    if state.selected.len() > 1 && state.selected.contains(&cid) {
+    // The multi-selection is TotalMix's *temporary fader* group: it gangs
+    // faders only and must not propagate mute or solo.
+    if link == sidebar::GroupLink::Fader
+        && state.selected.len() > 1
+        && state.selected.contains(&cid)
+    {
         set.extend(state.selected.iter().copied());
     }
     for g in &state.groups {
@@ -8613,55 +8623,113 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::Mute(cid, m) => {
-            select_strip(state, cid);
-            // `propagation_set` covers both the pre-existing multi-select
-            // case and (new) any mute-linked group `cid` belongs to.
-            set_channel_mute(state, cid, m);
-            notify_osc(state, OscOutbound::Mute(cid, m));
-            for other in propagation_set(state, cid, sidebar::GroupLink::Mute) {
-                set_channel_mute(state, other, m);
-                notify_osc(state, OscOutbound::Mute(other, m));
+            if state.mute_master.suspended {
+                // Building the held set: a click adds or removes the
+                // channel and leaves its mute off, with the pause glyph.
+                if let Some(pos) = state.mute_master.members.iter().position(|c| *c == cid) {
+                    state.mute_master.members.remove(pos);
+                } else {
+                    state.mute_master.members.push(cid);
+                }
+                set_channel_mute(state, cid, false);
+                notify_osc(state, OscOutbound::Mute(cid, false));
+            } else {
+                select_strip(state, cid);
+                set_channel_mute(state, cid, m);
+                notify_osc(state, OscOutbound::Mute(cid, m));
+                if !m {
+                    // Switching a held member off removes it from the set.
+                    state.mute_master.members.retain(|c| *c != cid);
+                }
+                for other in propagation_set(state, cid, sidebar::GroupLink::Mute) {
+                    set_channel_mute(state, other, m);
+                    notify_osc(state, OscOutbound::Mute(other, m));
+                }
             }
         }
         Message::Solo(cid, s) => {
-            select_strip(state, cid);
-            set_channel_solo(state, cid, s);
-            notify_osc(state, OscOutbound::Solo(cid, s));
-            for other in propagation_set(state, cid, sidebar::GroupLink::Solo) {
-                set_channel_solo(state, other, s);
-                notify_osc(state, OscOutbound::Solo(other, s));
+            if state.solo_master.suspended {
+                if let Some(pos) = state.solo_master.members.iter().position(|c| *c == cid) {
+                    state.solo_master.members.remove(pos);
+                } else {
+                    state.solo_master.members.push(cid);
+                }
+                set_channel_solo(state, cid, false);
+                notify_osc(state, OscOutbound::Solo(cid, false));
+            } else {
+                select_strip(state, cid);
+                set_channel_solo(state, cid, s);
+                notify_osc(state, OscOutbound::Solo(cid, s));
+                if !s {
+                    state.solo_master.members.retain(|c| *c != cid);
+                }
+                for other in propagation_set(state, cid, sidebar::GroupLink::Solo) {
+                    set_channel_solo(state, other, s);
+                    notify_osc(state, OscOutbound::Solo(other, s));
+                }
             }
         }
         Message::GlobalMuteToggle => {
-            let muted: Vec<ChannelId> =
-                all_channel_ids(state).into_iter().filter(|&cid| channel_is_muted(state, cid)).collect();
-            if muted.is_empty() {
-                for cid in std::mem::take(&mut state.last_cleared_mutes) {
+            if state.mute_master.suspended {
+                // Engage the held set.
+                let members = std::mem::take(&mut state.mute_master.members);
+                state.mute_master.suspended = false;
+                for cid in members {
                     set_channel_mute(state, cid, true);
                     notify_osc(state, OscOutbound::Mute(cid, true));
                 }
             } else {
-                for &cid in &muted {
-                    set_channel_mute(state, cid, false);
-                    notify_osc(state, OscOutbound::Mute(cid, false));
+                let muted: Vec<ChannelId> = all_channel_ids(state)
+                    .into_iter()
+                    .filter(|&cid| channel_is_muted(state, cid))
+                    .collect();
+                if !muted.is_empty() {
+                    for &cid in &muted {
+                        set_channel_mute(state, cid, false);
+                        notify_osc(state, OscOutbound::Mute(cid, false));
+                    }
+                    state.mute_master = MasterSet {
+                        members: muted,
+                        suspended: true,
+                    };
                 }
-                state.last_cleared_mutes = muted;
             }
         }
         Message::GlobalSoloToggle => {
-            let soloed: Vec<ChannelId> =
-                all_channel_ids(state).into_iter().filter(|&cid| channel_is_soloed(state, cid)).collect();
-            if soloed.is_empty() {
-                for cid in std::mem::take(&mut state.last_cleared_solos) {
+            if state.control_room.pfl_replaces_solo && any_channel_soloed(state) {
+                // Measured in TotalMix: the PFL master cancels the active
+                // PFL and does not restore it on a second press.
+                let active: Vec<ChannelId> = all_channel_ids(state)
+                    .into_iter()
+                    .filter(|&cid| channel_is_soloed(state, cid))
+                    .collect();
+                for cid in active {
+                    set_channel_solo(state, cid, false);
+                    notify_osc(state, OscOutbound::Solo(cid, false));
+                }
+                state.solo_master = MasterSet::default();
+            } else if state.solo_master.suspended {
+                let members = std::mem::take(&mut state.solo_master.members);
+                state.solo_master.suspended = false;
+                for cid in members {
                     set_channel_solo(state, cid, true);
                     notify_osc(state, OscOutbound::Solo(cid, true));
                 }
             } else {
-                for &cid in &soloed {
-                    set_channel_solo(state, cid, false);
-                    notify_osc(state, OscOutbound::Solo(cid, false));
+                let soloed: Vec<ChannelId> = all_channel_ids(state)
+                    .into_iter()
+                    .filter(|&cid| channel_is_soloed(state, cid))
+                    .collect();
+                if !soloed.is_empty() {
+                    for &cid in &soloed {
+                        set_channel_solo(state, cid, false);
+                        notify_osc(state, OscOutbound::Solo(cid, false));
+                    }
+                    state.solo_master = MasterSet {
+                        members: soloed,
+                        suspended: true,
+                    };
                 }
-                state.last_cleared_solos = soloed;
             }
         }
         Message::Phantom(idx, p) => {            if let Err(e) = state.device.set_input_phantom(idx, p) {
@@ -17949,7 +18017,7 @@ mod tests {
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
         apply_startup_sync, apply_control_room_assignments, sync_control_room_runtime,
-        attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
+        attach_device_service, prefs_of, mute_armed, solo_armed, power_sum_output_meters,
         apply_workspace, capture_workspace, save_workspace_to,
         reorder_pair_volumes, fx_reserve, fx_slot,
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
@@ -19246,11 +19314,15 @@ mod tests {
 
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(!any_channel_muted(&state), "first press clears every mute");
+        assert!(state.mute_master.suspended);
+        assert!(state.mute_master.members.contains(&a));
+        assert!(mute_armed(&state, a), "members show the pause glyph");
 
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(channel_is_muted(&state, a));
         assert!(channel_is_muted(&state, b));
-        assert!(state.last_cleared_mutes.is_empty(), "the remembered set was used up");
+        assert!(!state.mute_master.suspended);
+        assert!(state.mute_master.members.is_empty(), "the set was used up");
     }
 
     #[test]
@@ -19500,10 +19572,12 @@ mod tests {
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(mute_armed(&state, a), "held off by the master");
         assert!(!mute_armed(&state, other), "never muted, never armed");
-        // A fresh mute makes the master's next press clear that one, so the
-        // old set is no longer shown as coming back.
+        // A fresh mute while suspended joins the held set; it stays off and
+        // the existing member remains held too.
         let _ = update(&mut state, Message::Mute(other, true));
-        assert!(!mute_armed(&state, a));
+        assert!(!channel_is_muted(&state, other), "new member stays off");
+        assert!(mute_armed(&state, other), "and shows the pause glyph");
+        assert!(mute_armed(&state, a), "the held set survives a new member");
     }
 
     #[test]
@@ -19545,28 +19619,60 @@ mod tests {
     }
 
     #[test]
-    fn global_solo_toggle_soloing_a_new_channel_after_a_clear_replaces_the_restore_set() {
+    fn a_click_while_the_solo_master_is_suspended_extends_the_set() {
         let mut state = new(true, None, None);
-        // Input(0) and Input(8) are each half of a hardware-linked pair
-        // by default (see `mock.rs::test_input_pair_linked_by_default`),
-        // so soloing either one mirrors onto its sibling too — accounted
-        // for below rather than fought.
         let a = ChannelId::Input(0);
         let c = ChannelId::Input(8);
         let _ = update(&mut state, Message::Solo(a, true));
         let _ = update(&mut state, Message::GlobalSoloToggle);
         assert!(!any_channel_soloed(&state));
+        assert!(state.solo_master.suspended);
 
-        // Solo a different channel manually before pressing the global
-        // toggle again — the toggle should clear *that* one (and its
-        // linked sibling), not try to restore the stale `a`/`Input(1)`
-        // pair from before.
+        // While suspended a click adds the channel and leaves it silent.
         let _ = update(&mut state, Message::Solo(c, true));
+        assert!(!channel_is_soloed(&state, c), "the set member stays off");
+        assert!(state.solo_master.members.contains(&c));
+        assert!(solo_armed(&state, c), "it shows the pause glyph");
+
+        // The next press engages the whole set.
         let _ = update(&mut state, Message::GlobalSoloToggle);
-        assert!(!any_channel_soloed(&state));
-        assert!(state.last_cleared_solos.contains(&c));
-        assert!(!state.last_cleared_solos.contains(&a));
-        assert!(!state.last_cleared_solos.contains(&ChannelId::Input(1)));
+        assert!(channel_is_soloed(&state, a));
+        assert!(channel_is_soloed(&state, c));
+        assert!(!state.solo_master.suspended);
+    }
+
+    #[test]
+    fn switching_a_held_mute_off_removes_it_from_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::Mute(a, true));
+        let _ = update(&mut state, Message::Mute(b, true));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(channel_is_muted(&state, a));
+
+        let _ = update(&mut state, Message::Mute(a, false));
+        assert!(!state.mute_master.members.contains(&a));
+
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!state.mute_master.members.contains(&a));
+        assert!(state.mute_master.members.contains(&b));
+    }
+
+    #[test]
+    fn the_temporary_fader_group_does_not_propagate_mute_or_solo() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.selected.insert(a);
+        state.selected.insert(b);
+        let _ = update(&mut state, Message::Mute(a, true));
+        assert!(channel_is_muted(&state, a));
+        assert!(
+            !channel_is_muted(&state, b),
+            "the temporary group gangs faders only"
+        );
     }
 
     #[test]

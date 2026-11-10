@@ -611,12 +611,23 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     let any_mute = crate::app::any_channel_muted(state);
     let any_solo = crate::app::any_channel_soloed(state);
     // Armed: the master switched its mutes (solos) off and a press brings
-    // them back; the channels it holds show the same dimmed state.
-    let mute_held = !any_mute && !state.last_cleared_mutes.is_empty();
-    let solo_held = !any_solo && !state.last_cleared_solos.is_empty();
+    // them back; the channels it holds show the same pause mark.
+    let mute_held = state.mute_master.suspended && !state.mute_master.members.is_empty();
+    let solo_held = state.solo_master.suspended && !state.solo_master.members.is_empty();
     let has_group = !state.selected.is_empty();
     let pfl = state.control_room.pfl_replaces_solo;
-    let solo_label = if pfl && any_solo { "F" } else { "S" };
+    let mute_label = if mute_held { "|| M" } else { "M" };
+    let solo_label = if pfl {
+        if any_solo {
+            "F"
+        } else {
+            "S ||"
+        }
+    } else if solo_held {
+        "S ||"
+    } else {
+        "S"
+    };
     let cell = |label: &'static str| {
         button(text(label).size(theme::TEXT_SM * scale).center())
             .padding(theme::SPACE_SM * scale)
@@ -624,10 +635,9 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     };
     let r = row![
         hint(
-            cell("M")
-                .style(theme::armed_toggle_button(
-                    any_mute,
-                    mute_held,
+            cell(mute_label)
+                .style(theme::master_button(
+                    any_mute || mute_held,
                     theme::mute_color()
                 ))
                 .on_press(Message::GlobalMuteToggle),
@@ -640,14 +650,13 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         ),
         hint(
             cell(solo_label)
-                .style(theme::armed_toggle_button(
-                    any_solo,
-                    solo_held,
-                    theme::solo_color()
+                .style(theme::master_button(
+                    any_solo || solo_held,
+                    theme::SOLO_MASTER
                 ))
                 .on_press(Message::GlobalSoloToggle),
             if pfl && any_solo {
-                "PFL master: switch the active PFL inputs off"
+                "PFL master: cancel the active PFL"
             } else if pfl {
                 "PFL master: no input is listening"
             } else if solo_held {
@@ -659,7 +668,7 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         ),
         hint(
             cell("F")
-                .style(theme::toggle_button(has_group, theme::group_temporary()))
+                .style(theme::master_button(has_group, theme::FADER))
                 .on_press_maybe(has_group.then_some(Message::ClearSelection)),
             "Temporary fader group (Shift-click strips): clear it",
             scale,
