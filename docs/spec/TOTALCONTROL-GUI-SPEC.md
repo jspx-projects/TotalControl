@@ -1149,6 +1149,16 @@ their ratio as the balance, and writes both cells into that block. Each mono
 output has its own balance and the other block is not written. A mono source
 has one cell and no balance into a mono target.
 
+Linking the output pair folds each source's natural cells — left source into
+the left output, right source into the right output — into the pair send and
+balance. Cross cells are dropped and the per-block overrides cleared.
+Splitting again returns each source's two mono blocks to hard left and hard
+right.
+
+Balance is independent of the fader level: it keeps its value at 0 and is
+applied when the fader rises. This applies to a linked input or playback pair
+and to each mono block of a split output.
+
 ### 8.1 Signal model and submixes
 
 Each hardware output is a bus. The selected output is the current submix;

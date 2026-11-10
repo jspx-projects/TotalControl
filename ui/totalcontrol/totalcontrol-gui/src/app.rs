@@ -5115,15 +5115,27 @@ fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f
     if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) && out == state.sel_out {
         if let Some(block) = selected_output_block(state) {
             // A linked pair keeps its balance across the two source cells
-            // while the fader moves the pair level.
+            // while the fader moves the pair level.  At level 0 the cells
+            // are silent, so the stored balance is the only state left.
             if pair_linked(state, cid) {
-                if let Some((left, right, _, balance)) =
+                let (left, right) = stereo_pair(cid);
+                if let Some((_, _, level, current)) =
                     split_pair_levels(state, cid, block)
                 {
+                    let balance = if level > 0.0 {
+                        current
+                    } else {
+                        state
+                            .device
+                            .pair_block_balance(cid, block)
+                            .unwrap_or(current)
+                    };
                     let (left_level, right_level) =
                         output_balance_to_volumes(send, balance);
                     let _ = state.device.set_matrix_cell(left, block, left_level);
                     let _ = state.device.set_matrix_cell(right, block, right_level);
+                    let _ = state.device.set_pair_block_balance(left, block, balance);
+                    let _ = state.device.set_pair_block_balance(right, block, balance);
                     return;
                 }
             }
@@ -5157,9 +5169,15 @@ fn channel_pan(state: &TotalControl, cid: ChannelId, out: usize) -> i8 {
         && matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_))
     {
         if let Some(block) = split_block_for(state, out) {
-            if let Some((_, _, _, balance)) = split_pair_levels(state, cid, block) {
-                return balance;
+            if let Some((_, _, level, balance)) = split_pair_levels(state, cid, block) {
+                if level > 0.0 {
+                    return balance;
+                }
             }
+            return state
+                .device
+                .pair_block_balance(cid, block)
+                .unwrap_or(0);
         }
     }
     match cid {
@@ -5178,6 +5196,12 @@ fn channel_pan(state: &TotalControl, cid: ChannelId, out: usize) -> i8 {
                 .and_then(|c| c.volumes.get(out))
                 .copied()
                 .unwrap_or(0.0);
+            if left.max(right) <= 0.0 {
+                let block = state.device.matrix_blocks_for_pair(out)[0];
+                if let Some(balance) = state.device.pair_block_balance(cid, block) {
+                    return balance;
+                }
+            }
             output_balance_from_volumes(left, right)
         }
         ChannelId::Playback(i) if state.device.playback_linked(i / 2) => {
@@ -5195,6 +5219,12 @@ fn channel_pan(state: &TotalControl, cid: ChannelId, out: usize) -> i8 {
                 .and_then(|c| c.volumes.get(out))
                 .copied()
                 .unwrap_or(0.0);
+            if left.max(right) <= 0.0 {
+                let block = state.device.matrix_blocks_for_pair(out)[0];
+                if let Some(balance) = state.device.pair_block_balance(cid, block) {
+                    return balance;
+                }
+            }
             output_balance_from_volumes(left, right)
         }
         _ => state.device.pan(cid, out).unwrap_or(0),
@@ -5207,17 +5237,21 @@ fn channel_pan(state: &TotalControl, cid: ChannelId, out: usize) -> i8 {
 fn set_channel_pan(state: &mut TotalControl, cid: ChannelId, out: usize, pan: i8) {
     if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) {
         if let Some(block) = split_block_for(state, out) {
-            // A linked pair writes both source cells for this one mono
-            // block; a mono source has no balance into a mono target.
+            // A linked pair stores the balance for this one mono block even
+            // when the fader is at 0; the cells follow only when the pair
+            // level is non-zero.  A mono source has no balance here.
             if pair_linked(state, cid) {
-                if let Some((left, right, level, _)) =
-                    split_pair_levels(state, cid, block)
-                {
-                    let (left_level, right_level) =
-                        output_balance_to_volumes(level, pan);
-                    let _ = state.device.set_matrix_cell(left, block, left_level);
-                    let _ = state.device.set_matrix_cell(right, block, right_level);
+                let (left, right) = stereo_pair(cid);
+                if let Some((_, _, level, _)) = split_pair_levels(state, cid, block) {
+                    if level > 0.0 {
+                        let (left_level, right_level) =
+                            output_balance_to_volumes(level, pan);
+                        let _ = state.device.set_matrix_cell(left, block, left_level);
+                        let _ = state.device.set_matrix_cell(right, block, right_level);
+                    }
                 }
+                let _ = state.device.set_pair_block_balance(left, block, pan);
+                let _ = state.device.set_pair_block_balance(right, block, pan);
             }
             return;
         }
@@ -13290,7 +13324,17 @@ fn strip_params<'a>(
                 // mono source its one cell.
                 if linked {
                     split_pair_levels(state, cid, block)
-                        .map(|(_, _, level, balance)| (level, balance))
+                        .map(|(_, _, level, balance)| {
+                            let pan = if level > 0.0 {
+                                balance
+                            } else {
+                                state
+                                    .device
+                                    .pair_block_balance(cid, block)
+                                    .unwrap_or(0)
+                            };
+                            (level, pan)
+                        })
                         .unwrap_or_else(|| {
                             (
                                 state.device.matrix_cell(cid, block).unwrap_or(0.0),
@@ -13317,10 +13361,21 @@ fn strip_params<'a>(
                     .and_then(|c| c.volumes.get(output_idx))
                     .copied()
                     .unwrap_or(0.0);
-                (
-                    left_volume.max(right_volume),
-                    output_balance_from_volumes(left_volume, right_volume),
-                )
+                {
+                    let peak = left_volume.max(right_volume);
+                    let pan = if peak > 0.0 {
+                        output_balance_from_volumes(left_volume, right_volume)
+                    } else {
+                        let block = state
+                            .device
+                            .matrix_blocks_for_pair(output_idx)[0];
+                        state
+                            .device
+                            .pair_block_balance(cid, block)
+                            .unwrap_or(0)
+                    };
+                    (peak, pan)
+                }
             } else {
                 (ch.volumes[output_idx], ch.pans[output_idx])
             };
@@ -13393,7 +13448,17 @@ fn strip_params<'a>(
             {
                 if linked {
                     split_pair_levels(state, cid, block)
-                        .map(|(_, _, level, balance)| (level, balance))
+                        .map(|(_, _, level, balance)| {
+                            let pan = if level > 0.0 {
+                                balance
+                            } else {
+                                state
+                                    .device
+                                    .pair_block_balance(cid, block)
+                                    .unwrap_or(0)
+                            };
+                            (level, pan)
+                        })
                         .unwrap_or_else(|| {
                             (
                                 state.device.matrix_cell(cid, block).unwrap_or(0.0),
@@ -13420,10 +13485,21 @@ fn strip_params<'a>(
                     .and_then(|c| c.volumes.get(output_idx))
                     .copied()
                     .unwrap_or(0.0);
-                (
-                    left_volume.max(right_volume),
-                    output_balance_from_volumes(left_volume, right_volume),
-                )
+                {
+                    let peak = left_volume.max(right_volume);
+                    let pan = if peak > 0.0 {
+                        output_balance_from_volumes(left_volume, right_volume)
+                    } else {
+                        let block = state
+                            .device
+                            .matrix_blocks_for_pair(output_idx)[0];
+                        state
+                            .device
+                            .pair_block_balance(cid, block)
+                            .unwrap_or(0)
+                    };
+                    (peak, pan)
+                }
             } else {
                 (ch.volumes[output_idx], ch.pans[output_idx])
             };
@@ -21835,6 +21911,81 @@ mod tests {
         let _ = update(&mut state, Message::VolumeChanged(left, 0, 0.25));
         assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4);
         assert_eq!(state.device.matrix_cell(right, left_block), Some(0.0));
+
+        // Re-link: the natural cells become the stereo pair send and
+        // balance, and the per-block overrides are cleared.
+        let _ = update(
+            &mut state,
+            Message::StereoLinkChanged(ChannelId::Output(0), true),
+        );
+        assert!(!state.device.has_pair_cell_override(left, 0));
+        assert!(!state.device.has_pair_cell_override(right, 0));
+        assert!(
+            (state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4
+        );
+        assert!(
+            (state.device.matrix_cell(right, right_block).unwrap() - 1.0).abs() < 1e-4
+        );
+        assert_eq!(super::channel_pan(&state, left, 0), 75);
+
+        // Re-split: the two blocks return to hard L and hard R.
+        let _ = update(
+            &mut state,
+            Message::StereoLinkChanged(ChannelId::Output(0), false),
+        );
+        state.sel_out_side = 0;
+        assert_eq!(super::channel_pan(&state, left, 0), -100);
+        state.sel_out_side = 1;
+        assert_eq!(super::channel_pan(&state, left, 0), 100);
+    }
+
+    #[test]
+    fn a_linked_pair_keeps_its_balance_at_zero_volume() {
+        let mut state = new(true, None, None);
+        let cid = ChannelId::Input(0);
+        // Input pair 0/1 linked; fader down to 0 for output pair 0.
+        state.device.set_input_volume(0, 0, 0, 0.0).unwrap();
+        assert_eq!(super::channel_pan(&state, cid, 0), 0);
+        let _ = update(&mut state, Message::PanChanged(cid, 0, -50));
+        assert_eq!(super::channel_pan(&state, cid, 0), -50);
+        assert_eq!(strip_params(&state, cid, 0).pan, -50);
+
+        // Raising the fader applies the stored balance.
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
+        assert!((state.device.inputs()[0].volumes[0] - 0.5).abs() < 1e-4);
+        assert!((state.device.inputs()[1].volumes[0] - 0.25).abs() < 1e-4);
+        assert_eq!(super::channel_pan(&state, cid, 0), -50);
+
+        // Dragging the fader back to 0 keeps the balance rather than
+        // flattening it into two silent channels.
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.0));
+        assert_eq!(super::channel_pan(&state, cid, 0), -50);
+        assert_eq!(strip_params(&state, cid, 0).pan, -50);
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
+        assert!((state.device.inputs()[0].volumes[0] - 0.5).abs() < 1e-4);
+        assert!((state.device.inputs()[1].volumes[0] - 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_split_block_keeps_its_balance_at_zero_volume() {
+        let mut state = new(true, None, None);
+        let left = ChannelId::Playback(0);
+        let right = ChannelId::Playback(1);
+        let _ = update(&mut state, Message::StereoLinkChanged(left, true));
+        state.device.set_output_linked(0, false).unwrap();
+        state.sel_out = 0;
+        state.sel_out_side = 0;
+        let block = super::selected_output_block(&state).unwrap();
+
+        let _ = update(&mut state, Message::VolumeChanged(left, 0, 0.0));
+        let _ = update(&mut state, Message::PanChanged(left, 0, -50));
+        assert_eq!(super::channel_pan(&state, left, 0), -50);
+        assert_eq!(strip_params(&state, left, 0).pan, -50);
+
+        let _ = update(&mut state, Message::VolumeChanged(left, 0, 0.5));
+        assert!((state.device.matrix_cell(left, block).unwrap() - 0.5).abs() < 1e-4);
+        assert!((state.device.matrix_cell(right, block).unwrap() - 0.25).abs() < 1e-4);
+        assert_eq!(super::channel_pan(&state, left, 0), -50);
     }
 
     #[test]

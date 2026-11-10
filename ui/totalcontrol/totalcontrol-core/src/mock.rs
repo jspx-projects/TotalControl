@@ -547,6 +547,12 @@ impl RmeDevice for MockBabyfacePro {
         }
     }
 
+    fn has_pair_cell_override(&self, channel: ChannelId, pair: usize) -> bool {
+        self.matrix_blocks_for_pair(pair)
+            .iter()
+            .any(|block| self.matrix_overrides.contains_key(&(channel, *block)))
+    }
+
     fn set_matrix_cell(
         &mut self,
         channel: ChannelId,

@@ -3929,6 +3929,27 @@ impl RmeDevice for Fireface {
         }
     }
 
+    fn matrix_blocks_for_pair(&self, pair: usize) -> [usize; 2] {
+        if self.is_uc() {
+            [pair * 2, pair * 2 + 1]
+        } else {
+            match ucx::output_pair_dsp(pair) {
+                Some(dsp) => [dsp, dsp + 1],
+                None => [pair * 2, pair * 2 + 1],
+            }
+        }
+    }
+
+    fn has_pair_cell_override(&self, channel: ChannelId, pair: usize) -> bool {
+        let Some(source) = Self::matrix_source_index(channel) else {
+            return false;
+        };
+        let blocks = self.matrix_blocks_for_pair(pair);
+        blocks
+            .iter()
+            .any(|block| self.matrix_overrides.contains_key(&(source, *block)))
+    }
+
     fn set_matrix_cell(
         &mut self,
         channel: ChannelId,
@@ -4256,6 +4277,9 @@ impl RmeDevice for Fireface {
             v[pair] = linked;
         }
         if linked {
+            self.fold_pair_sources(pair)?;
+        }
+        if linked {
             // Loopback, Talkback receive and No Trim are pair controls in
             // the linked view.  TotalMix copies the left side over the right
             // when the pair is linked.
@@ -4296,6 +4320,7 @@ impl RmeDevice for Fireface {
                 self.set_pan(ChannelId::Output(left), 0, balance)?;
             }
         } else if !self.is_uc() {
+            self.reset_pair_block_balances(pair);
             // UCX split: turn the linked level/balance into the two channel
             // volumes, then clear the now-unused balance register.
             let (l, r) = output_balance_to_volumes(pair_volume, balance);

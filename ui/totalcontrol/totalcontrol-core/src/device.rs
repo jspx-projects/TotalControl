@@ -241,6 +241,14 @@ fn default_input_link() -> bool {
     true
 }
 
+/// Grow a legacy channel's balance vector to address `block`.  Scenes saved
+/// before the field existed deserialize as an empty vector.
+fn ensure_balance_len(balance: &mut Vec<i8>, block: usize) {
+    if balance.len() <= block {
+        balance.resize(block + 1, 0);
+    }
+}
+
 /// A generic RME audio interface.
 ///
 /// Each implementation maps to a specific hardware model and knows
@@ -468,6 +476,161 @@ pub trait RmeDevice {
         gain: f32,
     ) -> Result<(), Error> {
         self.set_volume(channel, block / 2, gain)
+    }
+
+    /// The two mono matrix blocks of an output pair.  The default pair
+    /// order is block 2p/2p+1; the UCX uses its display/DSP block order.
+    fn matrix_blocks_for_pair(&self, pair: usize) -> [usize; 2] {
+        [pair * 2, pair * 2 + 1]
+    }
+
+    /// Whether a channel has a per-block matrix override for this output
+    /// pair.  Backends without a mono matrix never do.
+    fn has_pair_cell_override(&self, _channel: ChannelId, _pair: usize) -> bool {
+        false
+    }
+
+    /// The stored linked-pair balance for one output block.  This is a
+    /// host-side value, independent of the fader, so it survives a fader
+    /// at 0; the matrix cell is level × balance.
+    fn pair_block_balance(&self, channel: ChannelId, block: usize) -> Option<i8> {
+        match channel {
+            ChannelId::Input(i) => self
+                .inputs()
+                .get(i)
+                .and_then(|c| c.balance.get(block))
+                .copied(),
+            ChannelId::Playback(i) => self
+                .playbacks()
+                .get(i)
+                .and_then(|c| c.balance.get(block))
+                .copied(),
+            ChannelId::Output(_) => None,
+        }
+    }
+
+    /// Store a linked-pair balance for one output block without changing
+    /// the fader.
+    fn set_pair_block_balance(
+        &mut self,
+        channel: ChannelId,
+        block: usize,
+        balance: i8,
+    ) -> Result<(), Error> {
+        match channel {
+            ChannelId::Input(i) => {
+                if let Some(c) = self.inputs_mut().get_mut(i) {
+                    ensure_balance_len(&mut c.balance, block);
+                    c.balance[block] = balance;
+                }
+            }
+            ChannelId::Playback(i) => {
+                if let Some(c) = self.playbacks_mut().get_mut(i) {
+                    ensure_balance_len(&mut c.balance, block);
+                    c.balance[block] = balance;
+                }
+            }
+            ChannelId::Output(_) => {}
+        }
+        Ok(())
+    }
+
+    /// Reset each source's stored balance for a freshly split output pair.
+    /// The left mono output keeps the left source and the right output the
+    /// right source, matching TotalMix's hard-L/R reset on the link change.
+    fn reset_pair_block_balances(&mut self, pair: usize) {
+        let blocks = self.matrix_blocks_for_pair(pair);
+        for i in 0..self.inputs().len() {
+            if let Some(c) = self.inputs_mut().get_mut(i) {
+                ensure_balance_len(&mut c.balance, blocks[1]);
+                c.balance[blocks[0]] = -100;
+                c.balance[blocks[1]] = 100;
+            }
+        }
+        for i in 0..self.playbacks().len() {
+            if let Some(c) = self.playbacks_mut().get_mut(i) {
+                ensure_balance_len(&mut c.balance, blocks[1]);
+                c.balance[blocks[0]] = -100;
+                c.balance[blocks[1]] = 100;
+            }
+        }
+    }
+
+    /// Fold the per-mono-block sends of the sources routed to `pair` into
+    /// the stereo-pair model when the output pair is linked again.  For a
+    /// linked source pair the natural cells (left source into the left
+    /// output, right source into the right output) become the pair send and
+    /// balance; the cross cells cannot be represented in a stereo pair and
+    /// are dropped.  For a mono source the two cells become its pair level
+    /// and pan.  The per-block overrides are cleared as the pair model takes
+    /// over.
+    fn fold_pair_sources(&mut self, pair: usize) -> Result<(), Error> {
+        let blocks = self.matrix_blocks_for_pair(pair);
+        for i in 0..self.inputs().len() {
+            let left = ChannelId::Input(i & !1);
+            let right = ChannelId::Input(i | 1);
+            if self.input_pair_linked(i / 2) {
+                if i % 2 != 0 {
+                    continue;
+                }
+                if !self.has_pair_cell_override(left, pair)
+                    && !self.has_pair_cell_override(right, pair)
+                {
+                    continue;
+                }
+                let left_cell = self.matrix_cell(left, blocks[0]).unwrap_or(0.0);
+                let right_cell = self.matrix_cell(right, blocks[1]).unwrap_or(0.0);
+                let level = left_cell.max(right_cell);
+                let balance = output_balance_from_volumes(left_cell, right_cell);
+                let (left_level, right_level) = output_balance_to_volumes(level, balance);
+                self.set_volume(left, pair, left_level)?;
+                self.set_volume(right, pair, right_level)?;
+            } else {
+                let cid = ChannelId::Input(i);
+                if !self.has_pair_cell_override(cid, pair) {
+                    continue;
+                }
+                let left_cell = self.matrix_cell(cid, blocks[0]).unwrap_or(0.0);
+                let right_cell = self.matrix_cell(cid, blocks[1]).unwrap_or(0.0);
+                let level = left_cell.max(right_cell);
+                let pan = output_balance_from_volumes(left_cell, right_cell);
+                self.set_volume(cid, pair, level)?;
+                self.set_pan(cid, pair, pan)?;
+            }
+        }
+        for i in 0..self.playbacks().len() {
+            let left = ChannelId::Playback(i & !1);
+            let right = ChannelId::Playback(i | 1);
+            if self.playback_linked(i / 2) {
+                if i % 2 != 0 {
+                    continue;
+                }
+                if !self.has_pair_cell_override(left, pair)
+                    && !self.has_pair_cell_override(right, pair)
+                {
+                    continue;
+                }
+                let left_cell = self.matrix_cell(left, blocks[0]).unwrap_or(0.0);
+                let right_cell = self.matrix_cell(right, blocks[1]).unwrap_or(0.0);
+                let level = left_cell.max(right_cell);
+                let balance = output_balance_from_volumes(left_cell, right_cell);
+                let (left_level, right_level) = output_balance_to_volumes(level, balance);
+                self.set_volume(left, pair, left_level)?;
+                self.set_volume(right, pair, right_level)?;
+            } else {
+                let cid = ChannelId::Playback(i);
+                if !self.has_pair_cell_override(cid, pair) {
+                    continue;
+                }
+                let left_cell = self.matrix_cell(cid, blocks[0]).unwrap_or(0.0);
+                let right_cell = self.matrix_cell(cid, blocks[1]).unwrap_or(0.0);
+                let level = left_cell.max(right_cell);
+                let pan = output_balance_from_volumes(left_cell, right_cell);
+                self.set_volume(cid, pair, level)?;
+                self.set_pan(cid, pair, pan)?;
+            }
+        }
+        Ok(())
     }
 
     /// Set the pan (-100 .. 100) for a given channel into a specific output pair.
@@ -868,6 +1031,9 @@ pub trait RmeDevice {
                 }
                 let _ = self.set_fx_return(right, saved.fx_return_db);
             }
+            self.fold_pair_sources(pair)?;
+        } else {
+            self.reset_pair_block_balances(pair);
         }
         Ok(())
     }
@@ -1015,19 +1181,42 @@ pub trait RmeDevice {
         let (l, r) = (pair * 2, pair * 2 + 1);
         if self.input_pair_linked(pair) {
             let target = volume.clamp(0.0, 2.0);
+            let block = self.matrix_blocks_for_pair(output)[0];
             let left = self.volume(ChannelId::Input(l), output)?;
             let right = self.volume(ChannelId::Input(r), output)?;
             let peak = left.max(right);
+            // The balance shown while the fader is up is the current
+            // channel difference; at 0 the stored value is all that is left.
+            let current = output_balance_from_volumes(left, right);
+            let stored = self
+                .inputs()
+                .get(l)
+                .and_then(|channel| channel.balance.get(block))
+                .copied()
+                .unwrap_or(current);
             let (left, right) = if peak > 0.0 {
                 // The linked fader is a relative dB trim: scale both
                 // channels by the same factor so their difference stays.
                 let gain = target / peak;
                 (left * gain, right * gain)
+            } else if target > 0.0 {
+                // The fader was at 0; the stored balance survives there.
+                output_balance_to_volumes(target, stored)
             } else {
-                (target, target)
+                (0.0, 0.0)
             };
             self.set_volume(ChannelId::Input(l), output, left)?;
             self.set_volume(ChannelId::Input(r), output, right)?;
+            // A fader move must not erase the balance when it lands on 0.
+            let balance = if peak > 0.0 { current } else { stored };
+            if let Some(channel) = self.inputs_mut().get_mut(l) {
+                ensure_balance_len(&mut channel.balance, block);
+                channel.balance[block] = balance;
+            }
+            if let Some(channel) = self.inputs_mut().get_mut(r) {
+                ensure_balance_len(&mut channel.balance, block);
+                channel.balance[block] = balance;
+            }
         } else {
             self.set_volume(ChannelId::Input(if which == 0 { l } else { r }), output, volume)?;
         }
@@ -1048,6 +1237,15 @@ pub trait RmeDevice {
         let left = self.volume(ChannelId::Input(l), output)?;
         let right = self.volume(ChannelId::Input(r), output)?;
         let (left, right) = output_balance_to_volumes(left.max(right), balance);
+        let block = self.matrix_blocks_for_pair(output)[0];
+        if let Some(channel) = self.inputs_mut().get_mut(l) {
+            ensure_balance_len(&mut channel.balance, block);
+            channel.balance[block] = balance;
+        }
+        if let Some(channel) = self.inputs_mut().get_mut(r) {
+            ensure_balance_len(&mut channel.balance, block);
+            channel.balance[block] = balance;
+        }
         self.set_volume(ChannelId::Input(l), output, left)?;
         self.set_volume(ChannelId::Input(r), output, right)?;
         Ok(())
@@ -1138,19 +1336,38 @@ pub trait RmeDevice {
         let (l, r) = (pair * 2, pair * 2 + 1);
         if self.playback_linked(pair) {
             let target = volume.clamp(0.0, 2.0);
+            let block = self.matrix_blocks_for_pair(output)[0];
             let left = self.volume(ChannelId::Playback(l), output)?;
             let right = self.volume(ChannelId::Playback(r), output)?;
             let peak = left.max(right);
+            let current = output_balance_from_volumes(left, right);
+            let stored = self
+                .playbacks()
+                .get(l)
+                .and_then(|channel| channel.balance.get(block))
+                .copied()
+                .unwrap_or(current);
             let (left, right) = if peak > 0.0 {
                 // The linked fader is a relative dB trim: scale both
                 // channels by the same factor so their difference stays.
                 let gain = target / peak;
                 (left * gain, right * gain)
+            } else if target > 0.0 {
+                output_balance_to_volumes(target, stored)
             } else {
-                (target, target)
+                (0.0, 0.0)
             };
             self.set_volume(ChannelId::Playback(l), output, left)?;
             self.set_volume(ChannelId::Playback(r), output, right)?;
+            let balance = if peak > 0.0 { current } else { stored };
+            if let Some(channel) = self.playbacks_mut().get_mut(l) {
+                ensure_balance_len(&mut channel.balance, block);
+                channel.balance[block] = balance;
+            }
+            if let Some(channel) = self.playbacks_mut().get_mut(r) {
+                ensure_balance_len(&mut channel.balance, block);
+                channel.balance[block] = balance;
+            }
         } else {
             self.set_volume(ChannelId::Playback(if which == 0 { l } else { r }), output, volume)?;
         }
@@ -1169,6 +1386,15 @@ pub trait RmeDevice {
         let left = self.volume(ChannelId::Playback(l), output)?;
         let right = self.volume(ChannelId::Playback(r), output)?;
         let (left, right) = output_balance_to_volumes(left.max(right), balance);
+        let block = self.matrix_blocks_for_pair(output)[0];
+        if let Some(channel) = self.playbacks_mut().get_mut(l) {
+            ensure_balance_len(&mut channel.balance, block);
+            channel.balance[block] = balance;
+        }
+        if let Some(channel) = self.playbacks_mut().get_mut(r) {
+            ensure_balance_len(&mut channel.balance, block);
+            channel.balance[block] = balance;
+        }
         self.set_volume(ChannelId::Playback(l), output, left)?;
         self.set_volume(ChannelId::Playback(r), output, right)?;
         Ok(())
