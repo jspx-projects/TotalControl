@@ -993,6 +993,28 @@ Undo restores the mix as it was before your last mix-changing step; every
 continuous drag of one control counts as a single step. Redo reapplies what
 you undid. Device settings and window layout are not part of undo.
 
+### Groups
+
+Four groups, each with its own membership and three independent links: mute,
+solo and fader.
+
+To build one:
+
+1. Select the channels: Ctrl+click a strip to add or remove it, Shift+click to
+   take the range from the previous selection. Ctrl/Shift+click works anywhere
+   on the strip, including its fader and its FX fader.
+2. Open the `groups` card in the sidebar and press `edit`; it stays lit.
+3. Click the group's fader cell (`1`–`4`). That assigns the current selection
+   as the group's membership and switches the fader link on. The `M1`–`M4`
+   and `S1`–`S4` cells do the same for mute and solo; the links are
+   independent, so one group can link its faders and its mutes at once.
+4. Press `edit` again to leave edit mode. In normal mode those cells only
+   toggle each link on and off.
+
+With the fader link engaged, moving one member applies the same dB change to
+the others, so their relative balance is preserved. Mute and solo propagate
+the same way. `clear` empties all four groups.
+
 Groups are saved in a workspace. Loading a workspace replaces the current
 groups with the stored ones.
 
