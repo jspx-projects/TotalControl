@@ -1073,6 +1073,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         on_drag: Box::new(move |v| Message::VolumeChanged(cid, out, v)),
         on_release: Box::new(move || Message::RangeCleared(cid)),
         on_reset: Box::new(move || Message::Reset(cid, out, default_vol)),
+        on_select: Some(Box::new(move || Message::StripClicked(cid))),
     });
 
     // The four tab slots are fixed.  A slot with no control is still
@@ -1208,6 +1209,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             on_drag: Box::new(move |v| fx_message(cid, db_of(v))),
             on_release: Box::new(move || Message::RangeCleared(cid)),
             on_reset: Box::new(move || fx_message(cid, -65.0)),
+            on_select: Some(Box::new(move || Message::StripClicked(cid))),
         });
         // The fader's own coloured fill says everything; the dark channel
         // behind it is what marks the slot above the cap.

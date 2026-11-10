@@ -363,6 +363,9 @@ pub struct Fader<Message> {
     pub on_drag: Box<dyn Fn(f32) -> Message>,
     pub on_release: Box<dyn Fn() -> Message>,
     pub on_reset: Box<dyn Fn() -> Message>,
+    /// Ctrl/Shift+click picks the strip for a group edit instead of starting
+    /// a drag.  `None` on a fader that does not belong to a strip.
+    pub on_select: Option<Box<dyn Fn() -> Message>>,
 }
 
 impl<Message> Fader<Message> {
@@ -565,6 +568,14 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
 
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                // Ctrl/Shift+click is the group selection gesture, not a
+                // drag: it must reach the strip even though the fader
+                // canvas owns the press position.
+                if self.modifiers.control() || self.modifiers.shift() {
+                    return self.on_select.as_ref().map(|on_select| {
+                        canvas::Action::publish(on_select()).and_capture()
+                    });
+                }
                 let pos = cursor.position_over(bounds)?;
                 if !self.is_over_track(pos.x, bounds.x, bounds.width) {
                     return None;
