@@ -204,9 +204,13 @@ is a complete template object.
 Pixels at zoom 1.0.  The resolver multiplies each value by the zoom exactly
 once.  Widths and heights must be greater than zero; offsets may be zero.
 
+`Built-in` is the shipped default.  The live values are `LayoutMetrics` in
+`ui/totalcontrol/totalcontrol-layout/src/lib.rs`, and the schema carries the
+same defaults for editors; a test keeps the two in step.
+
 **Card and content**
 
-| Field | Default | Meaning |
+| Field | Built-in | Meaning |
 |---|---:|---|
 | `strip_w` | 90 | Card width.  Tab and minimize faces derive their width from it. |
 | `strip_h` | 350 | Card height.  Rows are stacked from `content_y`, so it must hold every row. |
@@ -217,7 +221,7 @@ once.  Widths and heights must be greater than zero; offsets may be zero.
 
 **Top area**
 
-| Field | Default | Meaning |
+| Field | Built-in | Meaning |
 |---|---:|---|
 | `name_h` | 13 | Channel name row height.  The name spans the content box. |
 | `pan_x` | 12 | Left edge of the pan knob area from the content box. |
@@ -230,7 +234,7 @@ once.  Widths and heights must be greater than zero; offsets may be zero.
 
 **Middle area**
 
-| Field | Default | Meaning |
+| Field | Built-in | Meaning |
 |---|---:|---|
 | `middle_h` | 205 | Middle row height, shared by the VU, the channel fader canvas and the FX fader. |
 | `vu_x` | 0 | Left edge of the VU from the content box. |
@@ -249,7 +253,7 @@ once.  Widths and heights must be greater than zero; offsets may be zero.
 
 **Bottom area**
 
-| Field | Default | Meaning |
+| Field | Built-in | Meaning |
 |---|---:|---|
 | `db_x` | 20 | Left edge of the dB readout from the content box. |
 | `db_w` | 38 | dB readout width. |
@@ -262,7 +266,10 @@ once.  Widths and heights must be greater than zero; offsets may be zero.
 
 Pixels at zoom 1.0; every value must be greater than zero.
 
-| Field | Default | Meaning |
+`Built-in` is the shipped default; the live values are `VISUAL` in
+`ui/totalcontrol/totalcontrol-layout/src/lib.rs`.
+
+| Field | Built-in | Meaning |
 |---|---:|---|
 | `name_size` | 13 | Channel name font size. |
 | `button_text_size` | 11 | Mute/solo and cue label size. |
