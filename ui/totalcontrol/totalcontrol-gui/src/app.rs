@@ -10646,11 +10646,11 @@ pub fn tick_interval(state: &TotalControl) -> Duration {
         TICK_ACTIVE
     } else if is_active(state) {
         TICK_METERS
-    } else if state.meter_bus.is_some()
-        && (state.device.has_device_playback_meters() || state.device.is_mock())
-        && state.osc_config.is_none()
-    {
-        TICK_SERVICE
+    } else if state.meter_bus.is_some() && state.osc_config.is_none() {
+        // The device service owns metering and the fader canvases schedule
+        // their own frames; this single clock drives the M1 readouts and the
+        // periodic housekeeping.
+        TICK_READOUT
     } else {
         TICK_IDLE
     }
@@ -10809,15 +10809,20 @@ thread_local! {
 }
 
 /// Count full view builds per second when `TOTALCONTROL_PROFILE` is set.
-fn profile_view_build() {
+fn profile_view_build(state: &TotalControl) {
     VIEW_WINDOW.with(|cell| {
         let mut window = cell.borrow_mut();
         window.1 += 1;
         let elapsed = window.0.elapsed();
         if elapsed >= Duration::from_secs(1) {
             eprintln!(
-                "profile: view builds/s={:.1}",
-                window.1 as f32 / elapsed.as_secs_f32()
+                "profile: builds/s={:.1} tick={:?} hidden={} bus={} active={} osc={}",
+                window.1 as f32 / elapsed.as_secs_f32(),
+                tick_interval(state),
+                state.window_hidden,
+                state.meter_bus.is_some(),
+                is_active(state),
+                state.osc_config.is_some()
             );
             *window = (Instant::now(), 0);
         }
@@ -10831,7 +10836,7 @@ fn profiling() -> bool {
 
 pub fn view(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
     if profiling() {
-        profile_view_build();
+        profile_view_build(state);
     }
     let top = top_bar(state);
     let now = Instant::now();
