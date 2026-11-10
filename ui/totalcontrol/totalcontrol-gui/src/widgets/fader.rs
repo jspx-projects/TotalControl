@@ -173,6 +173,9 @@ const TRACK_W: f32 = 26.0;
 #[cfg(test)]
 pub(crate) const FADER_GROUP_W: f32 = METER_RULER_W + GAP + TRACK_W;
 pub(crate) const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// How far the pointer may move with Shift held before the press becomes a
+/// fine drag instead of a group click.
+const SHIFT_DRAG_PX: f32 = 2.0;
 /// Gap after the last `WheelScrolled` event that means "this is a new
 /// gesture" rather than a continuation — wheel scrolling has no
 /// press/release framing to mark that boundary explicitly.
@@ -363,9 +366,15 @@ pub struct Fader<Message> {
     pub on_drag: Box<dyn Fn(f32) -> Message>,
     pub on_release: Box<dyn Fn() -> Message>,
     pub on_reset: Box<dyn Fn() -> Message>,
-    /// Ctrl/Shift+click picks the strip for a group edit instead of starting
-    /// a drag.  `None` on a fader that does not belong to a strip.
+    /// Shift+click picks the strip for the temporary fader group (or for
+    /// the group being edited) instead of starting a drag.  `None` on a
+    /// fader that does not belong to a strip.
     pub on_select: Option<Box<dyn Fn() -> Message>>,
+    /// While a group session is open, any click picks the strip, not only
+    /// Shift+click.
+    pub click_selects: bool,
+    /// The storage-group colour this fader's cap carries, if any.
+    pub cap_tint: Option<Color>,
 }
 
 impl<Message> Fader<Message> {
@@ -497,6 +506,10 @@ pub struct State {
     meter_key: std::cell::Cell<u64>,
     dragging: bool,
     last_click: Option<Instant>,
+    /// A Shift+press on the track, held until it either becomes a fine drag
+    /// (the pointer moves) or a group click (it is released in place):
+    /// `(press y, value under the press)`.
+    pending_shift: Option<(f32, f32)>,
     /// Last cursor Y seen during an active drag. Each move applies the
     /// delta since this point (scaled by `FINE_SENSITIVITY` while Shift is
     /// held) rather than an absolute cursor-to-value mapping, and is
@@ -568,13 +581,24 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
 
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                // Ctrl/Shift+click is the group selection gesture, not a
-                // drag: it must reach the strip even though the fader
-                // canvas owns the press position.
-                if self.modifiers.control() || self.modifiers.shift() {
+                if self.click_selects {
+                    // A group session is open: every click picks the strip.
                     return self.on_select.as_ref().map(|on_select| {
                         canvas::Action::publish(on_select()).and_capture()
                     });
+                }
+                if self.modifiers.shift() {
+                    // Deferred: a Shift+click groups the strip, a
+                    // Shift+drag is still fine adjustment. Off the track
+                    // there is nothing to drag, so group immediately.
+                    let pos = cursor.position_over(bounds)?;
+                    if !self.is_over_track(pos.x, bounds.x, bounds.width) {
+                        return self.on_select.as_ref().map(|on_select| {
+                            canvas::Action::publish(on_select()).and_capture()
+                        });
+                    }
+                    state.pending_shift = Some((pos.y, locate(pos.y)));
+                    return Some(canvas::Action::capture());
                 }
                 let pos = cursor.position_over(bounds)?;
                 if !self.is_over_track(pos.x, bounds.x, bounds.width) {
@@ -601,6 +625,23 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                 Some(canvas::Action::publish((self.on_press)(value, None)).and_capture())
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if let Some((press_y, press_value)) = state.pending_shift {
+                    let pos = cursor.land().position()?;
+                    if (pos.y - press_y).abs() < SHIFT_DRAG_PX * self.scale {
+                        return Some(canvas::Action::capture());
+                    }
+                    // The pointer moved: this is a fine drag, starting at
+                    // the value under the press.
+                    state.pending_shift = None;
+                    state.last_click = Some(Instant::now());
+                    state.dragging = true;
+                    state.drag_pos = Some(pos.y);
+                    state.drag_t = Some(vol_to_t(press_value));
+                    return Some(
+                        canvas::Action::publish((self.on_press)(press_value, None))
+                            .and_capture(),
+                    );
+                }
                 if !state.dragging {
                     return None;
                 }
@@ -624,6 +665,12 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                 Some(canvas::Action::publish((self.on_drag)(t_to_vol(t))).and_capture())
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if state.pending_shift.take().is_some() {
+                    // Released in place: a Shift+click, the group gesture.
+                    return self.on_select.as_ref().map(|on_select| {
+                        canvas::Action::publish(on_select()).and_capture()
+                    });
+                }
                 if !state.dragging {
                     return None;
                 }
@@ -900,6 +947,11 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                 (display_value.to_bits(), self.default_value.to_bits()).hash(h);
                 (self.range.0.to_bits(), self.range.1.to_bits()).hash(h);
                 (state.dragging, track_x.to_bits(), marks_left.to_bits()).hash(h);
+                // The cap carries the group colour, so a change must
+                // invalidate the cached rail layer.
+                self.cap_tint
+                    .map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()])
+                    .hash(h);
             });
             if state.track_key.replace(key) != key {
                 state.track_cache.clear();
@@ -925,6 +977,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     self.show_meter,
                     self.slot_w,
                     marks_left,
+                    self.cap_tint,
                 );
             }));
         }
@@ -1294,6 +1347,7 @@ fn draw_track(
     show_scale: bool,
     slot_w: f32,
     marks_left: f32,
+    cap_tint: Option<Color>,
 ) {
     // One line per fader: the slot *is* the rail, for the main fader and the
     // thin FX fader alike. There is no second, thinner rail inside it.
@@ -1398,7 +1452,7 @@ fn draw_track(
     let body_color = if dragging {
         Color::from_rgb8(0xf0, 0xf1, 0xf4)
     } else {
-        theme::FADER
+        cap_tint.unwrap_or(theme::FADER)
     };
     frame.fill(&body, body_color);
 
