@@ -5253,6 +5253,37 @@ pub(crate) fn any_channel_muted(state: &TotalControl) -> bool {
     all_channel_ids(state).into_iter().any(|cid| channel_is_muted(state, cid))
 }
 
+/// Whether two or more channels of one kind are selected.  The temporary
+/// fader group gangs within a row only: inputs with inputs, software
+/// playbacks with playbacks, outputs with outputs.
+pub(crate) fn temporary_group_exists(state: &TotalControl) -> bool {
+    [ChannelId::Input(0), ChannelId::Playback(0), ChannelId::Output(0)]
+        .iter()
+        .any(|probe| {
+            let kind = std::mem::discriminant(probe);
+            state
+                .selected
+                .iter()
+                .filter(|channel| std::mem::discriminant(*channel) == kind)
+                .count()
+                > 1
+        })
+}
+
+/// Whether `cid` is part of a temporary group of its own kind.
+fn temporary_group_contains(state: &TotalControl, cid: ChannelId) -> bool {
+    if !state.selected.contains(&cid) {
+        return false;
+    }
+    let kind = std::mem::discriminant(&cid);
+    state
+        .selected
+        .iter()
+        .filter(|channel| std::mem::discriminant(*channel) == kind)
+        .count()
+        > 1
+}
+
 /// Whether `cid`'s mute is held off by the Mute master: the master's last
 /// press cleared it, and nothing has been muted since (a new mute makes the
 /// master's next press clear that one instead, so the old set is no longer
@@ -5292,12 +5323,19 @@ fn propagation_set(
 ) -> HashSet<ChannelId> {
     let mut set = HashSet::new();
     // The multi-selection is TotalMix's *temporary fader* group: it gangs
-    // faders only and must not propagate mute or solo.
-    if link == sidebar::GroupLink::Fader
-        && state.selected.len() > 1
-        && state.selected.contains(&cid)
-    {
-        set.extend(state.selected.iter().copied());
+    // faders only, and only within one row — inputs with inputs, software
+    // playbacks with playbacks, outputs with outputs.
+    if link == sidebar::GroupLink::Fader && state.selected.contains(&cid) {
+        let kind = std::mem::discriminant(&cid);
+        let peers: Vec<ChannelId> = state
+            .selected
+            .iter()
+            .copied()
+            .filter(|other| std::mem::discriminant(other) == kind)
+            .collect();
+        if peers.len() > 1 {
+            set.extend(peers);
+        }
     }
     for g in &state.groups {
         let linked = match link {
@@ -13050,7 +13088,7 @@ fn fader_group_mark(state: &TotalControl, cid: ChannelId) -> Option<Color> {
             }
         }
     }
-    if state.selected.len() > 1 && state.selected.contains(&cid) {
+    if temporary_group_contains(state, cid) {
         return Some(theme::group_temporary());
     }
     state
@@ -18013,7 +18051,7 @@ mod tests {
         channel_trim, trim_factor, trim_meter_levels,
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
         global_feedback, global_feedback_is_typed, global_messages, global_state_commands,
-        input_gain_knob_label, TotalControl,
+        input_gain_knob_label, temporary_group_exists, TotalControl,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
         apply_startup_sync, apply_control_room_assignments, sync_control_room_runtime,
@@ -19658,6 +19696,43 @@ mod tests {
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(!state.mute_master.members.contains(&a));
         assert!(state.mute_master.members.contains(&b));
+    }
+
+    #[test]
+    fn the_temporary_group_gangs_within_a_row_only() {
+        let mut state = new(true, None, None);
+        let input = ChannelId::Input(0);
+        let other_input = ChannelId::Input(4);
+        let output = ChannelId::Output(0);
+        state.selected.insert(input);
+        state.selected.insert(other_input);
+        state.selected.insert(output);
+        let output_before = state.device.outputs()[0].volume;
+
+        let _ = update(&mut state, Message::VolumeChanged(input, 0, 0.5));
+        assert!(
+            (state.device.inputs()[4].volumes[0] - 0.5).abs() < 1e-4,
+            "the other input fader follows"
+        );
+        assert_eq!(
+            output_before,
+            state.device.outputs()[0].volume,
+            "an output selected alongside is its own group"
+        );
+    }
+
+    #[test]
+    fn a_temporary_group_needs_two_faders_of_the_same_row() {
+        let mut state = new(true, None, None);
+        state.selected.insert(ChannelId::Input(0));
+        assert!(!temporary_group_exists(&state), "one fader is not a group");
+        state.selected.insert(ChannelId::Output(0));
+        assert!(
+            !temporary_group_exists(&state),
+            "one input and one output are two groups of one"
+        );
+        state.selected.insert(ChannelId::Input(4));
+        assert!(temporary_group_exists(&state), "two inputs make a group");
     }
 
     #[test]

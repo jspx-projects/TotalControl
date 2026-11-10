@@ -20,6 +20,7 @@ use crate::widgets::layout::{
     SUBMIX_H,
 };
 use crate::widgets::knob::{knob, Knob};
+use crate::widgets::pause_mark::pause_mark;
 
 /// Base sizes at `scale == 1.0` (`theme::SCALE_DEFAULT`) — every dimension
 /// in a strip is one of these times `StripParams::scale`, so the window's
@@ -357,6 +358,39 @@ pub(crate) fn centered_label<'a>(s: &'a str, size: f32) -> Element<'a, Message> 
     )
     .center(Length::Fill)
     .into()
+}
+
+/// `label` with the master's pause mark before or after it, centred in a
+/// button; without `paused` it is the plain centred label.
+fn centered_master_label<'a>(
+    label: &'a str,
+    size: f32,
+    scale: f32,
+    color: Color,
+    paused: bool,
+    pause_before: bool,
+) -> Element<'a, Message> {
+    if !paused {
+        return centered_label(label, size);
+    }
+    let label = text(label)
+        .size(size)
+        .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+            size,
+        )));
+    let mark = pause_mark(color, scale);
+    let content: Element<'a, Message> = if pause_before {
+        row![mark, label]
+            .spacing(theme::SPACE_TIGHT * scale)
+            .align_y(alignment::Vertical::Center)
+            .into()
+    } else {
+        row![label, mark]
+            .spacing(theme::SPACE_TIGHT * scale)
+            .align_y(alignment::Vertical::Center)
+            .into()
+    };
+    container(content).center(Length::Fill).into()
 }
 
 /// Wraps a control in a hover tooltip — for the abbreviations (M, S, 48V,
@@ -714,9 +748,13 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
     let btn_h = ICON_BTN_H * scale;
 
     let mute_btn = hint(
-        button(centered_label(
-            if p.mute_armed { "|| M" } else { "M" },
+        button(centered_master_label(
+            "M",
             theme::TEXT_XS * scale,
+            scale,
+            theme::mute_color(),
+            p.mute_armed,
+            true,
         ))
             .width(Length::Fill)
             .height(btn_h)
@@ -730,15 +768,13 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         scale,
     );
     let solo_btn = hint(
-        button(centered_label(
-            if p.pfl {
-                "PFL"
-            } else if p.solo_armed {
-                "S ||"
-            } else {
-                "S"
-            },
+        button(centered_master_label(
+            if p.pfl { "PFL" } else { "S" },
             theme::TEXT_XS * scale,
+            scale,
+            theme::solo_color(),
+            !p.pfl && p.solo_armed,
+            false,
         ))
         .width(Length::Fill)
         .height(btn_h)
@@ -944,9 +980,13 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     );
 
     let mute_btn = hint(
-        button(centered_label(
-            if p.mute_armed { "|| M" } else { "M" },
+        button(centered_master_label(
+            "M",
             theme::TEXT_SM * scale,
+            scale,
+            theme::mute_color(),
+            p.mute_armed,
+            true,
         ))
             .width(Length::Fill)
             .height(btn_h)
@@ -960,19 +1000,17 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         scale,
     );
     let solo_btn = hint(
-        button(centered_label(
-            if p.pfl {
-                "PFL"
-            } else if p.solo_armed {
-                "S ||"
-            } else {
-                "S"
-            },
+        button(centered_master_label(
+            if p.pfl { "PFL" } else { "S" },
             if p.pfl || p.solo_armed {
                 theme::TEXT_XS * scale
             } else {
                 theme::TEXT_SM * scale
             },
+            scale,
+            theme::solo_color(),
+            !p.pfl && p.solo_armed,
+            false,
         ))
         .width(Length::Fill)
         .height(btn_h)

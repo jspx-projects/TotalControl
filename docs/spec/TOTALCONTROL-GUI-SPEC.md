@@ -49,27 +49,31 @@ its own collapse toggle.
 The global row is `M`, `S`/`F`, `F`.
 
 The left button is the **Mute master**. It lights while any channel is muted.
-A press stores the muted channels, suspends them and shows `|| M` on the
-master and on every held channel; a further press engages them again. While
-it is suspended, a click on a channel's mute adds or removes it from the held
-set and leaves that channel unmuted; switching a held member's mute off
+A press stores the muted channels, suspends them and shows the pause mark on
+the master and on every held channel; a further press engages them again.
+While it is suspended, a click on a channel's mute adds or removes it from the
+held set and leaves that channel unmuted; switching a held member's mute off
 removes it from the set. The set is global: it silences the channel on every
 routing.
 
 The middle button is the **Solo master**, the same machine with the pause mark
-after the letter (`S ||`), over the current submix. In PFL mode it shows `F`
-while an input is listening; a press then cancels the active PFL and does not
-restore it.
+after the letter, over the current submix. In PFL mode it shows `F` while an
+input is listening; a press then cancels the active PFL and does not restore
+it.
 
 The right `F` is the **temporary fader group**, not the FX panel. It lights
 while the group exists; Shift+click a strip or its fader adds or removes it,
 the members' caps are marked, and a press clears the group. It never affects
-the stored fader groups `1`–`4`.
+the stored fader groups `1`–`4`. The group is per row: input faders gang with
+input faders, software-playback faders with their own, hardware-output faders
+with theirs, so a selection spanning rows forms one group per row.
 
 The three masters are outline switches in their own colour — mute blue, solo
 orange, temporary group silver — and take a muted version of that hue while
-idle. `M` and `S` show the pause mark while suspended: `|| M` before the
-letter for mute, `S ||` after it for solo.
+idle. An idle master (nothing active, no set engaged) shows the pause mark in
+that muted colour, as TotalMix rests after a reset; the plain letter appears
+only while its set is applied. The pause mark is two short, thick bars, half
+the label height: before the `M`, after the `S`.
 
 The `groups` card has four rows of storage places: `M1`–`M4` for the mute
 link, `S1`–`S4` for the solo link and `1`–`4` for the fader link, with `edit`

@@ -712,12 +712,12 @@ pub fn master_button(
         if pressed {
             background = blend(background, Color::BLACK, PRESS_DARKEN);
         }
-        let muted = Color { a: 0.42, ..color };
+        let idle = muted(color);
         button::Style {
             background: Some(Background::Color(background)),
-            text_color: if active { color } else { muted },
+            text_color: if active { color } else { idle },
             border: Border {
-                color: if active { color } else { muted },
+                color: if active { color } else { idle },
                 width: 1.0,
                 radius: RADIUS_SM.into(),
             },
@@ -725,6 +725,11 @@ pub fn master_button(
             snap: false,
         }
     }
+}
+
+/// A dim version of a UI colour, for an idle master's outline and mark.
+pub fn muted(color: Color) -> Color {
+    Color { a: 0.42, ..color }
 }
 
 /// The Solo master is orange, distinct from the yellow idle outline of the

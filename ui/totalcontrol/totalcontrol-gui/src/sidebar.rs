@@ -39,6 +39,7 @@ use totalcontrol_core::{ChannelId, RmeDevice};
 
 use crate::app::{Message, TotalControl};
 use crate::theme;
+use crate::widgets::pause_mark::pause_mark;
 
 /// Default sidebar width (at `scale == 1.0`), used until the user drags
 /// the resize strip — wide enough for the longest label in the Options
@@ -607,67 +608,102 @@ fn undo_redo_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
 /// * `DIM` flips `RmeDevice::set_dim`, the switch the front-panel DIM
 ///   button toggles, which had no on-screen control at all. RME-protocol
 ///   only, so it is absent in Class Compliant mode.
+/// One master cell: a `Fill` button around its label content.
+fn master_cell<'a>(
+    content: Element<'a, Message>,
+    scale: f32,
+) -> iced::widget::Button<'a, Message> {
+    button(content)
+        .padding(theme::SPACE_SM * scale)
+        .width(Length::Fill)
+}
+
 fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     let any_mute = crate::app::any_channel_muted(state);
     let any_solo = crate::app::any_channel_soloed(state);
-    // Armed: the master switched its mutes (solos) off and a press brings
-    // them back; the channels it holds show the same pause mark.
-    let mute_held = state.mute_master.suspended && !state.mute_master.members.is_empty();
-    let solo_held = state.solo_master.suspended && !state.solo_master.members.is_empty();
-    let has_group = !state.selected.is_empty();
+    // A master is "applied" only while its set is engaged; idle or suspended
+    // it shows the pause mark in the muted hue (TotalMix rests that way).
+    let has_group = crate::app::temporary_group_exists(state);
     let pfl = state.control_room.pfl_replaces_solo;
-    let mute_label = if mute_held { "|| M" } else { "M" };
-    let solo_label = if pfl {
-        if any_solo {
-            "F"
-        } else {
-            "S ||"
-        }
-    } else if solo_held {
-        "S ||"
+    // A master is "applied" only while its set is engaged; idle or suspended
+    // it shows the pause mark in the muted hue (TotalMix rests that way).
+    let mute_applied = any_mute && !state.mute_master.suspended;
+    let mute_pause = state.mute_master.suspended || !any_mute;
+    let solo_applied = any_solo && !state.solo_master.suspended;
+    let solo_pause = !pfl && (state.solo_master.suspended || !any_solo);
+    let mute_color = if mute_applied {
+        theme::mute_color()
     } else {
-        "S"
+        theme::muted(theme::mute_color())
     };
-    let cell = |label: &'static str| {
-        button(text(label).size(theme::TEXT_SM * scale).center())
-            .padding(theme::SPACE_SM * scale)
-            .width(Length::Fill)
+    let solo_color = if solo_applied {
+        theme::SOLO_MASTER
+    } else {
+        theme::muted(theme::SOLO_MASTER)
+    };
+    let mute_content: Element<'_, Message> = if mute_pause {
+        row![
+            pause_mark(mute_color, scale),
+            text("M").size(theme::TEXT_SM * scale)
+        ]
+        .spacing(theme::SPACE_TIGHT * scale)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        text("M").size(theme::TEXT_SM * scale).into()
+    };
+    let solo_content: Element<'_, Message> = if pfl {
+        if any_solo {
+            text("F").size(theme::TEXT_SM * scale).into()
+        } else {
+            row![
+                text("S").size(theme::TEXT_SM * scale),
+                pause_mark(solo_color, scale)
+            ]
+            .spacing(theme::SPACE_TIGHT * scale)
+            .align_y(Alignment::Center)
+            .into()
+        }
+    } else if solo_pause {
+        row![
+            text("S").size(theme::TEXT_SM * scale),
+            pause_mark(solo_color, scale)
+        ]
+        .spacing(theme::SPACE_TIGHT * scale)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        text("S").size(theme::TEXT_SM * scale).into()
     };
     let r = row![
         hint(
-            cell(mute_label)
-                .style(theme::master_button(
-                    any_mute || mute_held,
-                    theme::mute_color()
-                ))
+            master_cell(mute_content, scale)
+                .style(theme::master_button(mute_applied, theme::mute_color()))
                 .on_press(Message::GlobalMuteToggle),
-            if mute_held {
-                "Mute master: bring the held mutes back"
+            if mute_pause {
+                "Mute master: engage the held mutes"
             } else {
                 "Mute master: switch the active mutes off"
             },
             scale,
         ),
         hint(
-            cell(solo_label)
-                .style(theme::master_button(
-                    any_solo || solo_held,
-                    theme::SOLO_MASTER
-                ))
+            master_cell(solo_content, scale)
+                .style(theme::master_button(solo_applied, theme::SOLO_MASTER))
                 .on_press(Message::GlobalSoloToggle),
             if pfl && any_solo {
                 "PFL master: cancel the active PFL"
             } else if pfl {
                 "PFL master: no input is listening"
-            } else if solo_held {
-                "Solo master: bring the held solos back"
+            } else if solo_pause {
+                "Solo master: engage the held solos"
             } else {
                 "Solo master: switch the active solos off"
             },
             scale,
         ),
         hint(
-            cell("F")
+            master_cell(text("F").size(theme::TEXT_SM * scale).into(), scale)
                 .style(theme::master_button(has_group, theme::FADER))
                 .on_press_maybe(has_group.then_some(Message::ClearSelection)),
             "Temporary fader group (Shift-click strips): clear it",

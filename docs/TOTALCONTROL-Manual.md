@@ -351,20 +351,27 @@ silver. While a master is idle its label and outline take a muted version of
 that colour.
 
 `M` lights while any channel is muted. Pressing it stores those mutes and
-suspends them: the master and every held channel show `|| M` and the channels
-stay unmuted. While it is suspended, clicking a channel's mute adds or removes
-it from the held set and leaves it unmuted. Pressing `M` again engages the
-whole set; switching a held member's mute off by hand removes it from the set.
-The mute master silences its channels on every routing.
+suspends them: the master and every held channel show the pause mark and the
+channels stay unmuted. While it is suspended, clicking a channel's mute adds
+or removes it from the held set and leaves it unmuted. Pressing `M` again
+engages the whole set; switching a held member's mute off by hand removes it
+from the set. The mute master silences its channels on every routing.
 
-`S` works the same way, with the pause mark after the letter (`S ||`), over
-the channels in the current submix. In PFL mode the same button is the PFL
-master: it shows `F` while an input is listening, and pressing it cancels the
-active PFL rather than restoring it.
+An idle master — nothing active, no set engaged — shows the pause mark in its
+muted colour, which is how TotalMix rests after a reset; the plain letter
+appears only while the set is applied. The mark is two short, thick bars, half
+the label height, placed after the `S` so the two masters read differently at
+a glance.
+
+`S` works the same way over the channels in the current submix. In PFL mode
+the same button is the PFL master: it shows `F` while an input is listening,
+and pressing it cancels the active PFL rather than restoring it.
 
 `F` lights while the temporary fader group exists. Shift+click a strip or its
 fader to add or remove it; the members' fader caps are marked, and pressing
-`F` clears the group. It does not affect the stored fader groups `1`–`4`.
+`F` clears the group. It does not affect the stored fader groups `1`–`4`, and
+it gangs within one row: input faders together, software-playback faders
+together, hardware-output faders together.
 
 Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the
