@@ -577,39 +577,6 @@ fn draw_fader(
     let cap_centre = track.bottom() - track.height * db_to_t(0.0);
     let fill = Rect::new(slot.x, cap_centre, slot.width, slot.bottom() - cap_centre);
     fill_rect(svg, fill, &c.control.fader_fill, &c.control.fader_fill, 0.0);
-    let cap = Rect::new(
-        track.centre_x() - 11.0 * scale,
-        cap_centre - v.fader_cap_h * scale / 2.0,
-        v.fader_cap_w * scale,
-        v.fader_cap_h * scale,
-    );
-    fill_rect(svg, cap, "#c9cbd1", "#8b8e96", 2.0 * scale);
-    for i in 1..=3 {
-        let y = cap.y + cap.height * i as f32 / 4.0;
-        let (x, w, h) = if i == 2 {
-            (cap.x, cap.width, (2.0 * scale).max(2.0))
-        } else {
-            (
-                cap.x + 3.0 * scale,
-                cap.width - 6.0 * scale,
-                (1.0 * scale).max(1.0),
-            )
-        };
-        let _ = write!(
-            svg,
-            r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="{color}"/>"#,
-            x = x,
-            y = y - h / 2.0,
-            w = w,
-            h = h,
-            color = if i == 2 {
-                &c.control.cap_centre
-            } else {
-                &c.control.cap_ridge
-            },
-        );
-    }
-
     // Graduations sit to the left of the slot.  +3 / -3 are half length;
     // the white 0 dB mark is repeated at the right edge of the slot.
     let under = 5.0 * scale;
@@ -650,6 +617,40 @@ fn draw_fader(
         h = 1.0 * scale,
         color = "#f2f3f5",
     );
+    // The cap is painted over the graduations, like the printed scale on a
+    // real console: only the marks outside the cap stay visible.
+    let cap = Rect::new(
+        track.centre_x() - 11.0 * scale,
+        cap_centre - v.fader_cap_h * scale / 2.0,
+        v.fader_cap_w * scale,
+        v.fader_cap_h * scale,
+    );
+    fill_rect(svg, cap, "#c9cbd1", "#8b8e96", 2.0 * scale);
+    for i in 1..=3 {
+        let y = cap.y + cap.height * i as f32 / 4.0;
+        let (x, w, h) = if i == 2 {
+            (cap.x, cap.width, (2.0 * scale).max(2.0))
+        } else {
+            (
+                cap.x + 3.0 * scale,
+                cap.width - 6.0 * scale,
+                (1.0 * scale).max(1.0),
+            )
+        };
+        let _ = write!(
+            svg,
+            r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="{color}"/>"#,
+            x = x,
+            y = y - h / 2.0,
+            w = w,
+            h = h,
+            color = if i == 2 {
+                &c.control.cap_centre
+            } else {
+                &c.control.cap_ridge
+            },
+        );
+    }
 }
 
 fn draw_fx(
