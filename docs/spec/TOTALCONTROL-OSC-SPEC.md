@@ -868,10 +868,11 @@ write, while the TotalMix UI phase control writes request `0x18`.  Do not
 describe OSC phase as a UC device-backed control.
 
 The UC manual specifies a Peak and RMS meter for every input, playback and
-hardware output, calculated in the device hardware.  The `0x85` interrupt
-stream is 324 bytes and carries the hardware meters; a 1 kHz test tone
-confirmed the expected meter response.  Its word layout and channel order are
-still undecoded.  TotalControl currently feeds UC meters from the host audio
+hardware output, calculated in the device hardware.  The UC manual specifies hardware Peak/RMS meters, but the captured `0x85`
+stream does not carry level-proportional data: -6, -20, -40 and -60 dBFS
+tones produce the same word range, with identical left/right values.  It is an
+activity/counter stream, not a usable VU source.  TotalControl therefore keeps
+the host audio path as the UC meter source.  TotalControl currently feeds UC meters from the host audio
 path and does not start the UC `0x85`/`0x8d` streams; that is an implementation
 gap, not evidence that the device lacks meters.  The `0x8b` endpoint carries
 no status payload in the captured connects.
