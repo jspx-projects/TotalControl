@@ -5,7 +5,7 @@
 //! cargo run -p totalcontrol-gui -- --mock    # simulation (Babyface Pro FS)
 //! cargo run -p totalcontrol-gui -- --mock-ucx # simulation (Fireface UCX)
 //! cargo run -p totalcontrol-gui -- --mock-uc  # simulation (Fireface UC)
-//! cargo run -p totalcontrol-gui -- --mock --osc   # + classic OSC surface
+//! cargo run -p totalcontrol-gui -- --mock --osc   # + OSC 1.96 surface
 //! cargo run -p totalcontrol-gui -- --mock --osc --osc-mode global  # + Global OSC
 //! cargo run -p totalcontrol-gui -- --backend usb  # force libusb over the kernel driver
 //! cargo run -p totalcontrol-gui -- --view mixer  # open straight on the Mixer page

@@ -152,7 +152,7 @@ pub struct Prefs {
     /// OSC control surface, enabled from the app settings.
     #[serde(default)]
     pub osc_enabled: bool,
-    /// Classic banked or absolute-channel Global OSC.
+    /// Banked OSC 1.96 or absolute-channel Global OSC.
     #[serde(default)]
     pub osc_mode: crate::osc::OscDialect,
     #[serde(default = "default_osc_recv_port")]

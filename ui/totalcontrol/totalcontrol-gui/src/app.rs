@@ -12546,7 +12546,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
                 .color(theme::text_primary())
                 .size(text_size),
             radio_choice(
-                "Classic",
+                "OSC 1.96",
                 state.osc_dialect == crate::osc::OscDialect::Classic,
                 Message::SetOscMode(crate::osc::OscDialect::Classic),
             ),
@@ -12559,7 +12559,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
         osc_ports,
-        help("Loopback only. Classic uses the banked 1.96–2.11 address space; Global uses absolute channels and native values (TotalMix FX 2.1+)."),
+        help("Loopback only. OSC 1.96 uses the banked TotalMix FX 1.96 address space (1.90 is not supported); Global uses absolute channels and native values (TotalMix FX 2.1+)."),
     ]
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);

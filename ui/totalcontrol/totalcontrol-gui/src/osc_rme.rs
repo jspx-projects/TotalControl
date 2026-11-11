@@ -1,7 +1,7 @@
 //! TotalMix FX OSC front-end.
 //!
-//! Implements the classic RME OSC address space (the `OscTableTotalMix`
-//! surface used by TotalMix FX 2.10/2.11).  The surface is banked: page 1
+//! Implements the OSC 1.96 address space (the `OscTableTotalMix_240722`
+//! surface from TotalMix FX 1.96).  The surface is banked: page 1
 //! addresses `bank + n`, page 2 addresses one selected channel, and
 //! `/setSubmix` selects the output whose mix is being edited.
 //!
@@ -73,8 +73,6 @@ impl RmeState {
 }
 
 pub const CHANNELS: usize = 18;
-pub const ROW_COUNT: usize = 3;
-pub const TOTAL_CHANNELS: usize = CHANNELS * ROW_COUNT;
 
 /// A page-2 or page-1 control whose reference scale is `Toggle`: a non-zero
 /// value flips the current state, zero is ignored.
@@ -283,6 +281,15 @@ fn set_bus(st: &mut RmeState, bus: Bus) {
     st.channel = st.channel.min(last);
 }
 
+/// Shift the page-1 bank start and keep the page-2 offset from it.
+fn shift_bank(st: &mut RmeState, delta: isize) {
+    let last = row_len(st, st.bus).saturating_sub(1);
+    let offset = st.channel.saturating_sub(st.bank);
+    let bank = (st.bank as isize + delta).clamp(0, last as isize) as usize;
+    st.bank = bank;
+    st.channel = (bank + offset).min(last);
+}
+
 fn toggle(v: &OscType, target: RmeToggle) -> Option<Vec<Message>> {
     Some(if arg_on(v)? {
         vec![Message::RmeToggle(target)]
@@ -355,18 +362,11 @@ pub fn parse(addr: &str, args: &[OscType], st: &mut RmeState) -> Option<Vec<Mess
             Some(vec![Message::SelectOutput(idx)])
         }
         ["setBankStart"] => {
-            let abs = arg_f32(first)?.max(0.0) as usize;
-            if abs >= TOTAL_CHANNELS {
-                return None;
-            }
-            let bus = match abs / CHANNELS {
-                0 => Bus::Input,
-                1 => Bus::Playback,
-                _ => Bus::Output,
-            };
-            st.bus = bus;
-            let idx = abs % CHANNELS;
-            if idx >= row_len(st, bus) {
+            // OSC 1.96: the value selects a channel inside the current bus.
+            // Bus selection is separate (`/1/busInput`, `/1/busPlayback`,
+            // `/1/busOutput`); page 2 is an offset from this bank start.
+            let idx = arg_f32(first)?.max(0.0) as usize;
+            if idx >= row_len(st, st.bus) {
                 return None;
             }
             st.bank = idx;
@@ -401,28 +401,22 @@ pub fn parse(addr: &str, args: &[OscType], st: &mut RmeState) -> Option<Vec<Mess
             Some(Vec::new())
         }
         ["1", "track+"] => {
-            let last = row_len(st, st.bus).saturating_sub(1);
-            st.bank = (st.bank + 1).min(last);
-            st.channel = st.bank;
+            shift_bank(st, 1);
             st.page = 1;
             Some(Vec::new())
         }
         ["1", "track-"] => {
-            st.bank = st.bank.saturating_sub(1);
-            st.channel = st.bank;
+            shift_bank(st, -1);
             st.page = 1;
             Some(Vec::new())
         }
         ["1", "bank+"] => {
-            let last = row_len(st, st.bus).saturating_sub(1);
-            st.bank = (st.bank + st.bank_size.max(1)).min(last);
-            st.channel = st.bank;
+            shift_bank(st, st.bank_size.max(1) as isize);
             st.page = 1;
             Some(Vec::new())
         }
         ["1", "bank-"] => {
-            st.bank = st.bank.saturating_sub(st.bank_size.max(1));
-            st.channel = st.bank;
+            shift_bank(st, -(st.bank_size.max(1) as isize));
             st.page = 1;
             Some(Vec::new())
         }
@@ -615,12 +609,8 @@ pub fn parse(addr: &str, args: &[OscType], st: &mut RmeState) -> Option<Vec<Mess
             if st.bus != Bus::Input {
                 return None;
             }
-            // `Toggle`; the UCX also accepts 0.0 as a direct off command.
-            if !arg_on(first)? {
-                Some(vec![Message::Phantom(st.channel, false)])
-            } else {
-                Some(vec![Message::RmeToggle(RmeToggle::Phantom(st.channel))])
-            }
+            // OSC 1.96: `Toggle`; 0.0 is ignored.
+            toggle(first, RmeToggle::Phantom(st.channel))
         }
         ["2", "instrument"] => {
             st.page = 2;
@@ -994,16 +984,26 @@ mod tests {
     }
 
     #[test]
-    fn set_bank_start_selects_the_absolute_row() {
+    fn set_bank_start_selects_within_the_current_bus() {
         let mut st = RmeState::default();
-        parse("/setBankStart", &[OscType::Float(20.0)], &mut st).unwrap();
-        assert_eq!(st.bus, Bus::Playback);
-        assert_eq!(st.channel, 2);
-        assert_eq!(st.bank, 2);
+        parse("/setBankStart", &[OscType::Float(5.0)], &mut st).unwrap();
+        assert_eq!(st.bus, Bus::Input);
+        assert_eq!(st.channel, 5);
+        assert_eq!(st.bank, 5);
 
-        parse("/setBankStart", &[OscType::Float(40.0)], &mut st).unwrap();
-        assert_eq!(st.bus, Bus::Output);
-        assert_eq!(st.channel, 4);
+        parse("/1/busPlayback", &[OscType::Float(1.0)], &mut st).unwrap();
+        parse("/setBankStart", &[OscType::Float(3.0)], &mut st).unwrap();
+        assert_eq!(st.bus, Bus::Playback);
+        assert_eq!(st.channel, 3);
+        assert_eq!(st.bank, 3);
+    }
+
+    #[test]
+    fn set_bank_start_does_not_switch_bus() {
+        let mut st = RmeState::default();
+        assert!(parse("/setBankStart", &[OscType::Float(18.0)], &mut st).is_none());
+        assert_eq!(st.bus, Bus::Input);
+        assert_eq!(st.channel, 0);
     }
 
     #[test]
@@ -1053,6 +1053,21 @@ mod tests {
     }
 
     #[test]
+    fn shifting_the_bank_keeps_the_page2_offset() {
+        let mut st = RmeState {
+            bank: 2,
+            channel: 4,
+            ..Default::default()
+        };
+        parse("/1/track+", &[OscType::Int(1)], &mut st).unwrap();
+        assert_eq!(st.bank, 3);
+        assert_eq!(st.channel, 5);
+        parse("/1/bank+", &[OscType::Int(1)], &mut st).unwrap();
+        assert_eq!(st.bank, 11);
+        assert_eq!(st.channel, 13);
+    }
+
+    #[test]
     fn page2_toggle_is_edge_triggered() {
         let mut st = RmeState::default();
         assert!(matches!(
@@ -1075,11 +1090,15 @@ mod tests {
     }
 
     #[test]
-    fn phantom_zero_is_a_direct_off() {
+    fn phantom_zero_is_ignored() {
         let mut st = RmeState::default();
         assert!(matches!(
-            parse("/2/phantom", &[OscType::Float(0.0)], &mut st).as_deref(),
-            Some([Message::Phantom(0, false)])
+            parse("/2/phantom", &[OscType::Float(0.0)], &mut st),
+            Some(v) if v.is_empty()
+        ));
+        assert!(matches!(
+            parse("/2/phantom", &[OscType::Float(1.0)], &mut st).as_deref(),
+            Some([Message::RmeToggle(RmeToggle::Phantom(0))])
         ));
     }
 
