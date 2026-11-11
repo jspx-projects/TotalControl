@@ -511,10 +511,17 @@ Linking the output pair again returns each source to its natural side, with
 the pair balance following the two levels. Splitting again starts the mono
 outputs hard left and hard right.
 
+When the input and the selected submix are both mono, there is no left/right
+position to set: the pan/balance knob disappears and `MONO` is shown in the
+same place, so the strip layout does not move. A mono input into a stereo
+submix keeps a pan knob, and a linked stereo pair into a mono submix keeps a
+balance knob.
+
 Output pairs behave the same way: the balance knob exists only while
 linked, and splitting converts the pair level and balance into two
-independent channel volumes. A pair assigned to the Control Room is always
-stereo and never splits.
+independent channel volumes. A split output's own strip shows `MONO` instead
+of the balance knob, whatever the input and playback link states are. A pair
+assigned to the Control Room is always stereo and never splits.
 
 ## 6. The slideout panels
 
