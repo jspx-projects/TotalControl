@@ -142,7 +142,19 @@ Request `0x17` is a 16-bit register:
 | 10–11 | Phones reference |
 
 A switch change reads the complete register, changes the target field and
-writes the complete 16-bit value.
+writes the complete 16-bit value with `wIndex 0xf03f`.  A reference-level
+change uses `wIndex 0x0fc0` and the same read-modify-write form.
+
+Reference codes:
+
+| Field | Bits | Codes |
+|---|---|---|
+| Line output | 6–7 | `1` −10 dBV, `2` Hi Gain, `3` +4 dBu |
+| Line input | 8–9 | `0` Lo Gain, `1` +4 dBu, `3` −10 dBV |
+| Phones | 10–11 | `1` Hi Gain, `2` −10 dBV, `3` +4 dBu |
+
+The reference register has base `0x3000`.  `SPDIF In TMS` is a host-side
+option on the UC and does not change this register.
 
 ## 6. Routing controls
 
@@ -182,9 +194,24 @@ The word selects the 32 kHz, 44.1 kHz or 48 kHz family; the stream multiplier
 follows the active stream.  A selection is followed by
 `0x10 / wIndex 1487 = 0x0001`.
 
-The options word at `wIndex 1487` carries clock source (bits 1–3), word-clock
-single-speed (bit 6), SPDIF professional (bit 7) and optical output format
-(bit 10).
+The options word at `wIndex 1487` has base `0x0001` and carries clock source
+(bits 1–3), word-clock single-speed (bit 6), SPDIF professional (bit 7) and
+optical output format (bit 10; set for SPDIF, clear for ADAT).  `SPDIF In TMS`
+is host-side and has no bit in this word.
+
+Pitch/varispeed uses request `0x1b` with four DDS words.  Each DDS word is
+split as `wValue` = bits 31..16 and the `wIndex` high byte = bits 15..8; the
+`wIndex` low byte is the fixed channel/family `0..3`.  At 0% pitch the 32 kHz,
+44.1 kHz and 48 kHz words are:
+
+| Base | `wValue` / `wIndex` |
+|---|---|
+| 32 kHz | `0xc350` / `0x0000` |
+| 44.1 kHz | `0x8db9` / `0x2d01` |
+| 48 kHz | `0x8235` / `0x5502` |
+
+Pitch scales the DDS value as `base / (1 + pitch / 100)`.  The fourth word
+has a fixed low byte `3`; its clock role is not part of the rate selection.
 
 A host rate change closes the current session with
 `0x13 / wValue 0x000F / wIndex 0xC000`, writes the new rate word when the
@@ -198,8 +225,9 @@ Inst, reference levels, clock source and optical format.
 
 The mixer group is written from the TotalControl scene: matrix, pans, faders,
 mutes, loopback, output levels and output balance.  The connect sequence
-writes 30 loopback entries, 18 output-volume words, 18 output masters and
-the 666 matrix words.
+writes 60 `0x16` channel slots, four `0x1b` DDS words, 11 `0x10` settings
+words, 30 loopback entries, one `0x17` switch reset, four `0x1a` preamps,
+18 `0x1a` output levels and 666 `0x12` matrix/master words.
 
 Front-panel gain and output-level changes arrive on `0x8b` and update the
 live model.  The host scene remains the source for the next connect.
