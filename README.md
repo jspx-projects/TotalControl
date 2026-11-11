@@ -45,7 +45,7 @@ WirePlumber.
 - [UC protocol specification](docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md).
 - [UCX protocol specification](docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md).
 - [Babyface Pro protocol specification](docs/spec/BABYFACE-PRO-PROTOCOL-SPEC.md).
-- [OSC 1.96 specification](docs/spec/TOTALCONTROL-OSC-SPEC.md).
+- [OSC 1.96 and Global OSC specification](docs/spec/TOTALCONTROL-OSC-SPEC.md).
 - [User manual](docs/TOTALCONTROL-Manual.md).
 - [Development tools](docs/DEVELOPMENT-TOOLS.md) — non-user-facing backends,
   capture and probe helpers.

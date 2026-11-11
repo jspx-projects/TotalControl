@@ -9,7 +9,7 @@ these documents extend it with device-specific and visible detail.
 | [TOTALCONTROL-GUI-SPEC.md](TOTALCONTROL-GUI-SPEC.md) | layout, strip controls, panels, gestures, motion and Control Room |
 | [TOTALCONTROL-STATE-SPEC.md](TOTALCONTROL-STATE-SPEC.md) | state ownership, current workspace, autosave, restore, host settings and layout files |
 | [TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md](TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) | channel-template schema, layout document, per-device overrides, invariants and preview |
-| [TOTALCONTROL-OSC-SPEC.md](TOTALCONTROL-OSC-SPEC.md) | OSC 1.96 transport, pages, scales, feedback and mapping |
+| [TOTALCONTROL-OSC-SPEC.md](TOTALCONTROL-OSC-SPEC.md) | OSC 1.96 and Global OSC transport, address spaces, scales, feedback and mapping |
 | [FIREFFACE-UCX-PROTOCOL-SPEC.md](FIREFFACE-UCX-PROTOCOL-SPEC.md) | Fireface UCX transport, registers, writes and readback |
 | [FIREFFACE-UC-PROTOCOL-SPEC.md](FIREFFACE-UC-PROTOCOL-SPEC.md) | Fireface UC transport and controls |
 | [BABYFACE-PRO-PROTOCOL-SPEC.md](BABYFACE-PRO-PROTOCOL-SPEC.md) | Babyface Pro FS channel model, ALSA surface, USB protocol and DSP blocks |

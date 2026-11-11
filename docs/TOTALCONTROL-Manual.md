@@ -1392,9 +1392,9 @@ totalcontrol --osc
 | `--osc-host` | 127.0.0.1 | Feedback destination |
 
 Configure the controller to send to the receive port and receive feedback on
-the send port. The OSC 1.96 address space is defined in
-[`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md); Global uses
-RME's separate Global OSC protocol table.
+the send port. Both address spaces are defined in
+[`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md); Global OSC is
+§13 of that document.
 
 For a controller on another host, set `--osc-host` to the controller's address
 and allow the feedback port through the firewall. Do not run two controllers
