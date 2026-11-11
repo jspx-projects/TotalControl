@@ -1154,7 +1154,7 @@ input and playback sources.
 
 ## 9. Pan and balance
 
-A split input or software-playback strip exposes pan into the selected
+A split input or software-playback strip exposes pan into a stereo selected
 submix; the knob writes the source's matrix cells for that submix. On a
 linked pair the same knob is a balance derived from the two channel volumes,
 and writing it changes the quieter channel's volume instead of a pan.
