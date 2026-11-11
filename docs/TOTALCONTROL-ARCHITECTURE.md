@@ -31,7 +31,7 @@ detail.
 | `spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` | Fireface UCX transport, registers, writes and readback |
 | `spec/FIREFFACE-UC-PROTOCOL-SPEC.md` | Fireface UC transport, registers, writes and readback |
 | `spec/BABYFACE-PRO-PROTOCOL-SPEC.md` | Babyface Pro FS transport, ALSA surface, USB protocol and DSP blocks |
-| `spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md` | Babyface-classic transport, PCM streams, metering and hwdep ABI |
+| `spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md` | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI |
 | `spec/TOTALCONTROL-OSC-SPEC.md` | TotalMix FX OSC address space, pages, scales and feedback |
 | `TOTALCONTROL-Manual.md` | installation, setup, use and troubleshooting |
 | `DEVELOPMENT-TOOLS.md` | development-only backends, probes and capture helpers |
@@ -110,6 +110,7 @@ the controls that connection can drive.
 | Variant | Transport | Support |
 |---|---|---|
 | `Fireface` | Fireface UC/UCX over the kernel hwdep node | production |
+| `BabyfaceClassic` | Babyface-classic over the kernel hwdep node | minimal support |
 | `BabyfacePro` | Babyface ALSA controls | development fallback |
 | `BabyfaceProUsb` | direct libusb vendor protocol | development only |
 | `Mirror` | UI-side copy owned by the device service | production |
