@@ -2507,7 +2507,7 @@ impl Fireface {
         let mut word = u32::from_le_bytes([d[0], d[1], d[2], d[3]]) as u16;
         word &= !(0x3 << shift);
         word |= (code & 0x3) << shift;
-        self.vendor_out(protocol::req::LEVELS, word, 0xffff)?;
+        self.vendor_out(protocol::req::LEVELS, word, 0x0fc0)?;
         self.apply_uc_levels(word as u32);
         Ok(())
     }
@@ -8974,7 +8974,7 @@ mod tests {
         dev.set_spdif_professional(true).unwrap();
         let w = writes.lock().unwrap();
         // Line In -10 dBV: bits 9:8 = 11, base 0x3000 -> 0x3780.
-        assert!(w.contains(&Write::Vendor(protocol::req::LEVELS, 0x3780, 0xffff)));
+        assert!(w.contains(&Write::Vendor(protocol::req::LEVELS, 0x3780, 0x0fc0)));
         // Options word: commit + SPDIF professional, wIndex 1487.
         assert!(w.contains(&Write::Vendor(protocol::req::SETTINGS, 0x0081, 1487)));
     }
