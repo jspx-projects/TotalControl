@@ -297,20 +297,31 @@ void ffuc_release_interface(struct usb_interface *intf)
 
 /* -- per-device core sequences --------------------------------------- */
 
+static const struct ffuc_init_range ffuc_uc_chan_init[] = {
+	{ .value = 0x0000, .first = 0,    .count = 30 },
+	{ .value = 0x0000, .first = 0x20, .count = 30 },
+};
+
+static const struct ffuc_init_range ffuc_ucx_chan_init[] = {
+	{ .value = 0x0001, .first = 0,    .count = FFUC_MAX_CHANNELS },
+	{ .value = 0x0001, .first = 0x20, .count = FFUC_MAX_CHANNELS },
+};
+
 static int ffuc_uc_init(struct ffuc *chip)
 {
-	int i, ret;
+	const struct ffuc_init_range *range;
+	unsigned int i, r;
+	int ret;
 
-	/* The vendor driver sends 18 slot pairs for every model. */
-	for (i = 0; i < FFUC_MAX_CHANNELS; i++) {
-		ret = ffuc_vendor_send(chip, FFUC_REQ_CHAN_INIT, 0x0001, i,
-				       NULL, 0);
-		if (ret < 0)
-			return ret;
-		ret = ffuc_vendor_send(chip, FFUC_REQ_CHAN_INIT, 0x0001,
-				       i + 0x20, NULL, 0);
-		if (ret < 0)
-			return ret;
+	for (r = 0; r < chip->desc->n_chan_init; r++) {
+		range = &chip->desc->chan_init[r];
+		for (i = 0; i < range->count; i++) {
+			ret = ffuc_vendor_send(chip, FFUC_REQ_CHAN_INIT,
+					       range->value,
+					       range->first + i, NULL, 0);
+			if (ret < 0)
+				return ret;
+		}
 	}
 	ret = ffuc_vendor_send(chip, FFUC_REQ_SETTINGS, 0x0800, 0xb800,
 			       NULL, 0);
@@ -552,6 +563,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 324,
+		.chan_init = ffuc_uc_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_uc_chan_init),
 		.ops = &ffuc_uc_ops,
 	}, {
 		.name = "Fireface UC",
@@ -577,6 +590,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 324,
+		.chan_init = ffuc_uc_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_uc_chan_init),
 		.ops = &ffuc_uc_ops,
 	}, {
 		.name = "Fireface UC",
@@ -602,6 +617,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 324,
+		.chan_init = ffuc_uc_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_uc_chan_init),
 		.ops = &ffuc_uc_ops,
 	}, {
 		.name = "Fireface UCX",
@@ -630,6 +647,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 244,
+		.chan_init = ffuc_ucx_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_ucx_chan_init),
 		.ops = &ffuc_ucx_ops,
 	}, {
 		.name = "Fireface UCX",
@@ -661,6 +680,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 244,
+		.chan_init = ffuc_ucx_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_ucx_chan_init),
 		.ops = &ffuc_ucx_ops,
 	}, {
 		.name = "Fireface UCX",
@@ -689,6 +710,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 244,
+		.chan_init = ffuc_ucx_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_ucx_chan_init),
 		.ops = &ffuc_ucx_ops,
 	}, {
 		.name = "Fireface UCX",
@@ -720,6 +743,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 244,
+		.chan_init = ffuc_ucx_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_ucx_chan_init),
 		.ops = &ffuc_ucx_ops,
 	}, {
 		/* ISO audio, MIDI and the IF1 0x85 DSP meter read-back.  The

@@ -52,6 +52,13 @@ written to the device on connect and on each change.
 | `0x1c` | IN | Firmware revision |
 | `0x20` | OUT | Global enable |
 
+### 2.1 Channel initialization
+
+The UC connect sequence writes request `0x16` with `wValue 0x0000` for slots
+`0..29` and `32..61` (60 writes).  Slots 30 and 31 are skipped.  The slot
+ranges and values are per-device data; they are not derived from the channel
+count.
+
 ## 3. Matrix and channel words
 
 A mixer cell is addressed by:
