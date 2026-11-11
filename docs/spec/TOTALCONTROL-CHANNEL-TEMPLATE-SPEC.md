@@ -59,7 +59,7 @@ Each placement is one position of the strip grid, using the references of
 | Placement | Reference | Position |
 |---|---|---|
 | `Name` | T1 | name and type tag |
-| `Pan` | T2 | pan or balance knob |
+| `Pan` | T2 | pan or balance knob, or the `MONO` placeholder |
 | `ButtonLeft` | TL3 | left button |
 | `ButtonRight` | TR3 | right button |
 | `ReadoutLeft` | M1L | left channel readout |
@@ -103,7 +103,8 @@ Every template places the name, the pan knob, both buttons, both readouts, the
 meter, the fader, the level readout and the minimize face.  Inputs and
 playbacks add the submix bar.  The FX fader follows the FX feature.  The four
 tab rows follow Trim, EQ and Dynamics; the settings gear is always present.
-An absent tab leaves its row empty.
+An absent tab leaves its row empty.  The `Pan` element keeps its box when the
+runtime draws the `MONO` placeholder for a mono source into a mono submix.
 
 ### Resolution
 
