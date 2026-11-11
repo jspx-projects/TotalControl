@@ -434,6 +434,9 @@ impl RmeDevice for DeviceHandle {
     fn matrix_uses_display_order(&self) -> bool {
         delegate!(self, matrix_uses_display_order)
     }
+    fn matrix_blocks_for_pair(&self, pair: usize) -> [usize; 2] {
+        delegate!(self, matrix_blocks_for_pair(pair))
+    }
     fn matrix_cells_supported(&self) -> bool {
         delegate!(self, matrix_cells_supported)
     }
@@ -492,6 +495,60 @@ impl RmeDevice for DeviceHandle {
     }
     fn volume(&self, ch: ChannelId, out: usize) -> Result<f32, totalcontrol_core::Error> {
         delegate!(self, volume(ch, out))
+    }
+    /// These pair-level methods carry the linked balance.  The default trait
+    /// implementation updates the local model and calls `set_volume` for
+    /// each side, which loses the balance in a device-service mirror when
+    /// both levels are zero.  Delegate them so the service applies the pair
+    /// operation to its own model too.
+    fn set_input_volume(
+        &mut self,
+        pair: usize,
+        which: usize,
+        output: usize,
+        volume: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_input_volume(pair, which, output, volume))
+    }
+    fn set_playback_volume(
+        &mut self,
+        pair: usize,
+        which: usize,
+        output: usize,
+        volume: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_playback_volume(pair, which, output, volume))
+    }
+    fn set_input_balance(
+        &mut self,
+        pair: usize,
+        output: usize,
+        balance: i8,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_input_balance(pair, output, balance))
+    }
+    fn set_playback_balance(
+        &mut self,
+        pair: usize,
+        output: usize,
+        balance: i8,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_playback_balance(pair, output, balance))
+    }
+    fn pair_block_balance(
+        &self,
+        channel: ChannelId,
+        block: usize,
+    ) -> Option<i8> {
+        delegate!(self, pair_block_balance(channel, block))
+    }
+    fn set_pair_block_balance(
+        &mut self,
+        channel: ChannelId,
+        block: usize,
+        balance: i8,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_pair_block_balance(channel, block, balance))
     }
     fn set_pan(
         &mut self,
@@ -13682,6 +13739,7 @@ fn strip_params<'a>(
         type_tag: None,
         vol: 0.0,
         pan: 0,
+        mono_placeholder: false,
         output_balance_supported: false,
         fx_level,
         meter: fader::MeterFrame::still(0.0),
@@ -13842,6 +13900,7 @@ fn strip_params<'a>(
                 active_surface: true,
                 vol: volume * trim_factor(ch.trim),
                 pan,
+                mono_placeholder: !linked && submix_is_mono(state),
                 meter: state
                     .input_meters
                     .get(i)
@@ -13949,6 +14008,7 @@ fn strip_params<'a>(
                 active_surface: true,
                 vol: volume * trim_factor(ch.trim),
                 pan,
+                mono_placeholder: !linked && submix_is_mono(state),
                 has_trim: true,
                 trim: ch.trim,
                 trim_tip: trim_tip(ch.trim),
@@ -14022,6 +14082,7 @@ fn strip_params<'a>(
                 type_tag: None,
                 vol: hw.unwrap_or(pair_level),
                 pan,
+                mono_placeholder: !linked,
                 output_balance_supported: state.device.output_balance_supported() && linked,
                 meter: state
                     .output_meters
@@ -14171,6 +14232,12 @@ fn output_balance_to_volumes(volume: f32, balance: i8) -> (f32, f32) {
     let left = volume * if balance > 0.0 { 1.0 - balance } else { 1.0 };
     let right = volume * if balance < 0.0 { 1.0 + balance } else { 1.0 };
     (left, right)
+}
+
+/// Whether the selected submix is a single mono bus.  That is one side of a
+/// split output pair, or a backend that lays outputs out one channel per bus.
+fn submix_is_mono(state: &TotalControl) -> bool {
+    state.device.outputs_one_per_pair() || selected_output_block(state).is_some()
 }
 
 /// The selected mono output block, when `out` is the current send and the
@@ -22589,6 +22656,174 @@ mod tests {
     }
 
     #[test]
+    fn a_mono_input_keeps_its_pan_at_zero_volume() {
+        let mut state = new(true, None, None);
+        let cid = ChannelId::Input(2);
+        let _ = update(&mut state, Message::StereoLinkChanged(cid, false));
+        state.device.set_input_volume(1, 1, 0, 0.0).unwrap();
+
+        let _ = update(&mut state, Message::PanChanged(cid, 0, 60));
+        assert_eq!(super::channel_pan(&state, cid, 0), 60);
+        assert_eq!(strip_params(&state, cid, 0).pan, 60);
+
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
+        assert_eq!(super::channel_pan(&state, cid, 0), 60);
+    }
+
+    #[test]
+    fn a_device_service_mono_input_keeps_its_pan_at_zero_volume() {
+        let mut state = new(true, None, None);
+        attach_device_service(&mut state);
+        let cid = ChannelId::Input(2);
+        let _ = update(&mut state, Message::StereoLinkChanged(cid, false));
+        assert!(
+            !state.device.input_pair_linked(1),
+            "the link choice is visible before the service snapshot"
+        );
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.0));
+        let _ = update(&mut state, Message::PanChanged(cid, 0, 60));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pan = 0;
+        while Instant::now() < deadline {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            pan = super::channel_pan(&state, cid, 0);
+            if pan == 60 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(pan, 60);
+        assert_eq!(state.device.pan(cid, 0).unwrap(), 60);
+    }
+
+    #[test]
+    fn a_device_service_link_balances_at_a_nonzero_volume() {
+        let mut state = new(true, None, None);
+        attach_device_service(&mut state);
+        let cid = ChannelId::Input(0);
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
+        let _ = update(&mut state, Message::PanChanged(cid, 0, -50));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut volumes = (0.0, 0.0);
+        while Instant::now() < deadline {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            volumes = (
+                state.device.inputs()[0].volumes[0],
+                state.device.inputs()[1].volumes[0],
+            );
+            if (volumes.0 - 0.5).abs() < 0.001 && (volumes.1 - 0.25).abs() < 0.001 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            (volumes.0 - 0.5).abs() < 0.001 && (volumes.1 - 0.25).abs() < 0.001,
+            "expected 0.5/0.25, got {volumes:?}"
+        );
+        assert_eq!(super::channel_pan(&state, cid, 0), -50);
+    }
+
+    #[test]
+    fn a_ucx_input_balance_at_zero_reads_the_service_block() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.device_target = Some(DeviceTarget::kind_only(DeviceKind::MockUcx));
+        attach_device_service(&mut state);
+        let cid = ChannelId::Input(0);
+        let out = 3; // internal AN5/6; UCX DSP block 4
+
+        let _ = update(&mut state, Message::VolumeChanged(cid, out, 0.0));
+        let _ = update(&mut state, Message::PanChanged(cid, out, -50));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pan = 0;
+        while Instant::now() < deadline {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            pan = super::channel_pan(&state, cid, out);
+            if pan == -50 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(pan, -50);
+        let block = state.device.matrix_blocks_for_pair(out)[0];
+        assert_eq!(
+            state.device.pair_block_balance(cid, block),
+            Some(-50),
+            "the stored balance is in the block the GUI reads"
+        );
+    }
+
+    #[test]
+    fn a_device_service_link_keeps_the_input_balance_at_zero_volume() {
+        let mut state = new(true, None, None);
+        attach_device_service(&mut state);
+        let cid = ChannelId::Input(0);
+
+        // The balance is set while the pair is silent, then the fader goes
+        // up and back down through the service.  The service's pair model
+        // must carry the stored balance; a per-channel volume path would
+        // lose it and the knob would snap back to centre.
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.0));
+        let _ = update(&mut state, Message::PanChanged(cid, 0, -50));
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.0));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pan = 0;
+        while Instant::now() < deadline {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            pan = super::channel_pan(&state, cid, 0);
+            if pan == -50 {
+                // Give a later snapshot a chance to overwrite it again.
+                std::thread::sleep(Duration::from_millis(30));
+                if let (Some(rx), DeviceHandle::Mirror(m)) =
+                    (&mut state.device_updates, &mut state.device)
+                {
+                    while let Ok(snapshot) = rx.try_recv() {
+                        m.update(snapshot);
+                    }
+                }
+                pan = super::channel_pan(&state, cid, 0);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(pan, -50, "the service kept the stored input balance");
+        assert_eq!(
+            state.device.pair_block_balance(cid, 0),
+            Some(-50),
+            "the balance lives in the service model, not only the mirror"
+        );
+    }
+
+    #[test]
     fn a_split_block_keeps_its_balance_at_zero_volume() {
         let mut state = new(true, None, None);
         let left = ChannelId::Playback(0);
@@ -22608,6 +22843,34 @@ mod tests {
         assert!((state.device.matrix_cell(left, block).unwrap() - 0.5).abs() < 1e-4);
         assert!((state.device.matrix_cell(right, block).unwrap() - 0.25).abs() < 1e-4);
         assert_eq!(super::channel_pan(&state, left, 0), -50);
+    }
+
+    #[test]
+    fn the_mono_placeholder_follows_the_source_and_submix() {
+        let mut state = new(true, None, None);
+        let input = ChannelId::Input(0);
+        let output = ChannelId::Output(0);
+        state.sel_out = 0;
+        state.sel_out_side = 0;
+
+        // A mono source into a stereo submix keeps its pan knob.
+        let _ = update(&mut state, Message::StereoLinkChanged(input, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(output, true));
+        assert!(!strip_params(&state, input, 0).mono_placeholder);
+
+        // A stereo source into a split mono submix keeps its balance knob.
+        let _ = update(&mut state, Message::StereoLinkChanged(input, true));
+        let _ = update(&mut state, Message::StereoLinkChanged(output, false));
+        assert!(!strip_params(&state, input, 0).mono_placeholder);
+
+        // Both mono: the knob is replaced by MONO.
+        let _ = update(&mut state, Message::StereoLinkChanged(input, false));
+        assert!(strip_params(&state, input, 0).mono_placeholder);
+
+        // The output strip follows its own link state, not the source.
+        assert!(strip_params(&state, output, 0).mono_placeholder);
+        let _ = update(&mut state, Message::StereoLinkChanged(output, true));
+        assert!(!strip_params(&state, output, 0).mono_placeholder);
     }
 
     #[test]

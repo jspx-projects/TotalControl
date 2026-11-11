@@ -8450,6 +8450,23 @@ mod tests {
     }
 
     #[test]
+    fn ucx_input_balance_survives_a_zero_fader() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_input_pair_linked(0, true).unwrap();
+        dev.set_input_volume(0, 0, 0, 0.0).unwrap();
+        dev.set_input_balance(0, 0, -50).unwrap();
+        let block = dev.matrix_blocks_for_pair(0)[0];
+        assert_eq!(
+            dev.pair_block_balance(ChannelId::Input(0), block),
+            Some(-50)
+        );
+
+        dev.set_input_volume(0, 0, 0, 0.5).unwrap();
+        assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 0.5).abs() < 1e-6);
+        assert!((dev.volume(ChannelId::Input(1), 0).unwrap() - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
     fn ucx_output_link_round_trip_preserves_balance_and_split_volumes() {
         let (mut dev, _writes) = open(Model::Ucx);
         let left = ChannelId::Output(2);

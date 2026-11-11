@@ -106,7 +106,8 @@ Internal, <sample rate>, <buffer>
 A full strip contains:
 
 - channel name and type;
-- pan or balance knob;
+- pan or balance knob, or the `MONO` placeholder when neither side has a
+  left/right pair;
 - mute and solo; outputs use mute and cue;
 - level fader and a meter with a coloured RMS bar, a matching peak line and
   peak hold;
@@ -529,7 +530,7 @@ no other element changes size.
 | Ref | Element | Column |
 |---|---|---|
 | T1 | channel name and type tag | C |
-| T2 | pan or balance knob | C |
+| T2 | pan or balance knob, or `MONO` | C |
 | T3 | `M`/`S` pair, or `M`/`CUE` pair | L / R |
 | M1 | channel strength readouts, L and R | L / R |
 | M2 | VU, fader and right-hand stack | L / C / R |
@@ -1147,22 +1148,39 @@ is the louder channel (the pair level). On the UCX the knob writes the output
 balance register, independent of the pair volume. Splitting converts the pair
 level and balance into the two channel volumes; linking recomputes both from
 those volumes. A split/re-link round trip therefore preserves the pair level
-and balance. A split pair keeps two independent volumes and hides the balance
-knob.
+and balance. A split pair keeps two independent volumes; its output strip
+replaces the balance knob with `MONO` regardless of the linked state of the
+input and playback sources.
 
 ## 9. Pan and balance
 
-A split input or software-playback strip exposes pan into the selected
+A split input or software-playback strip exposes pan into a stereo selected
 submix; the knob writes the source's matrix cells for that submix. On a
 linked pair the same knob is a balance derived from the two channel volumes,
 and writing it changes the quieter channel's volume instead of a pan.
+
+The T2 control follows the source channel and the selected submix:
+
+| Source | Selected submix | T2 |
+|---|---|---|
+| mono input or playback | mono output | `MONO`, no knob |
+| mono input or playback | stereo output | pan knob; equal-power law, -3 dB at centre |
+| linked stereo pair | mono output | balance knob; one side attenuated, 0 dB at centre |
+| linked stereo pair | stereo output | balance knob; 0 dB at centre |
+
+`MONO` is drawn in the same T2 box as the knob, so the rows below it do not
+move. The rule applies to the strip's source: a mono source into a mono
+submix has no left/right pair to place. A linked stereo pair into a mono
+submix still has a balance, and a mono source into a stereo submix still has
+a pan. A hardware-output strip uses its own link state instead: a split
+output pair shows `MONO`; a linked pair shows its balance knob.
 
 When the selected submix is one channel of a split output pair, a linked
 pair's balance works on that one mono block. Its two source cells default to
 hard left and hard right; the knob reads their peak as the pair level and
 their ratio as the balance, and writes both cells into that block. Each mono
 output has its own balance and the other block is not written. A mono source
-has one cell and no balance into a mono target.
+has one cell and no balance into a mono target, so its T2 shows `MONO`.
 
 Linking the output pair folds each source's natural cells — left source into
 the left output, right source into the right output — into the pair send and
