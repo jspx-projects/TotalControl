@@ -22691,6 +22691,40 @@ mod tests {
     }
 
     #[test]
+    fn a_device_service_link_balances_at_a_nonzero_volume() {
+        let mut state = new(true, None, None);
+        attach_device_service(&mut state);
+        let cid = ChannelId::Input(0);
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
+        let _ = update(&mut state, Message::PanChanged(cid, 0, -50));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut volumes = (0.0, 0.0);
+        while Instant::now() < deadline {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            volumes = (
+                state.device.inputs()[0].volumes[0],
+                state.device.inputs()[1].volumes[0],
+            );
+            if (volumes.0 - 0.5).abs() < 0.001 && (volumes.1 - 0.25).abs() < 0.001 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            (volumes.0 - 0.5).abs() < 0.001 && (volumes.1 - 0.25).abs() < 0.001,
+            "expected 0.5/0.25, got {volumes:?}"
+        );
+        assert_eq!(super::channel_pan(&state, cid, 0), -50);
+    }
+
+    #[test]
     fn a_device_service_link_keeps_the_input_balance_at_zero_volume() {
         let mut state = new(true, None, None);
         attach_device_service(&mut state);
