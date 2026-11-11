@@ -1088,7 +1088,8 @@ With the fader link engaged, moving one member applies the same dB change to
 the others, so their relative balance is preserved. Do not add faders parked
 at the very top or bottom unless the whole group is there: a relative move
 cannot go further in that direction. Mute and solo propagate the same way.
-`clear` empties all four groups.
+A propagated mute or solo joins the global `M` or `S` group, so pressing the
+master releases the whole group together. `clear` empties all four groups.
 
 The fader groups carry red, blue, green and violet, on their cells and on the
 caps of their members; mute cells are steel blue and solo cells amber.

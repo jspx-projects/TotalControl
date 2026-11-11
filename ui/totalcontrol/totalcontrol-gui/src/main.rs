@@ -200,7 +200,6 @@ fn main() -> iced::Result {
                 state.prefs_path = Some(path);
             }
             app::apply_startup_sync(&mut state);
-            app::adopt_active_master_members(&mut state);
             if !state.startup_compare_pending {
                 if let Err(e) = app::apply_control_room_assignments(&mut state) {
                     log::debug!("Control Room assignments not restored: {e}");
@@ -212,6 +211,7 @@ fn main() -> iced::Result {
                 // Move the handle to the service only once that is done.
                 app::maybe_attach_device_service(&mut state);
             }
+            app::adopt_active_master_members(&mut state);
             if let Some(view) = start_view {
                 state.view = view;
             }

@@ -3739,6 +3739,7 @@ fn apply_workspace_state(
     apply_workspace_pfl(state, workspace)?;
     apply_workspace_sample_rate(state, &scene);
     apply_workspace_monitor_state(state, &scene)?;
+    adopt_active_master_members(state);
     if state.device.capabilities().pitch {
         state
             .device
@@ -8337,11 +8338,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         if state.host_scene.is_none() {
                             state.host_scene = Some(state.device.capture_scene());
                         }
-                        adopt_active_master_members(state);
                         if !deferred_ucx_restore {
                             if let Err(e) = apply_control_room_assignments(state) {
                                 log::debug!("Control Room assignments not restored: {e}");
                             }
+                        }
+                        adopt_active_master_members(state);
+                        if !deferred_ucx_restore {
                             maybe_attach_device_service(state);
                         }
                         restart_surround_bridge(state);
@@ -8511,6 +8514,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             state.host_scene = Some(their.clone());
                             if let Err(e) = state.device.apply_scene(&their) {
                                 fail(state, "apply_scene", &e);
+                            } else {
+                                adopt_active_master_members(state);
                             }
                         }
                     }
@@ -8779,6 +8784,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // toggles it and takes it out of the group again. A linked pair
             // joins and leaves together.
             let targets = paired_channels(state, cid);
+            let propagated = propagation_set(state, cid, sidebar::GroupLink::Mute);
+            let joined: Vec<ChannelId> = propagated
+                .iter()
+                .flat_map(|other| paired_channels(state, *other))
+                .collect();
             let member = targets
                 .iter()
                 .any(|target| state.mute_master.members.contains(target));
@@ -8794,10 +8804,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                 }
             }
+            if m {
+                for target in joined {
+                    if !state.mute_master.members.contains(&target) {
+                        state.mute_master.members.push(target);
+                    }
+                }
+            } else {
+                state
+                    .mute_master
+                    .members
+                    .retain(|channel| !joined.contains(channel));
+            }
             select_strip(state, cid);
             set_channel_mute(state, cid, m);
             notify_osc(state, OscOutbound::Mute(cid, m));
-            for other in propagation_set(state, cid, sidebar::GroupLink::Mute) {
+            for other in propagated {
                 set_channel_mute(state, other, m);
                 notify_osc(state, OscOutbound::Mute(other, m));
             }
@@ -8805,6 +8827,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::Solo(cid, s) => {
             // Same automatic group as mute, with the same pair handling.
             let targets = paired_channels(state, cid);
+            let propagated = propagation_set(state, cid, sidebar::GroupLink::Solo);
+            let joined: Vec<ChannelId> = propagated
+                .iter()
+                .flat_map(|other| paired_channels(state, *other))
+                .collect();
             let member = targets
                 .iter()
                 .any(|target| state.solo_master.members.contains(target));
@@ -8820,10 +8847,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                 }
             }
+            if s {
+                for target in joined {
+                    if !state.solo_master.members.contains(&target) {
+                        state.solo_master.members.push(target);
+                    }
+                }
+            } else {
+                state
+                    .solo_master
+                    .members
+                    .retain(|channel| !joined.contains(channel));
+            }
             select_strip(state, cid);
             set_channel_solo(state, cid, s);
             notify_osc(state, OscOutbound::Solo(cid, s));
-            for other in propagation_set(state, cid, sidebar::GroupLink::Solo) {
+            for other in propagated {
                 set_channel_solo(state, other, s);
                 notify_osc(state, OscOutbound::Solo(other, s));
             }
@@ -9394,6 +9433,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 ChannelId::Playback(i) => state.device.set_playback_linked(i / 2, linked),
                 ChannelId::Output(i) => state.device.set_output_linked(i / 2, linked),
             };
+            adopt_active_master_members(state);
             start_stereo_anim(state, cid, linked);
             let (kind, id) = channel_slug(cid);
             notify_osc_bool(state, format!("/{kind}/{id}/stereo"), linked);
@@ -10106,6 +10146,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 } else {
                     enforce_control_room_stereo(state);
                     state.host_scene = Some(state.device.capture_scene());
+                    adopt_active_master_members(state);
                 }
             }
         }
@@ -10123,6 +10164,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 } else {
                     enforce_control_room_stereo(state);
                     state.host_scene = Some(state.device.capture_scene());
+                    adopt_active_master_members(state);
                 }
             }
         }
@@ -10547,6 +10589,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 } else {
                     enforce_control_room_stereo(state);
                     state.host_scene = Some(state.device.capture_scene());
+                    adopt_active_master_members(state);
                 }
             }
             notify_osc_raw(state, "/snapshot/active", vec![OscType::Int(n as i32)]);
@@ -10771,6 +10814,9 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.redo_stack.clear();
     state.mute_master = MasterSet::default();
     state.solo_master = MasterSet::default();
+    state.groups = Default::default();
+    state.group_edit = None;
+    state.fader_ganged = false;
     state.connected = state.device.is_connected();
     state.input_meters = vec![MeterAnim::new(); state.device.inputs().len()];
     state.playback_meters = vec![MeterAnim::new(); state.device.playbacks().len()];
@@ -10821,10 +10867,10 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     if state.host_scene.is_none() {
         state.host_scene = Some(state.device.capture_scene());
     }
-    adopt_active_master_members(state);
     if let Err(e) = apply_control_room_assignments(state) {
         log::debug!("Control Room assignments not restored: {e}");
     }
+    adopt_active_master_members(state);
     restart_surround_bridge(state);
     // The UC's input meters come from a PipeWire capture tap that is opened
     // only after the scene is applied; without this a live switch to the UC
@@ -16788,6 +16834,7 @@ fn apply_reset_mix(state: &mut TotalControl, kind: ResetMix) {
                 let linked = outputs_linked || state.is_output_assigned(pair);
                 let _ = state.device.set_output_linked(pair, linked);
             }
+            adopt_active_master_members(state);
             state.notice = Some((
                 "Channel stereo/mono reset".into(),
                 std::time::Instant::now(),
@@ -16801,6 +16848,7 @@ fn apply_reset_mix(state: &mut TotalControl, kind: ResetMix) {
         fail(state, "reset_mix", &e);
         return;
     }
+    adopt_active_master_members(state);
     state.notice = Some((
         RESET_MIX
             .iter()
@@ -19622,6 +19670,35 @@ mod tests {
     }
 
     #[test]
+    fn restored_solos_join_the_master_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        state.device.set_input_solo(0, 0, true).unwrap();
+        assert!(state.solo_master.members.is_empty());
+
+        adopt_active_master_members(&mut state);
+        assert!(state.solo_master.members.contains(&a));
+
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(!any_channel_soloed(&state));
+        assert!(state.solo_master.suspended);
+    }
+
+    #[test]
+    fn a_snapshot_recall_rebuilds_the_master_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let _ = update(&mut state, Message::Mute(a, true));
+        state.snapshots[0] = Some(state.device.capture_scene());
+        state.mute_master.members.clear();
+
+        let _ = update(&mut state, Message::SnapshotClicked(1));
+        assert!(state.mute_master.members.contains(&a));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!channel_is_muted(&state, a));
+    }
+
+    #[test]
     fn adopting_mutes_keeps_a_suspended_set_and_drops_stale_members() {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
@@ -19641,6 +19718,65 @@ mod tests {
         state.mute_master.members.push(a);
         adopt_active_master_members(&mut state);
         assert!(!state.mute_master.members.contains(&a));
+    }
+
+    #[test]
+    fn a_mute_group_joins_its_propagated_members_to_the_master_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        state.groups[0] = sidebar::Group {
+            members: vec![a, b],
+            mute_linked: true,
+            ..Default::default()
+        };
+
+        let _ = update(&mut state, Message::Mute(a, true));
+        assert!(channel_is_muted(&state, b), "the linked group mutes b too");
+        assert!(state.mute_master.members.contains(&a));
+        assert!(
+            state.mute_master.members.contains(&b),
+            "the propagated mute is part of the master's set"
+        );
+
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!channel_is_muted(&state, a));
+        assert!(!channel_is_muted(&state, b), "the master releases the group");
+
+        let _ = update(&mut state, Message::Mute(a, false));
+        assert!(!state.mute_master.members.contains(&a));
+        assert!(
+            !state.mute_master.members.contains(&b),
+            "unmuting the group releases the propagated member from the set"
+        );
+    }
+
+    #[test]
+    fn a_solo_group_joins_its_propagated_members_to_the_master_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        state.groups[0] = sidebar::Group {
+            members: vec![a, b],
+            solo_linked: true,
+            ..Default::default()
+        };
+
+        let _ = update(&mut state, Message::Solo(a, true));
+        assert!(channel_is_soloed(&state, b), "the linked group solos b too");
+        assert!(state.solo_master.members.contains(&a));
+        assert!(
+            state.solo_master.members.contains(&b),
+            "the propagated solo is part of the master's set"
+        );
+
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(!channel_is_soloed(&state, a));
+        assert!(!channel_is_soloed(&state, b), "the master releases the group");
     }
 
     #[test]
