@@ -39,6 +39,8 @@ Authoritative files:
   flow, state ownership, driver and latency model.
 - `docs/spec/TOTALCONTROL-GUI-SPEC.md` — visible UI, panels, gestures and
   visible state.
+- `docs/spec/TOTALCONTROL-STATE-SPEC.md` — state ownership, current
+  workspace, autosave, restore, host settings and layout files.
 - `docs/spec/TOTALCONTROL-OSC-SPEC.md` — TotalMix FX OSC transport, pages,
   scales, feedback and mapping.
 - `docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` — UCX transport, registers,

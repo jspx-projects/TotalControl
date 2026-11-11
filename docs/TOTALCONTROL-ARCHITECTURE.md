@@ -27,6 +27,7 @@ detail.
 |---|---|
 | `TOTALCONTROL-ARCHITECTURE.md` | runtime structure, threads, data flow, state ownership, control-surface boundary, driver and latency model |
 | `spec/TOTALCONTROL-GUI-SPEC.md` | layout, controls, panels, gestures, motion and visible state |
+| `spec/TOTALCONTROL-STATE-SPEC.md` | state ownership, current workspace, autosave, restore, host settings and layout files |
 | `spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` | Fireface UCX transport, registers, writes and readback |
 | `spec/FIREFFACE-UC-PROTOCOL-SPEC.md` | Fireface UC transport, registers, writes and readback |
 | `spec/BABYFACE-PRO-PROTOCOL-SPEC.md` | Babyface Pro FS transport, ALSA surface, USB protocol and DSP blocks |
@@ -247,24 +248,26 @@ the mixer's channel rows and send matrix. The address space is defined in
 The device model is the runtime state. It is captured as a `Scene` — the
 internal name for one mixer state — for:
 
-- the auto-saved scene;
+- the current workspace;
 - snapshot slots;
 - undo and redo;
 - host-scene merge after a control change;
 - scene import and export.
 
-The GUI also persists interface state: window layout, sidebar state, channel
-names, Control Room preferences and device identity. The TUI and GUI share the
-mixer scene, so the last writer wins.
+The GUI state model is defined in
+[`spec/TOTALCONTROL-STATE-SPEC.md`](spec/TOTALCONTROL-STATE-SPEC.md). The
+current workspace is the live state for one unit and the single source of
+workspace data. It is stored as a `.tcws` file and autosaved while dirty; an
+explicit workspace is a saved copy of the same schema. Host settings hold
+installation and per-unit operational values, while the GUI layout document
+holds the presentation definitions.
 
-A named **workspace** bundles the current scene, the eight snapshots and their
-names, channel labels, the four groups, the six layouts, view state, Control
-Room state, virtual-surround settings and window size in one `.tcws` JSON
-file. It is the portable host-side configuration; `gui.json` remains the
-per-installation preference file, `auto.json` the crash-recovery scene, and
-the unit's six setups remain device state.  A workspace includes the sample
-rate, pitch/varispeed and active Dim and Speaker B states; the unit's six
-device setups and the device serial number remain outside it.
+A workspace includes the current scene, the eight snapshots and their names,
+channel labels, the four groups, the six layout slots, the mute/solo master
+sets and the temporary fader group, view and window state, Control Room state,
+virtual-surround settings and the sample rate, pitch/varispeed and active Dim
+and Speaker B states. The unit's six device setups and the device serial
+number remain device state.
 
 Factory surround Workspaces are `Workspace` values built in memory and
 applied through the same `apply_workspace` scene path as a `.tcws` file.  They

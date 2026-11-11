@@ -157,7 +157,7 @@ The top bar has `WORKSPACE` immediately before `OPTIONS`. Its menu contains:
 | `Factory Workspaces  ▸` | open the built-in direct surround layouts |
 | `Save Workspace As…` | choose a new `.tcws` file |
 
-The file dialogs remember the last used folder in `gui.json`. With no saved
+The file dialogs remember the last used folder in the host settings. With no saved
 folder they start in `Documents`, falling back to the home directory. A
 workspace written for another device model is refused. Opening or loading a
 workspace first shows an in-app confirmation: loading a workspace will
@@ -454,9 +454,19 @@ A strip is described at three levels:
 | Channel template | a kind plus its linkage and optional elements: input mono, playback stereo, output mono | `standard_elements` in `totalcontrol-layout` |
 | Channel | one instance: AN1, SW1/2, OUT3, MAIN | the runtime channel list |
 
-The layout is global.  One set of dimensions, visual tokens and colours
-applies to every strip in every view, workspace and scene; no workspace and
-no device scene stores its own layout.
+The layout definition has a global default and optional per-device
+overrides.  One set of dimensions, visual tokens, colours and templates
+applies to every strip of a unit; a per-device override may replace parts of
+that set for one model or device family.  The definition is installation
+configuration, not workspace state: a workspace stores the active layout
+preset and the channel visibility/collapse state, not the geometry, colours
+or templates.
+
+Device capabilities are authoritative.  A template may contain only elements
+the connection can use: a unit without the FX bus, EQ or Dynamics uses a
+template without those elements, and an override cannot add them back.
+Unsupported elements are not drawn and have no action; a per-device template
+may arrange the supported elements but cannot add an unsupported one.
 
 Three sources answer three different questions:
 
@@ -582,8 +592,8 @@ fader track.  It holds:
 | MR1 | FX send or FX return fader | every strip with an FX bus |
 | MR2 | `T` trim tab | inputs and software playback |
 | MR3 | settings gear | every strip |
-| MR4 | `EQ` tab | UCX inputs and outputs |
-| MR5 | `D` dynamics tab | UCX inputs and outputs |
+| MR4 | `EQ` tab | inputs and outputs whose connection supports EQ |
+| MR5 | `D` dynamics tab | inputs and outputs whose connection supports Dynamics |
 
 The glyph column keeps its glyphs in the content box; the `T`/gear/`EQ`/`D`
 tab faces and the B1 minimize face reach the card's right edge.
@@ -592,7 +602,7 @@ The FX fader has no level marks and no ruler: no tick marks, no 0 dB
 reference tick; only its coloured slot fill and cap are drawn.  The FX fader
 is followed by a gap, and the tabs below it are evenly spaced.  A missing tab
 keeps its row where a later element depends on it: an output gets an empty
-MR2, so the gear and the UCX tabs stay on the input grid.
+MR2, so the gear and the device tabs stay on the input grid.
 
 #### 2.8.6 Channel kinds
 
@@ -607,14 +617,18 @@ MR2, so the gear and the UCX tabs stay on the input grid.
 | MR1 | FX send | FX send | FX return |
 | MR2 | `T` | `T` | empty |
 | MR3 | gear | gear | gear |
-| MR4 | `EQ` on the UCX | empty | `EQ` on the UCX |
-| MR5 | `D` on the UCX | empty | `D` on the UCX |
+| MR4 | `EQ` when supported | empty | `EQ` when supported |
+| MR5 | `D` when supported | empty | `D` when supported |
 | B1 | dB and collapse | dB and collapse | dB and collapse |
 | B2 | full-width bottom bar | full-width bottom bar | empty |
 
 A linked pair is one strip and shows two VU bars with a small gap.  A split
 pair is two adjacent strips; each has one VU bar and its own fader.  The Control Room
 output strips use the hardware-output layout; their stereo link is locked.
+A unit without the FX bus, EQ or Dynamics draws the MR1/MR4/MR5 elements as
+absent rather than as active controls.  The optional slots remain reserved
+under the template rules; a per-device template may arrange the supported
+elements differently, but it cannot add an unsupported element.
 
 #### 2.8.7 Examples
 
@@ -703,6 +717,7 @@ place to change and what follows from it:
 | font sizes, knob, fader slot and cap dimensions | `VISUAL`, same file | the example document |
 | colours | `ColorScheme::default()`, same file | the example document |
 | which elements a template contains | `standard_elements`, same file | the template table in [`TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) |
+| per-device layout overrides | the `devices` section of `gui-layout.json` | the device template rules in this section |
 | a new element kind or placement | `ElementKind` and `ElementPlacement`, and `Grid::placement` | the schema enumerations, the template specification, the preview draw arm |
 | a visual state such as hover, active or an open panel | the strip widgets, and `draw_card` in the preview | this section |
 | the hand-drawn preview annotations | `totalcontrol-layout/src/bin/channel-preview.rs` | — |
@@ -1500,8 +1515,9 @@ device names. External Input lists stereo hardware-input pairs. The five
 level controls have a `-65.0 … 0.0 dB` range, a `0.5 dB` step and a
 one-decimal value display.
 
-`OK` stores the settings in `gui.json` for the selected device. The settings
-are not part of the mixer scene, snapshot, undo stack or OSC scene state.
+`OK` stores the settings in the current workspace for the selected device.
+The settings are workspace state, not part of the mixer scene, snapshot, undo
+stack or OSC scene state.
 `Dim`, `Speaker B`, `Mono`, `Mute FX`, `Cue` and the sample rate are mixer
 scene and workspace state. Active Talkback is momentary and starts off when a
 workspace opens; the per-output Talkback receive flags live in the mixer
@@ -1522,12 +1538,12 @@ panel labels it accordingly and keeps the four terms visible.
 
 ## 14. State references
 
-Mixer-state contents, workspace storage, snapshot storage, startup mismatch,
-undo and the split between mixer state and GUI preferences are defined in
-[`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §9. This
+Mixer-state contents, workspace storage, autosave, restore and the split
+between workspace state, host settings and layout definitions are defined in
+[`TOTALCONTROL-STATE-SPEC.md`](TOTALCONTROL-STATE-SPEC.md). This
 specification only names the visible surfaces: eight snapshot slots, six
-layout slots, the Workspace menu, the current auto-saved mix and the GUI
-preference file.
+layout slots, the Workspace menu, the current workspace and the host settings
+surface.
 
 The serialized mixer-state type is called `Scene` in code.  The interface
 never uses that word: it says **current mix** for the live state, **snapshot**
