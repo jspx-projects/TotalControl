@@ -1476,21 +1476,30 @@ impl Fireface {
         });
     }
 
-    /// Phase is a per-source property on the UC: TotalMix writes the
-    /// sign bit of every matrix cell carrying that source, it does not
-    /// have a separate phase register.  Only input sources have a phase
-    /// control in TotalControl today.
-    fn matrix_source_phase(&self, source: usize) -> bool {
-        self.inputs.get(source).is_some_and(|input| input.phase)
-    }
-
     fn uc_write_matrix(&self, block: usize, source: usize, linear: f32) -> Result<(), Error> {
         let address = (block as u16) * uc::MIX_STRIDE + source as u16;
-        let (mut value, index) = uc::matrix_word(linear, address);
-        if self.matrix_source_phase(source) && value != 0 {
-            value = value.wrapping_neg();
-        }
+        let (value, index) = uc::matrix_word(linear, address);
         self.vendor_out(protocol::req::MIXER, value, index)
+    }
+
+    /// UC input phase is a separate `0x18` write.  The low code is
+    /// `0x00` for input 1 and `0x24 + input` for inputs 2–4; the high
+    /// bit selects normal (`0x4000`) or inverted (`0xc000`).
+    fn uc_write_phase(&self, idx: usize, invert: bool) -> Result<(), Error> {
+        let code = match idx {
+            0 => 0x0000,
+            1 => 0x0025,
+            2 => 0x0026,
+            3 => 0x0027,
+            _ => {
+                return Err(Error::InvalidChannel(format!(
+                    "input {idx} has no phase on the UC"
+                )))
+            }
+        };
+        let index = if invert { 0xc000 | code } else { 0x4000 | code };
+        let value = if invert { 0xfea9 } else { 0x0156 };
+        self.vendor_out(protocol::req::PHASE, value, index)
     }
 
     fn uc_write_master(&self, block: usize, linear: f32) -> Result<(), Error> {
@@ -1498,10 +1507,10 @@ impl Fireface {
         self.vendor_out(protocol::req::MIXER, value, index)
     }
 
-    /// Reproduce the app-level connect sequence TotalMix sends to the UC.
+    /// Reproduce the app-level mixer push TotalMix sends to the UC.
     ///
-    /// The order is taken from the Windows capture
-    /// `capture/uc-fp-20261026/UC-FP3_startup_mismatch.pcapng`:
+    /// The order is taken from the connect capture
+    /// `uc-connect-burst3-20261111.pcap`:
     ///
     /// 1. 30 × `0x15` with index 0..29 and value 0 (mute/dim bank reset);
     /// 2. for each output pair, all except Phones in descending internal
@@ -1513,11 +1522,10 @@ impl Fireface {
     ///    - the 36 crosspoints for the left block and the right block,
     ///      interleaved source by source.
     ///
-    /// TotalMix writes 714 requests at connect: 30 × `0x15`, 18 × `0x1a`
-    /// and 666 × `0x12`.  Writing all `0x1a` values first and then all
-    /// `0x12` values (the previous implementation) leaves the `0x12`
-    /// masters at 0 dB and makes the unit jump to full level at engine
-    /// start while the front panel still shows the old fader position.
+    /// The complete connect burst also writes the fixed `0x16`, `0x1b`,
+    /// `0x10` and `0x17` prefix and the preamp gains.  The driver owns the
+    /// fixed prefix; this function owns the 30 × `0x15`, 18 × `0x1a` and
+    /// 666 × `0x12` mixer push.
     fn apply_uc_full_matrix(&mut self) -> Result<(), Error> {
         // TotalMix resets the 30-entry mute/dim bank before the mixer push.
         for idx in 0..30u16 {
@@ -1653,11 +1661,10 @@ impl Fireface {
         } else {
             current & !mask
         };
-        // The UC settings dialog uses wIndex 4032 (0x0fc0) for the
-        // reference-level fields, but that mask excludes the 48 V/PAD/Inst
-        // bits.  Switch changes need the complete register (wIndex 0xffff),
-        // otherwise EP0 accepts the write and the switch bit does not move.
-        self.vendor_out(protocol::req::LEVELS, next as u16, 0xffff)?;
+        // TotalMix writes the complete switch/level register through
+        // wIndex 0xf03f.  The narrower 0x0fc0 mask excludes the 48 V,
+        // PAD and Inst bits and EP0 accepts it without moving them.
+        self.vendor_out(protocol::req::LEVELS, next as u16, 0xf03f)?;
 
         // Keep the model tied to the register the unit actually accepted.
         let d = self.vendor_in(protocol::req::LEVELS, 0, 0, 4)?;
@@ -5426,19 +5433,8 @@ impl RmeDevice for Fireface {
             return Err(Error::InvalidChannel(format!("input {idx}")));
         }
         if self.is_uc() {
+            self.uc_write_phase(idx, invert)?;
             self.inputs[idx].phase = invert;
-            // The UC has no phase register: the sign of every routed
-            // matrix cell is the phase.  Rewrite the source's active cells
-            // so the change also survives later fader/pan writes, which go
-            // through the phase-aware uc_write_matrix().
-            let channel = ChannelId::Input(idx);
-            for block in 0..BLOCKS {
-                let gain = self.matrix_cell(channel, block).unwrap_or(0.0);
-                if gain > 0.0 {
-                    let trimmed = gain * self.trim_gain(channel);
-                    self.uc_write_matrix(block, idx, trimmed)?;
-                }
-            }
             return Ok(());
         }
         self.ucx_write_input_phase(idx, invert)?;
@@ -8649,38 +8645,45 @@ mod tests {
     }
 
     #[test]
-    fn uc_phase_sets_the_matrix_sign_bit_and_survives_fader_moves() {
+    fn uc_phase_writes_the_phase_request_per_input() {
         let (mut dev, writes) = open(Model::Uc);
-        dev.set_volume(ChannelId::Input(0), 0, 1.0).unwrap();
+        for (idx, on_index, off_index) in [
+            (0, 0xc000u16, 0x4000u16),
+            (1, 0xc025, 0x4025),
+            (2, 0xc026, 0x4026),
+            (3, 0xc027, 0x4027),
+        ] {
+            writes.lock().unwrap().clear();
+            dev.set_phase(idx, true).unwrap();
+            assert!(writes.lock().unwrap().contains(&Write::Vendor(
+                protocol::req::PHASE,
+                0xfea9,
+                on_index
+            )));
+            assert!(dev.inputs()[idx].phase);
 
-        writes.lock().unwrap().clear();
+            writes.lock().unwrap().clear();
+            dev.set_phase(idx, false).unwrap();
+            assert!(writes.lock().unwrap().contains(&Write::Vendor(
+                protocol::req::PHASE,
+                0x0156,
+                off_index
+            )));
+            assert!(!dev.inputs()[idx].phase);
+        }
+    }
+
+    #[test]
+    fn uc_fader_after_phase_does_not_negate_the_matrix_level() {
+        let (mut dev, writes) = open(Model::Uc);
         dev.set_phase(0, true).unwrap();
+        writes.lock().unwrap().clear();
+        dev.set_volume(ChannelId::Input(0), 0, 1.0).unwrap();
         let (value, index) = uc::matrix_word(1.0, 0);
-        assert!(writes.lock().unwrap().contains(&Write::Vendor(
-            protocol::req::MIXER,
-            value.wrapping_neg(),
-            index
-        )));
-        assert!(dev.inputs()[0].phase);
-
-        // Moving the fader after engaging phase must not silently undo it.
-        writes.lock().unwrap().clear();
-        dev.set_volume(ChannelId::Input(0), 0, 0.5).unwrap();
-        let (value, index) = uc::matrix_word(0.5, 0);
-        assert!(writes.lock().unwrap().contains(&Write::Vendor(
-            protocol::req::MIXER,
-            value.wrapping_neg(),
-            index
-        )));
-
-        writes.lock().unwrap().clear();
-        dev.set_phase(0, false).unwrap();
-        let (value, index) = uc::matrix_word(0.5, 0);
         assert!(writes
             .lock()
             .unwrap()
             .contains(&Write::Vendor(protocol::req::MIXER, value, index)));
-        assert!(!dev.inputs()[0].phase);
     }
 
     #[test]
@@ -9557,7 +9560,7 @@ mod tests {
         dev.set_pad(2, true).unwrap();
         let w = writes.lock().unwrap();
         // 0x3480 is the initial register; PAD on AN3 is bit 3.
-        assert!(w.contains(&Write::Vendor(protocol::req::LEVELS, 0x3488, 0xffff)));
+        assert!(w.contains(&Write::Vendor(protocol::req::LEVELS, 0x3488, 0xf03f)));
         assert!(dev.inputs()[2].pad);
     }
 

@@ -33,6 +33,8 @@ pub mod req {
     pub const LOOPBACK: u8 = 0x15;
     pub const CHAN_INIT: u8 = 0x16;
     pub const LEVELS: u8 = 0x17;
+    /// Input phase: signed coefficient plus a channel code.
+    pub const PHASE: u8 = 0x18;
     pub const PGA: u8 = 0x1a;
     pub const DDS: u8 = 0x1b;
     /// IN: 32-bit firmware revision word; bits 31..16 are the revision.
