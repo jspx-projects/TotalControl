@@ -25,7 +25,7 @@ Babyface Pro FS is a different device; see
 
 | Property | Value |
 |---|---|
-| Native USB ID | `2a39:3fc7` |
+| Native USB IDs | `0424:3fc7`, `2a39:3fc7` |
 | Tested firmware | 226 |
 | Default transport | isochronous interface 0 |
 | 1× rates | 32, 44.1, 48 kHz |

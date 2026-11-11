@@ -759,6 +759,10 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 static const struct usb_device_id ffuc_ids[] = {
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UC_PC, 0),
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[0] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_PC_RME, 0),
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[0] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_WIN_RME, 0),
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[0] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UC_MAC, 0),
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[1] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_MAC, 0),
@@ -771,6 +775,8 @@ static const struct usb_device_id ffuc_ids[] = {
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[5] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UCX, 5),
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[6] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_BABYFACE_CLASSIC, 0),
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[7] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_BABYFACE_CLASSIC, 0),
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[7] },
 	{ }

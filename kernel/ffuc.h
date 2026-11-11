@@ -21,7 +21,8 @@
  *
  * Transport summary
  * -----------------
- * Fireface UC PC personality (0424:3fc5, interface 0):
+ * Fireface UC PC personality (0424:3fc5 / 2a39:3fc5 / 2a39:3fce,
+ * interface 0):
  *   interrupt endpoints 0x01 OUT / 0x82 IN (0x03/0x84 at 4x), interleaved
  *   float32 frames, no header.  The status ticker on interface 5 (0x8b)
  *   reports front-panel events and the output-latch bit.
@@ -35,7 +36,7 @@
  *   the Windows interrupt endpoints 0x01/0x82.  The module parameter
  *   ucx_if5 chooses which personality binds (default ISO IF0).
  *
- * Babyface-classic (2a39:3fc7):
+ * Babyface-classic (0424:3fc7 / 2a39:3fc7):
  *   UCX-family layout.  Interface 0 has the ISO endpoints 0x03 OUT /
  *   0x84 IN with the UCX packet format; capture carries 12/8/6 words and
  *   playback 14/10/8 words at 1x/2x/4x.  Interface 1 bulk IN 0x85 streams
@@ -61,6 +62,8 @@
 #define FFUC_VENDOR_SMSC	0x0424
 #define FFUC_VENDOR_RME		0x2a39
 #define FFUC_PRODUCT_UC_PC	0x3fc5
+#define FFUC_PRODUCT_UC_PC_RME	0x3fc5
+#define FFUC_PRODUCT_UC_WIN_RME	0x3fce
 #define FFUC_PRODUCT_UC_MAC	0x3fc6
 #define FFUC_PRODUCT_UCX	0x3fc9
 #define FFUC_PRODUCT_BABYFACE_CLASSIC	0x3fc7

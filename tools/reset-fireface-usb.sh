@@ -4,7 +4,7 @@
 set -eu
 
 found=0
-for id in 0424:3fc5 0424:3fc6 2a39:3fc6 0424:3fc9 2a39:3fc9; do
+for id in 0424:3fc5 2a39:3fc5 2a39:3fce 0424:3fc6 2a39:3fc6 0424:3fc7 2a39:3fc7 0424:3fc9 2a39:3fc9; do
     if /usr/bin/lsusb -d "$id" >/dev/null 2>&1; then
         echo "resetting $id"
         /usr/bin/usbreset "$id"

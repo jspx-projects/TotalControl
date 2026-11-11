@@ -72,7 +72,7 @@ meters, clock/options and scenes.
 
 | Device | USB ID | Audio transport |
 |---|---|---|
-| Fireface UC PC | `0424:3fc5` | interrupt IF0 |
+| Fireface UC PC | `0424:3fc5`, `2a39:3fc5`, `2a39:3fce` | interrupt IF0 |
 | Fireface UC AP | `0424:3fc6`, `2a39:3fc6` | isochronous IF0 |
 | Fireface UCX | `0424:3fc9`, `2a39:3fc9` | isochronous IF0 (default) or interrupt IF5 |
 
