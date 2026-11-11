@@ -5465,9 +5465,15 @@ impl RmeDevice for Fireface {
 
     fn set_input_gain_right(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Right input gain is not mapped on the UC".into(),
-            ));
+            // The UC has one PGA per input.  The right side of a linked
+            // preamp pair is the odd input, so the right readout writes the
+            // ordinary `0x1a` gain for `idx + 1`.
+            if idx % 2 != 0 || idx + 1 >= 4 {
+                return Err(Error::InvalidChannel(format!(
+                    "input {idx} has no right preamp"
+                )));
+            }
+            return self.set_gain(idx + 1, gain);
         }
         if idx >= 4 {
             return Err(Error::InvalidChannel(format!("input {idx} has no preamp")));
@@ -9553,6 +9559,27 @@ mod tests {
         // 0x3480 is the initial register; PAD on AN3 is bit 3.
         assert!(w.contains(&Write::Vendor(protocol::req::LEVELS, 0x3488, 0xffff)));
         assert!(dev.inputs()[2].pad);
+    }
+
+    #[test]
+    fn uc_right_gain_writes_the_odd_preamp() {
+        let (mut dev, writes) = open(Model::Uc);
+        writes.lock().unwrap().clear();
+
+        dev.set_input_gain_right(0, 20).unwrap();
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Vendor(protocol::req::PGA, 20, 1)));
+        assert_eq!(dev.inputs()[1].gain, Some(20));
+
+        dev.set_input_gain_right(2, 12).unwrap();
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Vendor(protocol::req::PGA, 12, 3)));
+        assert_eq!(dev.inputs()[3].gain, Some(12));
+        assert!(dev.set_input_gain_right(1, 10).is_err());
     }
 
     #[test]
