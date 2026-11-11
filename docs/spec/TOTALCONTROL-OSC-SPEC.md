@@ -1,9 +1,10 @@
-# OSC 1.96 control specification
+# OSC 1.96 and Global OSC control specification
 
-This document defines the OSC 1.96 control surface used to drive TotalMix FX
-and the mapping from that surface to the Fireface UCX register protocol.  The
-reference is RME's `OscTableTotalMix_240722`, dated 2024-07-24 and labelled
-TotalMix FX 1.96.
+This document defines the two OSC surfaces used to drive TotalMix FX and the
+mapping from those surfaces to the Fireface UCX register protocol.  OSC 1.96
+is the banked classic surface defined by RME's `OscTableTotalMix_240722`,
+dated 2024-07-24.  Global OSC is the absolute-channel surface defined by RME's
+Global OSC table for TotalMix FX 2.1 and later.
 
 | Dialect | Reference | Status |
 |---|---|---|
@@ -11,9 +12,10 @@ TotalMix FX 1.96.
 | OSC 1.90 | older classic table | not supported |
 | Global OSC | RME Global OSC table (TotalMix FX 2.1+) | separate dialect |
 
-Global OSC is implemented by `totalcontrol-gui/src/osc_global.rs`; it is not
-this surface.  TotalMix FX 2.10 and 2.11 compatibility is not a support
-target; they are only useful as compatibility evidence for the 1.96 table.
+Global OSC is specified in [§13](#13-global-osc) and implemented by
+`totalcontrol-gui/src/osc_global.rs`.  TotalMix FX 2.10 and 2.11 compatibility
+is not a support target; they are only useful as compatibility evidence for
+the 1.96 table.
 
 The document covers protocol behaviour only. Enabling OSC in TotalMix FX and
 configuring the network are operational steps and live outside this
@@ -33,6 +35,7 @@ specification.
 - [10. Feedback](#10-feedback)
 - [11. Channel rows and link rules](#11-channel-rows-and-link-rules)
 - [12. UCX register mapping](#12-ucx-register-mapping)
+- [13. Global OSC](#13-global-osc)
 
 ## 1. Transport
 
@@ -659,10 +662,166 @@ into bursts; a burst carries complete 4-byte words. A 4-byte word is
 
 The UCX state stream on endpoint `0x8d` uses the same word layout.
 
-## 13. Global OSC Cue
+## 13. Global OSC
 
-Global OSC (TotalMix FX 2.1 and later) carries Cue in the Control Room
-namespace:
+Global OSC is the absolute-channel dialect of TotalMix FX 2.1 and later.  It
+has no bank, page, track or submix selection state: every input, playback and
+output is addressed by its absolute position, and values use native units.
+
+### 13.1 Transport and values
+
+Global OSC uses the same UDP transport and OSC 1.0 encoding as
+[§1](#1-transport).  A command carries one value argument unless the path is
+listed as a trigger.
+
+- Float and double values are accepted interchangeably.
+- An integer is accepted where a float is expected.
+- A boolean is true for a non-zero integer or a float greater than or equal
+  to `0.5`; a false value is zero.
+- A trigger fires for a bare message or for a value greater than or equal to
+  `0.5`; a value below `0.5` is ignored.
+- Channel positions are zero-based.  Snapshot numbers, layout numbers and
+  group numbers are one-based.
+
+### 13.2 Address spaces
+
+| Path | Meaning |
+|---|---|
+| `/input/{channel}/{field}` | Hardware input strip |
+| `/playback/{channel}/{field}` | Software playback strip |
+| `/output/{channel}/{field}` | Hardware output strip |
+| `/mix/{in\|pb}/{channel}/{submix}/{field}` | Matrix send from an input or playback channel into an output submix |
+| `/controlroom/{field}` | Monitor section |
+| `/reverb/{field}`, `/echo/{field}` | FX returns |
+| `/durec/{field}` | Recorder transport and status |
+| `/mutegroup/{n}`, `/sologroup/{n}`, `/fadergroup/{n}` | Channel groups `1..4` |
+| `/globalmute`, `/globalsolo`, `/undo`, `/redo` | Global actions |
+| `/snapshot/...`, `/layout/load/{n}`, `/showwindow` | Snapshot, layout and window actions |
+| `/send...` | Feedback and state-dump requests |
+| `/level/{in\|pb\|out}/{channel}` | Meter level feedback |
+| `/status/{device\|connection\|dsp}` | Connection and DSP status feedback |
+
+`/mix` addresses a source channel against one output submix.  `submix` is the
+zero-based hardware output channel; input and playback rows are the only
+matrix sources.
+
+### 13.3 Channel fields
+
+The codec accepts a common field set; the application exposes only fields the
+current device and channel type support.
+
+| Field | Value | Channel type |
+|---|---|---|
+| `mute` | Boolean | all |
+| `stereo` | Boolean | all |
+| `record` | Boolean | input, playback |
+| `name` | String | all |
+| `playchan` | Index | playback |
+| `msproc` | Boolean | all |
+| `phase` | Boolean | all |
+| `width` | Number | all |
+| `pfl` | Boolean | input |
+| `gain` | dB | input |
+| `reflevel` | Index | input, output |
+| `48v` | Boolean | input |
+| `instrument` | Boolean | input |
+| `pad` | Boolean | input |
+| `autoset` | Boolean | input |
+| `volume` | dB | playback, output |
+| `faderlin` | `0.0..1.0` | playback, output |
+| `balpan` | `-100..100` | playback, output |
+| `fxsend` | dB | input, playback |
+| `fxreturn` | dB | output |
+| `crossfeed` | dB | output |
+| `loopback` | Boolean | output |
+| `talkbacksel` | Boolean | output |
+| `delay` | ms | output |
+| `color` | Index | output |
+| `lowcut/{field}` | Low-cut controls | input, playback, output |
+| `eq/band{n}{gain\|freq\|q\|type}` | EQ band controls | input, playback, output |
+| `dynamics/{field}` | Dynamics controls | input, playback, output |
+| `autolevel/{field}` | Auto Level controls | input, playback, output |
+| `roomeq/{field}` | Room EQ controls | output |
+
+The EQ, dynamics, Auto Level and Room EQ subfields use the field names of the
+Global OSC reference table.  A device without the corresponding DSP does not
+expose those paths.
+
+### 13.4 Matrix fields
+
+| Field | Value |
+|---|---|
+| `fader` | dB |
+| `faderlin` | `0.0..1.0` |
+| `balpan` | `-100..100` |
+| `solo` | Boolean |
+| `groupflags` | Integer bit mask |
+
+A matrix write addresses one source and one output submix.  The application
+writes the source's send level and pan for that submix.
+
+### 13.5 Control Room
+
+| Path | Value |
+|---|---|
+| `/controlroom/mainout` | Zero-based output channel |
+| `/controlroom/mainoutb` | Zero-based output channel |
+| `/controlroom/phones1` … `phones4` | Zero-based output channel |
+| `/controlroom/mainmono` | Boolean |
+| `/controlroom/dimreduction` | dB |
+| `/controlroom/dim` | Boolean |
+| `/controlroom/recallvolume` | dB |
+| `/controlroom/recall` | Trigger |
+| `/controlroom/talkchannel` | Zero-based input channel |
+| `/controlroom/talkback` | Boolean |
+| `/controlroom/cuechan` | Zero-based output channel; `-1` clears Cue |
+| `/controlroom/externalin` | Boolean |
+| `/controlroom/extinchannel` | Zero-based input channel |
+| `/controlroom/extingain` | dB |
+| `/controlroom/linkab` | Boolean |
+| `/controlroom/speakerb` | Boolean |
+| `/controlroom/mutefx` | Boolean |
+
+### 13.6 Global actions
+
+| Path | Value |
+|---|---|
+| `/mutegroup/{1..4}`, `/sologroup/{1..4}`, `/fadergroup/{1..4}` | Boolean |
+| `/globalmute`, `/globalsolo` | Boolean |
+| `/undo`, `/redo` | Trigger |
+| `/snapshot/load/{n}` | Trigger; the optional argument is the snapshot state |
+| `/snapshot/save` | Trigger |
+| `/layout/load/{n}` | Trigger |
+| `/reverb/{field}`, `/echo/{field}` | FX controls |
+| `/durec/{play\|pause\|stop\|record\|next\|previous}` | Trigger |
+| `/durec/{time\|state}` | String feedback |
+| `/showwindow` | Boolean |
+
+### 13.7 Feedback and state requests
+
+Global OSC feedback is event-driven.  The surface sends state after a change
+and supports the following dump requests:
+
+| Path | Meaning |
+|---|---|
+| `/sendstate` | Full state |
+| `/sendchan/{in\|pb\|out}/{channel}` | One channel strip |
+| `/sendmix/{mode}` | Matrix state; mode `1` or `2` |
+| `/sendsubmix/{n}` | One output submix; optional mode `1` or `2` |
+| `/sendsettings` | Device settings |
+| `/sendall/{mode}` | Complete state; mode `1` or `2` |
+
+Feedback uses the same paths and native values as control.  Meter levels are
+sent as `/level/{in\|pb\|out}/{channel}` with dB values; connection and DSP
+state use `/status/connection`, `/status/device` and `/status/dsp`.
+
+A state dump is a sequence of ordinary OSC messages or bundles.  The receiver
+does not need to acknowledge a dump and does not use the bank/page state of
+OSC 1.96.
+
+### 13.8 Cue
+
+Global OSC carries Cue in the Control Room namespace:
 
 ```text
 /controlroom/cuechan N
