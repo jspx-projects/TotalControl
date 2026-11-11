@@ -46,6 +46,7 @@ written to the device on connect and on each change.
 | `0x15` | OUT | Loopback bank |
 | `0x16` | OUT | Channel initialization |
 | `0x17` | OUT/IN | Reference levels, 48 V, PAD, Inst |
+| `0x18` | OUT | Input phase |
 | `0x1a` | OUT | Input gain and output-channel level |
 | `0x1b` | OUT | Rate-generator/pitch coefficients |
 | `0x1c` | IN | Firmware revision |
@@ -62,18 +63,27 @@ source = 18..35  software playback channels
 block  = 0..17   hardware output blocks
 ```
 
-The value is a signed 16-bit level.  Bits 13:0 carry the level, with the two
-lowest level bits in `wIndex` bits 14:15.  A level of `0x2000` is 0 dB.
-Bit 15 carries phase inversion; the inverted form of a level is its 16-bit
-two's complement (`0x2000` ↔ `0xE000`).
+The value is a signed 16-bit level.  A level of `0x2000` is 0 dB.  A non-zero
+send sets `wIndex` bit 14; a zero send writes the same cell with bit 14 clear.
+Bit 14 is a send-active flag, not a submix selector.
+
+For a stereo pair, source `N` writes the left cell in block `2p` and source
+`N + 1` writes the right cell in block `2p + 1`; `p` is the output pair.
 
 The output masters use `wIndex = 992 + block`.  The four submix banks occupy
 `wIndex` bits 14:15; an output-balance change writes the left and right
 masters in each bank.
 
-Phase is a property of the source and applies to every routed cell.
-Changing phase rewrites the source's active cells with the new sign.  A
-later fader, pan, matrix-cell or full-matrix write carries the same sign.
+Input phase uses request `0x18`:
+
+| State | `wValue` | `wIndex` |
+|---|---:|---|
+| Normal | `0x0156` | `0x4000 + code` |
+| Inverted | `0xfea9` | `0xc000 + code` |
+
+The low code is `0x00` for input 1 and `0x24 + (input - 1)` for inputs 2–4,
+giving `0x25` for input 2 and `0x27` for input 4.  The value is a signed
+coefficient; phase is not a `0x17` bit on the UC.
 
 ## 4. Output level and balance
 
@@ -94,6 +104,9 @@ Output channel indices are:
 | AN5/6 | 8, 9 |
 | SPDIF | 12, 13 |
 | ADAT 1/2 … 7/8 | 14 … 21 |
+
+The `0x12` master for channel `n` is `992 + n`; the four submix banks are
+selected by `wIndex` bits 14:15.
 
 An output pair carries balance as two distinct channel levels.  The linked
 fader is the pair level: moving it applies one common dB offset to both
