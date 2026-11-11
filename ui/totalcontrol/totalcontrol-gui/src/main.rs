@@ -250,7 +250,7 @@ fn main() -> iced::Result {
                 state.show_device_panel = true;
                 state.show_settings = false;
             }
-            state.fullscreen = start_fullscreen;
+            state.fullscreen = start_fullscreen || state.fullscreen;
             state.tray_active = tray_active;
             state.window_hidden = start_hidden;
             if start_hidden {

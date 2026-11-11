@@ -595,8 +595,10 @@ fn current_workspace(dev: &DeviceHandle) -> Option<PathBuf> {
         return None;
     }
     if let Some(path) = totalcontrol_core::workspace::active_current_path() {
-        if path.is_file() {
-            return Some(path);
+        if let Some(scene) = totalcontrol_core::workspace::read_scene(&path) {
+            if scene.check_compatible(dev.canonical_model()).is_ok() {
+                return Some(path);
+            }
         }
     }
     let key = totalcontrol_core::workspace::unit_key(dev.canonical_model(), None);
