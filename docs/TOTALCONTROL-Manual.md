@@ -1365,17 +1365,18 @@ channels and can route it like any other playback source.
 ## Appendix C — OSC setup
 
 OSC is opt-in and binds to loopback. Open `Options > Settings`, enable
-`Enable OSC control surface`, and choose `Classic` or `Global`; the receive
+`Enable OSC control surface`, and choose `OSC 1.96` or `Global`; the receive
 and send ports are in the same section and are saved with the other settings.
 Disabling the switch stops the surface immediately.
 
 `Show OSC debug log` below it opens the traffic panel; it is greyed out until
 OSC is enabled and closes when OSC is switched off.
 
-`Classic` is the banked TotalMix FX 1.96–2.11 address space. `Global` is the
-absolute-channel TotalMix FX 2.1+ surface: channels are addressed by their
-0-based position and continuous values use native units instead of the
-classic normalized scale. The selected mode is saved with the other settings.
+`OSC 1.96` is the banked TotalMix FX 1.96 address space. The older 1.90
+classic surface is not supported. `Global` is the absolute-channel TotalMix FX
+2.1+ surface: channels are addressed by their 0-based position and continuous
+values use native units instead of the OSC 1.96 normalized scale. The selected
+mode is saved with the other settings.
 
 The command line remains a development override:
 
@@ -1385,13 +1386,13 @@ totalcontrol --osc
 
 | Option | Default | Meaning |
 |---|---:|---|
-| `--osc-mode` | classic | `classic` or `global` protocol |
+| `--osc-mode` | classic | `classic` (OSC 1.96) or `global` protocol |
 | `--osc-port` | 9000 | UDP port TotalControl listens on |
 | `--osc-send-port` | 9001 | UDP port for feedback |
 | `--osc-host` | 127.0.0.1 | Feedback destination |
 
 Configure the controller to send to the receive port and receive feedback on
-the send port. The classic address space is defined in
+the send port. The OSC 1.96 address space is defined in
 [`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md); Global uses
 RME's separate Global OSC protocol table.
 
@@ -1404,7 +1405,7 @@ on the same feedback port.
 | Option | Effect |
 |---|---|
 | `--osc` | Enable the OSC control surface |
-| `--osc-mode classic|global` | Select the OSC dialect |
+| `--osc-mode classic|global` | Select OSC 1.96 or Global |
 | `--view quick|mixer|matrix` | Start on a view |
 | `--fullscreen` | Start fullscreen |
 | `--minimized` | Start hidden in the tray |

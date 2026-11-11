@@ -1,7 +1,7 @@
 //! TotalMix FX OSC front-end.
 //!
-//! Implements the classic RME OSC address space (the `OscTableTotalMix`
-//! surface used by TotalMix FX 2.10/2.11).  The surface is banked: page 1
+//! Implements the OSC 1.96 address space (the `OscTableTotalMix_240722`
+//! surface from TotalMix FX 1.96).  The surface is banked: page 1
 //! addresses `bank + n`, page 2 addresses one selected channel, and
 //! `/setSubmix` selects the output whose mix is being edited.
 //!

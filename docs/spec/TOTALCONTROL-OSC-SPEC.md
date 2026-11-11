@@ -1,12 +1,19 @@
-# TotalMix FX OSC control specification
+# OSC 1.96 control specification
 
-This document defines the OSC control surface used to drive TotalMix FX and
-the mapping from that surface to the Fireface UCX register protocol.  The
-address space and behaviour described here target the classic TotalMix FX OSC
-surface used by 2.10 and 2.11.  The latest RME table for that surface is
-`OscTableTotalMix_240722`, labelled TotalMix FX 1.96.  TotalMix FX 2.1 and
-later also expose a separate Global OSC dialect, implemented by
-`totalcontrol-gui/src/osc_global.rs`; that is not this surface.
+This document defines the OSC 1.96 control surface used to drive TotalMix FX
+and the mapping from that surface to the Fireface UCX register protocol.  The
+reference is RME's `OscTableTotalMix_240722`, dated 2024-07-24 and labelled
+TotalMix FX 1.96.
+
+| Dialect | Reference | Status |
+|---|---|---|
+| OSC 1.96 | `OscTableTotalMix_240722` | supported |
+| OSC 1.90 | older classic table | not supported |
+| Global OSC | RME Global OSC table (TotalMix FX 2.1+) | separate dialect |
+
+Global OSC is implemented by `totalcontrol-gui/src/osc_global.rs`; it is not
+this surface.  TotalMix FX 2.10 and 2.11 compatibility is not a support
+target; they are only useful as compatibility evidence for the 1.96 table.
 
 The document covers protocol behaviour only. Enabling OSC in TotalMix FX and
 configuring the network are operational steps and live outside this

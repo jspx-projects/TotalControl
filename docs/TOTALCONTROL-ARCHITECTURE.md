@@ -32,7 +32,7 @@ detail.
 | `spec/FIREFFACE-UC-PROTOCOL-SPEC.md` | Fireface UC transport, registers, writes and readback |
 | `spec/BABYFACE-PRO-PROTOCOL-SPEC.md` | Babyface Pro FS transport, ALSA surface, USB protocol and DSP blocks |
 | `spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md` | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI |
-| `spec/TOTALCONTROL-OSC-SPEC.md` | TotalMix FX OSC address space, pages, scales and feedback |
+| `spec/TOTALCONTROL-OSC-SPEC.md` | OSC 1.96 address space, pages, scales and feedback |
 | `TOTALCONTROL-Manual.md` | installation, setup, use and troubleshooting |
 | `DEVELOPMENT-TOOLS.md` | development-only backends, probes and capture helpers |
 

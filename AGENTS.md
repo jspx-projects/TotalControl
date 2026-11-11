@@ -59,8 +59,8 @@ Authoritative files:
   visible state.
 - `docs/spec/TOTALCONTROL-STATE-SPEC.md` — state ownership, current
   workspace, autosave, restore, host settings and layout files.
-- `docs/spec/TOTALCONTROL-OSC-SPEC.md` — TotalMix FX OSC transport, pages,
-  scales, feedback and mapping.
+- `docs/spec/TOTALCONTROL-OSC-SPEC.md` — OSC 1.96 transport, pages, scales,
+  feedback and mapping.
 - `docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` — UCX transport, registers,
   controls and metering.
 - `docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md` — UC protocol and controls.

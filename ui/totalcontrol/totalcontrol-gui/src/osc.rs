@@ -35,7 +35,7 @@ pub struct OscConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OscDialect {
-    /// Banked TotalMix FX 1.96–2.11 address space.
+    /// Banked OSC 1.96 address space (TotalMix FX 1.96).
     #[default]
     Classic,
     /// Absolute-channel TotalMix FX 2.1+ address space.
