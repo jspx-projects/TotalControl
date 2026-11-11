@@ -936,16 +936,16 @@ term for a mixer state; the interface uses the terms below.
 
 | Term | Meaning |
 |---|---|
-| **Current mix** | The live mixer state: routing, faders, EQ, dynamics and FX. It is saved continuously for recovery. |
+| **Current workspace** | The live workspace for the connected unit: mixer, snapshots, layouts, groups, masters and the complete GUI state. It is saved automatically. |
 | **Snapshot** | One named, saved current mix inside a workspace. |
 | **Workspace** | A portable host-side configuration file: the current mix, snapshots, labels, groups — including the global fader group — layouts, view state and Control Room state. |
 | **Device setup** | One of the unit's own six states, separate from host files. |
 
 | Layer | Contains | Stored |
 |---|---|---|
-| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the global fader group), layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
-| **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace, and in the working `Mix n.json` files |
-| **Auto state** | The current mixer, saved continuously for crash recovery | `auto.json` |
+| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the global fader group), layouts, view state, Control Room assignments and complete GUI state | A `.tcws` file chosen by you, or the current workspace file |
+| **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace and explicit workspaces |
+| **Current workspace** | The live workspace for the connected unit, saved every minute while it changes and on close, hide, disconnect and unit switch | The current workspace file |
 | **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
 
 ### Workspaces
@@ -1017,19 +1017,21 @@ A workspace contains:
 - the current mix, including sample rate, pitch/varispeed and Dim/Speaker B state;
 - all eight snapshots and their names;
 - user channel labels;
-- the four mute/solo/fader groups and the global fader group;
+- the four mute/solo/fader groups, the global fader group and the mute/solo masters with their held state;
 - the six layout slots and the current collapsed/expanded strips;
 - view, row mode, sidebar, zoom and selected-output state;
+- open channel panels and flyouts;
 - Control Room assignments and monitoring settings;
 - active Cue, External Input and PFL states;
 - each output's Talkback receive flag, as part of the current mix;
 - the virtual surround-output settings;
-- the window size.
+- the window size, position, fullscreen state and scroll positions.
 
-Undo/redo history, open dialogs and transient selections are not saved. The
-unit's six device setups and the device serial number are not part of a
-workspace. Sample rate, pitch/varispeed and the active Dim and Speaker B
-states are stored in the current mix.
+Undo/redo history, open dialogs, meters, animations, pointer state, active
+Talkback and Listenback, and transient selections are not saved. The unit's
+six device setups and the device serial number are not part of a workspace.
+Sample rate, pitch/varispeed and the active Dim and Speaker B states are
+stored in the current mix.
 
 Opening a workspace replaces all of the above and applies its mixer to the
 device. TotalControl first warns that loading a workspace will overwrite the
@@ -1037,8 +1039,9 @@ current workspace; the buttons are `Cancel` and `Open` (or `Load` for a
 factory workspace). `Cancel` leaves the current workspace unchanged. A
 workspace written for a different device model is refused.
 
-The `WORKSPACE` label shows `*` while the workspace has unsaved changes. Saving
-clears the marker. A workspace is separate from the auto-saved current mix and
+The `WORKSPACE` label shows `*` while the workspace has changes since the last
+explicit Save. Saving clears the marker. The current workspace is saved
+automatically; an explicit workspace file is a saved copy. Both are separate
 from the unit's device setups.
 
 Clicking `OPTIONS` while the Workspace menu is open switches to the Options
@@ -1049,13 +1052,17 @@ menu immediately, and the reverse. Submenus open on the first click.
 **Snapshots** are eight numbered slots, each with a name. Select a slot and
 edit its name in the field below the Store action. They store a complete mixer
 state but not the GUI state, groups or layout. Recall applies the stored mix to
-the device at once. The current mix is also saved every few seconds and again
-when TotalControl closes.
+the device at once. The current workspace is saved every minute while it
+changes and again when TotalControl closes, hides to the tray, loses the unit
+or switches units.
 
 ### Layouts
 
 **Layouts** are six slots for the collapsed/expanded strip set. They are part
-of the current workspace, not separate mixer states.
+of the current workspace and of a saved workspace, not separate mixer states.
+The strip layout itself — sizes, colours and which controls a channel type
+shows — is the optional `gui-layout.json` presentation file. It applies to the
+whole installation and can carry a section for an individual interface model.
 
 Undo restores the mix as it was before your last mix-changing step; every
 continuous drag of one control counts as a single step. Redo reapplies what
@@ -1116,25 +1123,31 @@ packets; reset only clears the display baseline.
 
 ## 15. Where TotalControl keeps its data
 
-- Workspaces: `.tcws` files in the folder you choose when saving.
-- Snapshots: `Mix <n>.json` in the mix data directory.
-- The continuously saved current mix: `auto.json` in the mix data directory.
-- Layouts: `Layout <n>.json` in the layout directory.
-- Window, GUI state and the last workspace folder: `gui.json` in the
-  `~/.config/totalcontrol/` directory.
-- Channel strip layout: `gui-layout.json` in the same directory.
+- Current workspace per unit: `current-<unit>.tcws` in the data directory;
+  saved automatically and restored on the next start.
+- Explicit workspaces: `.tcws` files in the folder you choose when saving.
+- Host settings: `host-settings.json` in the `~/.config/totalcontrol/`
+  directory. It holds the start/tray choice, OSC, engine, startup sync and
+  the last workspace folder, globally and per unit.
+- Channel strip layout: `gui-layout.json` in the same directory. It holds the
+  global and per-interface presentation and is optional.
+- Snapshots and layout slots: inside the current workspace and explicit
+  workspaces, not in separate files.
 
-The workspace file is the portable one: it contains the current mixer,
-snapshots, labels, groups, layouts and view state. The other files are the
-working state of the current session.
+The current workspace is the live state of the session. A saved workspace is
+the portable copy and contains the same mixer, snapshots, labels, groups,
+layouts and GUI state.
 
-`gui-layout.json` is optional and applies to every view and workspace at once.
-It changes the appearance of the strips — their dimensions, text and control
-sizes, colours, and which controls each channel type shows. Without it the
-built-in layout is used. It is read once at startup, so restart TotalControl
-after editing it. An invalid file is ignored and the built-in layout is used;
-start TotalControl from a terminal to see the reason. The file never changes
-mixer state, routing or what a control does.
+`gui-layout.json` is optional and applies to every view and workspace. It
+changes the appearance of the strips — their dimensions, text and control
+sizes, colours, and which supported controls each channel type shows. The
+file has a global default and may have a section for an individual interface
+model. The interface capabilities always decide which controls exist: a UC
+never shows EQ, Dynamics or the FX fader even if a layout section mentions
+them. Without the file the built-in layout is used. It is read once at
+startup, so restart TotalControl after editing it. An invalid file is ignored
+and the built-in layout is used; start TotalControl from a terminal to see the
+reason. The file never changes mixer state, routing or what a control does.
 
 Create a starting document with the layout preview:
 
@@ -1150,9 +1163,9 @@ With a system tray, closing the window keeps TotalControl running, as TotalMix
 does: the front-panel DIM button and the restore of your mix after a replug
 are TotalControl's job while it runs. The tray icon toggles the window; its menu
 has dim, recall mix 1–8, settings and quit. `totalcontrol --minimized` starts
-hidden, and Settings can start TotalControl with your session. Without a tray,
-closing the window quits; one TotalControl runs per session, and a second launch
-tops up the first.
+hidden. Settings can start TotalControl with your session, hidden in the tray;
+a normal launch opens the window. Without a tray, closing the window quits;
+one TotalControl runs per session, and a second launch tops up the first.
 
 See [`ui/totalcontrol/docs/guide.md`](../ui/totalcontrol/docs/guide.md) for the Linux
 audio stack, building from source and project status.

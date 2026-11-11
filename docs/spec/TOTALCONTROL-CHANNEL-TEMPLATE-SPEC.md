@@ -27,12 +27,22 @@ the executable form of the geometry and the template list.
 | Input stereo | input | yes | yes | yes | yes | yes |
 | Input mono, no FX | input | no | no | yes | no | no |
 | Playback stereo | playback | yes | yes | no | no | no |
+| Playback stereo, no FX | playback | yes | no | no | no | no |
 | Output stereo | output | yes | yes | no | yes | yes |
+| Output stereo, no FX | output | yes | no | no | no | no |
 | Output mono | output | no | yes | no | yes | yes |
+| Output mono, no FX | output | no | no | no | no | no |
 | Control Room | output | yes | yes | no | yes | yes |
+| Control Room, no FX | output | yes | no | no | no | no |
 
-A template owns the presence of its optional elements.  The runtime must not
-independently decide that a channel has a different set of elements.
+A template owns the presence of its optional elements.  The runtime selects
+the template for the connection's effective features; it does not add an
+element that the template or the connection does not provide.
+
+The effective features are the intersection of the template's features and
+the connection capabilities.  A unit without the FX bus, EQ or Dynamics uses
+a no-FX template; a unit with those blocks uses the full template.  A unit
+override in `gui-layout.json` selects the template for its model or family.
 
 ## Elements and placement
 
