@@ -298,9 +298,9 @@ used, since it covers the values it hovers over.
 #### 2.1.1 Knob readouts
 
 A knob prints one or two values in its face. The primary value is the top (or
-left) one; the knob angle, value arc and tick follow it. A knob with two
-readouts keeps both visible at every value, including when the values are
-equal or both at a range limit.
+left) one; the knob angle and tick follow it. A colored value arc follows the
+higher of the two readouts. A knob with two readouts keeps both visible at
+every value, including when the values are equal or both at a range limit.
 
 Hovering a knob brightens its rim to the strip hover silver. The value arc and
 tick keep their functional colour. With two readouts, each printed line is its
@@ -318,8 +318,9 @@ whole-knob target.
 | secondary readout | only the secondary value |
 
 The wheel keeps its existing step, limits and Shift+fine behaviour for the
-targeted value. The angle, arc and tick keep following the primary value while
-the secondary is adjusted. Dragging, clicking and double-clicking remain
+targeted value. The angle and tick keep following the primary value while the
+secondary is adjusted; the arc follows whichever readout is higher. Dragging,
+clicking and double-clicking remain
 whole-knob gestures and never act on one readout. A one-readout knob has no
 readout distinction: the whole knob is the target.
 
@@ -939,7 +940,8 @@ A linked input pair always shows both values, left above right, even when
 they are equal. This mirrors the device, which always treats inputs 1–4 as
 unlinked. An unlinked input shows one value. The wheel over the whole knob
 moves both preamps by the same step; the wheel over the top or bottom number
-moves only that preamp, as described in §2.1.1.
+moves only that preamp, as described in §2.1.1. The orange arc follows the
+higher of the two gains.
 
 ### 3.3 Device sheet
 
@@ -1328,8 +1330,8 @@ phantom, Inst, Level, reference level and AutoSet. It also copies the left
 channel's FX send, low cut, EQ, dynamics and AutoLevel settings to the
 right. The linked gain knob moves both preamps by the same step and preserves
 their offset; the knob shows both values. The wheel over one readout moves
-that preamp alone; the wheel over the rest of the knob moves both. Phase
-remains per-channel.
+that preamp alone; the wheel over the rest of the knob moves both. The gain
+arc follows the higher of the two values. Phase remains per-channel.
 
 Linking does not copy or flatten the two channel volumes: the linked fader
 displays the louder channel, and moving it shifts both channels by the same

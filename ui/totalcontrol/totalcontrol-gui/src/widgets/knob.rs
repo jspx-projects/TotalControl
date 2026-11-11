@@ -174,6 +174,13 @@ impl<Message> Knob<Message> {
         }
     }
 
+    /// The value the colored arc follows.  A two-readout knob shows the
+    /// higher value so the arc never sits below a visible number.
+    fn arc_value(&self, primary: f32) -> f32 {
+        self.secondary_value
+            .map_or(primary, |secondary| primary.max(secondary))
+    }
+
     fn label_parts(&self) -> (&str, Option<&str>) {
         match self.label.split_once('\n') {
             Some((primary, secondary)) => (primary, Some(secondary)),
@@ -467,6 +474,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             display_value.to_bits().hash(&mut h);
+            self.secondary_value.map(f32::to_bits).hash(&mut h);
             self.label.hash(&mut h);
             self.scale.to_bits().hash(&mut h);
             (
@@ -489,7 +497,8 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             let border_w = BORDER_WIDTH * self.scale;
             let tick_len = TICK_LEN * self.scale;
 
-                let t = self.value_to_t(display_value);
+            let t = self.value_to_t(display_value);
+            let arc_t = self.value_to_t(self.arc_value(display_value));
             // Dims everything but the face (which is already dark enough not
             // to need it) when `!interactive` — a faded knob reads as "not
             // applicable here" at a glance, without a second visual language
@@ -554,9 +563,9 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             // A centered arc (balance/pan) uses the same color but starts at
             // 12 o'clock, so the minimum-to-value arc is skipped there.
             if let Some(color) = self.level_arc_color {
-                if self.interactive && !self.arc_from_center && t > 0.0 {
+                if self.interactive && !self.arc_from_center && arc_t > 0.0 {
                     let start_angle = angle_of(0.0).0;
-                    let end_angle = angle_of(t).0;
+                    let end_angle = angle_of(arc_t).0;
                     frame.stroke(
                         &Path::new(|b| {
                             b.arc(canvas::path::Arc {
@@ -581,7 +590,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             // arc implies a live reading a dimmed, inert knob shouldn't.
             if self.arc_from_center && self.interactive {
                 let center_angle = angle_of(0.5).0;
-                let value_angle = angle_of(t).0;
+                let value_angle = angle_of(arc_t).0;
                 let (start_angle, end_angle) = if center_angle <= value_angle {
                     (center_angle, value_angle)
                 } else {
@@ -714,7 +723,7 @@ mod tests {
             value: 20.0,
             range: (0.0, 65.0),
             label: label.into(),
-            secondary_value: Some(40.0),
+            secondary_value: label.contains('\n').then_some(40.0),
             on_readout_change: Some(Box::new(|secondary, _| {
                 if secondary { "secondary" } else { "primary" }
             })),
@@ -775,6 +784,17 @@ mod tests {
             "secondary"
         );
         assert_eq!(wheel_at(&knob, iced::Point::new(101.0, 51.0)), "whole");
+    }
+
+    #[test]
+    fn arc_follows_the_higher_readout() {
+        let knob = readout_knob("20\n40");
+        assert_eq!(knob.arc_value(20.0), 40.0);
+        assert_eq!(knob.arc_value(40.0), 40.0);
+        assert_eq!(knob.arc_value(50.0), 50.0);
+
+        let single = readout_knob("20");
+        assert_eq!(single.arc_value(20.0), 20.0);
     }
 
     #[test]

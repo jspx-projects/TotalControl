@@ -1247,8 +1247,9 @@ A linked input pair always shows both gains in the TotalControl Gain knob:
 the left gain above, the right gain below, even when they are equal. Turning
 that knob moves both preamps by the same step, preserving any offset between
 them. Turning the wheel with the pointer over the top number moves only the
-left preamp; over the bottom number it moves only the right one. Both values
-stay visible at the range limits. This mirrors the device's pair-adjust mode,
+left preamp; over the bottom number it moves only the right one. The orange
+arc follows the higher of the two gains, and both values stay visible at the
+range limits. This mirrors the device's pair-adjust mode,
 which moves both channels whether or not they are linked. An unlinked input
 shows one value and moves only that channel.
 
