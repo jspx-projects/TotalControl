@@ -22663,18 +22663,10 @@ mod tests {
         attach_device_service(&mut state);
         let cid = ChannelId::Input(2);
         let _ = update(&mut state, Message::StereoLinkChanged(cid, false));
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline && state.device.input_pair_linked(1) {
-            if let (Some(rx), DeviceHandle::Mirror(m)) =
-                (&mut state.device_updates, &mut state.device)
-            {
-                while let Ok(snapshot) = rx.try_recv() {
-                    m.update(snapshot);
-                }
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(!state.device.input_pair_linked(1));
+        assert!(
+            !state.device.input_pair_linked(1),
+            "the link choice is visible before the service snapshot"
+        );
         let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.0));
         let _ = update(&mut state, Message::PanChanged(cid, 0, 60));
 

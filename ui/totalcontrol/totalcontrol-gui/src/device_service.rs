@@ -662,6 +662,13 @@ impl RmeDevice for Mirror {
     // the mixer uses.  Each one becomes a `Run` command on the device
     // thread, so the model snapshot is the single source of truth.
     fn set_output_linked(&mut self, pair: usize, linked: bool) -> Result<(), Error> {
+        // Update the local link state at once: the next command (a balance
+        // or pan move) must not choose the linked-pair semantics from a
+        // stale mirror while the service snapshot is in flight.
+        if self.scene.settings.output_link.len() <= pair {
+            self.scene.settings.output_link.resize(pair + 1, true);
+        }
+        self.scene.settings.output_link[pair] = linked;
         self.run(move |d| {
             let _ = d.set_output_linked(pair, linked);
         });
@@ -669,6 +676,10 @@ impl RmeDevice for Mirror {
     }
 
     fn set_input_pair_linked(&mut self, pair: usize, linked: bool) -> Result<(), Error> {
+        if self.scene.settings.input_pair_link.len() <= pair {
+            self.scene.settings.input_pair_link.resize(pair + 1, true);
+        }
+        self.scene.settings.input_pair_link[pair] = linked;
         self.run(move |d| {
             let _ = d.set_input_pair_linked(pair, linked);
         });
@@ -676,6 +687,11 @@ impl RmeDevice for Mirror {
     }
 
     fn set_playback_linked(&mut self, pair: usize, linked: bool) -> Result<(), Error> {
+        for channel in [pair * 2, pair * 2 + 1] {
+            if let Some(playback) = self.scene.playbacks.get_mut(channel) {
+                playback.split = !linked;
+            }
+        }
         self.run(move |d| {
             let _ = d.set_playback_linked(pair, linked);
         });
