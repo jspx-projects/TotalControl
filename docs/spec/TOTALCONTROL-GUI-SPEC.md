@@ -227,6 +227,20 @@ the loopback UDP surface; disabling it stops it. The switch, protocol and
 both ports are persisted. The command line `--osc`, `--osc-mode`, `--osc-port`
 and `--osc-send-port` remain a development override.
 
+### 1.4 Quick view
+
+Quick view shows one source strip and one destination strip at a larger
+strip scale, with a picker above each.  The strips use the same
+`strip_params`, channel templates and titles as the Mixer, including a
+linked pair's combined name and split meter.
+
+The source list follows each input and playback pair's link state: a linked
+pair is one entry; a split pair contributes its two mono channels.  The
+destination list does the same for output pairs: a linked pair is one
+stereo bus; a split pair contributes its two mono buses, and choosing one
+sets the selected side.  Changing a link state updates the list and the
+current title.
+
 ### 2.0 FX fader
 
 Every strip on a unit with an FX bus carries a second, thin fader at the top
