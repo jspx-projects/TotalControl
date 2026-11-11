@@ -13739,6 +13739,7 @@ fn strip_params<'a>(
         type_tag: None,
         vol: 0.0,
         pan: 0,
+        mono_placeholder: false,
         output_balance_supported: false,
         fx_level,
         meter: fader::MeterFrame::still(0.0),
@@ -13899,6 +13900,7 @@ fn strip_params<'a>(
                 active_surface: true,
                 vol: volume * trim_factor(ch.trim),
                 pan,
+                mono_placeholder: !linked && submix_is_mono(state),
                 meter: state
                     .input_meters
                     .get(i)
@@ -14006,6 +14008,7 @@ fn strip_params<'a>(
                 active_surface: true,
                 vol: volume * trim_factor(ch.trim),
                 pan,
+                mono_placeholder: !linked && submix_is_mono(state),
                 has_trim: true,
                 trim: ch.trim,
                 trim_tip: trim_tip(ch.trim),
@@ -14079,6 +14082,7 @@ fn strip_params<'a>(
                 type_tag: None,
                 vol: hw.unwrap_or(pair_level),
                 pan,
+                mono_placeholder: !linked,
                 output_balance_supported: state.device.output_balance_supported() && linked,
                 meter: state
                     .output_meters
@@ -14228,6 +14232,12 @@ fn output_balance_to_volumes(volume: f32, balance: i8) -> (f32, f32) {
     let left = volume * if balance > 0.0 { 1.0 - balance } else { 1.0 };
     let right = volume * if balance < 0.0 { 1.0 + balance } else { 1.0 };
     (left, right)
+}
+
+/// Whether the selected submix is a single mono bus.  That is one side of a
+/// split output pair, or a backend that lays outputs out one channel per bus.
+fn submix_is_mono(state: &TotalControl) -> bool {
+    state.device.outputs_one_per_pair() || selected_output_block(state).is_some()
 }
 
 /// The selected mono output block, when `out` is the current send and the
@@ -22833,6 +22843,34 @@ mod tests {
         assert!((state.device.matrix_cell(left, block).unwrap() - 0.5).abs() < 1e-4);
         assert!((state.device.matrix_cell(right, block).unwrap() - 0.25).abs() < 1e-4);
         assert_eq!(super::channel_pan(&state, left, 0), -50);
+    }
+
+    #[test]
+    fn the_mono_placeholder_follows_the_source_and_submix() {
+        let mut state = new(true, None, None);
+        let input = ChannelId::Input(0);
+        let output = ChannelId::Output(0);
+        state.sel_out = 0;
+        state.sel_out_side = 0;
+
+        // A mono source into a stereo submix keeps its pan knob.
+        let _ = update(&mut state, Message::StereoLinkChanged(input, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(output, true));
+        assert!(!strip_params(&state, input, 0).mono_placeholder);
+
+        // A stereo source into a split mono submix keeps its balance knob.
+        let _ = update(&mut state, Message::StereoLinkChanged(input, true));
+        let _ = update(&mut state, Message::StereoLinkChanged(output, false));
+        assert!(!strip_params(&state, input, 0).mono_placeholder);
+
+        // Both mono: the knob is replaced by MONO.
+        let _ = update(&mut state, Message::StereoLinkChanged(input, false));
+        assert!(strip_params(&state, input, 0).mono_placeholder);
+
+        // The output strip follows its own link state, not the source.
+        assert!(strip_params(&state, output, 0).mono_placeholder);
+        let _ = update(&mut state, Message::StereoLinkChanged(output, true));
+        assert!(!strip_params(&state, output, 0).mono_placeholder);
     }
 
     #[test]

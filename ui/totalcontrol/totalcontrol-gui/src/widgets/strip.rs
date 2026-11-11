@@ -208,6 +208,9 @@ pub struct StripParams<'a> {
     pub type_tag: Option<(&'static str, Color)>,
     pub vol: f32,
     pub pan: i8,
+    /// Neither the source nor the selected submix has a left/right pair:
+    /// draw `MONO` in the T2 box instead of a pan or balance knob.
+    pub mono_placeholder: bool,
     /// Hardware-output balance is available for this strip (UC: unequal
     /// left/right output levels; UCX/other backends not implemented).
     pub output_balance_supported: bool,
@@ -1075,7 +1078,23 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     } else {
         "Pan — drag, scroll, Shift: fine, double-click to reset"
     };
-    let pan_element = hint(knob(pan_knob), pan_hint, scale);
+    let pan_element = if p.mono_placeholder {
+        hint(
+            container(
+                text("MONO")
+                    .size(theme::TEXT_XS * scale)
+                    .color(theme::text_sec()),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+            "Mono submix — no pan or balance",
+            scale,
+        )
+    } else {
+        hint(knob(pan_knob), pan_hint, scale)
+    };
     // 48V/PAD/Sensitivity/Gain all live in the gear flyout now (see
     // `app.rs::settings_popover`), not inline here — keeps every strip's
     // own height fixed regardless of channel type, and matches the route
