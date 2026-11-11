@@ -12210,7 +12210,7 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
     let item = |label: &'static str, message: Message| {
-        iced::widget::button(strip::centered_label_wide(label, text_size))
+        iced::widget::button(strip::left_label_wide(label, text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::ghost_button)
@@ -12250,7 +12250,7 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
     let item = |label: String, message: Message| {
-        iced::widget::button(strip::centered_label_wide(label, text_size))
+        iced::widget::button(strip::left_label_wide(label, text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::ghost_button)
@@ -14427,7 +14427,7 @@ fn route_popover(state: &TotalControl, width: f32, scale: f32) -> Element<'_, Me
     for (display, label) in labels.iter().enumerate() {
         let internal = display_to_internal.get(display).copied().unwrap_or(display);
         list = list.push(
-            button(strip::centered_label_wide(label.clone(), theme::TEXT_DIALOG * scale))
+            button(strip::left_label_wide(label.clone(), theme::TEXT_DIALOG * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
                 // The bus a strip routes to is a position, not an "on"
@@ -16931,11 +16931,10 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             container(
                 text(label)
                     .size(theme::TEXT_DIALOG * scale)
-                    .font(if strong { bold } else { iced::Font::DEFAULT })
-                    .center(),
+                    .font(if strong { bold } else { iced::Font::DEFAULT }),
             )
             .width(Length::Fill)
-            .align_x(iced::Alignment::Center),
+            .align_x(iced::Alignment::Start),
         )
         .width(Length::Fixed(entry_w))
         .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
@@ -17004,9 +17003,9 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
         col = col.push(
             iced::widget::mouse_area(
                 iced::widget::button(
-                    container(text(*name).size(theme::TEXT_MD * scale).center())
+                    container(text(*name).size(theme::TEXT_MD * scale))
                         .width(Length::Fill)
-                        .align_x(iced::Alignment::Center),
+                        .align_x(iced::Alignment::Start),
                 )
                 .width(Length::Fixed(entry_w))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])

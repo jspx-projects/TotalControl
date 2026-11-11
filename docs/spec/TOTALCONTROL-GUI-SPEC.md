@@ -1578,8 +1578,10 @@ beyond the window.
 - Every channel control has a defined effect in the mixer model and its device
   path.
 - Every button centres its label horizontally and vertically in the button
-  face; an icon-only button centres the icon. This covers menu items, dialog
-  actions, view tabs, segmented cells, group storage cells and glyph buttons.
+  face; an icon-only button centres the icon. This covers dialog actions,
+  view tabs, segmented cells, group storage cells and glyph buttons. The
+  items of an opened menu or listbox are the exception: their text is left
+  aligned in the row so a list reads as a table of choices.
   The label line box is tightened to the font size so descender space cannot
   push it above the visual centre. A button that sizes itself around its text
   must not fill the row: fill the content box only where the button has a

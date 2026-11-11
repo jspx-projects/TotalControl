@@ -429,6 +429,22 @@ pub(crate) fn centered_label_colored_auto<'a>(
         .into()
 }
 
+/// A row label for an opened menu or listbox: fill the row width, but keep
+/// the text on the left edge.  Menus and lists read as a table of choices,
+/// not as centred button faces.
+pub(crate) fn left_label_wide<'a>(
+    s: impl Into<String>,
+    size: f32,
+) -> Element<'a, Message> {
+    text(s.into())
+        .size(size)
+        .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+            size,
+        )))
+        .width(Length::Fill)
+        .into()
+}
+
 /// `label` with the master's pause mark before or after it, centred in a
 /// button; without `paused` it is the plain centred label.
 fn centered_master_label<'a>(
