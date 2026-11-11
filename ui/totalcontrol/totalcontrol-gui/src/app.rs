@@ -4912,6 +4912,14 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::ToggleCollapse(_)
             | Message::ToggleFlyout(..)
             | Message::StripClicked(_)
+            | Message::Mute(..)
+            | Message::Solo(..)
+            | Message::GlobalMuteToggle
+            | Message::GlobalSoloToggle
+            | Message::FaderGroupToggle
+            | Message::GroupEditToggle
+            | Message::GroupLinkToggle(..)
+            | Message::GroupClear
             | Message::StereoLinkChanged(..)
             | Message::WheelZoom(_)
             | Message::ZoomIn
@@ -20691,7 +20699,10 @@ mod tests {
     #[test]
     fn layout_changes_mark_prefs_dirty_and_mix_changes_do_not() {
         let mut state = new(true, None, None);
-        let _ = update(&mut state, Message::Mute(ChannelId::Input(0), true));
+        let _ = update(
+            &mut state,
+            Message::VolumeChanged(ChannelId::Input(0), 0, 0.5),
+        );
         assert!(!state.prefs_dirty);
         let _ = update(&mut state, Message::SetRowMode(RowMode::Two));
         assert!(state.prefs_dirty);
