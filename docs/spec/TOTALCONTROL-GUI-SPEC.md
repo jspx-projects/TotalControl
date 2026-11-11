@@ -308,10 +308,9 @@ applies to Dynamics, Auto Level, Reverb and Echo.
   step lighter than the open face and still darker than the channel surface.
   An open slideout keeps the darker face behind its tab.  When a face is
   drawn it extends from the 20 px column to the complete right edge of the
-  channel; the glyph stays centred in the column, not in the extended face.
-  The channel minimize button follows the same right-edge rule: its glyph
-  stays centred in its B1 column and its face reaches the channel's right
-  edge.
+  channel; the glyph is centred on the complete face, including the extended
+  part.  The channel minimize button follows the same right-edge rule: its
+  glyph is centred on its face and the face reaches the channel's right edge.
 - The T, EQ and D tabs keep their glyph only, in orange, while their setting
   is active and the slideout is closed: trim below 0 dB, EQ enabled, or
   dynamics on. While the slideout is open the tab carries no orange; the
@@ -325,7 +324,7 @@ applies to Dynamics, Auto Level, Reverb and Echo.
 - The T, gear, EQ and D tabs keep the same fixed slot with the slideout open
   or closed. Only the panel grows beside them; the tabs themselves never
   move.
-- The glyph is centred on its column before and after opening.
+- The glyph is centred on its face before and after opening.
 
 ### 2.5 Control sizing
 
@@ -1579,9 +1578,16 @@ beyond the window.
 - Every channel control has a defined effect in the mixer model and its device
   path.
 - Every button centres its label horizontally and vertically in the button
-  face; an icon-only button centres the icon. The three masters and the group
-  storage cells use the normal sidebar button height. Menu items are the one
-  exception: they keep their text left-aligned.
+  face; an icon-only button centres the icon. This covers menu items, dialog
+  actions, view tabs, segmented cells, group storage cells and glyph buttons.
+  The label line box is tightened to the font size so descender space cannot
+  push it above the visual centre. A button that sizes itself around its text
+  must not fill the row: fill the content box only where the button has a
+  fixed or externally sized face. Structured controls that arrange several
+  elements — the device card, panel headers, the brand lockup and the assign
+  selector — keep their designed arrangement instead of being treated as one
+  label. The three masters and the group storage cells use the normal sidebar
+  button height.
 - Engaged controls use their defined style: orange outline for Stereo, Inst,
   AutoSet, FX Return and Loopback; green outline for Phase; orange arc for
   gain, pan and output balance; solo colour for Dynamics.

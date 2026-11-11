@@ -10,6 +10,8 @@ use iced::{Alignment, Background, Color, Element, Length};
 
 use crate::app::{Message, TotalControl};
 use crate::theme;
+use crate::widgets::strip::centered_label_auto;
+use crate::widgets::strip::centered_label_colored_auto;
 
 const CARD_W: f32 = 760.0;
 /// More rows than this would make the dialog taller than the window on a
@@ -81,25 +83,25 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
                 .color(theme::text_sec())
                 .size(text_size),
                 row![
-                    button(
-                        text("Use TotalControl settings (default)")
-                            .size(text_size)
-                    )
+                    button(centered_label_auto(
+                        "Use TotalControl settings (default)",
+                        text_size,
+                    ))
                     .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                     .style(theme::segment_button(true))
                     .on_press(Message::MismatchUseTotalcontrol),
-                    button(text("Use device settings").size(text_size))
+                    button(centered_label_auto("Use device settings", text_size))
                         .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                         .style(theme::ghost_button)
                         .on_press(Message::MismatchUseDevice),
                 ]
                 .spacing(theme::SPACE_LG * scale)
                 .align_y(Alignment::Center),
-                button(
-                    text("Always use TotalControl settings and do not ask again")
-                        .color(theme::text_sec())
-                        .size(text_size)
-                )
+                button(centered_label_colored_auto(
+                    "Always use TotalControl settings and do not ask again",
+                    text_size,
+                    theme::text_sec(),
+                ))
                 .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
                 .style(theme::plain_button)
                 .on_press(Message::MismatchAlwaysTotalcontrol),
