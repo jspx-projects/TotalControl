@@ -2298,7 +2298,8 @@ pub struct GroupEdit {
 /// lights the master; pressing the master suspends the set (members unmuted,
 /// pause glyph) and pressing it again re-applies it. While suspended, clicking
 /// a member's button removes it from the set.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MasterSet {
     pub members: Vec<ChannelId>,
     pub suspended: bool,
@@ -3345,6 +3346,16 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         state.labels.iter().map(|(c, l)| (*c, l.clone())).collect();
     // Stable order, so an unchanged state writes an unchanged file.
     labels.sort_by_key(|(c, _)| format!("{c:?}"));
+    let mut mute_master = state.mute_master.clone();
+    mute_master.members.sort_by_key(|c| format!("{c:?}"));
+    let mut solo_master = state.solo_master.clone();
+    solo_master.members.sort_by_key(|c| format!("{c:?}"));
+    let mut groups = state.groups.clone();
+    for group in &mut groups {
+        group.members.sort_by_key(|c| format!("{c:?}"));
+    }
+    let mut temporary_group: Vec<ChannelId> = state.selected.iter().copied().collect();
+    temporary_group.sort_by_key(|c| format!("{c:?}"));
     let mut collapsed: Vec<ChannelId> = state.collapsed.iter().copied().collect();
     collapsed.sort_by_key(|c| format!("{c:?}"));
     // Route is a transient bus picker, not a channel control panel; do not
@@ -3391,6 +3402,11 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         osc_send_port: state.osc_send_port,
         input_pair_link: state.device.settings().input_pair_link.clone(),
         output_link: state.device.settings().output_link.clone(),
+        mute_master,
+        solo_master,
+        groups,
+        temporary_group,
+        fader_ganged: state.fader_ganged,
     }
 }
 
@@ -3528,6 +3544,33 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
     } else {
         prefs.sync_direction.unwrap_or(SyncDirection::DeviceToGui)
     };
+
+    // Master sets and groups name channels; a preferences file from another
+    // model must not leave ids the current device does not have.
+    let (inputs, playbacks, outputs) = (
+        state.device.inputs().len(),
+        state.device.playbacks().len(),
+        state.device.outputs().len(),
+    );
+    let exists = |cid: &ChannelId| match cid {
+        ChannelId::Input(i) => *i < inputs,
+        ChannelId::Playback(i) => *i < playbacks,
+        ChannelId::Output(i) => *i < outputs,
+    };
+    state.mute_master = prefs.mute_master;
+    state.mute_master.members.retain(|cid| exists(cid));
+    state.solo_master = prefs.solo_master;
+    state.solo_master.members.retain(|cid| exists(cid));
+    state.groups = prefs.groups;
+    for group in &mut state.groups {
+        group.members.retain(|cid| exists(cid));
+    }
+    state.selected = prefs
+        .temporary_group
+        .into_iter()
+        .filter(|cid| exists(cid))
+        .collect();
+    state.fader_ganged = prefs.fader_ganged && !state.selected.is_empty();
     state.device.sync_settings_to_device();
 }
 
@@ -10782,7 +10825,14 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     }
     let new = DeviceHandle::open_target(&target)
         .ok_or_else(|| format!("{} is not connected", target.label()))?;
-    let prefs = prefs_of(state);
+    let mut prefs = prefs_of(state);
+    // The groups and master sets name channels of the old unit.  Keep every
+    // other preference, but start the new topology with empty sets.
+    prefs.mute_master = MasterSet::default();
+    prefs.solo_master = MasterSet::default();
+    prefs.groups = Default::default();
+    prefs.temporary_group.clear();
+    prefs.fader_ganged = false;
     replace_device_handle(state, new);
     state.device_target = Some(state.device.target());
     // The new unit has its own layout, topology and scene; never carry the
@@ -20510,11 +20560,25 @@ mod tests {
         state.sidebar_panels_open.groups = false;
         state.show_original_names = true;
         state.labels.insert(ChannelId::Output(2), "Monitors".into());
+        state.mute_master.members = vec![ChannelId::Input(0)];
+        state.mute_master.suspended = true;
+        state.solo_master.members = vec![ChannelId::Playback(2)];
+        state.groups[0] = sidebar::Group {
+            members: vec![ChannelId::Input(0), ChannelId::Output(2)],
+            mute_linked: true,
+            fader_linked: true,
+            ..Default::default()
+        };
+        state.selected.insert(ChannelId::Input(0));
+        state.fader_ganged = true;
         let saved = prefs_of(&state);
 
         let mut fresh = new(true, None, None);
         apply_prefs(&mut fresh, saved.clone());
         assert_eq!(prefs_of(&fresh), saved);
+        assert!(fresh.mute_master.suspended);
+        assert!(fresh.solo_master.members.contains(&ChannelId::Playback(2)));
+        assert!(fresh.fader_ganged);
     }
 
     #[test]

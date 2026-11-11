@@ -254,8 +254,9 @@ internal name for one mixer state — for:
 - scene import and export.
 
 The GUI also persists interface state: window layout, sidebar state, channel
-names, Control Room preferences and device identity. The TUI and GUI share the
-mixer scene, so the last writer wins.
+names, Control Room preferences, the mute/solo master sets with their
+suspended state, the four stored groups, the temporary fader group and device
+identity. The TUI and GUI share the mixer scene, so the last writer wins.
 
 A named **workspace** bundles the current scene, the eight snapshots and their
 names, channel labels, the four groups, the six layouts, view state, Control

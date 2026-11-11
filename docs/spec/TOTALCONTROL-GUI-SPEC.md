@@ -77,6 +77,12 @@ their own, hardware-output faders with theirs, so a group spanning rows moves
 one row at a time. It never affects the stored fader groups `1`–`4`; an empty
 group leaves `F` off.
 
+Both master sets with their suspended state, the four stored groups and the
+temporary fader group with its ganged flag are stored in `gui.json`. They
+survive a restart; a device reconnect keeps the live state. A workspace load
+replaces the four groups and the temporary group; the master sets follow the
+loaded channel mutes.
+
 The three masters are outline switches in the colour of the channel control
 they stand for — mute blue, solo yellow, fader-group colour — and take a muted
 version of that hue while off. They use the normal sidebar button box and

@@ -354,7 +354,10 @@ The mute and solo groups build themselves. You do not have to set anything
 up: every channel you mute joins the global mute group, and every channel you
 solo joins the global solo group. All you need to remember is the button. The
 groups also follow the mixer itself, so channels restored muted from a saved
-scene or after reconnecting the interface are already in them.
+scene or after reconnecting the interface are already in them. The master
+settings and all four groups are part of the saved session: closing and
+reopening TotalControl, or reconnecting the interface, leaves them as they
+were.
 
 `M` is on when TotalControl starts. Press it and the whole mute group switches
 off for the moment: the master and every held channel show the pause mark
@@ -1123,7 +1126,8 @@ packets; reset only clears the display baseline.
 - Snapshots: `Mix <n>.json` in the mix data directory.
 - The continuously saved current mix: `auto.json` in the mix data directory.
 - Layouts: `Layout <n>.json` in the layout directory.
-- Window, GUI state and the last workspace folder: `gui.json` in the
+- Window, GUI state, the mute/solo masters, the four groups, the global fader
+  group and the last workspace folder: `gui.json` in the
   `~/.config/totalcontrol/` directory.
 - Channel strip layout: `gui-layout.json` in the same directory.
 

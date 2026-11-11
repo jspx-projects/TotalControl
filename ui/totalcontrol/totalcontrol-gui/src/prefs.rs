@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use totalcontrol_core::ChannelId;
 
-use crate::app::View;
+use crate::app::{MasterSet, View};
+use crate::sidebar::Group;
 use crate::widgets::strip::FlyoutKind;
 
 /// What to do on the first connect: read the device into the GUI (the safe
@@ -163,6 +164,21 @@ pub struct Prefs {
     /// Stereo-link groupings (pure GUI model state, no device writes).
     pub input_pair_link: Vec<bool>,
     pub output_link: Vec<bool>,
+    /// The automatic mute and solo master sets, including the suspended
+    /// state. TotalMix stores these in its last-state XML, so a restart
+    /// keeps the masters as they were left.
+    #[serde(default)]
+    pub mute_master: MasterSet,
+    #[serde(default)]
+    pub solo_master: MasterSet,
+    /// The four stored mute/solo/fader groups.
+    #[serde(default)]
+    pub groups: [Group; 4],
+    /// The temporary global fader group and whether `F` is ganging it.
+    #[serde(default)]
+    pub temporary_group: Vec<ChannelId>,
+    #[serde(default)]
+    pub fader_ganged: bool,
 }
 
 /// Where the preferences live. `None` only if neither `XDG_CONFIG_HOME`
@@ -232,6 +248,26 @@ mod tests {
             osc_mode: crate::osc::OscDialect::Global,
             osc_recv_port: 9010,
             osc_send_port: 9011,
+            mute_master: MasterSet {
+                members: vec![ChannelId::Input(0)],
+                suspended: true,
+            },
+            solo_master: MasterSet {
+                members: vec![ChannelId::Playback(2)],
+                suspended: false,
+            },
+            groups: [
+                Group {
+                    members: vec![ChannelId::Input(0)],
+                    mute_linked: true,
+                    ..Default::default()
+                },
+                Group::default(),
+                Group::default(),
+                Group::default(),
+            ],
+            temporary_group: vec![ChannelId::Output(2)],
+            fader_ganged: true,
             ..Default::default()
         };
         save(&file, &prefs).unwrap();
