@@ -186,6 +186,14 @@ struct ffuc_ops {
 	int (*hw_mute)(struct ffuc *chip, bool mute);
 };
 
+/* One run of 0x16 channel-initialization writes.  The sequence differs
+ * between device models, so it is data in the device descriptor. */
+struct ffuc_init_range {
+	u16 value;
+	u16 first;
+	u16 count;
+};
+
 struct ffuc_device_desc {
 	const char *name;		/* "Fireface UC" */
 	const char *shortname;
@@ -214,6 +222,8 @@ struct ffuc_device_desc {
 	unsigned int max_playback;	/* playback channels; 0 = max_channels */
 	unsigned int max_rate;
 	unsigned int meter_len;
+	const struct ffuc_init_range *chan_init;
+	unsigned int n_chan_init;
 	const struct ffuc_ops *ops;
 };
 
