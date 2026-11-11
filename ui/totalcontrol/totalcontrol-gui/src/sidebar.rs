@@ -39,6 +39,7 @@ use totalcontrol_core::{ChannelId, RmeDevice};
 
 use crate::app::{Message, TotalControl};
 use crate::theme;
+use crate::widgets::strip::{centered_label_auto, centered_label_fixed, centered_label_wide};
 use crate::widgets::pause_mark::pause_mark;
 
 /// Default sidebar width (at `scale == 1.0`), used until the user drags
@@ -267,13 +268,7 @@ pub fn sidebar(state: &TotalControl) -> Element<'_, Message> {
             // The device card is folded away with the panel; its settings
             // stay one click off.
             hint(
-                button(
-                    text("\u{2699}")
-                        .size(theme::TEXT_SM * scale)
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .center(),
-                )
+                button(centered_label_fixed("\u{2699}", theme::TEXT_SM * scale))
                     .padding(0)
                     .width(Length::Fixed(TOGGLE_W * scale))
                     .height(Length::Fixed(TOGGLE_H * scale))
@@ -370,7 +365,7 @@ pub fn sidebar(state: &TotalControl) -> Element<'_, Message> {
 fn zoom_bar(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     let pct = format!("{:.0}%", state.ui_scale * 100.0);
     let cell = |label: &'static str| {
-        button(text(label).size(theme::TEXT_SM * scale).width(Length::Fill).center())
+        button(centered_label_wide(label, theme::TEXT_SM * scale))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
             .width(Length::Fixed(26.0 * scale))
     };
@@ -384,7 +379,7 @@ fn zoom_bar(state: &TotalControl, scale: f32) -> Element<'_, Message> {
                 scale,
             ),
             hint(
-                button(text(pct).size(theme::TEXT_XS * scale).width(Length::Fill).center())
+                button(centered_label_wide(pct, theme::TEXT_XS * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                     .width(Length::Fill)
                     .style(theme::ghost_button)
@@ -576,7 +571,7 @@ pub(crate) fn clock_line(state: &TotalControl, clock_source: &str) -> String {
 fn undo_redo_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     row![
         hint(
-            button(text("\u{2039} undo").size(theme::TEXT_XS * scale).width(Length::Fill).center())
+            button(centered_label_wide("\u{2039} undo", theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                 .width(Length::Fill)
                 .style(theme::ghost_button)
@@ -585,7 +580,7 @@ fn undo_redo_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             scale,
         ),
         hint(
-            button(text("redo \u{203a}").size(theme::TEXT_XS * scale).width(Length::Fill).center())
+            button(centered_label_wide("redo \u{203a}", theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                 .width(Length::Fill)
                 .style(theme::ghost_button)
@@ -647,13 +642,7 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         theme::muted(theme::solo_color())
     };
     let fader_color = theme::group_temporary();
-    // Text fills the cell so its own centre alignment is the cell's centre.
-    let letter = |ch: &'static str| {
-        text(ch)
-            .size(theme::TEXT_XS * scale)
-            .width(Length::Fill)
-            .center()
-    };
+    let letter = |ch: &'static str| centered_label_wide(ch, theme::TEXT_XS * scale);
     let mute_content: Element<'_, Message> = if mute_pause {
         container(
             row![
@@ -663,18 +652,13 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_TIGHT * scale)
             .align_y(Alignment::Center),
         )
-        .width(Length::Fill)
-        .align_x(Alignment::Center)
+        .center_x(Length::Fill)
         .into()
     } else {
-        letter("M").into()
+        letter("M")
     };
     let solo_content: Element<'_, Message> = if pfl && any_solo {
-        text("F")
-            .size(theme::TEXT_XS * scale)
-            .width(Length::Fill)
-            .center()
-            .into()
+        centered_label_wide("F", theme::TEXT_XS * scale)
     } else if pfl || solo_pause {
         container(
             row![
@@ -684,11 +668,10 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_TIGHT * scale)
             .align_y(Alignment::Center),
         )
-        .width(Length::Fill)
-        .align_x(Alignment::Center)
+        .center_x(Length::Fill)
         .into()
     } else {
-        letter("S").into()
+        letter("S")
     };
     let r = row![
         hint(
@@ -719,11 +702,7 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         ),
         hint(
             master_cell(
-                text("F")
-                    .size(theme::TEXT_XS * scale)
-                    .width(Length::Fill)
-                    .center()
-                    .into(),
+                centered_label_wide("F", theme::TEXT_XS * scale),
                 scale,
             )
             .style(theme::master_button(state.fader_ganged, fader_color))
@@ -954,13 +933,13 @@ fn segmented_row<'a>(
     scale: f32,
 ) -> Element<'a, Message> {
     segment_track(
-        button(text(left_label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
+        button(centered_label_wide(left_label, theme::TEXT_XS * scale))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
             .width(Length::Fill)
             .style(theme::segment_cell(left_active))
             .on_press_maybe(on_left)
             .into(),
-        button(text(right_label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
+        button(centered_label_wide(right_label, theme::TEXT_XS * scale))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
             .width(Length::Fill)
             .style(theme::segment_cell(!left_active))
@@ -976,7 +955,7 @@ fn segmented<'a>(cells: &[(&'a str, bool, Option<Message>)], scale: f32) -> Elem
     let mut r = row![].spacing(theme::SPACE_HAIRLINE * scale);
     for (label, lit, msg) in cells {
         r = r.push(
-            button(text(*label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
+            button(centered_label_wide(*label, theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                 .width(Length::Fill)
                 .style(theme::segment_cell(*lit))
@@ -1104,7 +1083,7 @@ fn store_row(
         None => "select a slot to store".to_string(),
     };
     container(
-        button(text(label).size(theme::TEXT_XS * scale))
+        button(centered_label_auto(label, theme::TEXT_XS * scale))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
             .style(theme::ghost_button)
             .on_press_maybe(active.map(|_| on_press)),
@@ -1312,7 +1291,7 @@ fn groups_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             let flashing = state.group_edit.is_some()
                 && (target.is_none() || is_target);
             let lit = if flashing { state.group_flash } else { linked };
-            button(text(label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
+            button(centered_label_wide(label, theme::TEXT_XS * scale))
                 .padding(theme::SPACE_TIGHT * scale)
                 .width(Length::Fill)
                 .style(theme::toggle_button(lit, colour))
@@ -1337,12 +1316,12 @@ fn groups_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     };
     body = body.push(
         row![
-            button(text(edit_label).size(theme::TEXT_XS * scale).width(Length::Fill).center())
+            button(centered_label_wide(edit_label, theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
                 .style(theme::segment_button(state.group_edit.is_some()))
                 .on_press(Message::GroupEditToggle),
-            button(text("clear").size(theme::TEXT_XS * scale).width(Length::Fill).center())
+            button(centered_label_wide("clear", theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
                 .style(theme::ghost_button)

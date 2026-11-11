@@ -2,6 +2,24 @@
 
 Read this file before starting work in this repository.
 
+## Required reading before changes
+
+Before changing code, tests, tooling or documentation, read the documents
+that own the affected behaviour. The minimum set is:
+
+- this file;
+- `docs/TOTALCONTROL-ARCHITECTURE.md` for runtime layers and data flow;
+- `docs/spec/TOTALCONTROL-STATE-SPEC.md` for persistence, workspaces and host
+  settings;
+- `docs/spec/TOTALCONTROL-GUI-SPEC.md` for visible behaviour;
+- the device protocol specification, template specification, OSC
+  specification or development note that owns the area being changed.
+
+Do not infer the intended behaviour from the code alone. If the owning
+document is unclear or missing, update it in the same change. A change that
+alters user-visible behaviour or a persisted format is incomplete until its
+specification and `docs/TOTALCONTROL-Manual.md` counterpart are updated.
+
 ## Documentation rules
 
 `docs/spec/` contains authoritative specifications. Write them as reference

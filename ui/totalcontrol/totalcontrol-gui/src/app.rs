@@ -11772,11 +11772,11 @@ fn osc_log_panel(state: &TotalControl) -> Element<'_, Message> {
             .color(theme::text_sec())
             .size(theme::TEXT_XS * scale),
         iced::widget::Space::new().width(Length::Fill),
-        iced::widget::button(text("Clear").size(theme::TEXT_XS * scale))
+        iced::widget::button(strip::centered_label_auto("Clear", theme::TEXT_XS * scale))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .style(theme::plain_button)
             .on_press(Message::ClearOscLog),
-        iced::widget::button(text("Close").size(theme::TEXT_XS * scale))
+        iced::widget::button(strip::centered_label_auto("Close", theme::TEXT_XS * scale))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .style(theme::plain_button)
             .on_press(Message::ToggleOscLog),
@@ -11881,7 +11881,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
             .color(theme::text_primary())
             .size(text_size),
         iced::widget::Space::new().width(Length::Fill),
-        iced::widget::button(text("Close").size(text_size))
+        iced::widget::button(strip::centered_label_auto("Close", text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ToggleDevicePanel),
@@ -12001,7 +12001,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                 let mut line = row![].spacing(theme::SPACE_SM * scale);
                 for &(label, active, on_toggle) in pair {
                     line = line.push(
-                        iced::widget::button(text(label).size(text_size).center())
+                        iced::widget::button(strip::centered_label_wide(label, text_size))
                             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
                             .width(Length::Fill)
                             .style(theme::toggle_button(active, theme::ACCENT))
@@ -12188,11 +12188,11 @@ fn workspace_confirm_modal(state: &TotalControl) -> Element<'_, Message> {
             .size(theme::TEXT_DIALOG * scale)
             .color(theme::text_sec()),
         row![
-            iced::widget::button(text("Cancel").size(theme::TEXT_DIALOG * scale))
+            iced::widget::button(strip::centered_label_auto("Cancel", theme::TEXT_DIALOG * scale))
                 .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                 .style(theme::ghost_button)
                 .on_press(Message::WorkspaceCancel),
-            iced::widget::button(text(action).size(theme::TEXT_DIALOG * scale))
+            iced::widget::button(strip::centered_label_auto(action, theme::TEXT_DIALOG * scale))
                 .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                 .style(theme::ghost_button)
                 .on_press(Message::WorkspaceConfirm),
@@ -12210,7 +12210,7 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
     let item = |label: &'static str, message: Message| {
-        iced::widget::button(text(label).size(text_size).width(Length::Fill))
+        iced::widget::button(strip::left_label_wide(label, text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::ghost_button)
@@ -12250,7 +12250,7 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
     let item = |label: String, message: Message| {
-        iced::widget::button(text(label).size(text_size).width(Length::Fill))
+        iced::widget::button(strip::left_label_wide(label, text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::ghost_button)
@@ -12395,7 +12395,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             .on_input(Message::OscSendPortChanged)
             .width(Length::Fixed(90.0 * scale))
             .size(text_size),
-        iced::widget::button(text("Apply").size(text_size))
+        iced::widget::button(strip::centered_label_auto("Apply", text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ApplyOscPorts),
@@ -12445,7 +12445,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
 
     let footer = row![
         iced::widget::Space::new().width(Length::Fill),
-        iced::widget::button(text("Close").size(text_size))
+        iced::widget::button(strip::centered_label_auto("Close", text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
             .style(theme::ghost_button)
             .on_press(Message::ToggleSettings),
@@ -12604,11 +12604,10 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .into()
     };
     let checkbox = |on: bool, message: Message| {
-        iced::widget::button(
-            text(if on { "\u{2713}" } else { "" })
-                .size(text_size)
-                .center(),
-        )
+        iced::widget::button(strip::centered_label_fixed(
+            if on { "\u{2713}" } else { "" },
+            text_size,
+        ))
         .padding(0)
         .width(Length::Fixed(SETTINGS_CONTROL_H * scale))
         .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
@@ -12969,7 +12968,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Errors"),
                 iced::widget::Space::new().width(Length::Fill),
-                button(text("reset").size(theme::TEXT_DIALOG * scale))
+                button(strip::centered_label_auto("reset", theme::TEXT_DIALOG * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::ResetTransportErrors),
@@ -13033,7 +13032,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     .size(text_size)
                     .color(colour),
                 iced::widget::Space::new().width(Length::Fill),
-                button(text("0 dB").size(theme::TEXT_DIALOG * scale))
+                button(strip::centered_label_auto("0 dB", theme::TEXT_DIALOG * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::HostVolumeUnity),
@@ -13430,15 +13429,15 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     // (previously only the active view's name showed, with no click
     // target — Tab-key was the only way to switch).
     let tab_toggle = row![
-        iced::widget::button(text("QUICK").size(theme::TEXT_MD * scale))
+        iced::widget::button(strip::centered_label_auto("QUICK", theme::TEXT_MD * scale))
             .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
             .style(theme::tab_toggle(state.view == View::Quick))
             .on_press(Message::SetView(View::Quick)),
-        iced::widget::button(text("MIXER").size(theme::TEXT_MD * scale))
+        iced::widget::button(strip::centered_label_auto("MIXER", theme::TEXT_MD * scale))
             .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
             .style(theme::tab_toggle(state.view == View::Mixer))
             .on_press(Message::SetView(View::Mixer)),
-        iced::widget::button(text("MATRIX").size(theme::TEXT_MD * scale))
+        iced::widget::button(strip::centered_label_auto("MATRIX", theme::TEXT_MD * scale))
             .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
             .style(theme::tab_toggle(state.view == View::Matrix))
             .on_press(Message::SetView(View::Matrix)),
@@ -13544,14 +13543,16 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     // Workspace > Open/Save.  The file itself is the complete host-side
     // configuration; the menu is deliberately separate from Options.
     let workspace = iced::widget::button(
-        text(if state.workspace_menu != WorkspaceMenu::Closed {
-            "WORKSPACE ▴"
-        } else if state.workspace_dirty {
-            "WORKSPACE *"
-        } else {
-            "WORKSPACE"
-        })
-        .size(theme::TEXT_MD * scale),
+        strip::centered_label_auto(
+            if state.workspace_menu != WorkspaceMenu::Closed {
+                "WORKSPACE ▴"
+            } else if state.workspace_dirty {
+                "WORKSPACE *"
+            } else {
+                "WORKSPACE"
+            },
+            theme::TEXT_MD * scale,
+        ),
     )
     .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
     .style(theme::tab_toggle(
@@ -13562,12 +13563,14 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     // Options > Reset Mix and Settings.  Reset Mix is a submenu; Settings
     // opens the app-level sheet.
     let options = iced::widget::button(
-        text(if state.options_menu == OptionsMenu::Closed {
-            "OPTIONS"
-        } else {
-            "OPTIONS ▴"
-        })
-        .size(theme::TEXT_MD * scale),
+        strip::centered_label_auto(
+            if state.options_menu == OptionsMenu::Closed {
+                "OPTIONS"
+            } else {
+                "OPTIONS ▴"
+            },
+            theme::TEXT_MD * scale,
+        ),
     )
     .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
     .style(theme::tab_toggle(state.options_menu != OptionsMenu::Closed))
@@ -14424,7 +14427,7 @@ fn route_popover(state: &TotalControl, width: f32, scale: f32) -> Element<'_, Me
     for (display, label) in labels.iter().enumerate() {
         let internal = display_to_internal.get(display).copied().unwrap_or(display);
         list = list.push(
-            button(text(label.clone()).size(theme::TEXT_DIALOG * scale))
+            button(strip::left_label_wide(label.clone(), theme::TEXT_DIALOG * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
                 // The bus a strip routes to is a position, not an "on"
@@ -15382,7 +15385,7 @@ fn dynamics_popover(
     };
 
     let toggle = |on: bool, msg: Message| -> Element<'static, Message> {
-        button(text(if on { "ON" } else { "OFF" }).size(theme::TEXT_XS * scale))
+        button(strip::centered_label_auto(if on { "ON" } else { "OFF" }, theme::TEXT_XS * scale))
             .padding([0.0, theme::SPACE_SM * scale])
             .style(theme::toggle_button(on, theme::PHANTOM))
             .on_press(msg)
@@ -15717,7 +15720,7 @@ fn eq_popover(
 
     col = col.push(
         row![
-            button(text("EQ").size(theme::TEXT_XS * scale))
+            button(strip::centered_label_auto("EQ", theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .style(theme::toggle_button(eq.enabled, theme::PHANTOM))
                 .on_press(Message::EqEnabled(cid, !eq.enabled)),
@@ -15914,7 +15917,7 @@ fn eq_popover(
     let lc_button: Option<Element<'_, Message>> = if low_cut_supported {
         Some(
             container(hint(
-                button(text(lc_label).size(theme::TEXT_XS * scale))
+                button(strip::centered_label_wide(lc_label, theme::TEXT_XS * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_TIGHT * scale])
                     .width(Length::Fill)
                     .style(theme::toggle_button(eq.low_cut_enabled, theme::ACCENT))
@@ -15932,7 +15935,7 @@ fn eq_popover(
     for slope in [6u8, 12, 18, 24] {
         slope_row = slope_row.push(
             container(hint(
-                button(text(format!("{slope}")).size(theme::TEXT_XS * scale))
+                button(strip::centered_label_wide(format!("{slope}"), theme::TEXT_XS * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_TIGHT * scale])
                     .width(Length::Fill)
                     .style(theme::toggle_button(
@@ -16133,7 +16136,7 @@ fn fx_header_row(
 ) -> Element<'static, Message> {
     container(
         row![
-            iced::widget::button(text(if on { "ON" } else { "OFF" }).size(theme::TEXT_XS * scale))
+            iced::widget::button(strip::centered_label_auto(if on { "ON" } else { "OFF" }, theme::TEXT_XS * scale))
                 .padding([0.0, theme::SPACE_MD * scale])
                 .style(theme::toggle_button(on, theme::ACCENT))
                 .on_press(toggle),
@@ -16928,11 +16931,10 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             container(
                 text(label)
                     .size(theme::TEXT_DIALOG * scale)
-                    .font(if strong { bold } else { iced::Font::DEFAULT })
-                    .center(),
+                    .font(if strong { bold } else { iced::Font::DEFAULT }),
             )
             .width(Length::Fill)
-            .align_x(iced::Alignment::Center),
+            .align_x(iced::Alignment::Start),
         )
         .width(Length::Fixed(entry_w))
         .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
@@ -17001,9 +17003,9 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
         col = col.push(
             iced::widget::mouse_area(
                 iced::widget::button(
-                    container(text(*name).size(theme::TEXT_MD * scale).center())
+                    container(text(*name).size(theme::TEXT_MD * scale))
                         .width(Length::Fill)
-                        .align_x(iced::Alignment::Center),
+                        .align_x(iced::Alignment::Start),
                 )
                 .width(Length::Fixed(entry_w))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
@@ -17819,7 +17821,7 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
 
     let footer = row![
         hint(
-            button(text("default").size(text_size))
+            button(strip::centered_label_auto("default", text_size))
                 .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
                 .style(theme::ghost_button)
                 .on_press(Message::ResetControlRoomSettings),
@@ -17827,11 +17829,11 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
             scale,
         ),
         iced::widget::Space::new().width(Length::Fill),
-        button(text("Cancel").size(text_size))
+        button(strip::centered_label_auto("Cancel", text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
             .style(theme::ghost_button)
             .on_press(Message::CancelControlRoomSettings),
-        button(text("OK").size(text_size))
+        button(strip::centered_label_auto("OK", text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
             .style(theme::toggle_button(true, theme::ACCENT))
             .on_press(Message::ApplyControlRoomSettings),
@@ -18402,7 +18404,7 @@ fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
         row![
             caption,
             iced::widget::Space::new().width(Length::Fill),
-            iced::widget::button(text("MONO MODE").size(theme::TEXT_XS * scale))
+            iced::widget::button(strip::centered_label_auto("MONO MODE", theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .style(theme::toggle_button(state.matrix_mono, theme::ACCENT))
                 .on_press(Message::ToggleMatrixMono),
@@ -23051,6 +23053,27 @@ mod tests {
         assert!(state.mute_master.members.contains(&a));
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(!channel_is_muted(&state, a));
+    }
+
+    #[test]
+    fn simple_text_buttons_use_a_centred_label() {
+        // Raw `button(text(..))` content sits at the padding corner: the
+        // button does not centre it on either axis.  Keep text buttons on
+        // the shared helpers so a new control cannot regress.
+        let needle = concat!("button(", " text(");
+        for (name, source) in [
+            ("app.rs", include_str!("app.rs")),
+            ("sidebar.rs", include_str!("sidebar.rs")),
+            ("about.rs", include_str!("about.rs")),
+            ("sync_dialog.rs", include_str!("sync_dialog.rs")),
+            ("widgets/strip.rs", include_str!("widgets/strip.rs")),
+        ] {
+            let compact = source.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                !compact.contains(needle),
+                "{name} has a raw text button; use a centred label helper"
+            );
+        }
     }
 
     fn workspace_test_dir(name: &str) -> PathBuf {

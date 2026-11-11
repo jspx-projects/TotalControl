@@ -366,6 +366,85 @@ pub(crate) fn centered_label<'a>(s: &'a str, size: f32) -> Element<'a, Message> 
     .into()
 }
 
+/// A label for a button whose face has a fixed size: the text fills the
+/// content box and the renderer centres it on both axes.
+pub(crate) fn centered_label_fixed<'a>(
+    s: impl Into<String>,
+    size: f32,
+) -> Element<'a, Message> {
+    text(s.into())
+        .size(size)
+        .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+            size,
+        )))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center()
+        .into()
+}
+
+/// A label for a button that sizes itself around its text.  The label must
+/// not fill the row, or a dialog action consumes the remaining width.
+pub(crate) fn centered_label_auto<'a>(
+    s: impl Into<String>,
+    size: f32,
+) -> Element<'a, Message> {
+    text(s.into())
+        .size(size)
+        .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+            size,
+        )))
+        .center()
+        .into()
+}
+
+/// A label for a button that fills the width but keeps its natural height.
+pub(crate) fn centered_label_wide<'a>(
+    s: impl Into<String>,
+    size: f32,
+) -> Element<'a, Message> {
+    text(s.into())
+        .size(size)
+        .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+            size,
+        )))
+        .width(Length::Fill)
+        .center()
+        .into()
+}
+
+/// Auto-sized coloured label for link-style dialog actions.
+pub(crate) fn centered_label_colored_auto<'a>(
+    s: impl Into<String>,
+    size: f32,
+    color: Color,
+) -> Element<'a, Message> {
+    text(s.into())
+        .size(size)
+        .color(color)
+        .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+            size,
+        )))
+        .center()
+        .into()
+}
+
+/// A row label for an opened menu or listbox: fill the row width, but keep
+/// the text on the left edge.  Menus and lists read as a table of choices,
+/// not as centred button faces.
+pub(crate) fn left_label_wide<'a>(
+    s: impl Into<String>,
+    size: f32,
+) -> Element<'a, Message> {
+    text(s.into())
+        .size(size)
+        .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+            size,
+        )))
+        .width(Length::Fill)
+        .into()
+}
+
 /// `label` with the master's pause mark before or after it, centred in a
 /// button; without `paused` it is the plain centred label.
 fn centered_master_label<'a>(
@@ -377,7 +456,7 @@ fn centered_master_label<'a>(
     pause_before: bool,
 ) -> Element<'a, Message> {
     if !paused {
-        return centered_label(label, size);
+        return centered_label_fixed(label, size);
     }
     let label = text(label)
         .size(size)
@@ -504,15 +583,10 @@ fn slideout_tab<'a>(
     h: f32,
     glyph_size: f32,
 ) -> Element<'a, Message> {
-    let glyph = container(centered_label(label, glyph_size * scale))
-        .width(Length::Fixed(glyph_w))
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill);
-    let face = row![glyph, iced::widget::Space::new().width(Length::Fill)]
+    let _ = glyph_w;
+    let face = container(centered_label_fixed(label, glyph_size * scale))
         .width(Length::Fill)
-        .height(Length::Fill)
-        .align_y(iced::Alignment::Center);
+        .height(Length::Fill);
     hint(
         button(face)
             .padding(0)
@@ -533,15 +607,10 @@ fn minimize_button(
     face_w: f32,
     h: f32,
 ) -> Element<'static, Message> {
-    let glyph = container(centered_label("−", theme::TEXT_SM * scale))
-        .width(Length::Fixed(glyph_w))
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill);
-    let face = row![glyph, iced::widget::Space::new().width(Length::Fill)]
+    let _ = glyph_w;
+    let face = container(centered_label_fixed("−", theme::TEXT_SM * scale))
         .width(Length::Fill)
-        .height(Length::Fill)
-        .align_y(iced::Alignment::Center);
+        .height(Length::Fill);
     hint(
         button(face)
             .padding(0)
@@ -802,7 +871,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
     // would put "expand" somewhere a collapsed card, with no fader, has
     // nothing to anchor to).
     let expand_btn = hint(
-        button(centered_label("+", theme::TEXT_SM * scale))
+        button(centered_label_fixed("+", theme::TEXT_SM * scale))
             .padding(0)
             .width(Length::Fill)
             .height(btn_h)
@@ -815,7 +884,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
     // Inputs and software playbacks keep S; outputs keep CUE. Both occupy
     // the same second slot, so the collapsed cards stay aligned.
     let cue_btn = hint(
-        button(centered_label("CUE", theme::TEXT_XS * scale))
+        button(centered_label_fixed("CUE", theme::TEXT_XS * scale))
             .width(Length::Fill)
             .height(btn_h)
             .style(theme::cue_button(p.cue))
@@ -1014,7 +1083,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         scale,
     );
     let cue_btn = hint(
-        button(centered_label("CUE", theme::TEXT_SM * scale))
+        button(centered_label_fixed("CUE", theme::TEXT_SM * scale))
             .width(Length::Fill)
             .height(btn_h)
             .style(theme::cue_button(p.cue))

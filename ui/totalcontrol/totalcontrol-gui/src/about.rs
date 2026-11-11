@@ -13,6 +13,8 @@ use totalcontrol_core::RmeDevice;
 
 use crate::app::{Message, TotalControl};
 use crate::theme;
+use crate::widgets::strip::centered_label_auto;
+use crate::widgets::strip::centered_label_colored_auto;
 
 /// Where the source and the releases live: the same URL `totalcontrol.desktop`
 /// carries as its homepage.
@@ -30,7 +32,7 @@ fn header(scale: f32) -> Element<'static, Message> {
             .size(theme::TEXT_DIALOG * scale),
         Space::new().width(Length::Fill),
         // Same title/Close pair as the device popover (`app::device_panel`).
-        button(text("Close").size(theme::TEXT_DIALOG * scale))
+        button(centered_label_auto("Close", theme::TEXT_DIALOG * scale))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ToggleAbout),
@@ -129,11 +131,11 @@ pub fn about_modal(state: &TotalControl) -> Element<'_, Message> {
         text(device)
             .color(theme::text_sec())
             .size(theme::TEXT_DIALOG * scale),
-        button(
-            text(REPO_URL)
-                .color(theme::ACCENT)
-                .size(theme::TEXT_DIALOG * scale)
-        )
+        button(centered_label_colored_auto(
+            REPO_URL,
+            theme::TEXT_DIALOG * scale,
+            theme::ACCENT,
+        ))
         .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
         .style(theme::plain_button)
         .on_press(Message::OpenRepoUrl),
