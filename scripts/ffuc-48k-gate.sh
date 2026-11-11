@@ -51,8 +51,8 @@ PW_STARTED_BY_US=0
 ORIG_FORCE_RATE=""
 TMP=""
 TONE=""
-SRC_RAW=""
-MON_RAW=""
+SRC_WAV=""
+MON_WAV=""
 DIRECT_WAV=""
 
 usage() {
@@ -123,8 +123,8 @@ fi
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/ffuc-48k-gate.XXXXXX")
 TONE="$TMP/tone-18ch-48k.wav"
-SRC_RAW="$TMP/source-18ch-48k.raw"
-MON_RAW="$TMP/monitor-18ch-48k.raw"
+SRC_WAV="$TMP/source-18ch-48k.wav"
+MON_WAV="$TMP/monitor-18ch-48k.wav"
 DIRECT_WAV="$TMP/direct-18ch-48k.wav"
 
 python3 "$MAKE_TONE" --channels 18 --rate 48000 --seconds 5 \
@@ -368,16 +368,16 @@ run_pipewire() {
     [ -n "$source_name" ] && [ -n "$source_index" ] || fail "RME Pro Audio source not found"
 
     set_route
-    rm -f "$SRC_RAW" "$MON_RAW"
+    rm -f "$SRC_WAV" "$MON_WAV"
     # Source: exact Pulse source index.  Monitor: sink index plus
     # stream.capture.sink=true.  Never use a monitor name here: a missing
     # target silently falls back to the default source.
     pw-record --target "$source_index" --format s32 --rate 48000 --channels 18 \
-        --raw "$SRC_RAW" >/dev/null 2>&1 &
+        "$SRC_WAV" >/dev/null 2>&1 &
     local src_pid=$!
     pw-record --target "$sink_index" --properties stream.capture.sink=true \
         --format s32 --rate 48000 --channels 18 \
-        --raw "$MON_RAW" >/dev/null 2>&1 &
+        "$MON_WAV" >/dev/null 2>&1 &
     local mon_pid=$!
     sleep 0.4
 
@@ -402,8 +402,8 @@ run_pipewire() {
     wait "$mon_pid" 2>/dev/null || true
     clear_route
 
-    analyze raw "$SRC_RAW" pipewire-source
-    analyze raw "$MON_RAW" pipewire-monitor
+    analyze wav "$SRC_WAV" pipewire-source
+    analyze wav "$MON_WAV" pipewire-monitor
 }
 
 # ---------------------------------------------------------------------------
