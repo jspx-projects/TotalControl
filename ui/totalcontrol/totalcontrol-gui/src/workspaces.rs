@@ -15,9 +15,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use totalcontrol_core::{ChannelId, Scene};
 
-use crate::app::{RowMode, View, OUTPUT_DESTS};
+use crate::app::{MasterSet, RowMode, View, OUTPUT_DESTS};
 use crate::prefs::ControlRoomSettings;
 use crate::sidebar::Group;
+use crate::widgets::strip::FlyoutKind;
 
 pub const EXTENSION: &str = "tcws";
 pub const SCHEMA: u32 = 1;
@@ -48,6 +49,16 @@ pub struct WorkspaceView {
     pub active_snapshot: Option<usize>,
     pub active_layout: Option<usize>,
     pub collapsed: HashSet<ChannelId>,
+    /// Open channel panels and flyouts.
+    pub flyouts: Vec<(ChannelId, FlyoutKind)>,
+    /// Focused strip and the anchor of the current multi-selection.
+    pub focus_channel: Option<ChannelId>,
+    pub select_anchor: Option<ChannelId>,
+    /// Window position and fullscreen state, separately from its size.
+    pub window_position: Option<(i32, i32)>,
+    pub fullscreen: bool,
+    /// Page scroll offset, in logical pixels.
+    pub scroll: (f32, f32),
     /// Legacy field kept for schema compatibility. Active Talkback is a
     /// momentary performance state and is never restored from a workspace.
     pub talkback_on: bool,
@@ -75,6 +86,12 @@ impl Default for WorkspaceView {
             active_snapshot: None,
             active_layout: None,
             collapsed: HashSet::new(),
+            flyouts: Vec::new(),
+            focus_channel: None,
+            select_anchor: None,
+            window_position: None,
+            fullscreen: false,
+            scroll: (0.0, 0.0),
             talkback_on: false,
             external_input_on: false,
             pfl_inputs: Vec::new(),
@@ -109,6 +126,10 @@ pub struct Workspace {
     /// workspaces, which always stored a ganged group.
     #[serde(default = "fader_ganged_default")]
     pub fader_ganged: bool,
+    /// The mute and solo master sets, including whether each set is
+    /// suspended (members currently unmuted/un-soloed but remembered).
+    pub mute_master: MasterSet,
+    pub solo_master: MasterSet,
     /// The six Mixer Layout slots.
     pub layouts: [Option<HashSet<ChannelId>>; 6],
     pub labels: Vec<(ChannelId, String)>,
@@ -136,6 +157,8 @@ impl Default for Workspace {
             groups: Default::default(),
             temporary_group: Vec::new(),
             fader_ganged: false,
+            mute_master: MasterSet::default(),
+            solo_master: MasterSet::default(),
             layouts: Default::default(),
             labels: Vec::new(),
             view: WorkspaceView::default(),

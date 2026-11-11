@@ -16,6 +16,7 @@
 mod about;
 mod app;
 mod device_service;
+mod host_settings;
 mod icon;
 mod layouts;
 mod matrix;
@@ -150,19 +151,34 @@ fn main() -> iced::Result {
     let start_flyouts = arg_value(&args, "--flyouts");
     // Open the device sheet before the first frame, for screenshots.
     let start_device_panel = args.iter().any(|a| a == "--device-panel");
-    let saved_prefs = prefs::path().map(|p| prefs::load(&p));
-    let saved_size = saved_prefs
+    let host_settings_path = host_settings::HostSettings::path();
+    let saved_host = host_settings_path
         .as_ref()
-        .and_then(|p| p.window_size)
-        .map(|(w, h)| Size::new(w.max(app::MIN_WINDOW.0), h.max(app::MIN_WINDOW.1)))
-        .unwrap_or(Size::new(1280.0, 800.0));
-    let preferred_device = saved_prefs
+        .map(|path| host_settings::HostSettings::load(path));
+    // `gui.json` is a migration input only.  It still supplies the device
+    // choice until the first host settings file exists.
+    let legacy_prefs = prefs::path().map(|path| prefs::load(&path));
+    let saved_size = Size::new(1280.0, 800.0);
+    let (preferred_device, preferred_serial) = saved_host
         .as_ref()
-        .and_then(|p| p.device.as_deref())
-        .and_then(app::DeviceKind::from_label);
-    let preferred_serial = saved_prefs
-        .as_ref()
-        .and_then(|p| p.device_serial.clone());
+        .and_then(|host| host.active())
+        .map(|(_, unit)| {
+            (
+                app::DeviceKind::from_canonical_model(&unit.model),
+                unit.serial.clone(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                legacy_prefs
+                    .as_ref()
+                    .and_then(|prefs| prefs.device.as_deref())
+                    .and_then(app::DeviceKind::from_label),
+                legacy_prefs
+                    .as_ref()
+                    .and_then(|prefs| prefs.device_serial.clone()),
+            )
+        });
     let start_fullscreen = args.iter().any(|a| a == "--fullscreen");
 
     // One TotalControl per session: a second launch asks the first to show its
@@ -191,15 +207,21 @@ fn main() -> iced::Result {
                     preferred_device,
                     preferred_serial.clone(),
                 );
-            // Restore the window's own layout (view, sidebar, rows, zoom,
-            // channel names) before the command line overrides any of it.
-            if let Some(path) = prefs::path() {
-                if let Some(prefs) = saved_prefs.clone() {
-                    app::apply_prefs(&mut state, prefs);
-                }
-                state.prefs_path = Some(path);
-            }
+            // Restore the operational settings and the active unit's current
+            // workspace (view, sidebar, rows, zoom, channel names, scene)
+            // before the command line overrides any of it.
+            let settings = saved_host.clone().unwrap_or_else(|| {
+                legacy_prefs
+                    .as_ref()
+                    .map(host_settings::from_legacy)
+                    .unwrap_or_default()
+            });
+            app::apply_host_settings(&mut state, settings);
+            state.host_settings_path = host_settings_path.clone();
+            app::restore_startup_workspace(&mut state);
+            app::save_host_settings_now(&mut state);
             app::apply_startup_sync(&mut state);
+            app::adopt_active_master_members(&mut state);
             if !state.startup_compare_pending {
                 if let Err(e) = app::apply_control_room_assignments(&mut state) {
                     log::debug!("Control Room assignments not restored: {e}");
@@ -228,13 +250,21 @@ fn main() -> iced::Result {
                 state.show_device_panel = true;
                 state.show_settings = false;
             }
-            state.fullscreen = start_fullscreen;
+            state.fullscreen = start_fullscreen || state.fullscreen;
             state.tray_active = tray_active;
             state.window_hidden = start_hidden;
             if start_hidden {
                 return (state, iced::Task::none());
             }
-            let (id, open) = window::open(window_settings(saved_size, start_fullscreen));
+            let size = state
+                .window_size
+                .map(|(w, h)| Size::new(w.max(app::MIN_WINDOW.0), h.max(app::MIN_WINDOW.1)))
+                .unwrap_or(saved_size);
+            let (id, open) = window::open(window_settings(
+                size,
+                start_fullscreen || state.fullscreen,
+                state.window_position,
+            ));
             state.window_id = Some(id);
             // First launch only (no saved zoom): ask the monitor's size to
             // pick a starting zoom.
@@ -244,7 +274,13 @@ fn main() -> iced::Result {
             } else {
                 open.discard()
             };
-            (state, task)
+            let scroll = iced::Task::perform(
+                async {
+                    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                },
+                |_| app::Message::RestoreWorkspaceScroll,
+            );
+            (state, iced::Task::batch([task, scroll]))
         },
         app::update,
         app::view,
@@ -265,7 +301,11 @@ fn main() -> iced::Result {
 }
 
 /// The main window: `size` floored at the minimum, the app's icon and id.
-pub fn window_settings(size: Size, fullscreen: bool) -> window::Settings {
+pub fn window_settings(
+    size: Size,
+    fullscreen: bool,
+    position: Option<(i32, i32)>,
+) -> window::Settings {
     window::Settings {
         // The close button is handled by the app (`Message::CloseRequested`):
         // hide in the tray, or save and quit.
@@ -274,6 +314,9 @@ pub fn window_settings(size: Size, fullscreen: bool) -> window::Settings {
         // See `app::MIN_WINDOW`.
         min_size: Some(Size::new(app::MIN_WINDOW.0, app::MIN_WINDOW.1)),
         fullscreen,
+        position: position
+            .map(|(x, y)| window::Position::Specific(iced::Point::new(x as f32, y as f32)))
+            .unwrap_or_default(),
         icon: window_icon(),
         platform_specific: window::settings::PlatformSpecific {
             application_id: APP_ID.to_owned(),

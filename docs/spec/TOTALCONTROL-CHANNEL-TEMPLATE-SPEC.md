@@ -175,17 +175,17 @@ The second argument is the zoom.  The SVG can be converted to PNG with
 
 ## Layout configuration
 
-`totalcontrol-layout` reads a complete layout document in JSON.  The document
-is the configuration form of this specification: one geometry, one visual
-token set, one colour scheme and a list of channel templates.
+`totalcontrol-layout` reads a layout document in JSON.  The document has a
+default geometry, visual token set, colour scheme and template list, plus
+optional per-device overrides.  Each template declares the channel elements it
+contains and where each one sits; the bindings follow from the kinds (see
+[Elements and placement](#elements-and-placement)).
 
-The document describes the whole sheet: one geometry, one visual token set,
-one colour scheme and the templates.  Each template declares the channel
-elements it contains and where each one sits; the bindings follow from the
-kinds (see [Elements and placement](#elements-and-placement)).
-
-The preview and the runtime read the same document.  The runtime starts from
-the built-in defaults when the file is absent or invalid.
+The preview and the runtime read the same document.  The runtime resolves the
+connected model's override before rendering and starts from the built-in
+defaults when the file is absent or invalid.  Device capabilities remain
+authoritative: an override may replace layout values and arrange supported
+elements, but it cannot add an element the connection does not provide.
 
 ### Document
 
@@ -197,6 +197,7 @@ the built-in defaults when the file is absent or invalid.
 | `visual` | object | Font sizes and control dimensions at zoom 1.0. |
 | `colors` | object | Semantic colour scheme. |
 | `templates` | array | Channel templates, in sheet order. |
+| `devices` | object | Optional per-device overrides keyed by canonical model or family. |
 
 Every key is optional.  A missing section, a missing field or an empty
 document (`{}`) takes the built-in value, and a partial section overrides only
@@ -208,6 +209,39 @@ the fields it names:
 
 `templates` is the exception: the list is replaced, not merged, and each entry
 is a complete template object.
+
+### Device overrides
+
+`devices` maps a canonical model name (`Fireface UC`, `Fireface UCX`,
+`Babyface Pro FS`) or a family prefix (`Fireface`) to an override.  The
+longest matching key wins; an exact model match wins over a family prefix.  A
+present `geometry`, `visual`, `colors` or `templates` section replaces the
+default section as a whole, and an absent section inherits the default:
+
+```json
+{
+  "devices": {
+    "Fireface UC": {
+      "geometry": { "strip_w": 94 },
+      "colors": { "accent": { "solo": "#ffcc00" } }
+    },
+    "Fireface": {
+      "visual": { "name_size": 12 }
+    }
+  }
+}
+```
+
+`templates` may appear in an override as a complete template list.
+
+A key that is a prefix of another model is not a family match: `Fireface UC`
+does not apply to `Fireface UCX`.
+
+The resolved template follows the connection's effective features; the
+runtime selects the matching no-FX template for a unit without the FX bus, EQ
+or Dynamics.  A device override may choose which of the supported elements a
+template arranges, but the runtime never draws or activates an element the
+unit cannot use.
 
 ### Geometry
 
@@ -363,7 +397,7 @@ Five placements follow the content box rather than the card:
 
 The preview rejects a document and renders nothing when:
 
-- `schema` is not `1`;
+- `schema` is not `2`;
 - a width or height is zero or negative, or any number is not finite;
 - an offset is negative;
 - a colour is not a `#rrggbb` literal;
@@ -391,8 +425,9 @@ cargo run -p totalcontrol-layout --bin channel-preview -- \
 ```
 
 The second positional argument is the zoom, clamped to `0.75..3.0`.
-`--focus <template>` renders one strip instead of the sheet, and `--state`
-selects its element state: `rest`, `hover`, `open` or `active`.
+`--focus <template>` renders one strip instead of the sheet, `--state` selects
+its element state (`rest`, `hover`, `open` or `active`), and `--device <model>`
+renders the document with that model's override applied.
 
 `--example` writes a complete starting document and the matching schema
 beside it:

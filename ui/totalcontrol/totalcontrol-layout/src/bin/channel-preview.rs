@@ -51,6 +51,7 @@ fn main() {
     let mut config_path = None;
     let mut example_path = None;
     let mut focus_name = None;
+    let mut device = None;
     let mut state = PreviewState::Rest;
     let mut state_given = false;
     let mut args = std::env::args().skip(1);
@@ -59,6 +60,7 @@ fn main() {
             "--config" => config_path = args.next().map(PathBuf::from),
             "--example" => example_path = args.next().map(PathBuf::from),
             "--focus" => focus_name = args.next(),
+            "--device" => device = args.next(),
             "--state" => {
                 state_given = true;
                 let token = args.next().unwrap_or_default();
@@ -114,6 +116,10 @@ fn main() {
             }
         },
         None => GuiLayoutConfig::default(),
+    };
+    let config = match device.as_deref() {
+        Some(model) => config.resolve_for(model),
+        None => config,
     };
 
     let out = positional
@@ -782,10 +788,15 @@ fn sample_name(id: TemplateId) -> &'static str {
         TemplateId::InputMono => "AN1",
         TemplateId::InputStereo => "AN1/2",
         TemplateId::InputMonoNoFx => "AN3",
+        TemplateId::InputStereoNoFx => "AN3/4",
         TemplateId::PlaybackStereo => "SW1/2",
+        TemplateId::PlaybackStereoNoFx => "SW3/4",
         TemplateId::OutputStereo => "OUT1/2",
+        TemplateId::OutputStereoNoFx => "OUT5/6",
         TemplateId::OutputMono => "OUT3",
+        TemplateId::OutputMonoNoFx => "OUT7",
         TemplateId::ControlRoom => "MAIN",
+        TemplateId::ControlRoomNoFx => "MAIN",
     }
 }
 

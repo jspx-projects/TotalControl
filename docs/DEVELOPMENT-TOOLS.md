@@ -195,7 +195,9 @@ cargo run -p totalcontrol-layout --bin channel-preview -- \
 
 `--state` accepts `rest`, `hover`, `open` or `active`.  The open state draws a
 labelled placeholder beside the card, because a panel body is not part of the
-layout document.
+layout document.  `--device <model>` resolves the document's per-device
+override for that model before rendering, for example
+`--device "Fireface UC"`.
 
 The command writes `/tmp/gui-layout.json` and the matching
 `gui-layout.schema.json` beside it; the document references that sibling file

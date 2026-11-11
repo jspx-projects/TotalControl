@@ -1,15 +1,14 @@
-//! The GUI's own preferences — how the window was laid out, not what the
-//! mixer is doing (that is the shared auto-saved scene, see
-//! `totalcontrol_core::scene`). One JSON file in the XDG config directory
-//! (`$XDG_CONFIG_HOME/totalcontrol/gui.json`, else `~/.config/totalcontrol/gui.json`):
-//! the open view, the sidebar's state, the mixer row count, the zoom, and
-//! the user's channel names, the PipeWire rate / buffer size forced here.
+//! The legacy `gui.json` preference format.
 //!
-//! Every field is optional on read (`#[serde(default)]`), so a file from
-//! an older build, or a hand-edited one missing keys, still loads and
-//! leaves the rest at the app's defaults. A file that does not parse at
-//! all is ignored the same way: preferences are a convenience, never a
-//! reason not to start.
+//! This module is a migration input only.  The current workspace owns the
+//! mixer scene and durable GUI state, and `host-settings.json` owns the
+//! operational values (OSC, engine, tray and the active unit).  The old
+//! `gui.json` is read once when no current workspace exists and is then
+//! left untouched as a backup.
+//!
+//! Every field is optional on read (`#[serde(default)]`), so an older
+//! file, or a hand-edited one missing keys, still loads and leaves the
+//! rest at the app's defaults.
 
 use std::path::{Path, PathBuf};
 
@@ -182,6 +181,7 @@ pub fn load(path: &Path) -> Prefs {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub fn save(path: &Path, prefs: &Prefs) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -209,7 +209,8 @@ mod tests {
 
     #[test]
     fn prefs_round_trip_through_a_file() {
-        let dir = std::env::temp_dir().join(format!("totalcontrol-prefs-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("totalcontrol-prefs-test-{}", std::process::id()));
         let file = dir.join("gui.json");
         let prefs = Prefs {
             view: Some(View::Matrix),
@@ -284,7 +285,8 @@ mod tests {
 
     #[test]
     fn a_corrupt_file_is_ignored() {
-        let dir = std::env::temp_dir().join(format!("totalcontrol-prefs-bad-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("totalcontrol-prefs-bad-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("gui.json");
         std::fs::write(&file, "{ not json").unwrap();

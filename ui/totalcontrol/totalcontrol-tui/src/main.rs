@@ -34,6 +34,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io::{self, Stdout};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 #[cfg(feature = "alsa")]
 use totalcontrol_core::BabyfacePro;
@@ -586,6 +587,25 @@ fn pan_text(pan: i8) -> String {
     }
 }
 
+/// The current workspace the GUI and TUI share.  The active unit recorded in
+/// `host-settings.json` names it; without that file the model-level file is
+/// the fallback, matching a unit that has no serial.
+fn current_workspace(dev: &DeviceHandle) -> Option<PathBuf> {
+    if dev.is_mock() {
+        return None;
+    }
+    if let Some(path) = totalcontrol_core::workspace::active_current_path() {
+        if let Some(scene) = totalcontrol_core::workspace::read_scene(&path) {
+            if scene.check_compatible(dev.canonical_model()).is_ok() {
+                return Some(path);
+            }
+        }
+    }
+    let key = totalcontrol_core::workspace::unit_key(dev.canonical_model(), None);
+    let path = totalcontrol_core::workspace::current_path(&key);
+    path.is_file().then_some(path)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args: Vec<String> = std::env::args().collect();
@@ -614,13 +634,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             DeviceHandle::open_mock()
         })
     };
-    // Restore the shared auto-saved state (the same `auto.json` the GUI
-    // uses) so the two UIs stay in sync — the device has no gain/volume
-    // readback. Skip in mock mode (no hardware to write to).
-    if !mock {
-        if let Some(scene) = totalcontrol_core::scene::load_auto_scene() {
+    // Restore the scene from the active unit's current workspace, the same
+    // file the GUI keeps live.  Skip in mock mode (there is no hardware to
+    // write to, and a simulation must not touch a real unit's file).
+    let workspace_path = current_workspace(&device);
+    if let Some(path) = workspace_path.as_deref() {
+        if let Some(scene) = totalcontrol_core::workspace::read_scene(path) {
             if let Err(e) = device.apply_scene(&scene) {
-                eprintln!("auto scene load failed: {e:?}");
+                eprintln!("current workspace scene load failed: {e:?}");
             }
         }
     }
@@ -629,7 +650,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     stdout.execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let res = run(&mut terminal, &mut device);
+    let res = run(&mut terminal, &mut device, workspace_path);
     disable_raw_mode()?;
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -639,7 +660,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run(term: &mut Terminal<CrosstermBackend<Stdout>>, dev: &mut DeviceHandle) -> io::Result<()> {
+fn run(
+    term: &mut Terminal<CrosstermBackend<Stdout>>,
+    dev: &mut DeviceHandle,
+    workspace_path: Option<PathBuf>,
+) -> io::Result<()> {
     let mut show_matrix = false;
     let mut section: usize = 0; // 0=inputs, 1=playbacks, 2=outputs // 0=inputs, 1=playbacks
     let mut channel: usize = 0;
@@ -658,8 +683,8 @@ fn run(term: &mut Terminal<CrosstermBackend<Stdout>>, dev: &mut DeviceHandle) ->
     // `e` on one of the 4 analog inputs opens the EQ editor for it —
     // `(input_idx, selected_row)`, see `render_eq`/`adjust_eq_field`.
     let mut eq_view: Option<(usize, usize)> = None;
-    // Shared-state persistence (same `auto.json` as the GUI): debounced
-    // auto-save in the loop + a final save on quit.
+    // Current-workspace persistence: the TUI replaces only the scene inside
+    // the GUI's live workspace and preserves every other field.
     let mut last_auto_save = Instant::now();
     let mut last_saved_json: Option<String> = None;
     // Mock has its own generated playback levels; a real backend gets
@@ -673,26 +698,17 @@ fn run(term: &mut Terminal<CrosstermBackend<Stdout>>, dev: &mut DeviceHandle) ->
         let _ = dev.poll_events();
         if last_auto_save.elapsed() >= Duration::from_secs(3) {
             last_auto_save = Instant::now();
-            // The mock has no hardware and its state would pollute the
-            // SHARED auto.json with a "(mock)" model (making the real
-            // device reject it on load) — never persist it.
             if dev.is_mock() {
                 last_saved_json = None;
                 continue;
             }
-            // GUI/TUI sync: if the OTHER UI wrote auto.json since our
-            // last save, re-apply its state first so we don't clobber it
-            // with our own (possibly stale) copy — then save ours.
-            if let Some(their) =
-                totalcontrol_core::scene::auto_scene_written_by_other(last_saved_json.as_deref())
-            {
-                let _ = dev.apply_scene(&their);
-            }
             let scene = dev.capture_scene();
             if let Ok(json) = scene.to_json() {
                 if last_saved_json.as_deref() != Some(json.as_str()) {
-                    if totalcontrol_core::scene::save_auto_scene(&scene).is_ok() {
-                        last_saved_json = Some(json);
+                    if let Some(path) = workspace_path.as_deref() {
+                        if totalcontrol_core::workspace::write_scene(path, &scene).is_ok() {
+                            last_saved_json = Some(json);
+                        }
                     }
                 }
             }
@@ -744,16 +760,15 @@ fn run(term: &mut Terminal<CrosstermBackend<Stdout>>, dev: &mut DeviceHandle) ->
                     }
                     match k.code {
                         KeyCode::Char('q') | KeyCode::Esc => {
-                            // Final state save — the next UI (GUI or TUI)
-                            // restores this from the shared auto.json.
-                            // Sync first (see the 3 s auto-save above).
-                            if let Some(their) = totalcontrol_core::scene::auto_scene_written_by_other(
-                                last_saved_json.as_deref(),
-                            ) {
-                                let _ = dev.apply_scene(&their);
+                            // Final scene save into the live workspace; the
+                            // GUI restores the same file on its next start.
+                            if !dev.is_mock() {
+                                let scene = dev.capture_scene();
+                                if let Some(path) = workspace_path.as_deref() {
+                                    let _ =
+                                        totalcontrol_core::workspace::write_scene(path, &scene);
+                                }
                             }
-                            let scene = dev.capture_scene();
-                            let _ = totalcontrol_core::scene::save_auto_scene(&scene);
                             break;
                         }
                         KeyCode::Tab => show_matrix = !show_matrix,

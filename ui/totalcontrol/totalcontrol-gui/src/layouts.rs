@@ -1,10 +1,7 @@
-//! Mixer Layout (collapsed-strip set) persistence — mirrors `scenes.rs`'s
-//! own file-per-slot pattern, one JSON file per numbered slot (1-6),
-//! sibling directory to the scenes one. A layout is just `TotalControl::
-//! collapsed` (which strips are collapsed) — there's no strip-reordering
-//! yet, so that's the whole story; `ChannelId` already derives `Serialize`/
-//! `Deserialize` (`totalcontrol_core::channel`), so this is plain serde, no
-//! bespoke format.
+//! Legacy mixer-layout slot files.
+//!
+//! `Layout <n>.json` is a migration input for the one-time import into the
+//! current workspace.  It is not read or written after migration.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -24,10 +21,4 @@ pub fn load_layout_file(slot: u8) -> Option<HashSet<ChannelId>> {
     let content =
         std::fs::read_to_string(layouts_dir().join(format!("Layout {slot}.json"))).ok()?;
     serde_json::from_str(&content).ok()
-}
-
-pub fn save_layout_file(slot: u8, collapsed: &HashSet<ChannelId>) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(collapsed).map_err(|e| e.to_string())?;
-    std::fs::write(layouts_dir().join(format!("Layout {slot}.json")), json)
-        .map_err(|e| e.to_string())
 }
