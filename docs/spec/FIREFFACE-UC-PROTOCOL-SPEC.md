@@ -46,6 +46,7 @@ written to the device on connect and on each change.
 | `0x15` | OUT | Loopback bank |
 | `0x16` | OUT | Channel initialization |
 | `0x17` | OUT/IN | Reference levels, 48 V, PAD, Inst |
+| `0x18` | OUT | Input phase |
 | `0x1a` | OUT | Input gain and output-channel level |
 | `0x1b` | OUT | Rate-generator/pitch coefficients |
 | `0x1c` | IN | Firmware revision |
@@ -69,16 +70,20 @@ Bit 14 is a send-active flag, not a submix selector.
 For a stereo pair, source `N` writes the left cell in block `2p` and source
 `N + 1` writes the right cell in block `2p + 1`; `p` is the output pair.
 
-Bit 15 carries phase inversion; the inverted form of a level is its 16-bit
-two's complement (`0x2000` ↔ `0xE000`).
-
 The output masters use `wIndex = 992 + block`.  The four submix banks occupy
 `wIndex` bits 14:15; an output-balance change writes the left and right
 masters in each bank.
 
-Phase is a property of the source and applies to every routed cell.
-Changing phase rewrites the source's active cells with the new sign.  A
-later fader, pan, matrix-cell or full-matrix write carries the same sign.
+Input phase uses request `0x18`:
+
+| State | `wValue` | `wIndex` |
+|---|---:|---|
+| Normal | `0x0156` | `0x4000 + code` |
+| Inverted | `0xfea9` | `0xc000 + code` |
+
+The low code is `0x00` for input 1 and `0x24 + (input - 1)` for inputs 2–4,
+giving `0x25` for input 2 and `0x27` for input 4.  The value is a signed
+coefficient; phase is not a `0x17` bit on the UC.
 
 ## 4. Output level and balance
 
