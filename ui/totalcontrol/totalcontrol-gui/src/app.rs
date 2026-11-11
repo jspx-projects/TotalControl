@@ -22643,6 +22643,62 @@ mod tests {
     }
 
     #[test]
+    fn a_mono_input_keeps_its_pan_at_zero_volume() {
+        let mut state = new(true, None, None);
+        let cid = ChannelId::Input(2);
+        let _ = update(&mut state, Message::StereoLinkChanged(cid, false));
+        state.device.set_input_volume(1, 1, 0, 0.0).unwrap();
+
+        let _ = update(&mut state, Message::PanChanged(cid, 0, 60));
+        assert_eq!(super::channel_pan(&state, cid, 0), 60);
+        assert_eq!(strip_params(&state, cid, 0).pan, 60);
+
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
+        assert_eq!(super::channel_pan(&state, cid, 0), 60);
+    }
+
+    #[test]
+    fn a_device_service_mono_input_keeps_its_pan_at_zero_volume() {
+        let mut state = new(true, None, None);
+        attach_device_service(&mut state);
+        let cid = ChannelId::Input(2);
+        let _ = update(&mut state, Message::StereoLinkChanged(cid, false));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && state.device.input_pair_linked(1) {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!state.device.input_pair_linked(1));
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.0));
+        let _ = update(&mut state, Message::PanChanged(cid, 0, 60));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pan = 0;
+        while Instant::now() < deadline {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            pan = super::channel_pan(&state, cid, 0);
+            if pan == 60 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(pan, 60);
+        assert_eq!(state.device.pan(cid, 0).unwrap(), 60);
+    }
+
+    #[test]
     fn a_device_service_link_keeps_the_input_balance_at_zero_volume() {
         let mut state = new(true, None, None);
         attach_device_service(&mut state);
