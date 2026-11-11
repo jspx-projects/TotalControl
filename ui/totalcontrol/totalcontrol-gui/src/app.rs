@@ -18781,21 +18781,11 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
             big_scale,
         );
 
-        let connector = text("\u{2192}")
-            .color(theme::text_sec())
-            .size(theme::TEXT_XL * scale);
-
-        let blocks = row![source_block, connector, dest_block]
+        let blocks = row![source_block, dest_block]
             .spacing(theme::SPACE_XL * big_scale)
             .align_y(iced::Alignment::Start);
 
-        column![
-            section_header("QUICK CONTROL", scale),
-            text("Choose a source and a destination, then set how loud the source is there. Tab switches to the Mixer.")
-                .color(theme::text_sec())
-                .size(theme::TEXT_XS * scale),
-            blocks,
-        ]
+        column![section_header("QUICK CONTROL", scale), blocks]
         .spacing(theme::SPACE_LG)
         .align_x(iced::Alignment::Center)
         .width(Length::Fill)
