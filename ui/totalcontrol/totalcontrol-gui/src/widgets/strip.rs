@@ -1121,6 +1121,8 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         } else {
             "C".to_string()
         },
+        secondary_value: None,
+        on_readout_change: None,
         arc_from_center: true,
         level_arc_color: Some(theme::PHANTOM),
         interactive: balance_available,

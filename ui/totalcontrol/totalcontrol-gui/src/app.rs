@@ -1983,7 +1983,13 @@ pub enum Message {
     Autoset(usize, bool),
     /// Raw preamp gain units (0..=`InputChannel::gain_max`), not dB —
     /// the hardware's own scale isn't a fixed dB curve we can label.
+    /// This is the whole-knob movement: a linked pair moves both sides by
+    /// the same step.
     Gain(usize, u32),
+    /// Raw preamp gain for the left readout only, even on a linked pair.
+    GainLeft(usize, u32),
+    /// Raw preamp gain for the right readout only, even on a linked pair.
+    GainRight(usize, u32),
     /// `true` = +4dBu, `false` = -10dBV.
     Sensitivity(usize, bool),
     /// Trim in dB (-65..+6, see `RmeDevice::set_trim`) — `usize` is the
@@ -2977,7 +2983,9 @@ fn undo_gesture(message: &Message) -> Option<UndoGesture> {
             UndoGesture::Volume(*cid, *out)
         }
         Message::PanChanged(cid, out, _) => UndoGesture::Pan(*cid, *out),
-        Message::Gain(idx, _) => UndoGesture::Gain(*idx),
+        Message::Gain(idx, _) | Message::GainLeft(idx, _) | Message::GainRight(idx, _) => {
+            UndoGesture::Gain(*idx)
+        }
         Message::TrimChanged(cid, _) => UndoGesture::Trim(*cid),
         Message::EqBandFreq(cid, band, _)
         | Message::EqBandQ(cid, band, _)
@@ -9413,6 +9421,31 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Float(actual as f32)],
             );
         }
+        Message::GainLeft(idx, gain) => {
+            // The top readout of a linked gain knob addresses only the left
+            // preamp; the pair's link state is unchanged.
+            if let Err(e) = state.device.set_input_gain(idx, gain) {
+                fail(state, "set_input_gain", &e);
+            }
+            let actual = state
+                .device
+                .inputs()
+                .get(idx)
+                .and_then(|c| c.gain)
+                .unwrap_or(gain);
+            notify_osc_raw(
+                state,
+                format!("/input/{idx}/gain"),
+                vec![OscType::Float(actual as f32)],
+            );
+        }
+        Message::GainRight(idx, gain) => {
+            // The bottom readout addresses only the right preamp, like
+            // `/2/gainRight`; the pair's link state is unchanged.
+            if let Err(e) = state.device.set_input_gain_right(idx, gain) {
+                fail(state, "set_input_gain_right", &e);
+            }
+        }
         Message::RmeToggle(target) => {
             if let Some(message) = rme_toggle_message(state, target) {
                 return update(state, message);
@@ -11941,6 +11974,8 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                     value: settings.pitch_percent,
                     range: (-5.0, 5.0),
                     label: format!("{:+.1}%", settings.pitch_percent),
+                    secondary_value: None,
+                    on_readout_change: None,
                     arc_from_center: true,
                     level_arc_color: Some(theme::text_primary()),
                     interactive: true,
@@ -11959,6 +11994,8 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                     value: settings.width,
                     range: (-1.0, 1.0),
                     label: format!("{:+.2}", settings.width),
+                    secondary_value: None,
+                    on_readout_change: None,
                     arc_from_center: true,
                     level_arc_color: Some(theme::text_primary()),
                     interactive: true,
@@ -14738,6 +14775,8 @@ fn settings_popover(
             value: send,
             range: (-65.0, 0.0),
             label: knob_db_label(send),
+            secondary_value: None,
+            on_readout_change: None,
             arc_from_center: false,
             level_arc_color: Some(theme::PHANTOM),
             interactive: true,
@@ -14897,12 +14936,14 @@ fn settings_popover(
         // Row 5 — gain.
         let gain = p.has_gain.then(|| {
             let gain_max = p.gain_max;
+            let linked_left = p.stereo_linked && idx % 2 == 0;
             let label = input_gain_knob_label(
                 p.gain,
                 p.gain_right,
                 p.gain_half,
-                p.stereo_linked && idx % 2 == 0,
+                linked_left,
             );
+            let right_gain = p.gain_right.unwrap_or(p.gain);
             settings_knob_row(
                 column![
                     text("gain")
@@ -14918,10 +14959,23 @@ fn settings_popover(
                     value: p.gain as f32,
                     range: (0.0, gain_max as f32),
                     // Gain is tracked in raw device units (whole dB on
-                    // inputs 1/2, half-dB units on 3/4).  A linked pair with
-                    // different left/right gains shows both values, left
-                    // above right; equal values collapse to one number.
+                    // inputs 1/2, half-dB units on 3/4).  A linked pair
+                    // always shows both values, left above right, even when
+                    // they are equal.  The wheel over one printed value
+                    // adjusts only that preamp; the rest of the knob keeps
+                    // the pair's same-step movement.
                     label,
+                    secondary_value: linked_left.then_some(right_gain as f32),
+                    on_readout_change: linked_left.then(|| {
+                        Box::new(move |secondary: bool, v: f32| {
+                            let raw = (v.round() as u32).min(gain_max);
+                            if secondary {
+                                Message::GainRight(idx, raw)
+                            } else {
+                                Message::GainLeft(idx, raw)
+                            }
+                        }) as Box<dyn Fn(bool, f32) -> Message>
+                    }),
                     arc_from_center: false,
                     level_arc_color: Some(theme::PHANTOM),
                     interactive: true,
@@ -14951,6 +15005,8 @@ fn settings_popover(
                     value,
                     range: (-1.0, 1.0),
                     label: format!("{value:.2}"),
+                    secondary_value: None,
+                    on_readout_change: None,
                     arc_from_center: true,
                     level_arc_color: Some(theme::PHANTOM),
                     interactive: true,
@@ -15055,6 +15111,8 @@ fn settings_popover(
                     value,
                     range: (-1.0, 1.0),
                     label: format!("{value:.2}"),
+                    secondary_value: None,
+                    on_readout_change: None,
                     arc_from_center: true,
                     level_arc_color: Some(theme::PHANTOM),
                     interactive: true,
@@ -15184,6 +15242,8 @@ fn settings_popover(
                 value: fx,
                 range: (-65.0, 0.0),
                 label: knob_db_label(fx),
+                secondary_value: None,
+                on_readout_change: None,
                 arc_from_center: false,
                 level_arc_color: Some(theme::PHANTOM),
                 interactive: true,
@@ -15337,6 +15397,8 @@ fn dynamics_popover(
             value,
             range,
             label: value_text,
+            secondary_value: None,
+            on_readout_change: None,
             arc_from_center: range.0 < 0.0,
             level_arc_color: Some(colour),
             interactive: true,
@@ -15676,6 +15738,8 @@ fn trim_popover(
             value: trim,
             range: (-65.0, 0.0),
             label: knob_db_label(trim),
+            secondary_value: None,
+            on_readout_change: None,
             arc_from_center: false,
             level_arc_color: Some(theme::text_primary()),
             interactive: true,
@@ -15839,6 +15903,8 @@ fn eq_popover(
                     value: b.gain_db,
                     range: (-20.0, 20.0),
                     label: format!("{:+.1}", b.gain_db),
+                    secondary_value: None,
+                    on_readout_change: None,
                     arc_from_center: true,
                     level_arc_color: Some(theme::eq_band()[band]),
                     interactive: true,
@@ -15870,6 +15936,8 @@ fn eq_popover(
                     value: b.freq_hz as f32,
                     range: (20.0, 20_000.0),
                     label: freq_text(b.freq_hz),
+                    secondary_value: None,
+                    on_readout_change: None,
                     arc_from_center: false,
                     level_arc_color: Some(theme::text_primary()),
                     interactive: true,
@@ -15901,6 +15969,8 @@ fn eq_popover(
                     value: b.q,
                     range: (0.7, 5.0),
                     label: format!("{:.2}", b.q),
+                    secondary_value: None,
+                    on_readout_change: None,
                     arc_from_center: false,
                     level_arc_color: Some(theme::text_primary()),
                     interactive: true,
@@ -15965,6 +16035,8 @@ fn eq_popover(
             value: eq.low_cut_freq_hz as f32,
             range: (20.0, 500.0),
             label: freq_text(eq.low_cut_freq_hz),
+            secondary_value: None,
+            on_readout_change: None,
             arc_from_center: false,
             level_arc_color: Some(theme::text_primary()),
             interactive: true,
@@ -16265,6 +16337,8 @@ fn fx_knob_cell<'a, T: Copy + 'static>(
         value,
         range,
         label: value_text,
+        secondary_value: None,
+        on_readout_change: None,
         arc_from_center: range.0 < 0.0,
         level_arc_color: Some(colour),
         interactive: true,
@@ -22318,6 +22392,34 @@ mod tests {
             state.device.inputs()[0].gain_right,
             Some(25),
             "the right preamp must follow the linked left control by the same step"
+        );
+    }
+
+    #[test]
+    fn linked_gain_readouts_adjust_each_preamp_independently() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        state.device.set_input_gain(0, 10).unwrap();
+        state.device.set_input_gain_right(0, 20).unwrap();
+
+        let _ = update(&mut state, Message::GainLeft(0, 15));
+        assert_eq!(state.device.inputs()[0].gain, Some(15));
+        assert_eq!(
+            state.device.inputs()[0].gain_right,
+            Some(20),
+            "the top readout must leave the right preamp alone"
+        );
+
+        let _ = update(&mut state, Message::GainRight(0, 30));
+        assert_eq!(state.device.inputs()[0].gain, Some(15));
+        assert_eq!(
+            state.device.inputs()[0].gain_right,
+            Some(30),
+            "the bottom readout must leave the left preamp alone"
+        );
+        assert!(
+            state.device.input_pair_linked(0),
+            "adjusting one readout must not split the pair"
         );
     }
 

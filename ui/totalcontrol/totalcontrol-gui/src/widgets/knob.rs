@@ -2,8 +2,9 @@
 //! alternative to a linear track. Drag vertically to turn it (a literal
 //! circular drag is fiddly with a 2D mouse, so — like every DAW's own
 //! virtual knobs, this included — "up" and "down" turn it, not tracing
-//! an arc), shift-drag for fine adjustment, scroll wheel to nudge,
-//! double-click to reset to default. Same interaction shape as
+//! an arc), shift-drag for fine adjustment, scroll wheel to nudge (or to
+//! nudge only one printed value when the face has two), double-click to
+//! reset to default. Same interaction shape as
 //! [`super::fader::Fader`], just driving an angle instead of a cap
 //! position.
 
@@ -23,7 +24,11 @@ use crate::theme;
 /// not a small accent.
 pub(crate) const DIAMETER: f32 = 42.0;
 const BORDER_WIDTH: f32 = 1.5;
+/// Every arc segment on a knob — the faint range track and both value arcs —
+/// uses this width.
+const ARC_WIDTH: f32 = 2.0;
 const TICK_LEN: f32 = 5.0;
+const TICK_WIDTH: f32 = 1.5;
 /// The tick extends past `DIAMETER`'s own edge (see `draw`); the canvas
 /// element's actual box (see `knob()`) is padded by this on every side so
 /// it doesn't get clipped by the widget's own layout bounds — the drawn
@@ -43,11 +48,26 @@ const DRAG_PX: f32 = 150.0;
 const START_DEG: f32 = 135.0;
 const SWEEP_DEG: f32 = 270.0;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+enum HoverTarget {
+    #[default]
+    None,
+    Knob,
+    Primary,
+    Secondary,
+}
+
 pub struct Knob<Message> {
     pub value: f32,
+    /// The secondary value printed under the primary one, when the label has
+    /// two lines.  Wheel input over the secondary readout starts from this
+    /// value instead of the primary one.
+    pub secondary_value: Option<f32>,
     pub range: (f32, f32),
     /// Printed centered inside the knob face — the reference design has no
     /// separate value readout below it, the knob doubles as the readout.
+    /// The primary value is the first line; a second line is the secondary
+    /// readout, and each line is its own wheel target.
     pub label: String,
     /// Draws a filled orange arc from the 12-o'clock (center-of-range)
     /// position round to the current value, like the real TotalMix pan
@@ -88,7 +108,12 @@ pub struct Knob<Message> {
     pub log_scale: bool,
     pub modifiers: Modifiers,
     pub scale: f32,
+    /// Whole-knob value changes: drag, click, double-click and wheel input
+    /// outside a readout.
     pub on_change: Box<dyn Fn(f32) -> Message>,
+    /// Wheel input over one printed readout.  `true` is the secondary line.
+    /// When absent, a wheel over either line uses `on_change`.
+    pub on_readout_change: Option<Box<dyn Fn(bool, f32) -> Message>>,
     pub on_reset: Box<dyn Fn() -> Message>,
 }
 
@@ -109,10 +134,23 @@ pub struct State {
     /// last one.
     drag_t: Option<f32>,
     scroll_t: Option<f32>,
+    /// Which readout the current wheel gesture started on.  A gesture that
+    /// moves from one readout to the other starts from that readout's value.
+    scroll_readout: Option<bool>,
     last_scroll: Option<Instant>,
+    hover: HoverTarget,
     /// See `Fader::State::display` — eases in value changes that didn't
     /// come from this knob's own drag (group selection, scene load).
     display: Option<MeterFrame>,
+}
+
+/// Measured readout cells in canvas-local coordinates.  The text is drawn
+/// from these same rectangles, so the hover target and the visible line
+/// always agree.
+struct LabelLayout {
+    font_size: f32,
+    primary: Rectangle,
+    secondary: Option<Rectangle>,
 }
 
 impl<Message> Knob<Message> {
@@ -137,6 +175,116 @@ impl<Message> Knob<Message> {
             (log_lo + t * (log_hi - log_lo)).exp()
         } else {
             lo + t * (hi - lo)
+        }
+    }
+
+    /// The value the colored arc follows.  A two-readout knob shows the
+    /// higher value so the arc never sits below a visible number.
+    fn arc_value(&self, primary: f32) -> f32 {
+        self.secondary_value
+            .map_or(primary, |secondary| primary.max(secondary))
+    }
+
+    fn label_parts(&self) -> (&str, Option<&str>) {
+        match self.label.split_once('\n') {
+            Some((primary, secondary)) => (primary, Some(secondary)),
+            None => (self.label.as_str(), None),
+        }
+    }
+
+    fn label_font_size(lines: usize, chars: usize) -> f32 {
+        if lines > 1 {
+            if chars <= 4 {
+                16.0
+            } else if chars <= 6 {
+                13.0
+            } else {
+                11.0
+            }
+        } else if chars <= 4 {
+            15.0
+        } else if chars <= 6 {
+            11.0
+        } else {
+            9.5
+        }
+    }
+
+    /// Canvas-local bounds.  `draw` translates the widget into place, so the
+    /// cache geometry starts at the origin even though the event bounds do
+    /// not.
+    fn local_bounds(bounds: Rectangle) -> Rectangle {
+        Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: bounds.width,
+            height: bounds.height,
+        }
+    }
+
+    fn label_layout(&self, bounds: Rectangle) -> LabelLayout {
+        let (primary, secondary) = self.label_parts();
+        let lines = if secondary.is_some() { 2 } else { 1 };
+        let chars = primary
+            .chars()
+            .count()
+            .max(secondary.map(|line| line.chars().count()).unwrap_or(0));
+        let font_size = Self::label_font_size(lines, chars) * self.scale;
+        let line_height = font_size * 1.18;
+        let center = bounds.center();
+        let max_width = (DIAMETER - 8.0) * self.scale;
+        let min_width = 8.0 * self.scale;
+        let cell = |line: &str, index: usize| {
+            let width = (line.chars().count() as f32 * font_size * 0.62)
+                .clamp(min_width, max_width);
+            let y = center.y
+                + (index as f32 - (lines as f32 - 1.0) / 2.0) * line_height;
+            Rectangle {
+                x: center.x - width / 2.0,
+                y: y - line_height / 2.0,
+                width,
+                height: line_height,
+            }
+        };
+        LabelLayout {
+            font_size,
+            primary: cell(primary, 0),
+            secondary: secondary.map(|line| cell(line, 1)),
+        }
+    }
+
+    /// Which printed line, if any, is under `position`.  `false` is the
+    /// primary line, `true` the secondary one.  A one-line label has no
+    /// separate readout target: the whole knob is its target.
+    fn readout_at(&self, position: iced::Point, bounds: Rectangle) -> Option<bool> {
+        if !self.interactive {
+            return None;
+        }
+        let layout = self.label_layout(bounds);
+        if let Some(secondary) = layout.secondary {
+            if layout.primary.contains(position) {
+                Some(false)
+            } else if secondary.contains(position) {
+                Some(true)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn hover_at(&self, cursor: mouse::Cursor, bounds: Rectangle) -> HoverTarget {
+        if !self.interactive {
+            return HoverTarget::None;
+        }
+        let Some(local) = cursor.position_in(bounds) else {
+            return HoverTarget::None;
+        };
+        match self.readout_at(local, Self::local_bounds(bounds)) {
+            Some(false) => HoverTarget::Primary,
+            Some(true) => HoverTarget::Secondary,
+            None => HoverTarget::Knob,
         }
     }
 }
@@ -181,7 +329,12 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if !state.dragging {
-                    return None;
+                    let hover = self.hover_at(cursor, bounds);
+                    if hover == state.hover {
+                        return None;
+                    }
+                    state.hover = hover;
+                    return Some(canvas::Action::request_redraw());
                 }
                 let pos = cursor.land().position()?;
                 let prev_y = state.drag_pos.unwrap_or(pos.y);
@@ -196,6 +349,13 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 state.drag_pos = Some(pos.y);
                 state.drag_t = Some(t);
                 Some(canvas::Action::publish((self.on_change)(self.t_to_value(t))).and_capture())
+            }
+            canvas::Event::Mouse(mouse::Event::CursorLeft) => {
+                if state.hover == HoverTarget::None {
+                    return None;
+                }
+                state.hover = HoverTarget::None;
+                Some(canvas::Action::request_redraw())
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 if !state.dragging {
@@ -227,20 +387,41 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 if dy == 0.0 {
                     return None;
                 }
+                let local = Self::local_bounds(bounds);
+                let target = cursor
+                    .position_in(bounds)
+                    .and_then(|position| self.readout_at(position, local))
+                    .filter(|_| self.on_readout_change.is_some());
+                state.hover = match target {
+                    Some(false) => HoverTarget::Primary,
+                    Some(true) => HoverTarget::Secondary,
+                    None => HoverTarget::Knob,
+                };
+                let value = match target {
+                    Some(true) => self.secondary_value.unwrap_or(self.value),
+                    _ => self.value,
+                };
                 let mult = if self.modifiers.shift() { 0.25 } else { 1.0 };
                 let now = Instant::now();
                 let fresh_gesture = state
                     .last_scroll
-                    .is_none_or(|t| now.duration_since(t) > SCROLL_IDLE);
+                    .is_none_or(|t| now.duration_since(t) > SCROLL_IDLE)
+                    || state.scroll_readout != target;
                 let base_t = if fresh_gesture {
-                    self.value_to_t(self.value)
+                    self.value_to_t(value)
                 } else {
-                    state.scroll_t.unwrap_or_else(|| self.value_to_t(self.value))
+                    state.scroll_t.unwrap_or_else(|| self.value_to_t(value))
                 };
                 let t = (base_t + dy * base_step * mult).clamp(0.0, 1.0);
                 state.scroll_t = Some(t);
+                state.scroll_readout = target;
                 state.last_scroll = Some(now);
-                Some(canvas::Action::publish((self.on_change)(self.t_to_value(t))).and_capture())
+                let value = self.t_to_value(t);
+                let message = match (target, self.on_readout_change.as_ref()) {
+                    (Some(side), Some(change)) => change(side, value),
+                    _ => (self.on_change)(value),
+                };
+                Some(canvas::Action::publish(message).and_capture())
             }
             // See `Fader::update`'s identical arm.
             canvas::Event::Window(window::Event::RedrawRequested(now)) => {
@@ -297,6 +478,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             display_value.to_bits().hash(&mut h);
+            self.secondary_value.map(f32::to_bits).hash(&mut h);
             self.label.hash(&mut h);
             self.scale.to_bits().hash(&mut h);
             (
@@ -304,6 +486,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 self.interactive,
                 self.arc_from_center,
                 self.level_arc_color.is_some(),
+                state.hover,
             )
                 .hash(&mut h);
             (bounds.width.to_bits(), bounds.height.to_bits()).hash(&mut h);
@@ -318,7 +501,8 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             let border_w = BORDER_WIDTH * self.scale;
             let tick_len = TICK_LEN * self.scale;
 
-                let t = self.value_to_t(display_value);
+            let t = self.value_to_t(display_value);
+            let arc_t = self.value_to_t(self.arc_value(display_value));
             // Dims everything but the face (which is already dark enough not
             // to need it) when `!interactive` — a faded knob reads as "not
             // applicable here" at a glance, without a second visual language
@@ -341,10 +525,15 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 theme::knob_face()
             };
             frame.fill(&Path::circle(center, radius.max(1.0)), face_color);
+            let border_color = if self.interactive && state.hover != HoverTarget::None {
+                theme::FADER
+            } else {
+                Color { a: dim, ..theme::knob_border() }
+            };
             frame.stroke(
                 &Path::circle(center, radius.max(1.0)),
                 Stroke::default()
-                    .with_color(Color { a: dim, ..theme::knob_border() })
+                    .with_color(border_color)
                     .with_width(border_w),
             );
 
@@ -370,7 +559,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                             a: 0.22,
                             ..theme::text_sec()
                         })
-                        .with_width(2.0 * self.scale),
+                        .with_width(ARC_WIDTH * self.scale),
                 );
             }
 
@@ -378,9 +567,9 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             // A centered arc (balance/pan) uses the same color but starts at
             // 12 o'clock, so the minimum-to-value arc is skipped there.
             if let Some(color) = self.level_arc_color {
-                if self.interactive && !self.arc_from_center && t > 0.0 {
+                if self.interactive && !self.arc_from_center && arc_t > 0.0 {
                     let start_angle = angle_of(0.0).0;
-                    let end_angle = angle_of(t).0;
+                    let end_angle = angle_of(arc_t).0;
                     frame.stroke(
                         &Path::new(|b| {
                             b.arc(canvas::path::Arc {
@@ -392,7 +581,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                         }),
                         Stroke::default()
                             .with_color(Color { a: dim, ..color })
-                            .with_width(2.0 * self.scale),
+                            .with_width(ARC_WIDTH * self.scale),
                     );
                 }
             }
@@ -405,7 +594,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             // arc implies a live reading a dimmed, inert knob shouldn't.
             if self.arc_from_center && self.interactive {
                 let center_angle = angle_of(0.5).0;
-                let value_angle = angle_of(t).0;
+                let value_angle = angle_of(arc_t).0;
                 let (start_angle, end_angle) = if center_angle <= value_angle {
                     (center_angle, value_angle)
                 } else {
@@ -415,14 +604,14 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                     &Path::new(|b| {
                         b.arc(canvas::path::Arc {
                             center,
-                            radius: radius - border_w,
+                            radius,
                             start_angle: Radians(start_angle),
                             end_angle: Radians(end_angle),
                         })
                     }),
                     Stroke::default()
                         .with_color(self.level_arc_color.unwrap_or(theme::ACCENT))
-                        .with_width(2.5 * self.scale),
+                        .with_width(ARC_WIDTH * self.scale),
                 );
             }
 
@@ -441,46 +630,46 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 ),
                 Stroke::default()
                     .with_color(Color { a: dim, ..theme::text_sec() })
-                    .with_width(1.5 * self.scale),
+                    .with_width(TICK_WIDTH * self.scale),
             );
 
-            // Value label, centered in the face — the knob doubles as its own
-            // readout instead of a separate text element below it.  Short
-            // values (gain, pan, trim) fill most of the face; longer EQ
-            // frequencies step down so they still fit inside the rim.
-            let lines: Vec<&str> = self.label.split('\n').collect();
-            let label_chars = lines
-                .iter()
-                .map(|line| line.chars().count())
-                .max()
-                .unwrap_or(0);
-            let label_size = if lines.len() > 1 {
-                // Two gain values stacked in one knob face: keep the single
-                // value size for short numbers, but leave room for both
-                // lines and the rim.
-                if label_chars <= 4 {
-                    16.0
-                } else if label_chars <= 6 {
-                    13.0
+            // Value labels, centered in the face — the knob doubles as its
+            // own readout instead of a separate text element below it.
+            // A linked gain pair prints two lines; each line is drawn from
+            // the same measured cell used by the wheel hit test, and the
+            // line under the pointer keeps full opacity while the other
+            // dims.
+            let (primary, secondary) = self.label_parts();
+            let layout = self.label_layout(Self::local_bounds(bounds));
+            let alpha = |is_secondary: bool| {
+                if !self.interactive {
+                    1.0
+                } else if state.hover == HoverTarget::Primary {
+                    if is_secondary { 0.55 } else { 1.0 }
+                } else if state.hover == HoverTarget::Secondary {
+                    if is_secondary { 1.0 } else { 0.55 }
                 } else {
-                    11.0
+                    1.0
                 }
-            } else if label_chars <= 4 {
-                15.0
-            } else if label_chars <= 6 {
-                11.0
-            } else {
-                9.5
             };
-            frame.fill_text(canvas::Text {
-                content: self.label.clone(),
-                position: center,
-                color: Color { a: dim, ..theme::text_primary() },
-                size: (label_size * self.scale).into(),
-                align_x: text::Alignment::Center,
-                align_y: alignment::Vertical::Center,
-                ..canvas::Text::default()
-            });
+            let mut draw_line = |line: &str, cell: Rectangle, is_secondary: bool| {
+                frame.fill_text(canvas::Text {
+                    content: line.to_owned(),
+                    position: iced::Point::new(center.x, cell.y + cell.height / 2.0),
+                    color: Color {
+                        a: dim * alpha(is_secondary),
+                        ..theme::text_primary()
+                    },
+                    size: layout.font_size.into(),
+                    align_x: text::Alignment::Center,
+                    align_y: alignment::Vertical::Center,
+                    ..canvas::Text::default()
+                });
+            };
+            draw_line(primary, layout.primary, false);
+            if let (Some(line), Some(cell)) = (secondary, layout.secondary) {
+                draw_line(line, cell, true);
+            }
 
         });
         vec![geometry]
@@ -520,6 +709,8 @@ mod tests {
             value: range.0,
             range,
             label: String::new(),
+            secondary_value: None,
+            on_readout_change: None,
             arc_from_center: false,
             level_arc_color: None,
             interactive: true,
@@ -529,6 +720,97 @@ mod tests {
             on_change: Box::new(|_| ()),
             on_reset: Box::new(|| ()),
         }
+    }
+
+    fn readout_knob(label: &'static str) -> Knob<&'static str> {
+        Knob {
+            value: 20.0,
+            range: (0.0, 65.0),
+            label: label.into(),
+            secondary_value: label.contains('\n').then_some(40.0),
+            on_readout_change: Some(Box::new(|secondary, _| {
+                if secondary { "secondary" } else { "primary" }
+            })),
+            arc_from_center: false,
+            level_arc_color: None,
+            interactive: true,
+            log_scale: false,
+            modifiers: Modifiers::default(),
+            scale: 1.0,
+            on_change: Box::new(|_| "whole"),
+            on_reset: Box::new(|| "reset"),
+        }
+    }
+
+    fn wheel_at(knob: &Knob<&'static str>, position: iced::Point) -> &'static str {
+        let mut state = State::default();
+        let bounds = Rectangle {
+            x: 100.0,
+            y: 50.0,
+            width: BOX_SIZE,
+            height: BOX_SIZE,
+        };
+        let event = canvas::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        });
+        canvas::Program::update(
+            knob,
+            &mut state,
+            &event,
+            bounds,
+            mouse::Cursor::Available(position),
+        )
+        .expect("wheel action")
+        .into_inner()
+        .0
+        .expect("message")
+    }
+
+    #[test]
+    fn two_readouts_are_separate_wheel_targets() {
+        let knob = readout_knob("20\n40");
+        let local = Knob::<()>::local_bounds(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: BOX_SIZE,
+            height: BOX_SIZE,
+        });
+        let layout = knob.label_layout(local);
+        let primary = layout.primary.center();
+        let secondary = layout.secondary.expect("second readout").center();
+
+        assert_eq!(
+            wheel_at(&knob, iced::Point::new(100.0 + primary.x, 50.0 + primary.y)),
+            "primary"
+        );
+        assert_eq!(
+            wheel_at(&knob, iced::Point::new(100.0 + secondary.x, 50.0 + secondary.y)),
+            "secondary"
+        );
+        assert_eq!(wheel_at(&knob, iced::Point::new(101.0, 51.0)), "whole");
+    }
+
+    #[test]
+    fn arc_follows_the_higher_readout() {
+        let knob = readout_knob("20\n40");
+        assert_eq!(knob.arc_value(20.0), 40.0);
+        assert_eq!(knob.arc_value(40.0), 40.0);
+        assert_eq!(knob.arc_value(50.0), 50.0);
+
+        let single = readout_knob("20");
+        assert_eq!(single.arc_value(20.0), 20.0);
+    }
+
+    #[test]
+    fn one_readout_keeps_the_whole_knob_as_its_target() {
+        let knob = readout_knob("20");
+        assert_eq!(
+            wheel_at(
+                &knob,
+                iced::Point::new(100.0 + BOX_SIZE / 2.0, 50.0 + BOX_SIZE / 2.0)
+            ),
+            "whole"
+        );
     }
 
     #[test]

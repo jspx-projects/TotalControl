@@ -282,7 +282,9 @@ used, since it covers the values it hovers over.
 - Every knob has the same near-black face, a step darker than the strip card,
   so its rim and arc read as colour against the card.
 - Every interactive knob draws a faint full-range track and a value arc from
-  the range minimum, or from top centre for pan and balance.
+  the range minimum, or from top centre for pan and balance. The faint track
+  and every value arc use one width, and the value arc is centred on the knob
+  rim.
 - An always-on coloured outline is not used.  The full-range track stays
   neutral; colour appears on an arc only while the control is live.
 - The default arc colour is white. Semantic colours are:
@@ -294,6 +296,40 @@ used, since it covers the values it hovers over.
   most one decimal and no unit suffix; the row label supplies the unit.
 - Label size is 15 px for 1–4 characters, 11 px for 5–6, and 9.5 px for longer
   frequency labels.
+
+#### 2.1.1 Knob readouts
+
+A knob prints one or two values in its face. The primary value is the top (or
+left) one; the knob angle and tick follow it. A colored value arc follows the
+higher of the two readouts. A knob with two readouts keeps both visible at
+every value, including when the values are equal or both at a range limit.
+
+Hovering a knob brightens its rim to the strip hover silver. The value arc and
+tick keep their functional colour. With two readouts, each printed line is its
+own hover target: the line under the pointer is drawn at full opacity and the
+other line is dimmed. The highlight follows the pointer and is not a
+selection.
+
+The rim, the value arc and the face outside the readout text are the
+whole-knob target.
+
+| Pointer over | Wheel adjusts |
+|---|---|
+| rim, value arc or empty face | every value, by the same step |
+| primary readout | only the primary value |
+| secondary readout | only the secondary value |
+
+The wheel keeps its existing step, limits and Shift+fine behaviour for the
+targeted value. The angle and tick keep following the primary value while the
+secondary is adjusted; the arc follows whichever readout is higher. Dragging,
+clicking and double-clicking remain
+whole-knob gestures and never act on one readout. A one-readout knob has no
+readout distinction: the whole knob is the target.
+
+The linked input-pair gain knob is the two-readout control. Over the knob the
+wheel moves both preamps by the same step; over the top or bottom number it
+moves only that preamp, so the two gains can be set individually. The pair
+stays linked and the face keeps both values.
 
 ### 2.2 On/off controls
 
@@ -904,7 +940,10 @@ stream.
 
 A linked input pair always shows both values, left above right, even when
 they are equal. This mirrors the device, which always treats inputs 1–4 as
-unlinked. An unlinked input shows one value.
+unlinked. An unlinked input shows one value. The wheel over the whole knob
+moves both preamps by the same step; the wheel over the top or bottom number
+moves only that preamp, as described in §2.1.1. The orange arc follows the
+higher of the two gains.
 
 ### 3.3 Device sheet
 
@@ -1292,7 +1331,9 @@ Linking an input pair uses the left channel as the reference for mute, solo,
 phantom, Inst, Level, reference level and AutoSet. It also copies the left
 channel's FX send, low cut, EQ, dynamics and AutoLevel settings to the
 right. The linked gain knob moves both preamps by the same step and preserves
-their offset; the knob shows both values. Phase remains per-channel.
+their offset; the knob shows both values. The wheel over one readout moves
+that preamp alone; the wheel over the rest of the knob moves both. The gain
+arc follows the higher of the two values. Phase remains per-channel.
 
 Linking does not copy or flatten the two channel volumes: the linked fader
 displays the louder channel, and moving it shifts both channels by the same

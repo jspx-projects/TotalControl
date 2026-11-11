@@ -494,7 +494,8 @@ Input and playback pairs can be linked. When linked:
 - the pair's balance is visible and adjustable from one knob, and keeps its
   setting at any fader level;
 - the gain knob moves both preamps by the same step, preserving any offset
-  between them, and shows both values;
+  between them, and shows both values; turning the wheel with the pointer
+  over the top or bottom value moves only that preamp;
 - mute, solo, FX send, EQ, low cut and dynamics settings are shared from the
   left channel;
 - panel buttons split into a **linked pair**: a phase pair shows `Ø L` and
@@ -893,7 +894,9 @@ front-panel equivalent controls of the unit.
   until you release it.
 - **Hold Shift** while dragging for fine adjustment. This works on faders,
   knobs, matrix cells and EQ handles.
-- **Scroll** over a fader or knob nudges it.
+- **Scroll** over a fader or knob nudges it. On a knob that shows two values,
+  scrolling over one value changes only that value; scrolling over the rest
+  of the knob changes both.
 - **Double-click** a fader, the FX fader, a knob or an EQ handle to reset
   that control; double-click a matrix cell to toggle it between off and
   unity; double-click a channel name to rename it; double-click the dB
@@ -1243,9 +1246,12 @@ knob cannot link or unlink a pair; the link state is a TotalControl setting.
 A linked input pair always shows both gains in the TotalControl Gain knob:
 the left gain above, the right gain below, even when they are equal. Turning
 that knob moves both preamps by the same step, preserving any offset between
-them. This mirrors the device's pair-adjust mode, which moves both channels
-whether or not they are linked. An unlinked input shows one value and moves
-only that channel.
+them. Turning the wheel with the pointer over the top number moves only the
+left preamp; over the bottom number it moves only the right one. The orange
+arc follows the higher of the two gains, and both values stay visible at the
+range limits. This mirrors the device's pair-adjust mode,
+which moves both channels whether or not they are linked. An unlinked input
+shows one value and moves only that channel.
 
 ### Output level
 
