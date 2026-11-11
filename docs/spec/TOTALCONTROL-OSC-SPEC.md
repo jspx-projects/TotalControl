@@ -867,9 +867,10 @@ Phase is a special case: classic page-2 `/2/phase` produced no UC device
 write, while the TotalMix UI phase control writes request `0x18`.  Do not
 describe OSC phase as a UC device-backed control.
 
-UC meters are fed from the host audio path.  The UC `0x85` interrupt stream is
-324 bytes and is captured, but its layout is not decoded.  The current driver
-treats UC metering as audio-derived and does not start the UC `0x85`/`0x8d`
-streams; it is not yet established whether `0x85` contains audio meters or
-link/transport telemetry.  The `0x8b` endpoint carries no status payload in
-the captured connects.
+The UC manual specifies a Peak and RMS meter for every input, playback and
+hardware output, calculated in the device hardware.  The `0x85` interrupt
+stream is 324 bytes and is the observed meter transport, but its word layout
+is not decoded.  TotalControl currently feeds UC meters from the host audio
+path and does not start the UC `0x85`/`0x8d` streams; that is an implementation
+gap, not evidence that the device lacks meters.  The `0x8b` endpoint carries
+no status payload in the captured connects.
