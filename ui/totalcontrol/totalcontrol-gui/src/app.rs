@@ -434,6 +434,9 @@ impl RmeDevice for DeviceHandle {
     fn matrix_uses_display_order(&self) -> bool {
         delegate!(self, matrix_uses_display_order)
     }
+    fn matrix_blocks_for_pair(&self, pair: usize) -> [usize; 2] {
+        delegate!(self, matrix_blocks_for_pair(pair))
+    }
     fn matrix_cells_supported(&self) -> bool {
         delegate!(self, matrix_cells_supported)
     }
@@ -22722,6 +22725,43 @@ mod tests {
             "expected 0.5/0.25, got {volumes:?}"
         );
         assert_eq!(super::channel_pan(&state, cid, 0), -50);
+    }
+
+    #[test]
+    fn a_ucx_input_balance_at_zero_reads_the_service_block() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.device_target = Some(DeviceTarget::kind_only(DeviceKind::MockUcx));
+        attach_device_service(&mut state);
+        let cid = ChannelId::Input(0);
+        let out = 3; // internal AN5/6; UCX DSP block 4
+
+        let _ = update(&mut state, Message::VolumeChanged(cid, out, 0.0));
+        let _ = update(&mut state, Message::PanChanged(cid, out, -50));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pan = 0;
+        while Instant::now() < deadline {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            pan = super::channel_pan(&state, cid, out);
+            if pan == -50 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(pan, -50);
+        let block = state.device.matrix_blocks_for_pair(out)[0];
+        assert_eq!(
+            state.device.pair_block_balance(cid, block),
+            Some(-50),
+            "the stored balance is in the block the GUI reads"
+        );
     }
 
     #[test]

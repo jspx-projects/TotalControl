@@ -433,6 +433,14 @@ impl RmeDevice for Mirror {
         self.info.matrix_uses_display_order
     }
 
+    fn matrix_blocks_for_pair(&self, pair: usize) -> [usize; 2] {
+        mirror_matrix_blocks(
+            &self.info.output_display_order,
+            self.info.matrix_uses_display_order,
+            pair,
+        )
+    }
+
     fn matrix_cells_supported(&self) -> bool {
         self.info.capabilities.matrix_cells
     }
@@ -1411,6 +1419,27 @@ fn live_scene(device: &DeviceHandle) -> Scene {
     scene
 }
 
+/// The matrix block pair the mirror must use for an internal output pair.
+///
+/// The UCX stores the matrix in display/DSP order (Phones first), while the
+/// output array and `sel_out` use the internal order.  The service applies
+/// pair operations with the backend's mapping, so a stored balance is read
+/// from the same block only when the mirror uses that mapping too.
+fn mirror_matrix_blocks(
+    output_display_order: &[usize],
+    matrix_uses_display_order: bool,
+    pair: usize,
+) -> [usize; 2] {
+    if matrix_uses_display_order {
+        return [pair * 2, pair * 2 + 1];
+    }
+    output_display_order
+        .iter()
+        .position(|&internal| internal == pair)
+        .map(|display| [display * 2, display * 2 + 1])
+        .unwrap_or([pair * 2, pair * 2 + 1])
+}
+
 fn capture_info(device: &DeviceHandle) -> DeviceInfo {
     DeviceInfo {
         model_name: device.model_name().to_string(),
@@ -1643,7 +1672,7 @@ fn apply(device: &mut DeviceHandle, command: Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, DeviceService};
+    use super::{mirror_matrix_blocks, Command, DeviceService};
     use crate::app::DeviceHandle;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -1651,6 +1680,18 @@ mod tests {
 
     fn mock() -> DeviceHandle {
         DeviceHandle::Mock(MockBabyfacePro::open_ucx().expect("mock opens"))
+    }
+
+    #[test]
+    fn the_mirror_uses_the_ucx_matrix_block_order() {
+        // UCX internal output order: Phones, AN1/2, AN3/4, AN5/6...
+        // Display/DSP order: AN1/2, AN3/4, AN5/6, Phones...
+        let order = vec![1, 2, 3, 0, 4, 5, 6, 7, 8];
+        assert_eq!(mirror_matrix_blocks(&order, false, 1), [0, 1]);
+        assert_eq!(mirror_matrix_blocks(&order, false, 3), [4, 5]);
+        assert_eq!(mirror_matrix_blocks(&order, false, 0), [6, 7]);
+        // The UC already stores its channels in display order.
+        assert_eq!(mirror_matrix_blocks(&order, true, 3), [6, 7]);
     }
 
     fn wait_for(mut check: impl FnMut() -> bool) -> bool {
