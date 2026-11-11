@@ -600,7 +600,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                     &Path::new(|b| {
                         b.arc(canvas::path::Arc {
                             center,
-                            radius: radius - border_w,
+                            radius,
                             start_angle: Radians(start_angle),
                             end_angle: Radians(end_angle),
                         })

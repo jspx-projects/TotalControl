@@ -282,7 +282,8 @@ used, since it covers the values it hovers over.
 - Every knob has the same near-black face, a step darker than the strip card,
   so its rim and arc read as colour against the card.
 - Every interactive knob draws a faint full-range track and a value arc from
-  the range minimum, or from top centre for pan and balance.
+  the range minimum, or from top centre for pan and balance. The value arc is
+  centred on the knob rim.
 - An always-on coloured outline is not used.  The full-range track stays
   neutral; colour appears on an arc only while the control is live.
 - The default arc colour is white. Semantic colours are:
