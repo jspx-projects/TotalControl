@@ -1894,6 +1894,8 @@ pub enum Message {
     /// `Input`/`Playback` id, never `Output` (see `quick_channel_options`,
     /// the only place that builds the pick-list this feeds).
     QuickChannelSelected(ChannelId),
+    /// A destination chosen in the Quick view's output list.
+    QuickDestination(ChannelId),
     /// Switch to another detected mixer backend/device.
     SelectDevice(DeviceTarget),
     SelectOutput(usize),
@@ -7987,6 +7989,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::SetView(_)
             | Message::ToggleMatrixMono
             | Message::QuickChannelSelected(_)
+            | Message::QuickDestination(_)
             | Message::SelectOutput(_)
             | Message::ModifiersChanged(_)
             | Message::TabPressed
@@ -8252,6 +8255,7 @@ fn changes_workspace(message: &Message) -> bool {
             | Message::SpeakerB(_)
             | Message::TalkbackChanged(_)
             | Message::QuickChannelSelected(_)
+            | Message::QuickDestination(_)
             | Message::SelectOutput(_)
             | Message::ToggleMatrixMono
     ) || changes_prefs(message)
@@ -9104,6 +9108,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::QuickChannelSelected(cid) => state.quick_channel = cid,
+        Message::QuickDestination(cid) => {
+            close_top_menus(state);
+            select_strip(state, cid);
+            close_route_flyout(state);
+            notify_osc_raw(state, "/submix", vec![OscType::Int(state.sel_out as i32)]);
+        }
         Message::SelectOutput(i) => {
             close_top_menus(state);
             // A click or OSC message can outlive the device it came from
@@ -18430,24 +18440,98 @@ fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
     .into()
 }
 
-/// Every channel selectable as a Quick Control source, in display order —
-/// inputs then playbacks, matching `channel_order`. Outputs are excluded:
-/// the Quick view's destination block is always `Output(state.sel_out)`,
-/// picked via the existing Submix selector in the top bar rather than a
-/// second picker here.
+/// The name the Mixer gives one channel strip, including the user's
+/// pair label and the pair-bus fold for a linked pair.
+fn quick_channel_title(state: &TotalControl, cid: ChannelId) -> String {
+    finish_params(state, strip_params(state, cid, state.sel_out)).name
+}
+
+/// The title of a linked pair, derived exactly like the Mixer's row: fold
+/// the right channel's own name into the left strip, then let the user's
+/// pair label win in `finish_params`.
+fn quick_pair_title(state: &TotalControl, left: ChannelId, right: ChannelId) -> String {
+    let mut params = strip_params(state, left, state.sel_out);
+    let right_name = match right {
+        ChannelId::Input(i) => state.device.inputs().get(i).map(|ch| ch.name.as_str()),
+        ChannelId::Playback(i) => state.device.playbacks().get(i).map(|ch| ch.name.as_str()),
+        ChannelId::Output(i) => state.device.outputs().get(i).map(|ch| ch.name.as_str()),
+    };
+    if let Some(name) = right_name {
+        params.name = pair_bus_label(&params.name, name);
+    }
+    finish_params(state, params).name
+}
+
+/// Every selectable Quick Control source.  A linked input or playback pair
+/// is one entry; a split pair contributes its two mono channels.  Outputs
+/// are excluded: the Quick destination block uses its own output list.
 fn quick_channel_options(state: &TotalControl) -> Vec<(ChannelId, String)> {
     let mut opts = Vec::new();
-    for (i, ch) in state.device.inputs().iter().enumerate() {
-        let cid = ChannelId::Input(i);
-        let name = user_label(state, cid).unwrap_or(short_label(&ch.name));
-        opts.push((cid, format!("{name} · IN")));
+    let inputs = state.device.inputs().len() / 2;
+    for pair in 0..inputs {
+        let left = ChannelId::Input(pair * 2);
+        let right = ChannelId::Input(pair * 2 + 1);
+        if state.device.input_pair_linked(pair) {
+            opts.push((left, format!("{} · IN", quick_pair_title(state, left, right))));
+        } else {
+            for cid in [left, right] {
+                if channel_exists(state, cid) {
+                    opts.push((cid, format!("{} · IN", quick_channel_title(state, cid))));
+                }
+            }
+        }
     }
-    for (i, ch) in state.device.playbacks().iter().enumerate() {
-        let cid = ChannelId::Playback(i);
-        let name = user_label(state, cid).unwrap_or(short_label(&ch.name));
-        opts.push((cid, format!("{name} · PB")));
+    let playbacks = state.device.playbacks().len() / 2;
+    for pair in 0..playbacks {
+        let left = ChannelId::Playback(pair * 2);
+        let right = ChannelId::Playback(pair * 2 + 1);
+        if state.device.playback_linked(pair) {
+            opts.push((left, format!("{} · PB", quick_pair_title(state, left, right))));
+        } else {
+            for cid in [left, right] {
+                if channel_exists(state, cid) {
+                    opts.push((cid, format!("{} · PB", quick_channel_title(state, cid))));
+                }
+            }
+        }
     }
     opts
+}
+
+/// The Quick destination list follows the output link state: one entry for a
+/// linked stereo pair, two entries for a split pair.  The labels are the same
+/// titles the output strips use.
+fn quick_destination_options(state: &TotalControl) -> Vec<(ChannelId, String)> {
+    let mut opts = Vec::new();
+    for pair in state.device.output_display_order() {
+        let left = ChannelId::Output(pair * 2);
+        if state.device.outputs_one_per_pair() {
+            opts.push((ChannelId::Output(pair), quick_channel_title(state, ChannelId::Output(pair))));
+        } else if state.device.output_linked(pair) {
+            let right = ChannelId::Output(pair * 2 + 1);
+            opts.push((left, quick_pair_title(state, left, right)));
+        } else {
+            for cid in [left, ChannelId::Output(pair * 2 + 1)] {
+                if channel_exists(state, cid) {
+                    opts.push((cid, quick_channel_title(state, cid)));
+                }
+            }
+        }
+    }
+    opts
+}
+
+/// The representative channel for the Quick source strip.  A linked pair
+/// always renders from its left channel; a split pair keeps the selected
+/// side.
+fn quick_source_channel(state: &TotalControl, cid: ChannelId) -> ChannelId {
+    match cid {
+        ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => ChannelId::Input(i & !1),
+        ChannelId::Playback(i) if state.device.playback_linked(i / 2) => {
+            ChannelId::Playback(i & !1)
+        }
+        other => other,
+    }
 }
 
 /// How much bigger than a normal strip the two Quick Control blocks are:
@@ -18559,19 +18643,18 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
     let options = quick_channel_options(state);
     let labels: Vec<String> = options.iter().map(|(_, l)| l.clone()).collect();
     let cids: Vec<ChannelId> = options.iter().map(|(c, _)| *c).collect();
+    let quick_channel = quick_source_channel(state, state.quick_channel);
     let current = options
         .iter()
-        .find(|(cid, _)| *cid == state.quick_channel)
+        .find(|(cid, _)| *cid == quick_channel)
         .map(|(_, l)| l.clone());
-
-    let quick_channel = state.quick_channel;
     // Never derive the destination from a submix that belongs to the
     // previous device; a stale selector may reach the view for one frame
     // during a switch.
     let sel_out = state
         .sel_out
         .min(state.device.output_pair_count().saturating_sub(1));
-    let dest_cid = ChannelId::Output(selected_output_channel(state));
+
 
     // Rebuilt on every layout pass: the content sits behind a `responsive`
     // (the centered form needs the available size, which a `Length::Fill`
@@ -18580,22 +18663,18 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
     // The destination picker lists the submix buses by the same names the
     // rest of the UI uses for them (a user label on an output strip
     // included), and selecting one is exactly the top bar's Submix field.
-    let out_labels = state.pair_labels();
-    let display_order = state.device.output_display_order();
-    let dest_labels: Vec<String> = display_order
+    let dest_options = quick_destination_options(state);
+    let dest_labels: Vec<String> = dest_options.iter().map(|(_, l)| l.clone()).collect();
+    let dest_cids: Vec<ChannelId> = dest_options.iter().map(|(c, _)| *c).collect();
+    let dest_cid = ChannelId::Output(selected_output_channel(state));
+    let dest_current = dest_options
         .iter()
-        .map(|&i| {
-            user_label(state, ChannelId::Output(i * 2))
-                .map(str::to_string)
-                .unwrap_or_else(|| out_labels.get(i).cloned().unwrap_or_default())
-        })
-        .collect();
-    let selected_display = state.device.display_pair_index(sel_out);
+        .find(|(cid, _)| *cid == dest_cid)
+        .map(|(_, l)| l.clone());
 
     let build_content = move |big_scale: f32| -> Element<'_, Message> {
         let labels_for_pick = labels.clone();
         let cids = cids.clone();
-        let display_order_for_pick = display_order.clone();
         let strip_w = strip::STRIP_W * big_scale;
         fn styled<'p>(
             p: iced::widget::PickList<'p, String, Vec<String>, String, Message>,
@@ -18620,17 +18699,13 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
             .placeholder("select..."),
         );
         let dest_for_pick = dest_labels.clone();
+        let dest_cids = dest_cids.clone();
         let dest_picker = picker_style(pick_list(
             dest_labels.clone(),
-            dest_labels.get(selected_display).cloned(),
+            dest_current.clone(),
             move |label| {
-                let display = dest_for_pick.iter().position(|l| *l == label).unwrap_or(0);
-                Message::SelectOutput(
-                    display_order_for_pick
-                        .get(display)
-                        .copied()
-                        .unwrap_or(display),
-                )
+                let idx = dest_for_pick.iter().position(|l| *l == label).unwrap_or(0);
+                Message::QuickDestination(dest_cids[idx])
             },
         ));
 
@@ -18640,6 +18715,30 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
         // left/right of pair `i`) — so the pair's representative channel
         // is `sel_out * 2`, not `sel_out` itself.
         let mut source_params = strip_params(state, quick_channel, sel_out);
+        match quick_channel {
+            ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => {
+                let left = i & !1;
+                if let Some(right) = state.device.inputs().get(left + 1) {
+                    source_params.name =
+                        pair_bus_label(&source_params.name, &right.name);
+                }
+                source_params.meter2 =
+                    state.input_meters.get(left + 1).map(MeterAnim::frame);
+                source_params.meter2_available = state.device.has_input_meter(left + 1);
+            }
+            ChannelId::Playback(i) if state.device.playback_linked(i / 2) => {
+                let left = i & !1;
+                if let Some(right) = state.device.playbacks().get(left + 1) {
+                    source_params.name =
+                        pair_bus_label(&source_params.name, &right.name);
+                }
+                source_params.meter2 =
+                    state.playback_meters.get(left + 1).map(MeterAnim::frame);
+                source_params.meter2_available =
+                    playback_meter_available(state, left + 1);
+            }
+            _ => {}
+        }
         source_params.scale = big_scale;
         let mut dest_params = strip_params(state, dest_cid, sel_out);
         dest_params.scale = big_scale;
@@ -21895,6 +21994,71 @@ mod tests {
         assert!(state.flyout_open.is_empty());
         assert!(state.sel_out < state.device.output_pair_count());
         let _ = super::quick_view(&state);
+    }
+
+    #[test]
+    fn quick_source_options_follow_the_input_link_state() {
+        let mut state = new(true, None, None);
+        let _ = update(
+            &mut state,
+            Message::StereoLinkChanged(ChannelId::Input(0), true),
+        );
+        let linked = super::quick_channel_options(&state);
+        assert_eq!(
+            linked
+                .iter()
+                .filter(|(cid, _)| matches!(cid, ChannelId::Input(0 | 1)))
+                .count(),
+            1,
+            "a linked input pair is one source entry"
+        );
+        assert!(linked
+            .iter()
+            .any(|(cid, label)| *cid == ChannelId::Input(0) && label.contains('/')));
+
+        let _ = update(
+            &mut state,
+            Message::StereoLinkChanged(ChannelId::Input(0), false),
+        );
+        let mono = super::quick_channel_options(&state);
+        assert_eq!(
+            mono.iter()
+                .filter(|(cid, _)| matches!(cid, ChannelId::Input(0 | 1)))
+                .count(),
+            2,
+            "a split input pair contributes both mono channels"
+        );
+        assert!(mono.iter().any(|(cid, _)| *cid == ChannelId::Input(1)));
+    }
+
+    #[test]
+    fn quick_destination_options_follow_the_output_link_state() {
+        let mut state = new(true, None, None);
+        let _ = update(
+            &mut state,
+            Message::StereoLinkChanged(ChannelId::Output(0), false),
+        );
+        let split = super::quick_destination_options(&state);
+        assert!(split.iter().any(|(cid, _)| *cid == ChannelId::Output(0)));
+        assert!(split.iter().any(|(cid, _)| *cid == ChannelId::Output(1)));
+
+        let _ = update(&mut state, Message::QuickDestination(ChannelId::Output(1)));
+        assert_eq!(state.sel_out, 0);
+        assert_eq!(state.sel_out_side, 1);
+
+        let _ = update(
+            &mut state,
+            Message::StereoLinkChanged(ChannelId::Output(0), true),
+        );
+        let linked = super::quick_destination_options(&state);
+        assert_eq!(
+            linked
+                .iter()
+                .filter(|(cid, _)| matches!(cid, ChannelId::Output(0 | 1)))
+                .count(),
+            1,
+            "a linked output pair is one destination entry"
+        );
     }
 
     #[test]

@@ -304,7 +304,10 @@ stops the drawing entirely (see
 TotalControl offers three views:
 
 - **Quick**: one source into one destination — the fastest way to build a
-  basic mix.
+  basic mix. A linked input pair appears once with its pair name; a split
+  pair appears as its two mono channels. The destination list follows the
+  output link state the same way, and a split output selects the chosen
+  side. The two strips render and behave like their Mixer counterparts.
 - **Mixer**: all strips on three rows, TotalMix-style.
 - **Matrix**: the complete routing grid; double-click a cell to toggle it
   between off and unity.
