@@ -167,3 +167,25 @@ Control Room extensions were developed in this tree.  All Fireface protocol
 knowledge comes from our own USB captures; no RME documentation or code is
 included.  Full notices are in [`THIRD-PARTY.md`](THIRD-PARTY.md).
 
+## How to contribute
+
+Contributions are welcome through pull requests. Maintainers integrate accepted
+work, keep `main` safe and own the project documentation. Device contributors
+own the hardware evidence and testing: the model, firmware, transport, sample
+rate and quantum, and confirmation that the user scene and
+`~/.config/totalcontrol/gui.json` are preserved.
+
+We may merge a minimal, device-specific implementation without waiting for full
+support. Full support requires the contributor to test the integrated tree and
+resolve or report the follow-up issue. After integration, sync `main`, build
+against your kernel, test, and close your original pull requests yourself once
+verified.
+
+Missing protocol details and hardware follow-ups belong in a tracking issue.
+They do not block maintainer progress on other devices. Do not include personal
+data or captured device state in a pull request or issue.
+
+See [`AGENTS.md`](AGENTS.md) and the
+[pull request template](.github/pull_request_template.md) for the repository
+rules.
+
