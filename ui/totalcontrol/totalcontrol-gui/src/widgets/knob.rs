@@ -24,7 +24,11 @@ use crate::theme;
 /// not a small accent.
 pub(crate) const DIAMETER: f32 = 42.0;
 const BORDER_WIDTH: f32 = 1.5;
+/// Every arc segment on a knob — the faint range track and both value arcs —
+/// uses this width.
+const ARC_WIDTH: f32 = 2.0;
 const TICK_LEN: f32 = 5.0;
+const TICK_WIDTH: f32 = 1.5;
 /// The tick extends past `DIAMETER`'s own edge (see `draw`); the canvas
 /// element's actual box (see `knob()`) is padded by this on every side so
 /// it doesn't get clipped by the widget's own layout bounds — the drawn
@@ -555,7 +559,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                             a: 0.22,
                             ..theme::text_sec()
                         })
-                        .with_width(2.0 * self.scale),
+                        .with_width(ARC_WIDTH * self.scale),
                 );
             }
 
@@ -577,7 +581,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                         }),
                         Stroke::default()
                             .with_color(Color { a: dim, ..color })
-                            .with_width(2.0 * self.scale),
+                            .with_width(ARC_WIDTH * self.scale),
                     );
                 }
             }
@@ -607,7 +611,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                     }),
                     Stroke::default()
                         .with_color(self.level_arc_color.unwrap_or(theme::ACCENT))
-                        .with_width(2.5 * self.scale),
+                        .with_width(ARC_WIDTH * self.scale),
                 );
             }
 
@@ -626,7 +630,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 ),
                 Stroke::default()
                     .with_color(Color { a: dim, ..theme::text_sec() })
-                    .with_width(1.5 * self.scale),
+                    .with_width(TICK_WIDTH * self.scale),
             );
 
             // Value labels, centered in the face — the knob doubles as its
