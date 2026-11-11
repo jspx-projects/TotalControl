@@ -13,7 +13,7 @@ these documents extend it with device-specific and visible detail.
 | [FIREFFACE-UCX-PROTOCOL-SPEC.md](FIREFFACE-UCX-PROTOCOL-SPEC.md) | Fireface UCX transport, registers, writes and readback |
 | [FIREFFACE-UC-PROTOCOL-SPEC.md](FIREFFACE-UC-PROTOCOL-SPEC.md) | Fireface UC transport and controls |
 | [BABYFACE-PRO-PROTOCOL-SPEC.md](BABYFACE-PRO-PROTOCOL-SPEC.md) | Babyface Pro FS channel model, ALSA surface, USB protocol and DSP blocks |
-| [BABYFACE-CLASSIC-PROTOCOL-SPEC.md](BABYFACE-CLASSIC-PROTOCOL-SPEC.md) | Babyface-classic transport, PCM streams, metering and hwdep ABI |
+| [BABYFACE-CLASSIC-PROTOCOL-SPEC.md](BABYFACE-CLASSIC-PROTOCOL-SPEC.md) | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI |
 
 The end-user manual is
 [`../TOTALCONTROL-Manual.md`](../TOTALCONTROL-Manual.md). Development-only

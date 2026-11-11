@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use totalcontrol_core::channel::EqBandType;
 use totalcontrol_core::fireface::UcxDump;
 #[cfg(feature = "alsa")]
-use totalcontrol_core::{BabyfacePro, Fireface, FirefaceModel};
+use totalcontrol_core::{BabyfaceClassic, BabyfacePro, Fireface, FirefaceModel};
 use totalcontrol_core::{
     BabyfaceProUsb, ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockBabyfacePro, Reverb,
     RmeDevice, Scene, Sensitivity, TalkbackConfig,
@@ -127,6 +127,8 @@ pub enum DeviceKind {
     Ucx,
     Uc,
     Babyface,
+    /// The Babyface-classic through the kernel hwdep transport.
+    BabyfaceClassic,
     /// The in-memory device, as a Babyface Pro FS.
     Mock,
     /// The in-memory device, as a Fireface UCX: EQ, dynamics, FX and the
@@ -267,11 +269,12 @@ fn choose_startup_target(
 }
 
 impl DeviceKind {
-    pub const ALL: [DeviceKind; 7] = [
+    pub const ALL: [DeviceKind; 8] = [
         DeviceKind::Fireface,
         DeviceKind::Ucx,
         DeviceKind::Uc,
         DeviceKind::Babyface,
+        DeviceKind::BabyfaceClassic,
         DeviceKind::Mock,
         DeviceKind::MockUcx,
         DeviceKind::MockUc,
@@ -283,6 +286,7 @@ impl DeviceKind {
             DeviceKind::Ucx => "Fireface UCX",
             DeviceKind::Uc => "Fireface UC",
             DeviceKind::Babyface => "Babyface Pro FS",
+            DeviceKind::BabyfaceClassic => "Babyface-classic",
             DeviceKind::Mock => "Babyface Pro FS (simulated)",
             DeviceKind::MockUcx => "Fireface UCX (simulated)",
             DeviceKind::MockUc => "Fireface UC (simulated)",
@@ -300,6 +304,7 @@ impl DeviceKind {
             "Fireface UCX" => Some(Self::Ucx),
             "Fireface UC" => Some(Self::Uc),
             "Babyface Pro FS" => Some(Self::Babyface),
+            "Babyface-classic" => Some(Self::BabyfaceClassic),
             _ => None,
         }
     }
@@ -312,6 +317,9 @@ pub enum DeviceHandle {
     /// USB/PCM, TotalControl owns the model.
     #[cfg(feature = "alsa")]
     Fireface(Fireface),
+    /// First-generation Babyface through the kernel hwdep transport.
+    #[cfg(feature = "alsa")]
+    BabyfaceClassic(BabyfaceClassic),
     Mock(MockBabyfacePro),
     /// The proprietary USB backend (the TotalMix protocol). On Linux
     /// with the device in proprietary mode this is the path that
@@ -382,6 +390,8 @@ macro_rules! delegate {
         DeviceHandle::Real(d) => d.$method($($arg),*),
         #[cfg(feature = "alsa")]
         DeviceHandle::Fireface(d) => d.$method($($arg),*),
+        #[cfg(feature = "alsa")]
+        DeviceHandle::BabyfaceClassic(d) => d.$method($($arg),*),
     } };
     ($self:expr, $method:ident) => { match $self {
         DeviceHandle::Mock(d) => d.$method(),
@@ -391,6 +401,8 @@ macro_rules! delegate {
         DeviceHandle::Real(d) => d.$method(),
         #[cfg(feature = "alsa")]
         DeviceHandle::Fireface(d) => d.$method(),
+        #[cfg(feature = "alsa")]
+        DeviceHandle::BabyfaceClassic(d) => d.$method(),
     } };
 }
 
@@ -863,6 +875,8 @@ impl DeviceHandle {
             // Refactored path first: the kernel module exposes one hwdep
             // control node per card and PCM only.  This works for UC and
             // UCX and for several units at once; `open()` picks the first.
+            // Keep the UC/UCX auto path ahead of the Babyface-classic so a
+            // multi-device setup keeps its previous selection.
             match Fireface::open() {
                 Ok(d) => {
                     log::info!(
@@ -873,6 +887,13 @@ impl DeviceHandle {
                     return Some(DeviceHandle::Fireface(d));
                 }
                 Err(e) => log::debug!("Fireface hwdep open not available: {e:?}"),
+            }
+            match BabyfaceClassic::open_first() {
+                Ok(d) => {
+                    log::info!("Device backend: hwdep (Babyface-classic)");
+                    return Some(DeviceHandle::BabyfaceClassic(d));
+                }
+                Err(e) => log::debug!("Babyface-classic hwdep open not available: {e:?}"),
             }
             match BabyfacePro::open() {
                 Ok(d) => {
@@ -953,6 +974,8 @@ impl DeviceHandle {
                 FirefaceModel::Ucx => DeviceKind::Ucx,
                 FirefaceModel::Uc => DeviceKind::Uc,
             },
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(_) => DeviceKind::BabyfaceClassic,
         }
     }
 
@@ -966,6 +989,8 @@ impl DeviceHandle {
             DeviceHandle::Real(_) => "BabyfacePro",
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.spec().card_id,
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(_) => "Babyface",
         }
     }
 
@@ -976,6 +1001,12 @@ impl DeviceHandle {
             DeviceKind::MockUc => Some(Self::open_mock_uc()),
             #[cfg(feature = "alsa")]
             DeviceKind::Fireface => Fireface::open().ok().map(DeviceHandle::Fireface),
+            #[cfg(feature = "alsa")]
+            DeviceKind::BabyfaceClassic => {
+                BabyfaceClassic::open_first().ok().map(DeviceHandle::BabyfaceClassic)
+            }
+            #[cfg(not(feature = "alsa"))]
+            DeviceKind::BabyfaceClassic => None,
             #[cfg(not(feature = "alsa"))]
             DeviceKind::Fireface => None,
             #[cfg(feature = "alsa")]
@@ -1003,6 +1034,9 @@ impl DeviceHandle {
                 if !out.contains(&target) {
                     out.push(target);
                 }
+            }
+            if BabyfaceClassic::present() {
+                out.push(DeviceTarget::kind_only(DeviceKind::BabyfaceClassic));
             }
             // Both simulations are always offered, so the interface can be
             // explored (or a GUI change checked) without the hardware.
@@ -1033,6 +1067,10 @@ impl DeviceHandle {
             DeviceHandle::Mirror(d) => d.info().target.clone(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => DeviceTarget::from_identity(d.identity()),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(_) => {
+                DeviceTarget::kind_only(DeviceKind::BabyfaceClassic)
+            }
         }
     }
 
@@ -1069,6 +1107,8 @@ impl DeviceHandle {
             DeviceHandle::Real(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
         }
     }
     pub fn playback_meters(&self) -> Vec<f32> {
@@ -1080,7 +1120,11 @@ impl DeviceHandle {
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => vec![0.0; n],
             #[cfg(feature = "alsa")]
-            DeviceHandle::Fireface(d) => d.playback_meters().unwrap_or_else(|| vec![0.0; n]),
+            DeviceHandle::Fireface(d) => d
+                .playback_meters()
+                .unwrap_or_else(|| vec![0.0; n]),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(_) => vec![0.0; n],
             DeviceHandle::Usb(_) => vec![0.0; n],
         }
     }
@@ -1094,6 +1138,8 @@ impl DeviceHandle {
             DeviceHandle::Mirror(_) => None,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.playback_meters(),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(d) => Some(d.playback_meters()),
             _ => None,
         }
     }
@@ -1172,6 +1218,8 @@ impl DeviceHandle {
             DeviceHandle::Mirror(d) => Some(d.meters().outputs.to_vec()),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.output_meters_internal(true),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(d) => Some(d.output_meters()),
             _ => None,
         }
     }
@@ -1187,6 +1235,10 @@ impl DeviceHandle {
     pub fn has_device_playback_meters(&self) -> bool {
         if let DeviceHandle::Mirror(d) = self {
             return d.info().device_playback_meters;
+        }
+        #[cfg(feature = "alsa")]
+        if matches!(self, DeviceHandle::BabyfaceClassic(_)) {
+            return true;
         }
         if matches!(self, DeviceHandle::Fireface(d) if d.model() == FirefaceModel::Ucx) {
             return true;
@@ -1219,6 +1271,8 @@ impl DeviceHandle {
             DeviceHandle::Real(d) => idx < d.inputs().len() && d.meters_available(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => idx < d.inputs().len(),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(d) => idx < d.inputs().len() && d.meters_available(),
         }
     }
     /// Whether `playback_meters()` is real — true only for Mock. The USB
@@ -1359,6 +1413,10 @@ impl DeviceHandle {
         if let DeviceHandle::Fireface(d) = self {
             return Some(d.firmware());
         }
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::BabyfaceClassic(d) = self {
+            return d.firmware();
+        }
         None
     }
 
@@ -1369,6 +1427,10 @@ impl DeviceHandle {
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return Some(d.serial());
+        }
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::BabyfaceClassic(d) = self {
+            return d.serial();
         }
         None
     }
@@ -1579,6 +1641,9 @@ impl DeviceHandle {
             DeviceHandle::Mirror(_) => true,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => true,
+            // Write-only mixer: the saved scene is the only source.
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(_) => true,
             _ => false,
         }
     }
@@ -1597,7 +1662,12 @@ impl DeviceHandle {
             return d.info().rate_follows;
         }
         #[cfg(feature = "alsa")]
-        if matches!(self, DeviceHandle::Real(_) | DeviceHandle::Fireface(_)) {
+        if matches!(
+            self,
+            DeviceHandle::Real(_)
+                | DeviceHandle::Fireface(_)
+                | DeviceHandle::BabyfaceClassic(_)
+        ) {
             return true;
         }
         false
@@ -1617,6 +1687,8 @@ impl DeviceHandle {
             DeviceHandle::Real(_) => true,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => false,
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(_) => false,
         }
     }
     /// True when the backend lays out outputs as ONE channel per submix
@@ -1638,6 +1710,8 @@ impl DeviceHandle {
             DeviceHandle::Real(d) => d.panel_selection(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => None,
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(_) => None,
         }
     }
 
@@ -19207,6 +19281,14 @@ mod tests {
         assert_eq!(
             choose_startup_kind(&[DeviceKind::Uc], Some(DeviceKind::Babyface)),
             Some(DeviceKind::Uc)
+        );
+    }
+
+    #[test]
+    fn babyface_classic_canonical_model_maps_back() {
+        assert_eq!(
+            DeviceKind::from_canonical_model("Babyface-classic"),
+            Some(DeviceKind::BabyfaceClassic)
         );
     }
 

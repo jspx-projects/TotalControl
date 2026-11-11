@@ -1,7 +1,8 @@
-# Babyface-classic transport specification
+# Babyface-classic protocol specification
 
-This document defines the native-mode USB transport, PCM streams, metering and
-hwdep ABI of the Babyface-classic as implemented by `snd-fireface-uc`. The
+This document defines the native-mode USB transport, PCM streams, channel
+model, mixer writes, preamps, metering and hwdep ABI of the Babyface-classic as
+implemented by `snd-fireface-uc` and the `BabyfaceClassic` backend. The
 Babyface Pro FS is a different device; see
 [BABYFACE-PRO-PROTOCOL-SPEC.md](BABYFACE-PRO-PROTOCOL-SPEC.md).
 
@@ -15,6 +16,10 @@ Babyface Pro FS is a different device; see
 - [6. hwdep ABI](#6-hwdep-abi)
 - [7. Capabilities](#7-capabilities)
 - [8. Code map](#8-code-map)
+- [9. Channel model](#9-channel-model)
+- [10. Mixer writes](#10-mixer-writes)
+- [11. Preamps and settings](#11-preamps-and-settings)
+- [12. State ownership](#12-state-ownership)
 
 ## 1. Device model
 
@@ -194,6 +199,15 @@ vendor-request ioctl, the meter event queue and the transport counters.
 | Status endpoint | no |
 | ALSA mixer controls | no |
 | Raw EP0 vendor requests through hwdep | yes |
+| Matrix pair routing, faders, mute, solo | yes |
+| Per-cell mono matrix | no |
+| Mic gain, 6–60 dB in 3 dB steps | inputs 1/2 |
+| 48 V | inputs 1/2 |
+| PAD, Inst, Level, AutoSet | no |
+| Phase, output balance, stereo split | no |
+| Loopback | no |
+| EQ, Low Cut, dynamics, AutoLevel, FX | no |
+| Dim, Mono, Speaker B, Cue, clock source | no |
 
 The kernel does not interpret mixer, preamp or scene writes. They are raw EP0
 requests from userspace.
@@ -206,3 +220,95 @@ requests from userspace.
 | hwdep INFO, events and vendor ioctl | `kernel/ffuc-hwdep.c` |
 | USB-MIDI | `kernel/ffuc-midi.c` |
 | Model enum and product ID | `kernel/ffuc-uapi.h`, `kernel/ffuc.h` |
+| Mixer model, EP0 writes, preamps and meters | `ui/totalcontrol/totalcontrol-core/src/babyface_classic.rs` |
+| Channel topology | `ui/totalcontrol/totalcontrol-core/src/profiles/babyface_classic.rs` |
+| Device menu and backend selection | `ui/totalcontrol/totalcontrol-gui/src/app.rs` |
+
+## 9. Channel model
+
+| Index | Inputs | Outputs |
+|---|---|---|
+| 0, 1 | AN1, AN2 (mic/line) | AN1, AN2 (XLR) |
+| 2, 3 | AS1, AS2 (optical ADAT 1/2 or S/PDIF) | PH3, PH4 (phones) |
+| 4, 5 | ADAT3, ADAT4 | AS1, AS2 |
+| 6..9 | ADAT5..ADAT8 | ADAT3..ADAT6 |
+| 10, 11 | — | ADAT7, ADAT8 |
+| 12, 13 | — | FX send bus L/R |
+
+Playback channels 1..12 feed the matrix. Playback 13/14 are the return of the
+host-side reverb; they do not enter the DSP, and the crosspoints `src` 22/23
+have no effect. Capture channels 0..9 carry the inputs; capture 10/11 carry the
+FX send bus.
+
+The profile groups the 10 inputs and 12 outputs into the stereo pairs AN1/2,
+PH3/4, AS1/2, ADAT3/4, ADAT5/6 and ADAT7/8.
+
+## 10. Mixer writes
+
+Request `0x12` writes one matrix crosspoint or one output master.
+
+| Target | Address |
+|---|---|
+| crosspoint `src` → output `out` | `24 · out + src` |
+| output master `out` | `0x3e0 + out` |
+
+| `src` | Source |
+|---|---|
+| 0..9 | hardware inputs (§9) |
+| 10..21 | playback 1..12 |
+
+The level is an 18-bit linear gain, `level = gain · 0x8000` (`0x8000` =
+0 dB, `0x10000` = +6 dB, 0 = off):
+
+```text
+wValue = level >> 2
+wIndex = ((level & 3) << 14) | address
+```
+
+The unit powers up with no playback routed. The backend writes nothing when
+it opens the device. The first full write covers the whole matrix, all output
+masters, both mic gains and both 48 V bits. It happens when the saved scene is
+applied, or when metering starts if there is no saved scene. If a saved scene
+cannot be applied, the backend writes a silent model instead of a default mix.
+The saved scene includes 48 V, so a scene saved with 48 V on switches it on at
+connect.
+
+Without a saved scene, the model is:
+
+- playback pair *n* → output pair *n* at 0 dB, centred;
+- every input crosspoint at off;
+- every output master at 0 dB;
+- mic gain 6 dB, 48 V off.
+
+Mic inputs are mono sources panned into both sides of a pair. ADAT inputs and
+playback channels feed only their own side; their pan acts as a balance. Mute,
+solo and the output masters are applied host-side by writing 0 or the scaled
+level.
+
+Request `0x15` selects loopback: `wValue` 1 = on, 0 = off, `wIndex` = capture
+channel 0..9. With loopback on, the capture channel records the output of the
+same index (post-master). The backend keeps loopback off.
+
+## 11. Preamps and settings
+
+| Control | Request | `wValue` | `wIndex` |
+|---|---|---|---|
+| Mic gain AN1/AN2 | `0x1a` | 0..18 | 0, 1 |
+| 48 V | `0x17` | bit mask to set | bit mask to change |
+
+- Mic gain: `gain dB = 6 + 3 · wValue`, 6..60 dB. The unit has no gain
+  readback. The backend snaps the model to the 3 dB grid and writes the gain
+  at the first full write and on every change.
+- 48 V: bit 0 = AN1, bit 1 = AN2. The register is write-only. The backend
+  writes one bit at a time with the matching mask, so the other bits are
+  unchanged, at the first full write and on every change.
+- Sample rate: set by the host stream. The backend writes no rate request and
+  shows the rate from the hwdep INFO block.
+- Controls the backend does not implement (Dim, Mono, Speaker B, Cue, clock
+  source, EQ and others) return an error.
+
+## 12. State ownership
+
+The unit has no mixer readback. The host owns the mix: the scene model holds
+every fader, pan, mute, solo and master, and the backend sends only the `0x12`
+addresses whose level changed since the last write.
