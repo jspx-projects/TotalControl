@@ -62,8 +62,13 @@ source = 18..35  software playback channels
 block  = 0..17   hardware output blocks
 ```
 
-The value is a signed 16-bit level.  Bits 13:0 carry the level, with the two
-lowest level bits in `wIndex` bits 14:15.  A level of `0x2000` is 0 dB.
+The value is a signed 16-bit level.  A level of `0x2000` is 0 dB.  A non-zero
+send sets `wIndex` bit 14; a zero send writes the same cell with bit 14 clear.
+Bit 14 is a send-active flag, not a submix selector.
+
+For a stereo pair, source `N` writes the left cell in block `2p` and source
+`N + 1` writes the right cell in block `2p + 1`; `p` is the output pair.
+
 Bit 15 carries phase inversion; the inverted form of a level is its 16-bit
 two's complement (`0x2000` ↔ `0xE000`).
 
