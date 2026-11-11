@@ -18,6 +18,11 @@ the UC control surface implemented by TotalControl.
 
 ## 1. Device and control paths
 
+| Personality | USB IDs | Transport |
+|---|---|---|
+| PC | `0424:3fc5`, `2a39:3fc5`, `2a39:3fce` | interrupt IF0 |
+| AP | `0424:3fc6`, `2a39:3fc6` | isochronous IF0 |
+
 The UC uses EP0 vendor requests for control. Two additional endpoints carry
 live information:
 

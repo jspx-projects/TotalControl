@@ -19,11 +19,11 @@ notes are in the archive (`docs/archive/`).
 
 | Model | USB ID | Transport | Interface |
 |---|---|---|---|
-| Fireface UC PC | `0424:3fc5` | interrupt IF0 | 0 |
+| Fireface UC PC | `0424:3fc5` / `2a39:3fc5` / `2a39:3fce` | interrupt IF0 | 0 |
 | Fireface UC AP | `0424:3fc6` / `2a39:3fc6` | isochronous IF0 | 0 |
 | Fireface UCX | `0424:3fc9` / `2a39:3fc9` | isochronous IF0 (default) | 0 |
 | Fireface UCX | `0424:3fc9` / `2a39:3fc9` | interrupt IF5 (`ucx_if5=1`) | 5 |
-| Babyface-classic | `2a39:3fc7` | isochronous IF0 | 0 |
+| Babyface-classic | `0424:3fc7` / `2a39:3fc7` | isochronous IF0 | 0 |
 
 One module instance handles several physical devices; each gets its own card,
 PCM device and hwdep node.  The Babyface-classic ALSA card ID is `Babyface`;
