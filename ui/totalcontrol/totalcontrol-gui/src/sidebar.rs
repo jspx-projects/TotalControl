@@ -116,7 +116,8 @@ pub enum GroupLink {
 /// *existing* multi-select (`TotalControl::selected`) rather than a bespoke
 /// picker UI: enter edit mode, select strips the normal Ctrl/Shift-click
 /// way, click the group cell to assign.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Group {
     pub members: Vec<ChannelId>,
     pub mute_linked: bool,

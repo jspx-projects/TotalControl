@@ -16,8 +16,8 @@ use crate::widgets::fader::{
     FX_SLOT_W,
 };
 use crate::widgets::layout::{
-    ChannelKind, ElementPlacement, Features, GuiLayoutConfig, Panel, Rect, StripLayout, TemplateId,
-    SUBMIX_H,
+    ChannelKind, ElementPlacement, Features, GuiLayoutConfig, LayoutTemplate, Panel, Rect,
+    StripLayout, TemplateId, TEMPLATES, SUBMIX_H,
 };
 use crate::widgets::knob::{knob, Knob};
 use crate::widgets::pause_mark::pause_mark;
@@ -185,6 +185,10 @@ pub struct StripParams<'a> {
     /// The layout source for this strip: the user document when it loads,
     /// otherwise the built-in defaults.
     pub layout: &'a GuiLayoutConfig,
+    /// The connection's effective optional controls.  The runtime chooses a
+    /// no-FX template when the unit lacks them; a layout document cannot add
+    /// an element the connection does not provide.
+    pub connection_features: Features,
     pub output_idx: usize,
     /// Human label of the current submix/output bus (device-derived).
     pub bus_label: String,
@@ -930,37 +934,20 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         ChannelId::Playback(_) => ChannelKind::Playback,
         ChannelId::Output(_) => ChannelKind::Output,
     };
-    let template_id = match kind {
-        ChannelKind::Input => {
-            if p.stereo_linked {
-                TemplateId::InputStereo
-            } else {
-                TemplateId::InputMono
-            }
-        }
-        ChannelKind::Playback => TemplateId::PlaybackStereo,
-        ChannelKind::Output => {
-            if p.stereo_linked {
-                TemplateId::OutputStereo
-            } else {
-                TemplateId::OutputMono
-            }
-        }
-    };
+    let template_id = TemplateId::for_channel(kind, p.stereo_linked, p.connection_features);
+    // A user document that omits the no-FX template still renders the
+    // supported shape: fall back to the built-in template for the same id
+    // with the document's geometry.
+    let built_in = TEMPLATES
+        .iter()
+        .find(|spec| spec.id == template_id)
+        .map(|spec| LayoutTemplate::from_spec(*spec));
     let layout = p
         .layout
         .template(template_id)
+        .or(built_in.as_ref())
         .and_then(|template| p.layout.layout(template, scale).ok())
-        .unwrap_or_else(|| {
-            StripLayout::for_kind(
-                kind,
-                scale,
-                Features {
-                    fx: p.fx_level.is_some(),
-                    ..Features::default()
-                },
-            )
-        });
+        .unwrap_or_else(|| StripLayout::for_kind(kind, scale, p.connection_features));
     let card = layout.card;
     let btn_h = layout
         .rect(ElementPlacement::ButtonLeft)

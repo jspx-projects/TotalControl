@@ -287,6 +287,65 @@
       ]
     },
     {
+      "id": "InputStereoNoFx",
+      "kind": "Input",
+      "stereo": true,
+      "elements": [
+        {
+          "kind": "name",
+          "at": "T1"
+        },
+        {
+          "kind": "pan",
+          "at": "T2"
+        },
+        {
+          "kind": "mute",
+          "at": "TL3"
+        },
+        {
+          "kind": "solo",
+          "at": "TR3"
+        },
+        {
+          "kind": "readout_left",
+          "at": "M1L"
+        },
+        {
+          "kind": "readout_right",
+          "at": "M1R"
+        },
+        {
+          "kind": "meter",
+          "at": "ML"
+        },
+        {
+          "kind": "fader",
+          "at": "MC"
+        },
+        {
+          "kind": "level_readout",
+          "at": "B1"
+        },
+        {
+          "kind": "minimize",
+          "at": "B1R"
+        },
+        {
+          "kind": "trim_tab",
+          "at": "MR2"
+        },
+        {
+          "kind": "settings_tab",
+          "at": "MR3"
+        },
+        {
+          "kind": "submix",
+          "at": "B2"
+        }
+      ]
+    },
+    {
       "id": "PlaybackStereo",
       "kind": "Playback",
       "stereo": true,
@@ -334,6 +393,61 @@
         {
           "kind": "fx_fader",
           "at": "MR1"
+        },
+        {
+          "kind": "settings_tab",
+          "at": "MR3"
+        },
+        {
+          "kind": "submix",
+          "at": "B2"
+        }
+      ]
+    },
+    {
+      "id": "PlaybackStereoNoFx",
+      "kind": "Playback",
+      "stereo": true,
+      "elements": [
+        {
+          "kind": "name",
+          "at": "T1"
+        },
+        {
+          "kind": "pan",
+          "at": "T2"
+        },
+        {
+          "kind": "mute",
+          "at": "TL3"
+        },
+        {
+          "kind": "solo",
+          "at": "TR3"
+        },
+        {
+          "kind": "readout_left",
+          "at": "M1L"
+        },
+        {
+          "kind": "readout_right",
+          "at": "M1R"
+        },
+        {
+          "kind": "meter",
+          "at": "ML"
+        },
+        {
+          "kind": "fader",
+          "at": "MC"
+        },
+        {
+          "kind": "level_readout",
+          "at": "B1"
+        },
+        {
+          "kind": "minimize",
+          "at": "B1R"
         },
         {
           "kind": "settings_tab",
@@ -409,6 +523,57 @@
       ]
     },
     {
+      "id": "OutputStereoNoFx",
+      "kind": "Output",
+      "stereo": true,
+      "elements": [
+        {
+          "kind": "name",
+          "at": "T1"
+        },
+        {
+          "kind": "pan",
+          "at": "T2"
+        },
+        {
+          "kind": "mute",
+          "at": "TL3"
+        },
+        {
+          "kind": "cue",
+          "at": "TR3"
+        },
+        {
+          "kind": "readout_left",
+          "at": "M1L"
+        },
+        {
+          "kind": "readout_right",
+          "at": "M1R"
+        },
+        {
+          "kind": "meter",
+          "at": "ML"
+        },
+        {
+          "kind": "fader",
+          "at": "MC"
+        },
+        {
+          "kind": "level_readout",
+          "at": "B1"
+        },
+        {
+          "kind": "minimize",
+          "at": "B1R"
+        },
+        {
+          "kind": "settings_tab",
+          "at": "MR3"
+        }
+      ]
+    },
+    {
       "id": "OutputMono",
       "kind": "Output",
       "stereo": false,
@@ -468,6 +633,57 @@
         {
           "kind": "dynamics_tab",
           "at": "MR5"
+        }
+      ]
+    },
+    {
+      "id": "OutputMonoNoFx",
+      "kind": "Output",
+      "stereo": false,
+      "elements": [
+        {
+          "kind": "name",
+          "at": "T1"
+        },
+        {
+          "kind": "pan",
+          "at": "T2"
+        },
+        {
+          "kind": "mute",
+          "at": "TL3"
+        },
+        {
+          "kind": "cue",
+          "at": "TR3"
+        },
+        {
+          "kind": "readout_left",
+          "at": "M1L"
+        },
+        {
+          "kind": "readout_right",
+          "at": "M1R"
+        },
+        {
+          "kind": "meter",
+          "at": "ML"
+        },
+        {
+          "kind": "fader",
+          "at": "MC"
+        },
+        {
+          "kind": "level_readout",
+          "at": "B1"
+        },
+        {
+          "kind": "minimize",
+          "at": "B1R"
+        },
+        {
+          "kind": "settings_tab",
+          "at": "MR3"
         }
       ]
     },
@@ -533,6 +749,58 @@
           "at": "MR5"
         }
       ]
+    },
+    {
+      "id": "ControlRoomNoFx",
+      "kind": "Output",
+      "stereo": true,
+      "elements": [
+        {
+          "kind": "name",
+          "at": "T1"
+        },
+        {
+          "kind": "pan",
+          "at": "T2"
+        },
+        {
+          "kind": "mute",
+          "at": "TL3"
+        },
+        {
+          "kind": "cue",
+          "at": "TR3"
+        },
+        {
+          "kind": "readout_left",
+          "at": "M1L"
+        },
+        {
+          "kind": "readout_right",
+          "at": "M1R"
+        },
+        {
+          "kind": "meter",
+          "at": "ML"
+        },
+        {
+          "kind": "fader",
+          "at": "MC"
+        },
+        {
+          "kind": "level_readout",
+          "at": "B1"
+        },
+        {
+          "kind": "minimize",
+          "at": "B1R"
+        },
+        {
+          "kind": "settings_tab",
+          "at": "MR3"
+        }
+      ]
     }
-  ]
+  ],
+  "devices": {}
 }

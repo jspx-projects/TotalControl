@@ -17,26 +17,25 @@ use totalcontrol_core::fireface::UcxDump;
 #[cfg(feature = "alsa")]
 use totalcontrol_core::{BabyfacePro, Fireface, FirefaceModel};
 use totalcontrol_core::{
-    BabyfaceProUsb, ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockBabyfacePro, RmeDevice,
-    Reverb, Scene, Sensitivity, TalkbackConfig,
+    BabyfaceProUsb, ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockBabyfacePro, Reverb,
+    RmeDevice, Scene, Sensitivity, TalkbackConfig,
 };
 
 use crate::about;
 use crate::matrix;
 use crate::osc::{self, OscConfig, OscOutbound};
 use crate::prefs::{ControlRoomSettings, SyncDirection};
-use totalcontrol_core::pw_clock::{self, CardStream, PwClock};
-use totalcontrol_core::pw_meter;
-use crate::scenes::{load_scene_file, save_scene_file};
 use crate::sidebar::{self, Group};
 use crate::sync_dialog;
 use crate::theme;
-use crate::workspaces::{self, Workspace, WorkspaceSnapshot, WorkspaceView};
 use crate::widgets::dynamics_plot::dynamics_plot;
 use crate::widgets::eq_plot::{eq_plot, EqPlotActions};
 use crate::widgets::fader;
 use crate::widgets::knob::{knob, Knob};
 use crate::widgets::strip::{self, hint};
+use crate::workspaces::{self, Workspace, WorkspaceSnapshot, WorkspaceView};
+use totalcontrol_core::pw_clock::{self, CardStream, PwClock};
+use totalcontrol_core::pw_meter;
 
 /// Strips redundant prefixes baked into a channel's stored name before it's
 /// shown in a strip header — "PCM " for playback channels, "OUT " for
@@ -119,7 +118,6 @@ fn freq_text(hz: u16) -> String {
 }
 
 // ── Device enum ──────────────────────────────────────────────────
-
 
 /// A user-selectable mixer backend/device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,7 +233,10 @@ fn choose_startup_target(
     preferred_serial: Option<&str>,
 ) -> Option<DeviceTarget> {
     if let Some(serial) = preferred_serial {
-        if let Some(target) = available.iter().find(|t| t.serial.as_deref() == Some(serial)) {
+        if let Some(target) = available
+            .iter()
+            .find(|t| t.serial.as_deref() == Some(serial))
+        {
             return Some(target.clone());
         }
     }
@@ -259,7 +260,10 @@ fn choose_startup_target(
             .cloned()
             .or_else(|| available.first().cloned());
     }
-    available.first().cloned().or_else(|| preferred.map(DeviceTarget::kind_only))
+    available
+        .first()
+        .cloned()
+        .or_else(|| preferred.map(DeviceTarget::kind_only))
 }
 
 impl DeviceKind {
@@ -287,6 +291,17 @@ impl DeviceKind {
 
     pub fn from_label(label: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.label() == label)
+    }
+
+    /// Map the canonical model stored in the host settings back to a
+    /// selectable device kind.  Simulations are never persisted.
+    pub fn from_canonical_model(model: &str) -> Option<Self> {
+        match model {
+            "Fireface UCX" => Some(Self::Ucx),
+            "Fireface UC" => Some(Self::Uc),
+            "Babyface Pro FS" => Some(Self::Babyface),
+            _ => None,
+        }
     }
 }
 
@@ -467,13 +482,23 @@ impl RmeDevice for DeviceHandle {
     fn begin_metering(&mut self) {
         delegate!(self, begin_metering)
     }
-    fn set_volume(&mut self, ch: ChannelId, out: usize, v: f32) -> Result<(), totalcontrol_core::Error> {
+    fn set_volume(
+        &mut self,
+        ch: ChannelId,
+        out: usize,
+        v: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_volume(ch, out, v))
     }
     fn volume(&self, ch: ChannelId, out: usize) -> Result<f32, totalcontrol_core::Error> {
         delegate!(self, volume(ch, out))
     }
-    fn set_pan(&mut self, ch: ChannelId, out: usize, p: i8) -> Result<(), totalcontrol_core::Error> {
+    fn set_pan(
+        &mut self,
+        ch: ChannelId,
+        out: usize,
+        p: i8,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_pan(ch, out, p))
     }
     fn pan(&self, ch: ChannelId, out: usize) -> Result<i8, totalcontrol_core::Error> {
@@ -527,7 +552,10 @@ impl RmeDevice for DeviceHandle {
     ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_dynamics(ch, dynamics))
     }
-    fn set_reverb(&mut self, reverb: &totalcontrol_core::Reverb) -> Result<(), totalcontrol_core::Error> {
+    fn set_reverb(
+        &mut self,
+        reverb: &totalcontrol_core::Reverb,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_reverb(reverb))
     }
     fn set_echo(&mut self, echo: &totalcontrol_core::Echo) -> Result<(), totalcontrol_core::Error> {
@@ -644,7 +672,11 @@ impl RmeDevice for DeviceHandle {
     fn set_phase(&mut self, idx: usize, invert: bool) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_phase(idx, invert))
     }
-    fn set_output_phase(&mut self, idx: usize, invert: bool) -> Result<(), totalcontrol_core::Error> {
+    fn set_output_phase(
+        &mut self,
+        idx: usize,
+        invert: bool,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_output_phase(idx, invert))
     }
     fn set_no_trim(&mut self, idx: usize, on: bool) -> Result<(), totalcontrol_core::Error> {
@@ -688,7 +720,12 @@ impl RmeDevice for DeviceHandle {
     ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_band_freq(idx, band, freq_hz))
     }
-    fn set_eq_band_q(&mut self, idx: usize, band: usize, q: f32) -> Result<(), totalcontrol_core::Error> {
+    fn set_eq_band_q(
+        &mut self,
+        idx: usize,
+        band: usize,
+        q: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_band_q(idx, band, q))
     }
     fn set_eq_band_gain(
@@ -699,10 +736,18 @@ impl RmeDevice for DeviceHandle {
     ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_band_gain(idx, band, gain_db))
     }
-    fn set_eq_low_cut_enabled(&mut self, idx: usize, on: bool) -> Result<(), totalcontrol_core::Error> {
+    fn set_eq_low_cut_enabled(
+        &mut self,
+        idx: usize,
+        on: bool,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_low_cut_enabled(idx, on))
     }
-    fn set_eq_low_cut_freq(&mut self, idx: usize, freq_hz: u16) -> Result<(), totalcontrol_core::Error> {
+    fn set_eq_low_cut_freq(
+        &mut self,
+        idx: usize,
+        freq_hz: u16,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_low_cut_freq(idx, freq_hz))
     }
     fn set_eq_low_cut_slope(
@@ -751,7 +796,8 @@ impl DeviceHandle {
                 "{} (card {}) is in Class Compliant mode: the RME mixer is not \
                  available. Use the stock ALSA/PipeWire device; switch the unit \
                  back to normal RME mode to use TotalControl's matrix.",
-                c.name, c.card
+                c.name,
+                c.card
             );
         }
 
@@ -977,9 +1023,7 @@ impl DeviceHandle {
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => vec![0.0; n],
             #[cfg(feature = "alsa")]
-            DeviceHandle::Fireface(d) => d
-                .playback_meters()
-                .unwrap_or_else(|| vec![0.0; n]),
+            DeviceHandle::Fireface(d) => d.playback_meters().unwrap_or_else(|| vec![0.0; n]),
             DeviceHandle::Usb(_) => vec![0.0; n],
         }
     }
@@ -1336,7 +1380,10 @@ impl DeviceHandle {
         Ok(())
     }
 
-    pub fn set_word_clock_single_speed(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
+    pub fn set_word_clock_single_speed(
+        &mut self,
+        on: bool,
+    ) -> Result<(), totalcontrol_core::Error> {
         if let DeviceHandle::Mirror(d) = self {
             d.set_word_clock_single_speed(on);
             return Ok(());
@@ -1366,7 +1413,11 @@ impl DeviceHandle {
         Ok(())
     }
 
-    pub fn set_input_ms_proc(&mut self, idx: usize, on: bool) -> Result<(), totalcontrol_core::Error> {
+    pub fn set_input_ms_proc(
+        &mut self,
+        idx: usize,
+        on: bool,
+    ) -> Result<(), totalcontrol_core::Error> {
         if let DeviceHandle::Mirror(d) = self {
             d.set_input_ms_proc(idx, on);
             return Ok(());
@@ -1684,7 +1735,10 @@ pub enum OptionsMenu {
 }
 
 pub const RESET_MIX: [(&str, ResetMix); 10] = [
-    ("Straight playback with all to Main Out", ResetMix::StraightToMain),
+    (
+        "Straight playback with all to Main Out",
+        ResetMix::StraightToMain,
+    ),
     ("Straight playback", ResetMix::StraightPlayback),
     ("Clear all submixes", ResetMix::ClearSubmixes),
     ("Clear channel effects", ResetMix::ClearEffects),
@@ -1692,7 +1746,10 @@ pub const RESET_MIX: [(&str, ResetMix); 10] = [
     ("Reset channel names", ResetMix::ResetNames),
     ("Set all channels mono", ResetMix::AllMono),
     ("Set all channels stereo", ResetMix::AllStereo),
-    ("Set inputs mono, outputs stereo", ResetMix::InputsMonoOutputsStereo),
+    (
+        "Set inputs mono, outputs stereo",
+        ResetMix::InputsMonoOutputsStereo,
+    ),
     ("Total reset", ResetMix::TotalReset),
 ];
 
@@ -1764,8 +1821,6 @@ impl AssignAnim {
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick,
@@ -1798,8 +1853,14 @@ pub enum Message {
     /// `ui_scale` (changed only by the manual `Zoom*` / `WheelZoom`
     /// messages), so a window drag is pure scroll/clip.
     WindowResized(f32),
-    /// The window's full size, kept for the preferences (`window_size`).
+    /// The window's full size, kept for the workspace (`window_size`).
     WindowSize(f32, f32),
+    /// The window moved to a new logical position.
+    WindowMoved(i32, i32),
+    /// The page's scroll offset changed.
+    WorkspaceScrolled(f32, f32),
+    /// Apply the offset restored from the workspace after the window opens.
+    RestoreWorkspaceScroll,
 
     /// Ctrl+wheel — zooms the UI in/out (see `zoom`). Ignored unless Ctrl
     /// is held (`TotalControl::modifiers`); plain wheel scrolls as normal.
@@ -1897,7 +1958,11 @@ pub enum Message {
     ReverbChanged(Reverb),
     EchoChanged(Echo),
     /// A TotalMix FX page-3 parameter applied to the current Reverb/Echo.
-    OscRmeFx { echo: bool, field: &'static str, value: f32 },
+    OscRmeFx {
+        echo: bool,
+        field: &'static str,
+        value: f32,
+    },
     /// Per-output FX Return level in dB.
     FxReturnChanged(usize, f32),
     /// Per-channel FX send level in dB.
@@ -2298,7 +2363,7 @@ pub struct GroupEdit {
 /// lights the master; pressing the master suspends the set (members unmuted,
 /// pause glyph) and pressing it again re-applies it. While suspended, clicking
 /// a member's button removes it from the set.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MasterSet {
     pub members: Vec<ChannelId>,
     pub suspended: bool,
@@ -2306,8 +2371,10 @@ pub struct MasterSet {
 
 pub struct TotalControl {
     pub device: DeviceHandle,
-    /// The layout document, or the built-in defaults when none loads.
+    /// The effective layout for the connected model.
     pub layout: crate::widgets::layout::GuiLayoutConfig,
+    /// The complete layout document, with every device override intact.
+    pub layout_document: crate::widgets::layout::GuiLayoutConfig,
     /// Stable identity of the selected unit, when the backend exposes one.
     /// The card index is deliberately not part of this.
     pub device_target: Option<DeviceTarget>,
@@ -2423,6 +2490,10 @@ pub struct TotalControl {
     /// same (`prefs::Prefs::window_size`). Not written on every resize
     /// step: a drag would rewrite the file 20 times a second.
     pub window_size: Option<(f32, f32)>,
+    /// The window's position, restored with its size.
+    pub window_position: Option<(i32, i32)>,
+    /// The page scroll offset, in logical pixels.
+    pub workspace_scroll: (f32, f32),
     /// The last time anything on screen changed or the user acted: while
     /// it is recent the UI ticks at `TICK_ACTIVE`, afterwards at
     /// `TICK_IDLE` (see `tick_interval`). An idle mixer used to redraw 20
@@ -2577,10 +2648,23 @@ pub struct TotalControl {
     pub show_settings: bool,
     /// Top-bar Workspace menu state.
     pub workspace_menu: WorkspaceMenu,
-    /// Current workspace file, if any.
+    /// The explicit workspace file, if one was opened or saved.  A
+    /// recovered current workspace starts without one, so Save opens Save
+    /// As.
     pub workspace_path: Option<PathBuf>,
-    /// Whether host-side workspace state has changed since the last save.
+    /// The live workspace file for the active unit.
+    pub current_workspace_path: Option<PathBuf>,
+    /// Key of the active unit in the host settings.
+    pub current_unit_key: Option<String>,
+    /// The workspace display name, independent of a file path.
+    pub workspace_name: String,
+    /// Whether workspace state has changed since the last save.
     pub workspace_dirty: bool,
+    /// When the periodic workspace write last ran.
+    pub last_workspace_save: Instant,
+    /// The scene the next startup sync should use, loaded from the current
+    /// workspace before the device compare runs.
+    pub startup_workspace_scene: Option<Scene>,
     /// Pending workspace replacement waiting for the in-app confirmation.
     pub workspace_pending: Option<WorkspacePending>,
     /// Last folder used by the Workspace file dialogs.
@@ -2615,13 +2699,6 @@ pub struct TotalControl {
     /// When the connection was last probed. The throttle for the Tick
     /// probe; `None` = never, so the first tick probes.
     last_conn_check: Option<Instant>,
-    /// Debounce timer for the auto-saved mixer state (see
-    /// `Message::Tick` — the device has no readback, so this is how the
-    /// UI restores the gains/volumes/48V on the next open).
-    pub last_auto_save: Instant,
-    /// Last JSON written to the "auto" scene, to skip redundant writes.
-    pub last_saved_json: Option<String>,
-
     // ── Right sidebar ────────────────────────────────────────────────
     /// Coarse, `Scene`-snapshot-based undo — see `Message::Undo`'s own
     /// doc comment for the granularity trade-off. Capped at
@@ -2683,12 +2760,14 @@ pub struct TotalControl {
     /// The strip whose name is being edited, and the text typed so far.
     pub renaming: Option<ChannelId>,
     pub rename_buf: String,
-    /// Where `prefs::Prefs` is written. Set by `main` only, so tests (which
-    /// build state through `new`) never touch the user's config.
-    pub prefs_path: Option<std::path::PathBuf>,
-    /// A preference changed since the last write; flushed on `Tick` and
+    /// Where `host-settings.json` is written. Set by `main` only, so tests
+    /// (which build state through `new`) never touch the user's config.
+    pub host_settings_path: Option<std::path::PathBuf>,
+    /// The loaded host settings document.
+    pub host_settings: crate::host_settings::HostSettings,
+    /// A host setting changed since the last write; flushed on `Tick` and
     /// on window close (`SaveNow`).
-    pub prefs_dirty: bool,
+    pub host_dirty: bool,
     /// The Matrix cell under the pointer (see `Message::MatrixHover`).
     pub matrix_hover: Option<(ChannelId, usize)>,
     /// Matrix Mono Mode: on = a crosspoint edit writes one mono cell;
@@ -2734,11 +2813,9 @@ pub struct TotalControl {
     pub host_volume: Option<(u32, f32)>,
     /// The device service, when the split is enabled.
     pub device_service: Option<crate::device_service::DeviceService>,
-    pub device_updates:
-        Option<std::sync::mpsc::Receiver<crate::device_service::Snapshot>>,
+    pub device_updates: Option<std::sync::mpsc::Receiver<crate::device_service::Snapshot>>,
     /// Shared meter values for the canvases (stage 3).
-    pub meter_bus:
-        Option<std::sync::Arc<std::sync::Mutex<crate::device_service::MeterSnapshot>>>,
+    pub meter_bus: Option<std::sync::Arc<std::sync::Mutex<crate::device_service::MeterSnapshot>>>,
     /// The kernel driver's period floor (`urb_frames` for the UC), read at
     /// launch: which buffer sizes the card can actually run. `None` when
     /// unknown (no kernel driver), taken as the default 32.
@@ -2993,8 +3070,7 @@ impl MeterAnim {
                 // The old ease-out is deliberately kept for the peak
                 // marker: the bar snaps down fast, while the little peak
                 // line glides down like an analog peak-hold.
-                self.peak_release_ms =
-                    (self.peak_release_ms + dt_ms).min(PEAK_RELEASE_MS);
+                self.peak_release_ms = (self.peak_release_ms + dt_ms).min(PEAK_RELEASE_MS);
                 let t = self.peak_release_ms / PEAK_RELEASE_MS;
                 let alpha = PEAK_RELEASE_END
                     + (PEAK_RELEASE_START - PEAK_RELEASE_END) * (1.0 - t) * (1.0 - t);
@@ -3026,15 +3102,14 @@ pub fn new_with_device(
         DeviceHandle::open_mock()
     } else {
         let available = DeviceHandle::available_targets();
-        let selected = choose_startup_target(
-            &available,
-            preferred,
-            preferred_serial.as_deref(),
-        );
+        let selected = choose_startup_target(&available, preferred, preferred_serial.as_deref());
         if available.len() == 1 && selected.as_ref().map(|t| t.kind) != preferred {
             log::info!(
                 "Auto-selected {}: it is the only Fireface visible",
-                selected.as_ref().map(DeviceTarget::label).unwrap_or_else(|| "device".into())
+                selected
+                    .as_ref()
+                    .map(DeviceTarget::label)
+                    .unwrap_or_else(|| "device".into())
             );
         }
         let preferred = selected.as_ref().and_then(DeviceHandle::open_target);
@@ -3100,26 +3175,25 @@ pub fn new_with_device(
         .map(|c| c.dialect)
         .unwrap_or(crate::osc::OscDialect::Classic);
     let osc_enabled = osc_cli;
-    let snapshots: [Option<Scene>; 8] = std::array::from_fn(|i| {
-        if simulated {
-            None
-        } else {
-            crate::scenes::load_scene_file(&format!("Mix {}", i + 1))
-        }
-    });
+    // Snapshots live inside the current workspace; the old `Mix n.json`
+    // files are read only by the one-time migration.
+    let snapshots: [Option<Scene>; 8] = Default::default();
 
-    let (layout, layout_error) = match crate::widgets::layout::GuiLayoutConfig::default_path() {
-        Some(path) => crate::widgets::layout::GuiLayoutConfig::load_or_default(&path),
-        None => (crate::widgets::layout::GuiLayoutConfig::default(), None),
-    };
+    let (layout_document, layout_error) =
+        match crate::widgets::layout::GuiLayoutConfig::default_path() {
+            Some(path) => crate::widgets::layout::GuiLayoutConfig::load_or_default(&path),
+            None => (crate::widgets::layout::GuiLayoutConfig::default(), None),
+        };
     if let Some(error) = layout_error {
         eprintln!("layout: {error}; using the built-in layout");
     }
+    let layout = layout_document.resolve_for(device.canonical_model());
     crate::theme::install_palette(layout.colors.clone());
 
     let state = TotalControl {
         device,
         layout,
+        layout_document,
         device_target,
         connected,
         sel_out: 0,
@@ -3154,6 +3228,8 @@ pub fn new_with_device(
         // Matches `window::Settings::size` in main.rs — updated for real
         // as soon as the first `Opened`/`Resized` event arrives.
         window_size: None,
+        window_position: None,
+        workspace_scroll: (0.0, 0.0),
         last_activity: Instant::now(),
         last_hw_volume: None,
         pending_device_rate: None,
@@ -3211,7 +3287,12 @@ pub fn new_with_device(
         show_settings: false,
         workspace_menu: WorkspaceMenu::Closed,
         workspace_path: None,
+        current_workspace_path: None,
+        current_unit_key: None,
+        workspace_name: "Untitled".into(),
         workspace_dirty: false,
+        last_workspace_save: Instant::now(),
+        startup_workspace_scene: None,
         workspace_pending: None,
         workspace_last_dir: None,
         options_menu: OptionsMenu::Closed,
@@ -3228,14 +3309,13 @@ pub fn new_with_device(
         last_conn_check: None,
         // State persistence (the device has no gain/volume readback —
         // TotalMix re-applies its saved state; this is our equivalent).
-        last_auto_save: Instant::now(),
-        last_saved_json: None,
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
         groups: Default::default(),
         group_edit: None,
         group_flash: false,
-        layouts: std::array::from_fn(|i| crate::layouts::load_layout_file((i + 1) as u8)),
+        // Layout slots live inside the current workspace.
+        layouts: Default::default(),
         active_layout: None,
         active_snapshot: None,
         stored_snapshots: std::array::from_fn(|i| snapshots[i].is_some()),
@@ -3253,10 +3333,10 @@ pub fn new_with_device(
         show_original_names: false,
         renaming: None,
         rename_buf: String::new(),
-        prefs_path: None,
-        // Persist a resolved hardware serial even on a first launch: the
-        // old preference file may only have the model-level label.
-        prefs_dirty: persist_target,
+        host_settings_path: None,
+        host_settings: Default::default(),
+        // Persist a resolved hardware serial even on a first launch.
+        host_dirty: persist_target,
         matrix_hover: None,
         matrix_mono: false,
         undo_gesture: None,
@@ -3301,18 +3381,13 @@ pub(crate) fn attach_device_service(state: &mut TotalControl) {
     }
     // The mock placeholder is dropped immediately; it only satisfies the
     // type until the service has taken the real handle.
-    let placeholder = DeviceHandle::Mock(
-        MockBabyfacePro::open().expect("placeholder mock"),
-    );
+    let placeholder = DeviceHandle::Mock(MockBabyfacePro::open().expect("placeholder mock"));
     let device = std::mem::replace(&mut state.device, placeholder);
     let mut service = crate::device_service::DeviceService::spawn(device);
     let updates = service.take_updates();
     let snapshot = service.snapshot();
-    let mirror = crate::device_service::Mirror::new(
-        snapshot,
-        service.command_sender(),
-        service.meter_bus(),
-    );
+    let mirror =
+        crate::device_service::Mirror::new(snapshot, service.command_sender(), service.meter_bus());
     state.meter_bus = Some(service.meter_bus());
     state.device = DeviceHandle::Mirror(mirror);
     state.device_updates = updates;
@@ -3338,197 +3413,88 @@ fn rebuild_osc_config(state: &mut TotalControl) {
     state.osc_send_text = state.osc_send_port.to_string();
 }
 
-/// The persisted subset of `state` (see `prefs.rs`).
-pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
-    let p = &state.sidebar_panels_open;
-    let mut labels: Vec<(ChannelId, String)> =
-        state.labels.iter().map(|(c, l)| (*c, l.clone())).collect();
-    // Stable order, so an unchanged state writes an unchanged file.
-    labels.sort_by_key(|(c, _)| format!("{c:?}"));
-    let mut collapsed: Vec<ChannelId> = state.collapsed.iter().copied().collect();
-    collapsed.sort_by_key(|c| format!("{c:?}"));
-    // Route is a transient bus picker, not a channel control panel; do not
-    // reopen it on the next launch.
-    // Channel panels are transient; reopening them on the next launch
-    // would widen a strip row without the user asking for it.
-    let flyouts: Vec<(ChannelId, strip::FlyoutKind)> = Vec::new();
-    crate::prefs::Prefs {
-        view: Some(state.view),
-        device: Some(state.device.kind().label().to_string()),
-        device_serial: state
+/// The host settings document for the live state.  Workspace fields,
+/// including the window and GUI layout, are not copied here.
+pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSettings {
+    let mut settings = state.host_settings.clone();
+    if let Some(key) = state.current_unit_key.as_deref() {
+        let serial = state
             .device_target
             .as_ref()
-            .and_then(|target| target.serial.clone()),
-        sidebar_open: Some(state.sidebar_open),
-        fx_panel: Some(state.show_fx_panel),
-        assign: state.assign,
-        surround_51: state.surround_51,
-        surround_71: state.surround_71,
-        control_room: state.control_room.clone(),
-        sidebar_width: Some(state.sidebar_width),
-        panels_open: Some([p.options, p.snapshots, p.groups, p.layout]),
-        two_row: None,
-        row_mode: Some(state.row_mode),
-        ui_scale: Some(state.ui_scale),
-        labels,
-        show_original_names: state.show_original_names,
-        window_size: state.window_size,
-        workspace_last_dir: state.workspace_last_dir.clone(),
-        // Only a choice to leave the default is worth writing down.
-        keep_in_tray: (!state.keep_in_tray).then_some(false),
-        engine_force_rate: Some(state.engine_force_rate),
-        engine_rate_mode: Some(state.engine_rate_mode),
-        engine_force_quantum: Some(state.engine_force_quantum),
-        collapsed,
-        flyouts,
-        sel_out: Some(state.sel_out),
-        sel_out_side: Some(state.sel_out_side),
-        sync_direction: Some(state.sync_direction),
-        always_init_device: state.always_init_device,
-        osc_enabled: state.osc_enabled,
-        osc_mode: state.osc_dialect,
-        osc_recv_port: state.osc_recv_port,
-        osc_send_port: state.osc_send_port,
-        input_pair_link: state.device.settings().input_pair_link.clone(),
-        output_link: state.device.settings().output_link.clone(),
+            .and_then(|target| target.serial.as_deref());
+        settings.set_active(key, state.device.canonical_model(), serial);
+        if let Some(path) = state.current_workspace_path.clone() {
+            settings.set_current_workspace(key, path);
+        }
+        if let Some(unit) = settings.units.get_mut(key) {
+            unit.sync_direction = Some(state.sync_direction);
+            unit.always_init_device = state.always_init_device;
+        }
     }
+    settings.workspace_last_dir = state.workspace_last_dir.clone();
+    // Only a choice to leave the default is worth writing down.
+    settings.keep_in_tray = (!state.keep_in_tray).then_some(false);
+    settings.engine_force_rate = Some(state.engine_force_rate);
+    settings.engine_rate_mode = Some(state.engine_rate_mode);
+    settings.engine_force_quantum = Some(state.engine_force_quantum);
+    settings.osc_enabled = state.osc_enabled;
+    settings.osc_mode = state.osc_dialect;
+    settings.osc_recv_port = state.osc_recv_port;
+    settings.osc_send_port = state.osc_send_port;
+    settings
 }
 
-/// Restores what `prefs_of` saved. Values are clamped to the same bounds
-/// the live controls use, so a hand-edited file cannot open the app in a
-/// state the UI could never reach.
-pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
-    if let Some(v) = prefs.view {
-        state.view = v;
-    }
-    if let Some(open) = prefs.sidebar_open {
-        state.sidebar_open = open;
-    }
-    if let Some(open) = prefs.fx_panel {
-        state.show_fx_panel = open;
-    }
-    state.assign = prefs.assign;
-    state.surround_51 = prefs.surround_51;
-    state.surround_71 = prefs.surround_71;
-    state.control_room = prefs.control_room;
-    state.control_room_draft = state.control_room.clone();
-    // Older files stored an output pair in the seventh slot. It cannot be
-    // interpreted as a monitoring target, so anything outside the Cue
-    // target list falls back to Main.
-    let cue = state.assign[CUE_DEST]
-        .filter(|target| CUE_TARGETS.contains(target))
-        .unwrap_or(0);
-    state.assign[CUE_DEST] = Some(cue);
-    if let Some(w) = prefs.sidebar_width {
-        // Installs still on one of the old defaults move to the current
-        // one; an explicitly chosen width is left alone.
-        let w = if sidebar::OLD_DEFAULT_WIDTHS
-            .iter()
-            .any(|old| (w - old).abs() < 0.5)
-        {
-            sidebar::DEFAULT_WIDTH
+/// Restores the global and active unit's operational settings.  Values are
+/// clamped to the same bounds the live controls use, so a hand-edited file
+/// cannot open the app in a state the UI could never reach.
+pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_settings::HostSettings) {
+    state.workspace_last_dir = settings.workspace_last_dir.clone();
+    state.keep_in_tray = settings.keep_in_tray.unwrap_or(true);
+    state.engine_force_rate = settings.engine_force_rate.unwrap_or(0);
+    state.engine_rate_mode = settings
+        .engine_rate_mode
+        .unwrap_or(if state.engine_force_rate > 0 {
+            EngineRateMode::Fixed
         } else {
-            w
-        };
-        state.sidebar_width = w.clamp(sidebar::MIN_WIDTH, sidebar::MAX_WIDTH);
-    }
-    if let Some([options, snapshots, groups, layout]) = prefs.panels_open {
-        state.sidebar_panels_open = sidebar::PanelsOpen {
-            options,
-            snapshots,
-            groups,
-            layout,
-        };
-    }
-    // TotalMix has two supported layouts: 3 rows (default) and 2 rows.
-    // `Auto` was a TotalControl-only width-dependent mode and is deliberately
-    // retired: an old preference containing it opens as the 3-row default.
-    state.row_mode = match (prefs.row_mode, prefs.two_row) {
-        (Some(RowMode::Auto), _) => RowMode::Three,
-        (Some(mode), _) => mode,
-        (None, Some(true)) => RowMode::Two,
-        _ => RowMode::Three,
-    };
-    if let Some(z) = prefs.ui_scale {
-        state.ui_scale = z.clamp(theme::SCALE_MIN, theme::SCALE_MAX);
-    } else {
-        // Never saved: the first launch, see `Message::MonitorSize`.
-        state.initial_zoom_pending = true;
-    }
-    state.labels = prefs
-        .labels
-        .into_iter()
-        .filter(|(_, l)| !l.trim().is_empty())
-        .collect();
-    state.show_original_names = prefs.show_original_names;
-    state.window_size = prefs.window_size;
-    state.workspace_last_dir = prefs.workspace_last_dir;
-    state.keep_in_tray = prefs.keep_in_tray.unwrap_or(true);
-    state.engine_force_rate = prefs.engine_force_rate.unwrap_or(0);
-    state.engine_rate_mode = prefs.engine_rate_mode.unwrap_or(if state.engine_force_rate > 0 {
-        EngineRateMode::Fixed
-    } else {
-        EngineRateMode::Auto
-    });
-    state.engine_force_quantum = prefs.engine_force_quantum.unwrap_or(0);
-    state.always_init_device = prefs.always_init_device;
+            EngineRateMode::Auto
+        });
+    state.engine_force_quantum = settings.engine_force_quantum.unwrap_or(0);
     if !state.osc_cli {
-        state.osc_recv_port = if prefs.osc_recv_port == 0 {
+        state.osc_recv_port = if settings.osc_recv_port == 0 {
             9000
         } else {
-            prefs.osc_recv_port
+            settings.osc_recv_port
         };
-        state.osc_send_port = if prefs.osc_send_port == 0 {
+        state.osc_send_port = if settings.osc_send_port == 0 {
             9001
         } else {
-            prefs.osc_send_port
+            settings.osc_send_port
         };
-        state.osc_enabled = prefs.osc_enabled;
-        state.osc_dialect = prefs.osc_mode;
+        state.osc_enabled = settings.osc_enabled;
+        state.osc_dialect = settings.osc_mode;
         rebuild_osc_config(state);
     }
-
-    // Apply the link groupings before the per-channel UI state, so a saved
-    // flyout/collapse on a now-linked right channel is moved to the one
-    // strip the row actually shows.
-    if !prefs.input_pair_link.is_empty() {
-        state.device.settings_mut().input_pair_link = prefs.input_pair_link;
-    }
-    if !prefs.output_link.is_empty() {
-        state.device.settings_mut().output_link = prefs.output_link;
-    }
-
-    // Per-channel GUI state.  Filter out ids the current device does not
-    // have (a prefs file from another model) and the transient Route bus
-    // picker.  These are pure GUI state and never touch the device.
-    state.collapsed = prefs
-        .collapsed
-        .into_iter()
-        .map(|cid| normalize_channel(state, cid))
-        .filter(|&cid| channel_exists(state, cid))
-        .collect();
-    // Flyouts are transient UI state.  Keep old preference files readable,
-    // but start with every panel closed so a saved Settings panel cannot
-    // push a channel row past the window edge.
-    state.flyout_open.clear();
-    if let Some(out) = prefs.sel_out {
-        let pairs = state.device.output_pair_count().max(1);
-        state.sel_out = out.min(pairs - 1);
-    }
-    if let Some(side) = prefs.sel_out_side {
-        state.sel_out_side = side.min(1);
-    }
-
-    // USB has no readback; it must always restore GUI -> device.  The UCX
-    // honours the user's choice, defaulting to the safe Device -> GUI.
-    state.sync_direction = if state.device.needs_scene_restore() {
-        SyncDirection::GuiToDevice
-    } else if state.device.device_state_is_authoritative() {
-        SyncDirection::DeviceToGui
+    if let Some((key, unit)) = settings.active() {
+        state.current_unit_key = Some(key.to_string());
+        state.always_init_device = unit.always_init_device;
+        state.sync_direction = if state.device.needs_scene_restore() {
+            SyncDirection::GuiToDevice
+        } else if state.device.device_state_is_authoritative() {
+            SyncDirection::DeviceToGui
+        } else {
+            unit.sync_direction.unwrap_or(SyncDirection::DeviceToGui)
+        };
     } else {
-        prefs.sync_direction.unwrap_or(SyncDirection::DeviceToGui)
-    };
+        state.sync_direction = if state.device.needs_scene_restore() {
+            SyncDirection::GuiToDevice
+        } else if state.device.device_state_is_authoritative() {
+            SyncDirection::DeviceToGui
+        } else {
+            SyncDirection::DeviceToGui
+        };
+    }
     state.device.sync_settings_to_device();
+    state.host_settings = settings;
 }
 
 /// Capture the complete host-side configuration for a workspace file.
@@ -3557,13 +3523,11 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             .unwrap_or_else(|| format!("Mix {}", i + 1)),
         scene: state.snapshots.get(i).cloned().flatten(),
     });
-    let name = state
-        .workspace_path
-        .as_ref()
-        .and_then(|path| path.file_stem())
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("Untitled")
-        .to_string();
+    let name = if state.workspace_name.is_empty() {
+        "Untitled".to_string()
+    } else {
+        state.workspace_name.clone()
+    };
     let panels = state.sidebar_panels_open;
     let pfl_inputs = if state.control_room.pfl_replaces_solo {
         state
@@ -3584,6 +3548,8 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         groups: state.groups.clone(),
         temporary_group: state.selected.iter().copied().collect(),
         fader_ganged: state.fader_ganged,
+        mute_master: state.mute_master.clone(),
+        solo_master: state.solo_master.clone(),
         layouts: state.layouts.clone(),
         labels: state.labels.iter().map(|(c, l)| (*c, l.clone())).collect(),
         view: WorkspaceView {
@@ -3591,7 +3557,12 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             row_mode: state.row_mode,
             sidebar_open: state.sidebar_open,
             sidebar_width: state.sidebar_width,
-            panels_open: [panels.options, panels.snapshots, panels.groups, panels.layout],
+            panels_open: [
+                panels.options,
+                panels.snapshots,
+                panels.groups,
+                panels.layout,
+            ],
             fx_panel: state.show_fx_panel,
             ui_scale: state.ui_scale,
             sel_out: state.sel_out,
@@ -3602,6 +3573,17 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             active_snapshot: state.active_snapshot,
             active_layout: state.active_layout,
             collapsed: state.collapsed.clone(),
+            flyouts: state
+                .flyout_open
+                .iter()
+                .filter(|entry| entry.1 != strip::FlyoutKind::Route)
+                .map(|(channel, kind)| (*channel, *kind))
+                .collect(),
+            focus_channel: state.focus_channel,
+            select_anchor: state.select_anchor,
+            window_position: state.window_position,
+            fullscreen: state.fullscreen,
+            scroll: state.workspace_scroll,
             // Active Talkback is a momentary performance state; the
             // workspace never restores it.  The field stays for schema
             // compatibility with older files.
@@ -3626,6 +3608,115 @@ fn apply_workspace(
     path: PathBuf,
 ) -> Result<(), String> {
     apply_workspace_state(state, workspace, Some(path))
+}
+
+/// Installs still on one of the old sidebar defaults move to the current
+/// one; an explicitly chosen width is left alone.
+fn normalized_sidebar_width(width: f32) -> f32 {
+    let width = if sidebar::OLD_DEFAULT_WIDTHS
+        .iter()
+        .any(|old| (width - old).abs() < 0.5)
+    {
+        sidebar::DEFAULT_WIDTH
+    } else {
+        width
+    };
+    width.clamp(sidebar::MIN_WIDTH, sidebar::MAX_WIDTH)
+}
+
+/// Apply the durable GUI, snapshot, group and master state of a workspace
+/// without touching the device scene.  Startup restore uses this before the
+/// device compare, so the mismatch prompt can still choose the device scene
+/// while the window opens with its saved layout.
+fn apply_workspace_gui(state: &mut TotalControl, workspace: &Workspace) {
+    state.snapshots = std::array::from_fn(|i| {
+        workspace
+            .snapshots
+            .get(i)
+            .and_then(|slot| slot.scene.clone())
+    });
+    state.stored_snapshots = std::array::from_fn(|i| state.snapshots[i].is_some());
+    state.snapshot_names = std::array::from_fn(|i| {
+        workspace
+            .snapshots
+            .get(i)
+            .map(|slot| slot.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("Mix {}", i + 1))
+    });
+    state.groups = workspace.groups.clone();
+    state.group_edit = None;
+    state.selected = workspace.temporary_group.iter().copied().collect();
+    state.fader_ganged = workspace.fader_ganged && !state.selected.is_empty();
+    state.mute_master = workspace.mute_master.clone();
+    state.solo_master = workspace.solo_master.clone();
+    state.select_anchor = workspace.view.select_anchor;
+    state.focus_channel = workspace.view.focus_channel;
+    state.layouts = workspace.layouts.clone();
+    state.active_layout = workspace.view.active_layout;
+    state.active_snapshot = workspace.view.active_snapshot;
+    state.collapsed = workspace
+        .view
+        .collapsed
+        .iter()
+        .copied()
+        .map(|channel| normalize_channel(state, channel))
+        .filter(|&channel| channel_exists(state, channel))
+        .collect();
+    state.collapse_anim.clear();
+    state.flyout_open = workspace
+        .view
+        .flyouts
+        .iter()
+        .filter(|(channel, kind)| {
+            *kind != strip::FlyoutKind::Route && channel_exists(state, *channel)
+        })
+        .copied()
+        .collect();
+    state.flyout_anim.clear();
+    state.labels = workspace
+        .labels
+        .iter()
+        .filter(|(_, label)| !label.trim().is_empty())
+        .cloned()
+        .collect();
+    state.view = workspace.view.view;
+    state.row_mode = workspace.view.row_mode;
+    state.sidebar_open = workspace.view.sidebar_open;
+    state.sidebar_width = normalized_sidebar_width(workspace.view.sidebar_width);
+    state.sidebar_panels_open = sidebar::PanelsOpen {
+        options: workspace.view.panels_open[0],
+        snapshots: workspace.view.panels_open[1],
+        groups: workspace.view.panels_open[2],
+        layout: workspace.view.panels_open[3],
+    };
+    state.show_fx_panel = workspace.view.fx_panel;
+    state.ui_scale = workspace
+        .view
+        .ui_scale
+        .clamp(theme::SCALE_MIN, theme::SCALE_MAX);
+    state.sel_out = workspace
+        .view
+        .sel_out
+        .min(state.device.output_pair_count().saturating_sub(1));
+    state.sel_out_side = workspace.view.sel_out_side.min(1);
+    state.quick_channel = workspace.view.quick_channel;
+    state.show_original_names = workspace.view.show_original_names;
+    state.matrix_mono = workspace.view.matrix_mono;
+    state.control_room = workspace.control_room.clone();
+    state.control_room_draft = workspace.control_room.clone();
+    state.assign = workspace.assign;
+    let cue = state.assign[CUE_DEST]
+        .filter(|target| CUE_TARGETS.contains(target))
+        .unwrap_or(0);
+    state.assign[CUE_DEST] = Some(cue);
+    state.surround_51 = workspace.surround_51;
+    state.surround_71 = workspace.surround_71;
+    state.window_size = workspace.window_size;
+    state.window_position = workspace.view.window_position;
+    state.fullscreen = workspace.view.fullscreen;
+    state.workspace_scroll = workspace.view.scroll;
+    state.workspace_name = workspace.name.clone();
 }
 
 /// Shared apply path for file-backed and built-in workspaces.  A built-in
@@ -3669,70 +3760,12 @@ fn apply_workspace_state(
         .map_err(|e| e.to_string())?;
 
     state.host_scene = Some(scene.clone());
-    state.snapshots = std::array::from_fn(|i| {
-        workspace
-            .snapshots
-            .get(i)
-            .and_then(|slot| slot.scene.clone())
-    });
-    state.stored_snapshots = std::array::from_fn(|i| state.snapshots[i].is_some());
-    state.snapshot_names = std::array::from_fn(|i| {
-        workspace
-            .snapshots
-            .get(i)
-            .map(|slot| slot.name.clone())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| format!("Mix {}", i + 1))
-    });
-    state.groups = workspace.groups.clone();
-    state.group_edit = None;
-    state.selected = workspace.temporary_group.iter().copied().collect();
-    state.fader_ganged = workspace.fader_ganged && !state.selected.is_empty();
-    state.select_anchor = None;
-    state.layouts = workspace.layouts.clone();
-    state.active_layout = workspace.view.active_layout;
-    state.active_snapshot = workspace.view.active_snapshot;
-    state.collapsed = workspace.view.collapsed.clone();
-    state.collapse_anim.clear();
-    state.labels = workspace.labels.iter().cloned().collect();
-    state.view = workspace.view.view;
-    state.row_mode = workspace.view.row_mode;
-    state.sidebar_open = workspace.view.sidebar_open;
-    state.sidebar_width = workspace
-        .view
-        .sidebar_width
-        .clamp(sidebar::MIN_WIDTH, sidebar::MAX_WIDTH);
-    state.sidebar_panels_open = sidebar::PanelsOpen {
-        options: workspace.view.panels_open[0],
-        snapshots: workspace.view.panels_open[1],
-        groups: workspace.view.panels_open[2],
-        layout: workspace.view.panels_open[3],
-    };
-    state.show_fx_panel = workspace.view.fx_panel;
-    state.ui_scale = workspace
-        .view
-        .ui_scale
-        .clamp(theme::SCALE_MIN, theme::SCALE_MAX);
-    state.sel_out = workspace
-        .view
-        .sel_out
-        .min(state.device.output_pair_count().saturating_sub(1));
-    state.sel_out_side = workspace.view.sel_out_side.min(1);
-    state.quick_channel = workspace.view.quick_channel;
-    state.show_original_names = workspace.view.show_original_names;
-    state.matrix_mono = workspace.view.matrix_mono;
-    state.control_room = workspace.control_room.clone();
-    state.control_room_draft = workspace.control_room.clone();
-    state.assign = workspace.assign;
-    state.surround_51 = workspace.surround_51;
-    state.surround_71 = workspace.surround_71;
-    state.window_size = workspace.window_size;
+    apply_workspace_gui(state, workspace);
     state.workspace_path = path;
     state.workspace_dirty = false;
     state.workspace_menu = WorkspaceMenu::Closed;
     state.snapshot_dirty = false;
-    state.prefs_dirty = true;
-    state.last_saved_json = None;
+    state.host_dirty = true;
     enforce_control_room_stereo(state);
     apply_control_room_assignments(state).map_err(|e| e.to_string())?;
     apply_workspace_external_input(state, workspace)?;
@@ -3760,11 +3793,7 @@ fn load_surround_workspace(
         output_order: state.device.output_display_order(),
         matrix_uses_display_order: state.device.matrix_uses_display_order(),
     };
-    let workspace = workspaces::factory_workspace(
-        &capture_workspace(state),
-        layout,
-        &topology,
-    )?;
+    let workspace = workspaces::factory_workspace(&capture_workspace(state), layout, &topology)?;
     // Rewriting the playback pairs at full width clears mono cells left by a
     // previous width/MS setting.  Do this before the scene apply so the
     // downmix's own cross-side cells are not wiped again.
@@ -3870,10 +3899,7 @@ fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
 /// have been installed.  `apply_scene` uses the live assignments; this
 /// second pass is what makes Dim and Speaker B follow the assignments saved
 /// in the workspace.
-fn apply_workspace_monitor_state(
-    state: &mut TotalControl,
-    scene: &Scene,
-) -> Result<(), String> {
+fn apply_workspace_monitor_state(state: &mut TotalControl, scene: &Scene) -> Result<(), String> {
     if !state.device.is_ucx_model() {
         return Ok(());
     }
@@ -3905,6 +3931,244 @@ fn apply_workspace_monitor_state(
     Ok(())
 }
 
+/// A fresh workspace carrying the connected device's topology.
+fn new_workspace_for_device(state: &TotalControl) -> Workspace {
+    let mut workspace = Workspace::default();
+    workspace.scene = state.device.capture_scene();
+    workspace.name = "Untitled".into();
+    workspace.scene.name = workspace.name.clone();
+    workspace.view.ui_scale = state.ui_scale;
+    workspace.window_size = state.window_size;
+    workspace
+}
+
+/// Map the legacy two-row / row-mode preference.  `Auto` is retired.
+fn legacy_row_mode(prefs: &crate::prefs::Prefs) -> RowMode {
+    match (prefs.row_mode, prefs.two_row) {
+        (Some(RowMode::Auto), _) => RowMode::Three,
+        (Some(mode), _) => mode,
+        (None, Some(true)) => RowMode::Two,
+        _ => RowMode::Three,
+    }
+}
+
+/// Build a workspace from the pre-current-workspace files.  The old files
+/// stay untouched; this is a one-time read.
+fn migrate_workspace(state: &TotalControl) -> Option<Workspace> {
+    let prefs = crate::prefs::path()
+        .filter(|path| path.exists())
+        .map(|path| crate::prefs::load(&path));
+    let scene = load_scene_for_current(state);
+    let snapshots: [Option<Scene>; 8] =
+        std::array::from_fn(|i| crate::scenes::load_scene_file(&format!("Mix {}", i + 1)));
+    let layouts: [Option<HashSet<ChannelId>>; 6] =
+        std::array::from_fn(|i| crate::layouts::load_layout_file((i + 1) as u8));
+    workspace_from_legacy(state, prefs, scene, snapshots, layouts)
+}
+
+/// Build the first current workspace from the legacy inputs.  Kept pure so
+/// migration tests use synthetic fixtures, never a user's files.
+fn workspace_from_legacy(
+    state: &TotalControl,
+    prefs: Option<crate::prefs::Prefs>,
+    scene: Option<Scene>,
+    snapshots: [Option<Scene>; 8],
+    layouts: [Option<HashSet<ChannelId>>; 6],
+) -> Option<Workspace> {
+    let had_any = prefs.is_some()
+        || scene.is_some()
+        || snapshots.iter().any(Option::is_some)
+        || layouts.iter().any(Option::is_some);
+    if !had_any {
+        return None;
+    }
+    let prefs = prefs.unwrap_or_default();
+    let row_mode = legacy_row_mode(&prefs);
+    let mut workspace = new_workspace_for_device(state);
+    if let Some(scene) = scene {
+        workspace.scene = scene;
+    }
+    if !prefs.input_pair_link.is_empty() {
+        workspace.scene.settings.input_pair_link = prefs.input_pair_link;
+    }
+    if !prefs.output_link.is_empty() {
+        workspace.scene.settings.output_link = prefs.output_link;
+    }
+    workspace.snapshots = std::array::from_fn(|i| WorkspaceSnapshot {
+        name: format!("Mix {}", i + 1),
+        scene: snapshots[i].clone(),
+    });
+    workspace.layouts = layouts;
+    workspace.labels = prefs
+        .labels
+        .into_iter()
+        .filter(|(_, label)| !label.trim().is_empty())
+        .collect();
+    workspace.view.view = prefs.view.unwrap_or(View::Mixer);
+    workspace.view.sidebar_open = prefs.sidebar_open.unwrap_or(true);
+    workspace.view.fx_panel = prefs.fx_panel.unwrap_or(true);
+    workspace.view.sidebar_width =
+        normalized_sidebar_width(prefs.sidebar_width.unwrap_or(sidebar::DEFAULT_WIDTH));
+    if let Some([options, snapshots, groups, layout]) = prefs.panels_open {
+        workspace.view.panels_open = [options, snapshots, groups, layout];
+    }
+    workspace.view.row_mode = row_mode;
+    workspace.view.ui_scale = prefs
+        .ui_scale
+        .unwrap_or(theme::SCALE_DEFAULT)
+        .clamp(theme::SCALE_MIN, theme::SCALE_MAX);
+    workspace.view.show_original_names = prefs.show_original_names;
+    workspace.view.sel_out = prefs.sel_out.unwrap_or(0);
+    workspace.view.sel_out_side = prefs.sel_out_side.unwrap_or(0).min(1);
+    workspace.view.collapsed = prefs
+        .collapsed
+        .into_iter()
+        .map(|channel| normalize_channel(state, channel))
+        .filter(|&channel| channel_exists(state, channel))
+        .collect();
+    workspace.control_room = prefs.control_room;
+    workspace.assign = prefs.assign;
+    workspace.surround_51 = prefs.surround_51;
+    workspace.surround_71 = prefs.surround_71;
+    workspace.window_size = prefs.window_size;
+    Some(workspace)
+}
+
+fn apply_unit_settings(state: &mut TotalControl, key: &str) {
+    let Some(unit) = state.host_settings.units.get(key).cloned() else {
+        return;
+    };
+    state.always_init_device = unit.always_init_device;
+    state.sync_direction = if state.device.needs_scene_restore() {
+        SyncDirection::GuiToDevice
+    } else if state.device.device_state_is_authoritative() {
+        SyncDirection::DeviceToGui
+    } else {
+        unit.sync_direction.unwrap_or(SyncDirection::DeviceToGui)
+    };
+    state.device.sync_settings_to_device();
+}
+
+/// Load the active unit's current workspace and restore its GUI before the
+/// device compare.  Missing files come from migration or a fresh workspace;
+/// a real unit's file is written once here, while an explicit file is never
+/// touched.
+pub fn restore_startup_workspace(state: &mut TotalControl) {
+    let (key, path) = resolve_current_workspace(state);
+    restore_startup_workspace_at(state, key, path);
+}
+
+/// Restore a unit's workspace from an explicit key and file.  Split from
+/// path resolution so tests use a temporary file instead of the user's data
+/// directory.
+fn restore_startup_workspace_at(state: &mut TotalControl, key: Option<String>, path: PathBuf) {
+    // No unit at start: the fallback simulation shows the last active
+    // unit's saved GUI and scene.  It has no file of its own to write, so a
+    // close cannot replace that unit's live workspace.  When the unit
+    // appears, the reconnect path restores its own current workspace.
+    if state.device.is_mock() && !state.explicit_mock {
+        if let Some((_, unit)) = state.host_settings.active() {
+            if let Some(last) = unit.current_workspace.clone() {
+                if let Ok(workspace) = workspaces::load(&last) {
+                    apply_workspace_gui(state, &workspace);
+                    state.startup_workspace_scene = Some(workspace.scene.clone());
+                    state.current_unit_key = None;
+                    state.current_workspace_path = None;
+                    state.workspace_path = None;
+                    state.workspace_dirty = false;
+                    state.initial_zoom_pending = false;
+                    return;
+                }
+            }
+        }
+    }
+    state.current_unit_key = key.clone();
+    state.current_workspace_path = Some(path.clone());
+    if let Some(key) = key.as_deref() {
+        state.host_settings.set_active(
+            key,
+            state.device.canonical_model(),
+            state
+                .device_target
+                .as_ref()
+                .and_then(|target| target.serial.as_deref()),
+        );
+        state.host_settings.set_current_workspace(key, path.clone());
+        state.host_dirty = true;
+        apply_unit_settings(state, key);
+    }
+    state.startup_workspace_scene = None;
+
+    // A mock resolves to a temporary path, so reading it cannot touch a
+    // real unit's workspace.
+    let loaded = workspaces::load(&path).ok();
+    let (workspace, write_now, fresh) = match loaded {
+        Some(workspace)
+            if workspace
+                .scene
+                .check_compatible(state.device.canonical_model())
+                .is_ok() =>
+        {
+            (workspace, false, false)
+        }
+        Some(_) => {
+            log::warn!(
+                "current workspace {} belongs to another model; starting a new one",
+                path.display()
+            );
+            (new_workspace_for_device(state), true, false)
+        }
+        None if state.device.is_mock() => (new_workspace_for_device(state), true, true),
+        None => match migrate_workspace(state) {
+            Some(workspace) => (workspace, true, false),
+            None => (new_workspace_for_device(state), true, true),
+        },
+    };
+    apply_workspace_gui(state, &workspace);
+    state.startup_workspace_scene = Some(workspace.scene.clone());
+    state.workspace_path = None;
+    state.workspace_dirty = false;
+    state.initial_zoom_pending = fresh;
+    state.last_workspace_save = Instant::now();
+    state.snapshot_dirty = false;
+    if write_now && !state.device.is_mock() {
+        if let Err(error) = workspaces::save(&path, &workspace) {
+            log::warn!(
+                "Could not write current workspace {}: {error}",
+                path.display()
+            );
+            state.workspace_dirty = true;
+        }
+    }
+}
+
+/// Write the live workspace to the unit's current file when it is dirty.
+/// Forced callers pass `force` to write state that was just changed by an
+/// operation which clears the flag itself.
+fn write_current_workspace(state: &mut TotalControl, force: bool) -> Result<(), String> {
+    if !force && !state.workspace_dirty {
+        return Ok(());
+    }
+    let Some(path) = state.current_workspace_path.clone() else {
+        return Ok(());
+    };
+    let workspace = capture_workspace(state);
+    workspaces::save(&path, &workspace)?;
+    state.last_workspace_save = Instant::now();
+    state.workspace_dirty = false;
+    Ok(())
+}
+
+/// Saves the current workspace at the lifecycle events that must not lose
+/// changes: quit, close, tray hide, disconnect, device switch and explicit
+/// workspace operations.
+pub fn save_current_workspace(state: &mut TotalControl) {
+    if let Err(error) = write_current_workspace(state, false) {
+        log::warn!("Could not save the current workspace: {error}");
+        state.workspace_dirty = true;
+    }
+}
+
 fn workspace_dialog_dir(state: &TotalControl) -> PathBuf {
     state
         .workspace_last_dir
@@ -3916,7 +4180,7 @@ fn workspace_dialog_dir(state: &TotalControl) -> PathBuf {
 fn remember_workspace_dir(state: &mut TotalControl, path: &std::path::Path) {
     if let Some(parent) = path.parent() {
         state.workspace_last_dir = Some(parent.to_path_buf());
-        state.prefs_dirty = true;
+        state.host_dirty = true;
     }
 }
 
@@ -3950,9 +4214,16 @@ fn save_workspace_to(state: &mut TotalControl, path: PathBuf) -> Result<(), Stri
         .unwrap_or("Untitled")
         .to_string();
     workspaces::save(&path, &workspace)?;
+    state.workspace_name = workspace.name.clone();
     state.workspace_path = Some(path.clone());
+    if let Some(current) = state.current_workspace_path.clone() {
+        if current != path {
+            workspaces::save(&current, &workspace)?;
+        }
+    }
     state.workspace_dirty = false;
-    state.prefs_dirty = true;
+    state.last_workspace_save = Instant::now();
+    state.host_dirty = true;
     remember_workspace_dir(state, &path);
     state.notice = Some((
         format!("Saved workspace {}", path.display()),
@@ -3965,10 +4236,17 @@ fn open_workspace_after_confirm(state: &mut TotalControl) -> Task<Message> {
     let Some(path) = workspace_open_dialog(state) else {
         return Task::none();
     };
+    // The outgoing live workspace is saved before its state is replaced.
+    save_current_workspace(state);
     match workspaces::load(&path)
         .and_then(|workspace| apply_workspace(state, &workspace, path.clone()))
     {
         Ok(()) => {
+            // The loaded state becomes the live current workspace too.
+            if let Err(error) = write_current_workspace(state, true) {
+                log::warn!("Could not write the loaded current workspace: {error}");
+                state.workspace_dirty = true;
+            }
             remember_workspace_dir(state, &path);
             state.notice = Some((
                 format!("Opened workspace {}", path.display()),
@@ -3998,10 +4276,7 @@ fn load_factory_workspace_after_confirm(
             ));
         }
         Err(e) => {
-            log::warn!(
-                "Could not load factory workspace {}: {e}",
-                layout.name()
-            );
+            log::warn!("Could not load factory workspace {}: {e}", layout.name());
             state.notice = Some((
                 format!("Could not load factory workspace: {e}"),
                 Instant::now(),
@@ -4131,8 +4406,7 @@ fn surround_script_path() -> Option<std::path::PathBuf> {
 }
 
 fn run_surround_command(command: &str, target: Option<&str>) -> Result<(), String> {
-    let script = surround_script_path()
-        .ok_or_else(|| "surround helper not found".to_string())?;
+    let script = surround_script_path().ok_or_else(|| "surround helper not found".to_string())?;
     let mut process = std::process::Command::new("bash");
     process.arg(script).arg(command);
     if let Some(target) = target {
@@ -4174,7 +4448,10 @@ pub fn sync_surround_bridge(state: &mut TotalControl) {
             Ok(()) => *running = wanted,
             Err(e) => {
                 state.notice = Some((
-                    format!("Could not {} virtual {kind}: {e}", if wanted { "start" } else { "stop" }),
+                    format!(
+                        "Could not {} virtual {kind}: {e}",
+                        if wanted { "start" } else { "stop" }
+                    ),
                     Instant::now(),
                 ));
             }
@@ -4206,15 +4483,11 @@ pub fn restart_surround_bridge(state: &mut TotalControl) {
 /// so Settings/EQ/Trim panels and collapsed state cannot get stranded.
 fn normalize_channel(state: &TotalControl, cid: ChannelId) -> ChannelId {
     match cid {
-        ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => {
-            ChannelId::Input(i & !1)
-        }
+        ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => ChannelId::Input(i & !1),
         ChannelId::Playback(i) if state.device.playback_linked(i / 2) => {
             ChannelId::Playback(i & !1)
         }
-        ChannelId::Output(i) if state.device.output_linked(i / 2) => {
-            ChannelId::Output(i & !1)
-        }
+        ChannelId::Output(i) if state.device.output_linked(i / 2) => ChannelId::Output(i & !1),
         _ => cid,
     }
 }
@@ -4279,10 +4552,54 @@ pub fn open_startup_flyouts(state: &mut TotalControl, spec: &str) {
 /// the TUI fallback working; the serial separates two units of the same model.
 fn scene_key(state: &TotalControl) -> String {
     let model = state.device.canonical_model();
-    match state.device_target.as_ref().and_then(|t| t.serial.as_deref()) {
+    match state
+        .device_target
+        .as_ref()
+        .and_then(|t| t.serial.as_deref())
+    {
         Some(serial) => format!("{model}-{serial}"),
         None => model.to_string(),
     }
+}
+
+/// The key for a current workspace file and the host settings entry.
+/// `None` for a simulation: a mock session must never touch a real unit's
+/// workspace.
+fn current_unit_key(state: &TotalControl) -> Option<String> {
+    if state.device.is_mock() {
+        return None;
+    }
+    let model = state.device.canonical_model();
+    let serial = state
+        .device_target
+        .as_ref()
+        .and_then(|t| t.serial.as_deref());
+    Some(totalcontrol_core::workspace::unit_key(model, serial))
+}
+
+/// Where a simulation keeps its workspace.  A temporary directory per
+/// process leaves real current workspace files untouched.
+fn development_workspace_path() -> PathBuf {
+    std::env::temp_dir()
+        .join(format!("totalcontrol-mock-{}", std::process::id()))
+        .join("current.tcws")
+}
+
+/// The live workspace file for the open unit, and the unit key when it is
+/// a real unit.
+fn resolve_current_workspace(state: &mut TotalControl) -> (Option<String>, PathBuf) {
+    let Some(key) = current_unit_key(state) else {
+        return (None, development_workspace_path());
+    };
+    if let Some(path) = state.host_settings.current_workspace(&key) {
+        return (Some(key), path);
+    }
+    let path = totalcontrol_core::workspace::current_path(&key);
+    state
+        .host_settings
+        .set_current_workspace(&key, path.clone());
+    state.host_dirty = true;
+    (Some(key), path)
 }
 
 fn load_scene_for_current(state: &TotalControl) -> Option<Scene> {
@@ -4313,29 +4630,6 @@ fn load_scene_for_current(state: &TotalControl) -> Option<Scene> {
     }
 }
 
-fn save_scene_for_current(state: &TotalControl, scene: &Scene) -> Result<(), String> {
-    if state.device.is_uc_model()
-        || state
-            .device_target
-            .as_ref()
-            .is_some_and(|target| target.serial.is_some())
-    {
-        totalcontrol_core::scene::save_auto_scene_for(&scene_key(state), scene)
-    } else {
-        totalcontrol_core::scene::save_auto_scene(scene)
-    }
-}
-
-/// Legacy backends and single-unit UCX sessions without a serial still use
-/// the shared auto.json that the TUI also writes.
-fn uses_shared_auto_scene(state: &TotalControl) -> bool {
-    !state.device.is_uc_model()
-        && !state
-            .device_target
-            .as_ref()
-            .is_some_and(|target| target.serial.is_some())
-}
-
 /// First-connect sync, after the preferences are known.
 ///
 /// Backends without a full mixer readback restore their saved scene.  For
@@ -4359,9 +4653,12 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
         if state.device.is_ucx_model() {
             let _ = state.device.poll_events();
         }
-        let scene = load_scene_for_current(state);
+        let scene = state
+            .startup_workspace_scene
+            .take()
+            .or_else(|| load_scene_for_current(state));
         let Some(scene) = scene else {
-            log::warn!("no auto scene found for {model}");
+            log::warn!("no current workspace scene found for {model}");
             state.device.begin_metering();
             return;
         };
@@ -4373,10 +4670,9 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
         );
         state.host_scene = Some(scene.clone());
         if state.device.is_ucx_model() && !state.always_init_device {
-            if let Err(e) =
-                state
-                    .device
-                    .begin_startup_state_dump(Duration::from_millis(3000))
+            if let Err(e) = state
+                .device
+                .begin_startup_state_dump(Duration::from_millis(3000))
             {
                 log::warn!("UCX startup state dump request failed: {e:?}");
             }
@@ -4405,8 +4701,7 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
             if let Some(device_state) = state.device.readable_state() {
                 let items = device_state.differences(&scene);
                 if !items.is_empty() {
-                    let totalcontrol_gain =
-                        scene_gain_pairs(&scene, state.device.is_ucx_model());
+                    let totalcontrol_gain = scene_gain_pairs(&scene, state.device.is_ucx_model());
                     state.startup_mismatch = Some(StartupMismatch {
                         items,
                         device_state,
@@ -4428,8 +4723,7 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
                 if state.always_init_device {
                     // "Always use TotalControl settings" skips the dialog, so the
                     // same readable values it would write are pushed here.
-                    let totalcontrol_gain =
-                        scene_gain_pairs(&scene, state.device.is_ucx_model());
+                    let totalcontrol_gain = scene_gain_pairs(&scene, state.device.is_ucx_model());
                     apply_totalcontrol_mismatch(
                         state,
                         &StartupMismatch {
@@ -4450,8 +4744,7 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
                     // device value instead of the host scene.
                     state.startup_scene = Some(scene.clone());
                     state.startup_scene_full_rewrite = false;
-                    state.startup_scene_due =
-                        Some(Instant::now() + Duration::from_secs(1));
+                    state.startup_scene_due = Some(Instant::now() + Duration::from_secs(1));
                     // The UC can deliver a front-panel move made while the
                     // app was not running after `begin_metering()` starts
                     // the engine.  TotalMix's connect write is
@@ -4615,11 +4908,7 @@ fn first_rate_needs_reapply(last: Option<u32>, current: Option<u32>, model_rate:
     last.is_none() && current.is_some_and(|rate| rate != model_rate)
 }
 
-fn rate_needs_mixer_reapply(
-    last: Option<u32>,
-    current: Option<u32>,
-    model_rate: u32,
-) -> bool {
+fn rate_needs_mixer_reapply(last: Option<u32>, current: Option<u32>, model_rate: u32) -> bool {
     card_rate_changed(last, current) || first_rate_needs_reapply(last, current, model_rate)
 }
 
@@ -4692,7 +4981,11 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
         }
         // Fallback for a backend/card where the restart did not latch the
         // shadow state.
-        schedule_mixer_reapply(state, Duration::from_millis(1_500), "host sample-rate change");
+        schedule_mixer_reapply(
+            state,
+            Duration::from_millis(1_500),
+            "host sample-rate change",
+        );
     } else {
         state.pending_device_rate = None;
     }
@@ -4837,20 +5130,30 @@ pub fn restore_engine(state: &mut TotalControl) {
     state.driver_queue = pw_clock::driver_urb_queue();
 }
 
-/// Writes the preferences if something changed (and a path is set).
-fn flush_prefs(state: &mut TotalControl) {
-    if !state.prefs_dirty {
+/// Writes the host settings if something changed (and a path is set).
+fn flush_host_settings(state: &mut TotalControl) {
+    if !state.host_dirty {
         return;
     }
-    state.prefs_dirty = false;
-    if let Some(path) = state.prefs_path.clone() {
-        if let Err(e) = crate::prefs::save(&path, &prefs_of(state)) {
-            log::warn!("Failed to save GUI preferences: {e}");
+    state.host_dirty = false;
+    if let Some(path) = state.host_settings_path.clone() {
+        let settings = host_settings_of(state);
+        if let Err(e) = crate::host_settings::HostSettings::save(&path, &settings) {
+            log::warn!("Failed to save host settings: {e}");
+        } else {
+            state.host_settings = settings;
         }
     }
 }
 
-/// Whether `message` changes something `prefs_of` persists.
+/// Write the host settings now; used once at startup after migration and
+/// by the lifecycle save paths.
+pub fn save_host_settings_now(state: &mut TotalControl) {
+    state.host_dirty = true;
+    flush_host_settings(state);
+}
+
+/// Whether `message` changes something `host_settings_of` persists.
 fn changes_prefs(message: &Message) -> bool {
     matches!(
         message,
@@ -4862,8 +5165,11 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::AssignCueTarget(_)
             | Message::SidebarResize(_)
             | Message::ToggleSidebarPanel(_)
+            | Message::WindowSize(..)
+            | Message::WindowMoved(..)
+            | Message::WorkspaceScrolled(..)
+            | Message::ToggleFullscreen(_)
             | Message::SetRowMode(_)
-            | Message::SetSyncDirection(_)
             | Message::ToggleCollapse(_)
             | Message::ToggleFlyout(..)
             | Message::StripClicked(_)
@@ -4872,17 +5178,34 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::ZoomIn
             | Message::ZoomOut
             | Message::ZoomReset
-            | Message::SetKeepInTray(_)
             | Message::MonitorSize(_)
             | Message::RenameCommit
             | Message::SetShowOriginalNames(_)
             | Message::SetSurround51(_)
             | Message::SetSurround71(_)
+            | Message::ApplyControlRoomSettings
+    )
+}
+
+/// Whether `message` changes a host setting rather than workspace state.
+fn changes_host_settings(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::SetKeepInTray(_)
+            | Message::SetAutostart(_)
+            | Message::SetSyncDirection(_)
+            | Message::SetAlwaysInitDevice(_)
             | Message::EngineRate(_)
             | Message::EngineRateMode(_)
             | Message::EngineQuantum(_)
             | Message::SelectDevice(_)
-            | Message::ApplyControlRoomSettings
+            | Message::WorkspaceSave
+            | Message::WorkspaceSaveAs
+            | Message::SetOscEnabled(_)
+            | Message::SetOscMode(_)
+            | Message::OscRecvPortChanged(_)
+            | Message::OscSendPortChanged(_)
+            | Message::ApplyOscPorts
     )
 }
 
@@ -4960,7 +5283,10 @@ fn enforce_control_room_stereo(state: &mut TotalControl) {
 /// strip its rename-field state. Every `strip::strip` call goes through
 /// this, after any pair-label joining, so a label replaces the whole
 /// strip name ("AN1/2" -> "Vocals"), not one half of it.
-fn finish_params<'a>(state: &'a TotalControl, mut p: strip::StripParams<'a>) -> strip::StripParams<'a> {
+fn finish_params<'a>(
+    state: &'a TotalControl,
+    mut p: strip::StripParams<'a>,
+) -> strip::StripParams<'a> {
     if !p.name_locked {
         let label = if p.stereo_linked {
             user_pair_label(state, p.cid)
@@ -5119,9 +5445,7 @@ fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f
             // are silent, so the stored balance is the only state left.
             if pair_linked(state, cid) {
                 let (left, right) = stereo_pair(cid);
-                if let Some((_, _, level, current)) =
-                    split_pair_levels(state, cid, block)
-                {
+                if let Some((_, _, level, current)) = split_pair_levels(state, cid, block) {
                     let balance = if level > 0.0 {
                         current
                     } else {
@@ -5130,8 +5454,7 @@ fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f
                             .pair_block_balance(cid, block)
                             .unwrap_or(current)
                     };
-                    let (left_level, right_level) =
-                        output_balance_to_volumes(send, balance);
+                    let (left_level, right_level) = output_balance_to_volumes(send, balance);
                     let _ = state.device.set_matrix_cell(left, block, left_level);
                     let _ = state.device.set_matrix_cell(right, block, right_level);
                     let _ = state.device.set_pair_block_balance(left, block, balance);
@@ -5165,19 +5488,14 @@ fn channel_pan(state: &TotalControl, cid: ChannelId, out: usize) -> i8 {
     // A linked pair into one mono output is a balance between its two
     // source cells: the default is hard L on the left block and hard R on
     // the right, and the knob moves the two source levels into that block.
-    if pair_linked(state, cid)
-        && matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_))
-    {
+    if pair_linked(state, cid) && matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) {
         if let Some(block) = split_block_for(state, out) {
             if let Some((_, _, level, balance)) = split_pair_levels(state, cid, block) {
                 if level > 0.0 {
                     return balance;
                 }
             }
-            return state
-                .device
-                .pair_block_balance(cid, block)
-                .unwrap_or(0);
+            return state.device.pair_block_balance(cid, block).unwrap_or(0);
         }
     }
     match cid {
@@ -5244,8 +5562,7 @@ fn set_channel_pan(state: &mut TotalControl, cid: ChannelId, out: usize, pan: i8
                 let (left, right) = stereo_pair(cid);
                 if let Some((_, _, level, _)) = split_pair_levels(state, cid, block) {
                     if level > 0.0 {
-                        let (left_level, right_level) =
-                            output_balance_to_volumes(level, pan);
+                        let (left_level, right_level) = output_balance_to_volumes(level, pan);
                         let _ = state.device.set_matrix_cell(left, block, left_level);
                         let _ = state.device.set_matrix_cell(right, block, right_level);
                     }
@@ -5296,17 +5613,17 @@ fn set_channel_solo(state: &mut TotalControl, cid: ChannelId, s: bool) {
 
 fn channel_is_muted(state: &TotalControl, cid: ChannelId) -> bool {
     match cid {
-        ChannelId::Input(ch) => state.device.inputs()[ch].mute,
-        ChannelId::Playback(ch) => state.device.playbacks()[ch].mute,
-        ChannelId::Output(ch) => state.device.outputs()[ch].mute,
+        ChannelId::Input(ch) => state.device.inputs().get(ch).is_some_and(|c| c.mute),
+        ChannelId::Playback(ch) => state.device.playbacks().get(ch).is_some_and(|c| c.mute),
+        ChannelId::Output(ch) => state.device.outputs().get(ch).is_some_and(|c| c.mute),
     }
 }
 
 fn channel_is_soloed(state: &TotalControl, cid: ChannelId) -> bool {
     match cid {
-        ChannelId::Input(ch) => state.device.inputs()[ch].solo,
-        ChannelId::Playback(ch) => state.device.playbacks()[ch].solo,
-        ChannelId::Output(ch) => state.device.outputs()[ch].solo,
+        ChannelId::Input(ch) => state.device.inputs().get(ch).is_some_and(|c| c.solo),
+        ChannelId::Playback(ch) => state.device.playbacks().get(ch).is_some_and(|c| c.solo),
+        ChannelId::Output(ch) => state.device.outputs().get(ch).is_some_and(|c| c.solo),
     }
 }
 
@@ -5325,7 +5642,45 @@ fn all_channel_ids(state: &TotalControl) -> Vec<ChannelId> {
 /// "M" button's toggle direction and its lit state (`sidebar::msf_row`
 /// reads this too, hence `pub(crate)`).
 pub(crate) fn any_channel_muted(state: &TotalControl) -> bool {
-    all_channel_ids(state).into_iter().any(|cid| channel_is_muted(state, cid))
+    all_channel_ids(state)
+        .into_iter()
+        .any(|cid| channel_is_muted(state, cid))
+}
+
+/// Rebuild the mute and solo master sets from the channels' own states.
+///
+/// The masters are automatic: a muted channel belongs to the mute set and a
+/// soloed channel to the solo set.  The UI keeps that true while it edits,
+/// but a restored scene, a snapshot recall or a reconnect can set the
+/// channel states directly.  A suspended set is deliberately unmuted, so its
+/// held members stay.
+pub(crate) fn adopt_active_master_members(state: &mut TotalControl) {
+    let ids = all_channel_ids(state);
+    let muted: Vec<ChannelId> = ids
+        .iter()
+        .copied()
+        .filter(|cid| channel_is_muted(state, *cid))
+        .collect();
+    let soloed: Vec<ChannelId> = ids
+        .into_iter()
+        .filter(|cid| channel_is_soloed(state, *cid))
+        .collect();
+    if !state.mute_master.suspended {
+        state.mute_master.members.retain(|cid| muted.contains(cid));
+    }
+    if !state.solo_master.suspended {
+        state.solo_master.members.retain(|cid| soloed.contains(cid));
+    }
+    for cid in muted {
+        if !state.mute_master.members.contains(&cid) {
+            state.mute_master.members.push(cid);
+        }
+    }
+    for cid in soloed {
+        if !state.solo_master.members.contains(&cid) {
+            state.solo_master.members.push(cid);
+        }
+    }
 }
 
 /// Whether the global fader group has any member. The group exists as soon
@@ -5349,16 +5704,10 @@ fn paired_channels(state: &TotalControl, cid: ChannelId) -> Vec<ChannelId> {
             vec![ChannelId::Input(i & !1), ChannelId::Input(i | 1)]
         }
         ChannelId::Playback(i) if state.device.playback_linked(i / 2) => {
-            vec![
-                ChannelId::Playback(i & !1),
-                ChannelId::Playback(i | 1),
-            ]
+            vec![ChannelId::Playback(i & !1), ChannelId::Playback(i | 1)]
         }
         ChannelId::Output(i) if state.device.output_linked(i / 2) => {
-            vec![
-                ChannelId::Output(i & !1),
-                ChannelId::Output(i | 1),
-            ]
+            vec![ChannelId::Output(i & !1), ChannelId::Output(i | 1)]
         }
         _ => vec![cid],
     }
@@ -5399,7 +5748,9 @@ pub(crate) fn solo_armed(state: &TotalControl, cid: ChannelId) -> bool {
 /// Whether at least one channel is currently soloed — drives the
 /// global "S" button's lit state (there's something for it to clear).
 pub(crate) fn any_channel_soloed(state: &TotalControl) -> bool {
-    all_channel_ids(state).into_iter().any(|cid| channel_is_soloed(state, cid))
+    all_channel_ids(state)
+        .into_iter()
+        .any(|cid| channel_is_soloed(state, cid))
 }
 
 /// Every *other* channel that should move/mute/solo alongside `cid`
@@ -5469,8 +5820,7 @@ fn apply_grouped_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v:
             ChannelId::Output(i) => i,
             _ => out,
         };
-        let cur =
-            channel_level(state, sel, peer_out) * trim_factor(channel_trim(state, sel));
+        let cur = channel_level(state, sel, peer_out) * trim_factor(channel_trim(state, sel));
         let new_vol = db_to_vol(vol_to_db(cur) + delta_db).clamp(0.0, 2.0);
         set_channel_volume(state, sel, peer_out, new_vol);
         notify_osc(state, OscOutbound::Volume(sel, peer_out, new_vol));
@@ -5528,9 +5878,7 @@ fn set_eq_band_freq_for(
 ) -> Result<(), totalcontrol_core::Error> {
     match cid {
         ChannelId::Input(idx) => state.device.set_eq_band_freq(idx, band, freq),
-        ChannelId::Output(idx) => {
-            update_output_eq(state, idx, |e| e.bands[band].freq_hz = freq)
-        }
+        ChannelId::Output(idx) => update_output_eq(state, idx, |e| e.bands[band].freq_hz = freq),
         ChannelId::Playback(_) => Ok(()),
     }
 }
@@ -5592,9 +5940,7 @@ fn set_low_cut_slope_for(
 ) -> Result<(), totalcontrol_core::Error> {
     match cid {
         ChannelId::Input(idx) => state.device.set_eq_low_cut_slope(idx, slope),
-        ChannelId::Output(idx) => {
-            update_output_eq(state, idx, |e| e.low_cut_slope_db_oct = slope)
-        }
+        ChannelId::Output(idx) => update_output_eq(state, idx, |e| e.low_cut_slope_db_oct = slope),
         ChannelId::Playback(_) => Ok(()),
     }
 }
@@ -5646,16 +5992,20 @@ fn channel_eq_on(state: &TotalControl, cid: ChannelId) -> bool {
 
 fn channel_phase(state: &TotalControl, cid: ChannelId, right: bool) -> bool {
     match cid {
-        ChannelId::Input(i) => state
-            .device
-            .inputs()
-            .get(i)
-            .is_some_and(|c| if right { c.phase_r } else { c.phase }),
-        ChannelId::Output(i) => state
-            .device
-            .outputs()
-            .get(i)
-            .is_some_and(|c| if right { c.phase_r } else { c.phase_l }),
+        ChannelId::Input(i) => {
+            state
+                .device
+                .inputs()
+                .get(i)
+                .is_some_and(|c| if right { c.phase_r } else { c.phase })
+        }
+        ChannelId::Output(i) => {
+            state
+                .device
+                .outputs()
+                .get(i)
+                .is_some_and(|c| if right { c.phase_r } else { c.phase_l })
+        }
         ChannelId::Playback(_) => false,
     }
 }
@@ -5680,22 +6030,23 @@ fn channel_low_cut_on(state: &TotalControl, cid: ChannelId) -> bool {
 
 /// Resolve one edge-triggered RME `Toggle` against the confirmed model and
 /// return the ordinary GUI message that performs the opposite state.
-fn rme_toggle_message(
-    state: &TotalControl,
-    target: crate::osc_rme::RmeToggle,
-) -> Option<Message> {
+fn rme_toggle_message(state: &TotalControl, target: crate::osc_rme::RmeToggle) -> Option<Message> {
     use crate::osc_rme::RmeToggle as T;
     Some(match target {
         T::Mute(cid) => Message::Mute(cid, !channel_is_muted(state, cid)),
         T::Solo(cid) => Message::Solo(cid, !channel_is_soloed(state, cid)),
         T::Phase(cid) => match cid {
             ChannelId::Input(_) => Message::PhaseChanged(cid, !channel_phase(state, cid, false)),
-            ChannelId::Output(i) => Message::OutputPhaseChanged(i, !channel_phase(state, cid, false)),
+            ChannelId::Output(i) => {
+                Message::OutputPhaseChanged(i, !channel_phase(state, cid, false))
+            }
             ChannelId::Playback(_) => return None,
         },
         T::PhaseRight(cid) => match cid {
             ChannelId::Input(i) => Message::InputPhaseRight(i, !channel_phase(state, cid, true)),
-            ChannelId::Output(i) => Message::OutputPhaseChanged(i, !channel_phase(state, cid, true)),
+            ChannelId::Output(i) => {
+                Message::OutputPhaseChanged(i, !channel_phase(state, cid, true))
+            }
             ChannelId::Playback(_) => return None,
         },
         T::Phantom(i) => Message::Phantom(i, !state.device.inputs().get(i)?.phantom),
@@ -5703,21 +6054,19 @@ fn rme_toggle_message(
         T::Pad(i) => Message::Pad(i, !state.device.inputs().get(i)?.pad),
         T::Autoset(i) => Message::Autoset(i, !state.device.inputs().get(i)?.autoset),
         T::MsProc(cid) => match cid {
-            ChannelId::Input(i) => Message::InputMsProcChanged(i, !state.device.inputs().get(i)?.ms_proc),
+            ChannelId::Input(i) => {
+                Message::InputMsProcChanged(i, !state.device.inputs().get(i)?.ms_proc)
+            }
             ChannelId::Playback(i) => {
                 Message::PlaybackMsProcChanged(i, !state.device.playbacks().get(i)?.ms_proc)
             }
             ChannelId::Output(_) => return None,
         },
         T::Stereo(cid) => Message::StereoLinkChanged(cid, !pair_linked(state, cid)),
-        T::Cue(i) => Message::CueChanged(
-            ChannelId::Output(i),
-            !state.device.outputs().get(i)?.cue,
-        ),
-        T::TalkbackSel(i) => Message::TalkbackReceiveChanged(
-            i,
-            !state.device.outputs().get(i)?.talkback,
-        ),
+        T::Cue(i) => Message::CueChanged(ChannelId::Output(i), !state.device.outputs().get(i)?.cue),
+        T::TalkbackSel(i) => {
+            Message::TalkbackReceiveChanged(i, !state.device.outputs().get(i)?.talkback)
+        }
         T::NoTrim(i) => Message::NoTrimChanged(i, !state.device.outputs().get(i)?.no_trim),
         T::Loopback(i) => Message::LoopbackChanged(i, !state.device.outputs().get(i)?.loopback),
         T::LowCutEnable(cid) => Message::EqLowCutEnabled(cid, !channel_low_cut_on(state, cid)),
@@ -5824,10 +6173,16 @@ fn global_lowcut_messages(
             vec![Message::EqLowCutEnabled(cid, *on)]
         }
         crate::osc_global::LowCutControl::Freq(hz) => {
-            vec![Message::EqLowCutFreq(cid, hz.round().clamp(0.0, 20_000.0) as u16)]
+            vec![Message::EqLowCutFreq(
+                cid,
+                hz.round().clamp(0.0, 20_000.0) as u16,
+            )]
         }
         crate::osc_global::LowCutControl::Slope(slope) => {
-            vec![Message::EqLowCutSlope(cid, slope.round().clamp(6.0, 24.0) as u8)]
+            vec![Message::EqLowCutSlope(
+                cid,
+                slope.round().clamp(6.0, 24.0) as u8,
+            )]
         }
         crate::osc_global::LowCutControl::LoadPreset => Vec::new(),
     }
@@ -5988,8 +6343,7 @@ fn global_channel_messages(
             vec![Message::TalkbackReceiveChanged(channel, *on)]
         }
         ChannelControl::Pfl(on)
-            if bus == crate::osc_global::Bus::Input
-                && state.control_room.pfl_replaces_solo =>
+            if bus == crate::osc_global::Bus::Input && state.control_room.pfl_replaces_solo =>
         {
             vec![Message::Solo(cid, *on)]
         }
@@ -6017,7 +6371,11 @@ fn global_mix_messages(
     };
     match control {
         crate::osc_global::MixControl::Fader(db) => {
-            vec![Message::MatrixCellChanged(cid, submix, db_to_vol(*db).clamp(0.0, 2.0))]
+            vec![Message::MatrixCellChanged(
+                cid,
+                submix,
+                db_to_vol(*db).clamp(0.0, 2.0),
+            )]
         }
         crate::osc_global::MixControl::FaderLin(norm) => {
             let gain = crate::osc_rme::fader_gain(&OscType::Float(*norm)).unwrap_or(0.0);
@@ -6082,9 +6440,9 @@ fn global_feedback_is_typed(command: &crate::osc_global::GlobalCommand) -> bool 
     match command {
         GlobalCommand::Channel { bus, control, .. } => match control {
             ChannelControl::Mute(_) => true,
-            ChannelControl::Volume(_) | ChannelControl::VolumeLin(_) | ChannelControl::Balance(_) => {
-                *bus == Bus::Output
-            }
+            ChannelControl::Volume(_)
+            | ChannelControl::VolumeLin(_)
+            | ChannelControl::Balance(_) => *bus == Bus::Output,
             _ => false,
         },
         GlobalCommand::Mix { control, .. } => matches!(
@@ -6095,7 +6453,10 @@ fn global_feedback_is_typed(command: &crate::osc_global::GlobalCommand) -> bool 
     }
 }
 
-fn global_messages(state: &TotalControl, command: &crate::osc_global::GlobalCommand) -> Vec<Message> {
+fn global_messages(
+    state: &TotalControl,
+    command: &crate::osc_global::GlobalCommand,
+) -> Vec<Message> {
     use crate::osc_global::GlobalCommand;
     match command {
         GlobalCommand::Channel {
@@ -6173,7 +6534,9 @@ fn global_gain_db(gain: f32) -> f32 {
     }
 }
 
-fn global_eq_controls(eq: &totalcontrol_core::channel::InputEq) -> Vec<crate::osc_global::ChannelControl> {
+fn global_eq_controls(
+    eq: &totalcontrol_core::channel::InputEq,
+) -> Vec<crate::osc_global::ChannelControl> {
     use crate::osc_global::{ChannelControl, EqControl, LowCutControl};
     let mut out = vec![
         ChannelControl::LowCut(LowCutControl::Enable(eq.low_cut_enabled)),
@@ -6358,9 +6721,7 @@ fn global_matrix_state(
                     source: bus,
                     channel,
                     submix,
-                    control: MixControl::Balance(
-                        f32::from(channel_pan(state, cid, pair)) / 100.0,
-                    ),
+                    control: MixControl::Balance(f32::from(channel_pan(state, cid, pair)) / 100.0),
                 });
             }
         }
@@ -6386,15 +6747,15 @@ fn global_control_room_state(state: &TotalControl) -> Vec<crate::osc_global::Glo
     out.push(GlobalCommand::ControlRoom(ControlRoomControl::MainMono(
         state.device.settings().mono,
     )));
-    out.push(GlobalCommand::ControlRoom(ControlRoomControl::DimReduction(
-        state.control_room.main_dim_db,
-    )));
+    out.push(GlobalCommand::ControlRoom(
+        ControlRoomControl::DimReduction(state.control_room.main_dim_db),
+    ));
     out.push(GlobalCommand::ControlRoom(ControlRoomControl::Dim(
         state.device.settings().dim,
     )));
-    out.push(GlobalCommand::ControlRoom(ControlRoomControl::RecallVolume(
-        state.control_room.recall_db,
-    )));
+    out.push(GlobalCommand::ControlRoom(
+        ControlRoomControl::RecallVolume(state.control_room.recall_db),
+    ));
     out.push(GlobalCommand::ControlRoom(ControlRoomControl::Talkback(
         state.talkback_on,
     )));
@@ -6416,9 +6777,9 @@ fn global_control_room_state(state: &TotalControl) -> Vec<crate::osc_global::Glo
         state.device.settings().external_input,
     )));
     if let Some(pair) = state.control_room.external_input {
-        out.push(GlobalCommand::ControlRoom(ControlRoomControl::ExtInChannel(
-            pair * 2,
-        )));
+        out.push(GlobalCommand::ControlRoom(
+            ControlRoomControl::ExtInChannel(pair * 2),
+        ));
         out.push(GlobalCommand::ControlRoom(ControlRoomControl::ExtInGain(
             state.control_room.external_gain_db,
         )));
@@ -6454,9 +6815,7 @@ fn global_status_state(state: &TotalControl) -> Vec<crate::osc_global::GlobalCom
         GlobalCommand::Status(StatusControl::Device(
             state.device.kind().label().to_string(),
         )),
-        GlobalCommand::Status(StatusControl::Connection(
-            state.device.is_connected(),
-        )),
+        GlobalCommand::Status(StatusControl::Connection(state.device.is_connected())),
         GlobalCommand::GlobalMute(any_channel_muted(state)),
         GlobalCommand::GlobalSolo(any_channel_soloed(state)),
     ];
@@ -6739,7 +7098,12 @@ fn rme_gain_norm(state: &TotalControl, idx: usize, raw: u32) -> f32 {
 fn rme_channel_volume(state: &TotalControl, cid: ChannelId) -> (f32, usize) {
     match cid {
         ChannelId::Output(i) => (
-            state.device.outputs().get(i).map(|o| o.volume).unwrap_or(0.0),
+            state
+                .device
+                .outputs()
+                .get(i)
+                .map(|o| o.volume)
+                .unwrap_or(0.0),
             i,
         ),
         ChannelId::Input(i) => (
@@ -6761,7 +7125,14 @@ fn rme_channel_volume(state: &TotalControl, cid: ChannelId) -> (f32, usize) {
                 .and_then(|c| c.volumes.get(state.rme.submix))
                 .copied()
                 .unwrap_or(0.0)
-                * trim_factor(state.device.playbacks().get(i).map(|c| c.trim).unwrap_or(0.0)),
+                * trim_factor(
+                    state
+                        .device
+                        .playbacks()
+                        .get(i)
+                        .map(|c| c.trim)
+                        .unwrap_or(0.0),
+                ),
             state.rme.submix,
         ),
     }
@@ -6792,11 +7163,7 @@ fn rme_page1_channel(state: &mut TotalControl, cid: ChannelId, n: usize) {
     let fader = crate::osc_rme::gain_to_fader(gain);
     rme_value(state, format!("/1/volume{n}"), fader);
     rme_string(state, format!("/1/volume{n}Val"), rme_db_string(gain));
-    rme_value(
-        state,
-        format!("/1/pan{n}"),
-        crate::osc_rme::pan_norm(pan),
-    );
+    rme_value(state, format!("/1/pan{n}"), crate::osc_rme::pan_norm(pan));
     rme_bool(state, format!("/1/mute/1/{n}"), muted);
     rme_bool(state, format!("/1/solo/1/{n}"), soloed);
     rme_bool(
@@ -6811,11 +7178,7 @@ fn rme_page1_channel(state: &mut TotalControl, cid: ChannelId, n: usize) {
                     let norm = rme_gain_norm(state, i, raw);
                     let db = rme_gain_db(state, i, raw);
                     rme_value(state, format!("/1/micgain{n}"), norm);
-                    rme_string(
-                        state,
-                        format!("/1/micgain{n}Val"),
-                        format!("{db:.1} dB"),
-                    );
+                    rme_string(state, format!("/1/micgain{n}Val"), format!("{db:.1} dB"));
                 }
                 rme_bool(state, format!("/1/phantom/1/{n}"), ch.phantom);
             }
@@ -6833,29 +7196,46 @@ fn rme_page1_channel(state: &mut TotalControl, cid: ChannelId, n: usize) {
 
 fn rme_channel_phase(state: &TotalControl, cid: ChannelId, right: bool) -> Option<bool> {
     match cid {
-        ChannelId::Input(i) => state
-            .device
-            .inputs()
-            .get(i)
-            .map(|c| if right { c.phase_r } else { c.phase }),
-        ChannelId::Output(i) => state
-            .device
-            .outputs()
-            .get(i)
-            .map(|c| if right { c.phase_r } else { c.phase_l }),
+        ChannelId::Input(i) => {
+            state
+                .device
+                .inputs()
+                .get(i)
+                .map(|c| if right { c.phase_r } else { c.phase })
+        }
+        ChannelId::Output(i) => {
+            state
+                .device
+                .outputs()
+                .get(i)
+                .map(|c| if right { c.phase_r } else { c.phase_l })
+        }
         ChannelId::Playback(_) => None,
     }
 }
 
 fn rme_channel_low_cut(state: &TotalControl, cid: ChannelId) -> Option<bool> {
     match cid {
-        ChannelId::Input(i) => state.device.inputs().get(i).and_then(|c| c.eq).map(|e| e.low_cut_enabled),
-        ChannelId::Output(i) => state.device.outputs().get(i).and_then(|c| c.eq).map(|e| e.low_cut_enabled),
+        ChannelId::Input(i) => state
+            .device
+            .inputs()
+            .get(i)
+            .and_then(|c| c.eq)
+            .map(|e| e.low_cut_enabled),
+        ChannelId::Output(i) => state
+            .device
+            .outputs()
+            .get(i)
+            .and_then(|c| c.eq)
+            .map(|e| e.low_cut_enabled),
         ChannelId::Playback(_) => None,
     }
 }
 
-fn rme_channel_eq(state: &TotalControl, cid: ChannelId) -> Option<totalcontrol_core::channel::InputEq> {
+fn rme_channel_eq(
+    state: &TotalControl,
+    cid: ChannelId,
+) -> Option<totalcontrol_core::channel::InputEq> {
     match cid {
         ChannelId::Input(i) => state.device.inputs().get(i).and_then(|c| c.eq),
         ChannelId::Output(i) => state.device.outputs().get(i).and_then(|c| c.eq),
@@ -6892,7 +7272,11 @@ fn rme_page2_channel(state: &mut TotalControl, cid: ChannelId) {
     let phase_right = rme_channel_phase(state, cid, true);
     let linked = pair_linked(state, cid);
 
-    rme_value(state, "/2/volume".into(), crate::osc_rme::gain_to_fader(gain));
+    rme_value(
+        state,
+        "/2/volume".into(),
+        crate::osc_rme::gain_to_fader(gain),
+    );
     rme_string(state, "/2/volumeVal".into(), rme_db_string(gain));
     rme_value(state, "/2/pan".into(), crate::osc_rme::pan_norm(pan));
     rme_string(state, "/2/panVal".into(), rme_pan_string(pan));
@@ -6931,7 +7315,11 @@ fn rme_page2_channel(state: &mut TotalControl, cid: ChannelId) {
             .level
             .or_else(|| totalcontrol_core::channel::InputLevel::from_code(ch.ref_level));
         if let Some(level) = level {
-            send_osc(state, "/2/refLevel".into(), vec![OscType::Int(level.code() as i32)]);
+            send_osc(
+                state,
+                "/2/refLevel".into(),
+                vec![OscType::Int(level.code() as i32)],
+            );
         }
         rme_bool(state, "/2/msProc".into(), ch.ms_proc);
         rme_value(state, "/2/width".into(), ch.width.clamp(0.0, 1.0));
@@ -7130,7 +7518,11 @@ fn notify_rme_page1(state: &mut TotalControl) {
     if let Some(pair) = state.device.settings().main_out {
         let idx = pair * 2;
         if let Some(volume) = state.device.outputs().get(idx).map(|ch| ch.volume) {
-            rme_value(state, "/1/mastervolume".into(), crate::osc_rme::gain_to_fader(volume));
+            rme_value(
+                state,
+                "/1/mastervolume".into(),
+                crate::osc_rme::gain_to_fader(volume),
+            );
             rme_string(state, "/1/mastervolumeVal".into(), rme_db_string(volume));
         }
     }
@@ -7177,7 +7569,11 @@ fn notify_rme_page3(state: &mut TotalControl) {
     let r = state.device.settings().reverb.unwrap_or_default();
     rme_bool(state, "/3/reverbEnable".into(), r.on);
     rme_value(state, "/3/reverbType".into(), r.kind as f32);
-    rme_value(state, "/3/reverbPredelay".into(), r.pre_delay_ms as f32 / 999.0);
+    rme_value(
+        state,
+        "/3/reverbPredelay".into(),
+        r.pre_delay_ms as f32 / 999.0,
+    );
     rme_value(
         state,
         "/3/reverbLowcut".into(),
@@ -7188,11 +7584,31 @@ fn notify_rme_page3(state: &mut TotalControl) {
         "/3/reverbHighcut".into(),
         crate::osc_rme::hz_freq(r.high_cut_hz as f32, 5000.0, 20_000.0),
     );
-    rme_value(state, "/3/reverbRoomscale".into(), ((r.room_scale - 0.5) / 2.5).clamp(0.0, 1.0));
-    rme_value(state, "/3/reverbAttack".into(), ((r.attack_ms as f32 - 5.0) / 395.0).clamp(0.0, 1.0));
-    rme_value(state, "/3/reverbHold".into(), ((r.hold_ms as f32 - 5.0) / 395.0).clamp(0.0, 1.0));
-    rme_value(state, "/3/reverbRelease".into(), ((r.release_ms as f32 - 5.0) / 495.0).clamp(0.0, 1.0));
-    rme_value(state, "/3/reverbTime".into(), ((r.reverb_time_ds as f32 - 1.0) / 49.0).clamp(0.0, 1.0));
+    rme_value(
+        state,
+        "/3/reverbRoomscale".into(),
+        ((r.room_scale - 0.5) / 2.5).clamp(0.0, 1.0),
+    );
+    rme_value(
+        state,
+        "/3/reverbAttack".into(),
+        ((r.attack_ms as f32 - 5.0) / 395.0).clamp(0.0, 1.0),
+    );
+    rme_value(
+        state,
+        "/3/reverbHold".into(),
+        ((r.hold_ms as f32 - 5.0) / 395.0).clamp(0.0, 1.0),
+    );
+    rme_value(
+        state,
+        "/3/reverbRelease".into(),
+        ((r.release_ms as f32 - 5.0) / 495.0).clamp(0.0, 1.0),
+    );
+    rme_value(
+        state,
+        "/3/reverbTime".into(),
+        ((r.reverb_time_ds as f32 - 1.0) / 49.0).clamp(0.0, 1.0),
+    );
     rme_value(
         state,
         "/3/reverbHighdamp".into(),
@@ -7200,7 +7616,11 @@ fn notify_rme_page3(state: &mut TotalControl) {
     );
     rme_value(state, "/3/reverbSmooth".into(), r.smoothness as f32 / 100.0);
     rme_value(state, "/3/reverbWidth".into(), r.width as f32 / 100.0);
-    rme_value(state, "/3/reverbVolume".into(), ((r.volume_db + 65.0) / 65.0).clamp(0.0, 1.0));
+    rme_value(
+        state,
+        "/3/reverbVolume".into(),
+        ((r.volume_db + 65.0) / 65.0).clamp(0.0, 1.0),
+    );
 
     let e = state.device.settings().echo.unwrap_or_default();
     rme_bool(state, "/3/echoEnable".into(), e.on);
@@ -7208,7 +7628,11 @@ fn notify_rme_page3(state: &mut TotalControl) {
     rme_value(state, "/3/echoDelaytime".into(), e.delay_ms as f32 / 2000.0);
     rme_value(state, "/3/echoFeedback".into(), e.feedback as f32 / 100.0);
     rme_value(state, "/3/echoWidth".into(), e.width as f32 / 100.0);
-    rme_value(state, "/3/echoVolume".into(), ((e.volume_db + 65.0) / 65.0).clamp(0.0, 1.0));
+    rme_value(
+        state,
+        "/3/echoVolume".into(),
+        ((e.volume_db + 65.0) / 65.0).clamp(0.0, 1.0),
+    );
 
     rme_bool(state, "/3/globalMute".into(), any_channel_muted(state));
     rme_bool(state, "/3/globalSolo".into(), any_channel_soloed(state));
@@ -7220,7 +7644,11 @@ fn notify_rme_page3(state: &mut TotalControl) {
         let g = state.groups[idx].clone();
         rme_bool(state, format!("/3/muteGroups/{}/1", 4 - idx), g.mute_linked);
         rme_bool(state, format!("/3/soloGroups/{}/1", 4 - idx), g.solo_linked);
-        rme_bool(state, format!("/3/faderGroups/{}/1", 4 - idx), g.fader_linked);
+        rme_bool(
+            state,
+            format!("/3/faderGroups/{}/1", 4 - idx),
+            g.fader_linked,
+        );
     }
 }
 
@@ -7252,7 +7680,7 @@ fn notify_rme_native(state: &mut TotalControl, addr: &str, _args: &[OscType]) {
         ["fx", "reverb", ..] | ["fx", "echo", ..] => notify_rme_page3(state),
         ["dim"] => notify_rme_page1(state),
         ["speaker_b"] | ["mono"] | ["mute_fx"] | ["talkback"] => notify_rme_page1(state),
-        ["snapshot", "active"] | ["snapshot", _ , "stored"] => notify_rme_page3(state),
+        ["snapshot", "active"] | ["snapshot", _, "stored"] => notify_rme_page3(state),
         ["submix"] => notify_rme_page1(state),
         _ => {}
     }
@@ -7423,9 +7851,9 @@ fn open_flyout(
         for (c, k) in other_open {
             state.flyout_open.remove(&(c, k));
         }
-        state.flyout_anim.retain(|&(c, k), _| {
-            c != cid || k == strip::FlyoutKind::Route
-        });
+        state
+            .flyout_anim
+            .retain(|&(c, k), _| c != cid || k == strip::FlyoutKind::Route);
         let target = flyout_width(state, cid, kind);
         state.flyout_open.insert((cid, kind));
         state.flyout_anim.insert(
@@ -7540,7 +7968,6 @@ fn is_undoable(message: &Message) -> bool {
             | Message::FaderGroupToggle
             | Message::StripHovered(_)
             | Message::OscReady(_)
-
             | Message::OscLog(_)
             | Message::ToggleOscLog
             | Message::ClearOscLog
@@ -7721,7 +8148,10 @@ fn apply_totalcontrol_mismatch(state: &mut TotalControl, mismatch: &StartupMisma
 fn changes_mix(message: &Message) -> bool {
     match message {
         Message::SnapshotClicked(_) => false,
-        Message::VolumeChanged(..) | Message::MatrixCellChanged(..) | Message::Undo | Message::Redo => true,
+        Message::VolumeChanged(..)
+        | Message::MatrixCellChanged(..)
+        | Message::Undo
+        | Message::Redo => true,
         // Device-owned and host-mode settings that live in the saved scene
         // but are not undo steps.  No UCX options-word readback is exposed,
         // so its values reach the scene only through this merge.
@@ -7881,7 +8311,8 @@ fn select_strip(state: &mut TotalControl, cid: ChannelId) {
 }
 
 /// Poll the PipeWire graph at 4 Hz and yield only when it changes.
-fn follow_graph_stream() -> impl iced::futures::Stream<Item = Option<totalcontrol_core::pw_follow::GraphSnapshot>> {
+fn follow_graph_stream(
+) -> impl iced::futures::Stream<Item = Option<totalcontrol_core::pw_follow::GraphSnapshot>> {
     iced::futures::stream::unfold((None, false), |(last, seeded)| async move {
         loop {
             let graph = totalcontrol_core::pw_follow::read_graph();
@@ -8032,9 +8463,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 // connectivity scene write covers this reapply.
                 state.startup_scene = None;
                 state.startup_scene_full_rewrite = false;
-                log::debug!(
-                    "discarding a mixer reapply scheduled before the UCX startup restore"
-                );
+                log::debug!("discarding a mixer reapply scheduled before the UCX startup restore");
             } else if let Some(scene) = state.startup_scene.take() {
                 // Reapply the scene that was loaded from disk, not the current
                 // model.  The UC may have delivered a stale front-panel event
@@ -8094,8 +8523,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
     // into the saved host scene; an earlier front-panel change is present
     // in both captures and is therefore not persisted.
     let host_before = mix_changed.then(|| state.device.capture_scene());
-    if changes_prefs(&message) {
-        state.prefs_dirty = true;
+    if changes_host_settings(&message) {
+        state.host_dirty = true;
     }
     if is_undoable(&message) {
         // A continuous edit opens one undo step for the whole gesture.
@@ -8162,7 +8591,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.transport_baseline = None;
             }
             state.transport_counters = counters;
-            if state.notice.as_ref().is_some_and(|(_, at)| at.elapsed() > NOTICE_FOR) {
+            if state
+                .notice
+                .as_ref()
+                .is_some_and(|(_, at)| at.elapsed() > NOTICE_FOR)
+            {
                 state.notice = None;
             }
             if state.tray_active {
@@ -8171,7 +8604,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     dim: state.device.settings().dim,
                 });
             }
-            flush_prefs(state);
+            flush_host_settings(state);
+            // Workspace autosave: a dirty live workspace is written at most
+            // once per minute.  The tick keeps running while the window is
+            // hidden in the tray.
+            if state.workspace_dirty
+                && state.last_workspace_save.elapsed() >= Duration::from_secs(60)
+            {
+                save_current_workspace(state);
+            }
             // Resize coalescing: if the last `Resized` of a drag landed
             // inside the throttle window, flush it here so the width always
             // settles (even if no further `Resized` arrives). 50 ms is well
@@ -8185,15 +8626,18 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // the same path the app started with, and re-apply the
             // auto-saved scene exactly like `new` does, so the UI and the
             // hardware agree again.
-            let conn_due = state
-                .last_conn_check
-                .map_or(true, |t| t.elapsed() >= Duration::from_millis(CONN_CHECK_MS));
+            let conn_due = state.last_conn_check.map_or(true, |t| {
+                t.elapsed() >= Duration::from_millis(CONN_CHECK_MS)
+            });
             if conn_due {
                 state.last_conn_check = Some(Instant::now());
                 let was_connected = state.connected;
                 state.connected = state.device.is_connected();
                 if !state.connected {
                     if was_connected {
+                        // The device is about to lose its handle: keep the
+                        // live workspace before that happens.
+                        save_current_workspace(state);
                         // Give the host its allowed-rate list back while the
                         // unit is away; a reconnect applies the device's list
                         // again.
@@ -8211,13 +8655,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     // A running simulation must give way to a real unit that
                     // appeared; only then fall back to the stored target.
                     let fresh = if fallback_mock {
-                        DeviceHandle::open_real(state.backend.as_deref())
-                            .or_else(|| {
-                                state
-                                    .device_target
-                                    .as_ref()
-                                    .and_then(DeviceHandle::open_target)
-                            })
+                        DeviceHandle::open_real(state.backend.as_deref()).or_else(|| {
+                            state
+                                .device_target
+                                .as_ref()
+                                .and_then(DeviceHandle::open_target)
+                        })
                     } else {
                         state
                             .device_target
@@ -8227,17 +8670,34 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     };
                     if let Some(fresh) = fresh {
                         log::info!("Device connected: {}", fresh.target().label());
-                        state.prefs_dirty = true;
+                        state.host_dirty = true;
                         replace_device_handle_direct(state, fresh);
                         clear_meters(state);
                         state.device_target = Some(state.device.target());
+                        state.layout = state
+                            .layout_document
+                            .resolve_for(state.device.canonical_model());
+                        crate::theme::install_palette(state.layout.colors.clone());
                         state.connected = state.device.is_connected();
                         state.show_device_panel = false;
                         let mut deferred_ucx_restore = false;
                         if state.device.needs_scene_restore()
                             || state.sync_direction == SyncDirection::GuiToDevice
                         {
-                            let scene = load_scene_for_current(state);
+                            // A reconnect keeps the live in-memory workspace;
+                            // it never rereads the current file.  A fallback
+                            // simulation giving way to a real unit is a
+                            // device switch, so that unit's workspace is
+                            // loaded instead.
+                            let scene = if fallback_mock {
+                                restore_startup_workspace(state);
+                                state.startup_workspace_scene.take()
+                            } else {
+                                state
+                                    .host_scene
+                                    .clone()
+                                    .or_else(|| Some(state.device.capture_scene()))
+                            };
                             if let Some(scene) = scene {
                                 state.host_scene = Some(scene.clone());
                                 if state.device.is_ucx_model() && !state.always_init_device {
@@ -8259,8 +8719,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                                                 "could not load the UCX reconnect scene model: {e:?}"
                                             );
                                         }
-                                        state.host_scene =
-                                            Some(state.device.capture_scene());
+                                        state.host_scene = Some(state.device.capture_scene());
                                         state.startup_compare_scene = Some(scene.clone());
                                         state.startup_compare_pending = true;
                                         deferred_ucx_restore = true;
@@ -8296,6 +8755,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             if let Err(e) = apply_control_room_assignments(state) {
                                 log::debug!("Control Room assignments not restored: {e}");
                             }
+                        }
+                        adopt_active_master_members(state);
+                        if !deferred_ucx_restore {
                             maybe_attach_device_service(state);
                         }
                         restart_surround_bridge(state);
@@ -8349,8 +8811,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.sel_out_side = 0;
                 }
             }
-            let input_trims: Vec<f32> =
-                state.device.inputs().iter().map(|c| c.trim).collect();
+            let input_trims: Vec<f32> = state.device.inputs().iter().map(|c| c.trim).collect();
             let raw_input = if state.connected {
                 state
                     .device
@@ -8429,59 +8890,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.device.output_linked(pair)
                 });
             }
-            // Meter motion does not need the whole view rebuilt: the
-            // fader canvases interpolate between these keyframes and ask
-            // for their own redraws (see `widgets::fader`).  The idle tick
-            // therefore keeps polling levels while the UI stays at rest.
-            // Persist the mixer state (debounced 3 s) for the backend that
-            // has no gain/volume readback (USB); this is its restore source
-            // for the next open (loaded in `new()`). ALSA backends read the
-            // live matrix and skip this path entirely. Shared with the TUI.
-            if state.last_auto_save.elapsed() >= Duration::from_secs(3)
-                && state.startup_scene.is_none()
-            {
-                state.last_auto_save = Instant::now();
-                // The mock has no hardware and its state would pollute
-                // the SHARED auto.json with a "(mock)" model (making the
-                // real device reject it on load) — never persist it.
-                if state.device.is_mock() {
-                    state.last_saved_json = None;
-                    return Task::none();
-                }
-                // USB always needs the shared auto scene.  An ALSA/UCX
-                // session in GUI -> device mode also saves its state so the
-                // next launch can apply it; Device -> GUI never writes the
-                // stale scene over the live device.
-                let auto_save = state.device.needs_scene_restore()
-                    || state.sync_direction == SyncDirection::GuiToDevice;
-                if auto_save {
-                    if uses_shared_auto_scene(state) {
-                        // GUI/TUI sync: if the OTHER UI wrote auto.json since
-                        // our last save, re-apply its state first so we don't
-                        // clobber it with our own (possibly stale) copy.
-                        if let Some(their) = totalcontrol_core::scene::auto_scene_written_by_other(
-                            state.last_saved_json.as_deref(),
-                        ) {
-                            state.host_scene = Some(their.clone());
-                            if let Err(e) = state.device.apply_scene(&their) {
-                                fail(state, "apply_scene", &e);
-                            }
-                        }
-                    }
-                    let scene = state
-                        .host_scene
-                        .clone()
-                        .unwrap_or_else(|| state.device.capture_scene());
-                    if let Ok(json) = scene.to_json() {
-                        if state.last_saved_json.as_deref() != Some(json.as_str()) {
-                            let saved = save_scene_for_current(state, &scene);
-                            if saved.is_ok() {
-                                state.last_saved_json = Some(json);
-                            }
-                        }
-                    }
-                }
-            }
             if state.osc_tx.is_some() {
                 notify_rme_meters(state);
             }
@@ -8493,6 +8901,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if state.window_id == Some(id) {
                 state.window_id = None;
                 if state.tray_active && state.keep_in_tray {
+                    save_current_workspace(state);
                     state.window_hidden = true;
                 } else {
                     let saved = update(state, Message::SaveNow);
@@ -8575,54 +8984,28 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
             }
             state.always_init_device = true;
-            state.prefs_dirty = true;
+            state.host_dirty = true;
             state.sync_direction = SyncDirection::GuiToDevice;
         }
         Message::SetAlwaysInitDevice(on) => {
             state.always_init_device = on;
-            state.prefs_dirty = true;
+            state.host_dirty = true;
         }
-        // Immediate save (window close) — the debounce above would lose
-        // the last few seconds of changes. Sync with the other UI first
-        // (see the 3 s auto-save in `Message::Tick`). The mock never
-        // persists (same reasoning as the auto-save).
+        // Immediate save on close, tray hide, quit and disconnect; the
+        // periodic write would lose the last minute of changes.
         Message::SaveNow => {
             // Talkback is a performance state; never leave the unit talking
             // back after TotalControl closes.
             if state.talkback_on {
-                let _ = state.device.set_talkback_with(false, &talkback_config(state));
+                let _ = state
+                    .device
+                    .set_talkback_with(false, &talkback_config(state));
                 state.talkback_on = false;
             }
             // Closing writes the window size, which no resize step does.
-            state.prefs_dirty = true;
-            flush_prefs(state);
-            if !state.device.is_mock() && state.device.needs_scene_restore() {
-                if uses_shared_auto_scene(state) {
-                    if let Some(their) = totalcontrol_core::scene::auto_scene_written_by_other(
-                        state.last_saved_json.as_deref(),
-                    ) {
-                        state.host_scene = Some(their.clone());
-                        if let Err(e) = state.device.apply_scene(&their) {
-                            fail(state, "apply_scene", &e);
-                        }
-                    }
-                }
-                // If the startup reapply is still pending, save the host
-                // scene that was loaded.  Otherwise save the host-owned
-                // scene, never the live model (front-panel changes must not
-                // become part of the saved mix).
-                let scene = state
-                    .startup_scene
-                    .clone()
-                    .or_else(|| state.host_scene.clone())
-                    .unwrap_or_else(|| state.device.capture_scene());
-                if let Ok(json) = scene.to_json() {
-                    let saved = save_scene_for_current(state, &scene);
-                    if saved.is_ok() {
-                        state.last_saved_json = Some(json);
-                    }
-                }
-            }
+            state.host_dirty = true;
+            flush_host_settings(state);
+            save_current_workspace(state);
         }
         Message::TabPressed => {
             // Cycles all three views — previously skipped Quick (Matrix and
@@ -8659,7 +9042,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if std::mem::take(&mut state.initial_zoom_pending) {
                 if let Some(size) = size {
                     state.ui_scale = initial_zoom_for(size.height);
-                    state.prefs_dirty = true;
+                    state.host_dirty = true;
                 }
             }
         }
@@ -8688,6 +9071,17 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // ToggleSidebar may collapse it.
             state.window_size = Some((w, h));
             return update(state, Message::WindowResized(w));
+        }
+        Message::WindowMoved(x, y) => state.window_position = Some((x, y)),
+        Message::WorkspaceScrolled(x, y) => state.workspace_scroll = (x, y),
+        Message::RestoreWorkspaceScroll => {
+            let (x, y) = state.workspace_scroll;
+            if x > 0.0 || y > 0.0 {
+                return iced::widget::operation::scroll_to(
+                    WORKSPACE_SCROLL_ID,
+                    iced::widget::scrollable::AbsoluteOffset { x, y },
+                );
+            }
         }
         Message::WindowResized(width) => {
             // Coalesce: a live window drag fires `Resized` faster than the
@@ -8733,6 +9127,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // toggles it and takes it out of the group again. A linked pair
             // joins and leaves together.
             let targets = paired_channels(state, cid);
+            let propagated = propagation_set(state, cid, sidebar::GroupLink::Mute);
+            let joined: Vec<ChannelId> = propagated
+                .iter()
+                .flat_map(|other| paired_channels(state, *other))
+                .collect();
             let member = targets
                 .iter()
                 .any(|target| state.mute_master.members.contains(target));
@@ -8748,10 +9147,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                 }
             }
+            if m {
+                for target in joined {
+                    if !state.mute_master.members.contains(&target) {
+                        state.mute_master.members.push(target);
+                    }
+                }
+            } else {
+                state
+                    .mute_master
+                    .members
+                    .retain(|channel| !joined.contains(channel));
+            }
             select_strip(state, cid);
             set_channel_mute(state, cid, m);
             notify_osc(state, OscOutbound::Mute(cid, m));
-            for other in propagation_set(state, cid, sidebar::GroupLink::Mute) {
+            for other in propagated {
                 set_channel_mute(state, other, m);
                 notify_osc(state, OscOutbound::Mute(other, m));
             }
@@ -8759,6 +9170,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::Solo(cid, s) => {
             // Same automatic group as mute, with the same pair handling.
             let targets = paired_channels(state, cid);
+            let propagated = propagation_set(state, cid, sidebar::GroupLink::Solo);
+            let joined: Vec<ChannelId> = propagated
+                .iter()
+                .flat_map(|other| paired_channels(state, *other))
+                .collect();
             let member = targets
                 .iter()
                 .any(|target| state.solo_master.members.contains(target));
@@ -8774,10 +9190,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                 }
             }
+            if s {
+                for target in joined {
+                    if !state.solo_master.members.contains(&target) {
+                        state.solo_master.members.push(target);
+                    }
+                }
+            } else {
+                state
+                    .solo_master
+                    .members
+                    .retain(|channel| !joined.contains(channel));
+            }
             select_strip(state, cid);
             set_channel_solo(state, cid, s);
             notify_osc(state, OscOutbound::Solo(cid, s));
-            for other in propagation_set(state, cid, sidebar::GroupLink::Solo) {
+            for other in propagated {
                 set_channel_solo(state, other, s);
                 notify_osc(state, OscOutbound::Solo(other, s));
             }
@@ -8830,12 +9258,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
             }
         }
-        Message::Phantom(idx, p) => {            if let Err(e) = state.device.set_input_phantom(idx, p) {
+        Message::Phantom(idx, p) => {
+            if let Err(e) = state.device.set_input_phantom(idx, p) {
                 fail(state, "set_input_phantom", &e);
             }
             notify_osc_bool(state, format!("/input/{idx}/phantom"), p);
         }
-        Message::Pad(idx, p) => {            if let Err(e) = state.device.set_input_pad(idx, p) {
+        Message::Pad(idx, p) => {
+            if let Err(e) = state.device.set_input_pad(idx, p) {
                 fail(state, "set_input_pad", &e);
             }
             notify_osc_bool(state, format!("/input/{idx}/pad"), p);
@@ -8856,7 +9286,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Int(level.code() as i32)],
             );
         }
-        Message::Autoset(idx, on) => {            if let Err(e) = state.device.set_autoset(idx, on) {
+        Message::Autoset(idx, on) => {
+            if let Err(e) = state.device.set_autoset(idx, on) {
                 fail(state, "set_autoset", &e);
             }
             notify_osc_bool(state, format!("/input/{idx}/autoset"), on);
@@ -8952,7 +9383,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             } else {
                 state.labels.insert(cid, name);
             }
-            state.prefs_dirty = true;
+            state.host_dirty = true;
         }
         Message::RmeDynamicsField {
             channel,
@@ -8985,7 +9416,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if let Err(e) = state.device.set_speaker_b_linked(on) {
                 fail(state, "set_speaker_b_linked", &e);
             }
-            state.prefs_dirty = true;
+            state.host_dirty = true;
         }
         Message::Sensitivity(idx, plus4) => {
             let s = if plus4 {
@@ -9002,20 +9433,30 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             let db = db.clamp(-65.0, 0.0);
             apply_trim(state, cid, db);
             let (kind, id) = channel_slug(cid);
-            notify_osc_raw(state, format!("/{kind}/{id}/trim"), vec![OscType::Float(db)]);
+            notify_osc_raw(
+                state,
+                format!("/{kind}/{id}/trim"),
+                vec![OscType::Float(db)],
+            );
         }
         Message::TrimReset(cid) => {
             apply_trim(state, cid, 0.0);
             let (kind, id) = channel_slug(cid);
-            notify_osc_raw(state, format!("/{kind}/{id}/trim"), vec![OscType::Float(0.0)]);
+            notify_osc_raw(
+                state,
+                format!("/{kind}/{id}/trim"),
+                vec![OscType::Float(0.0)],
+            );
         }
-        Message::EqEnabled(cid, on) => {            if let Err(e) = set_eq_enabled_for(state, cid, on) {
+        Message::EqEnabled(cid, on) => {
+            if let Err(e) = set_eq_enabled_for(state, cid, on) {
                 fail(state, "set_eq_enabled", &e);
             }
             let (kind, id) = channel_slug(cid);
             notify_osc_bool(state, format!("/{kind}/{id}/eq"), on);
         }
-        Message::EqBandType(cid, band, t) => {            if let Err(e) = set_eq_band_type_for(state, cid, band, t) {
+        Message::EqBandType(cid, band, t) => {
+            if let Err(e) = set_eq_band_type_for(state, cid, band, t) {
                 fail(state, "set_eq_band_type", &e);
             }
             let code = match t {
@@ -9023,8 +9464,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 EqBandType::Bell => 1,
                 EqBandType::LowShelf => 2,
                 EqBandType::HighShelf => 3,
-                        EqBandType::LowPass => 4,
-};
+                EqBandType::LowPass => 4,
+            };
             let (kind, id) = channel_slug(cid);
             notify_osc_raw(
                 state,
@@ -9032,7 +9473,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Int(code)],
             );
         }
-        Message::EqBandFreq(cid, band, freq) => {            if let Err(e) = set_eq_band_freq_for(state, cid, band, freq) {
+        Message::EqBandFreq(cid, band, freq) => {
+            if let Err(e) = set_eq_band_freq_for(state, cid, band, freq) {
                 fail(state, "set_eq_band_freq", &e);
             }
             let (kind, id) = channel_slug(cid);
@@ -9042,7 +9484,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Float(freq as f32)],
             );
         }
-        Message::EqBandQ(cid, band, q) => {            if let Err(e) = set_eq_band_q_for(state, cid, band, q) {
+        Message::EqBandQ(cid, band, q) => {
+            if let Err(e) = set_eq_band_q_for(state, cid, band, q) {
                 fail(state, "set_eq_band_q", &e);
             }
             let (kind, id) = channel_slug(cid);
@@ -9052,7 +9495,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Float(q)],
             );
         }
-        Message::EqBandGain(cid, band, gain) => {            if let Err(e) = set_eq_band_gain_for(state, cid, band, gain) {
+        Message::EqBandGain(cid, band, gain) => {
+            if let Err(e) = set_eq_band_gain_for(state, cid, band, gain) {
                 fail(state, "set_eq_band_gain", &e);
             }
             let (kind, id) = channel_slug(cid);
@@ -9062,7 +9506,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Float(gain)],
             );
         }
-        Message::EqBandPoint(cid, band, freq, gain) => {            if let Err(e) = set_eq_band_freq_for(state, cid, band, freq) {
+        Message::EqBandPoint(cid, band, freq, gain) => {
+            if let Err(e) = set_eq_band_freq_for(state, cid, band, freq) {
                 fail(state, "set_eq_band_freq", &e);
             }
             if let Err(e) = set_eq_band_gain_for(state, cid, band, gain) {
@@ -9080,7 +9525,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Float(gain)],
             );
         }
-        Message::EqBandReset(cid, band) => {            let reset = match cid {
+        Message::EqBandReset(cid, band) => {
+            let reset = match cid {
                 ChannelId::Input(idx) => {
                     let mut result = state.device.set_eq_band_freq(idx, band, 1000);
                     if result.is_ok() {
@@ -9110,13 +9556,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 );
             }
         }
-        Message::EqLowCutEnabled(cid, on) => {            if let Err(e) = set_low_cut_enabled_for(state, cid, on) {
+        Message::EqLowCutEnabled(cid, on) => {
+            if let Err(e) = set_low_cut_enabled_for(state, cid, on) {
                 fail(state, "set_eq_low_cut_enabled", &e);
             }
             let (kind, id) = channel_slug(cid);
             notify_osc_bool(state, format!("/{kind}/{id}/lowcut"), on);
         }
-        Message::EqLowCutFreq(cid, freq) => {            if let Err(e) = set_low_cut_freq_for(state, cid, freq) {
+        Message::EqLowCutFreq(cid, freq) => {
+            if let Err(e) = set_low_cut_freq_for(state, cid, freq) {
                 fail(state, "set_eq_low_cut_freq", &e);
             }
             let (kind, id) = channel_slug(cid);
@@ -9126,7 +9574,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Float(freq as f32)],
             );
         }
-        Message::EqLowCutSlope(cid, slope) => {            if let Err(e) = set_low_cut_slope_for(state, cid, slope) {
+        Message::EqLowCutSlope(cid, slope) => {
+            if let Err(e) = set_low_cut_slope_for(state, cid, slope) {
                 fail(state, "set_eq_low_cut_slope", &e);
             }
             let (kind, id) = channel_slug(cid);
@@ -9136,7 +9585,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Int(slope as i32)],
             );
         }
-        Message::DynamicsEnabled(cid, on) => {            let mut d = dynamics_for(state, cid);
+        Message::DynamicsEnabled(cid, on) => {
+            let mut d = dynamics_for(state, cid);
             d.on = on;
             if let Err(e) = state.device.set_dynamics(cid, &d) {
                 fail(state, "set_dynamics", &e);
@@ -9144,13 +9594,18 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             let (kind, id) = channel_slug(cid);
             notify_osc_bool(state, format!("/{kind}/{id}/dynamics"), on);
         }
-        Message::DynamicsChanged(cid, d) => {            if let Err(e) = state.device.set_dynamics(cid, &d) {
+        Message::DynamicsChanged(cid, d) => {
+            if let Err(e) = state.device.set_dynamics(cid, &d) {
                 fail(state, "set_dynamics", &e);
             }
             let (kind, id) = channel_slug(cid);
             let base = format!("/{kind}/{id}/dynamics");
             notify_osc_bool(state, format!("{base}/on"), d.on);
-            notify_osc_raw(state, format!("{base}/gain"), vec![OscType::Float(d.gain_db)]);
+            notify_osc_raw(
+                state,
+                format!("{base}/gain"),
+                vec![OscType::Float(d.gain_db)],
+            );
             notify_osc_raw(
                 state,
                 format!("{base}/attack"),
@@ -9220,14 +9675,25 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     "on" => r.on = value >= 0.5,
                     "type" => r.kind = value.round().clamp(0.0, 9.0) as u8,
                     "predelay" => r.pre_delay_ms = (value * 999.0).round() as u16,
-                    "lowcut" => r.low_cut_hz = (20.0 * 25.0f32.powf(value.clamp(0.0, 1.0))).round() as u16,
-                    "highcut" => r.high_cut_hz = (5000.0 * 4.0f32.powf(value.clamp(0.0, 1.0))).round() as u16,
+                    "lowcut" => {
+                        r.low_cut_hz = (20.0 * 25.0f32.powf(value.clamp(0.0, 1.0))).round() as u16
+                    }
+                    "highcut" => {
+                        r.high_cut_hz = (5000.0 * 4.0f32.powf(value.clamp(0.0, 1.0))).round() as u16
+                    }
                     "roomscale" => r.room_scale = 0.5 + value.clamp(0.0, 1.0) * 2.5,
                     "attack" => r.attack_ms = (5.0 + value.clamp(0.0, 1.0) * 395.0).round() as u16,
                     "hold" => r.hold_ms = (5.0 + value.clamp(0.0, 1.0) * 395.0).round() as u16,
-                    "release" => r.release_ms = (5.0 + value.clamp(0.0, 1.0) * 495.0).round() as u16,
-                    "time" => r.reverb_time_ds = (1.0 + value.clamp(0.0, 1.0) * 49.0).round() as u16,
-                    "highdamp" => r.high_damp_hz = (1000.0 * 20.0f32.powf(value.clamp(0.0, 1.0))).round() as u16,
+                    "release" => {
+                        r.release_ms = (5.0 + value.clamp(0.0, 1.0) * 495.0).round() as u16
+                    }
+                    "time" => {
+                        r.reverb_time_ds = (1.0 + value.clamp(0.0, 1.0) * 49.0).round() as u16
+                    }
+                    "highdamp" => {
+                        r.high_damp_hz =
+                            (1000.0 * 20.0f32.powf(value.clamp(0.0, 1.0))).round() as u16
+                    }
                     "smooth" => r.smoothness = (value * 100.0).round().clamp(0.0, 100.0) as u8,
                     "width" => r.width = (value * 100.0).round().clamp(0.0, 100.0),
                     "volume" => r.volume_db = value * 65.0 - 65.0,
@@ -9260,11 +9726,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 "/fx/reverb/highcut",
                 vec![OscType::Int(r.high_cut_hz as i32)],
             );
-            notify_osc_raw(
-                state,
-                "/fx/reverb/room",
-                vec![OscType::Float(r.room_scale)],
-            );
+            notify_osc_raw(state, "/fx/reverb/room", vec![OscType::Float(r.room_scale)]);
             notify_osc_raw(
                 state,
                 "/fx/reverb/smooth",
@@ -9275,11 +9737,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 "/fx/reverb/volume",
                 vec![OscType::Float(r.volume_db)],
             );
-            notify_osc_raw(
-                state,
-                "/fx/reverb/width",
-                vec![OscType::Float(r.width)],
-            );
+            notify_osc_raw(state, "/fx/reverb/width", vec![OscType::Float(r.width)]);
         }
         Message::EchoChanged(echo) => {
             if let Err(e) = state.device.set_echo(&echo) {
@@ -9313,11 +9771,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.options_menu = OptionsMenu::Closed;
             apply_reset_mix(state, kind);
         }
-        Message::FxSendChanged(cid, db) => {            if let Err(e) = state.device.set_channel_fx_send(cid, db) {
+        Message::FxSendChanged(cid, db) => {
+            if let Err(e) = state.device.set_channel_fx_send(cid, db) {
                 fail(state, "set_channel_fx_send", &e);
             }
             let (kind, id) = channel_slug(cid);
-            notify_osc_raw(state, format!("/{kind}/{id}/fx_send"), vec![OscType::Float(db)]);
+            notify_osc_raw(
+                state,
+                format!("/{kind}/{id}/fx_send"),
+                vec![OscType::Float(db)],
+            );
         }
         Message::FxReturnChanged(out, db) => {
             select_strip(state, ChannelId::Output(out));
@@ -9348,6 +9811,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 ChannelId::Playback(i) => state.device.set_playback_linked(i / 2, linked),
                 ChannelId::Output(i) => state.device.set_output_linked(i / 2, linked),
             };
+            adopt_active_master_members(state);
             start_stereo_anim(state, cid, linked);
             let (kind, id) = channel_slug(cid);
             notify_osc_bool(state, format!("/{kind}/{id}/stereo"), linked);
@@ -9468,7 +9932,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 notify_osc_bool(state, format!("/output/{idx}/cue"), on);
             }
         }
-        Message::PhaseChanged(cid, invert) => {            if let ChannelId::Input(idx) = cid {
+        Message::PhaseChanged(cid, invert) => {
+            if let ChannelId::Input(idx) = cid {
                 if let Err(e) = state.device.set_phase(idx, invert) {
                     fail(state, "set_phase", &e);
                 }
@@ -9499,11 +9964,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::MatrixCellChanged(cid, block, v) => {
             let split_playback = match cid {
-                ChannelId::Playback(i) => state
-                    .device
-                    .playbacks()
-                    .get(i)
-                    .is_some_and(|ch| ch.split),
+                ChannelId::Playback(i) => {
+                    state.device.playbacks().get(i).is_some_and(|ch| ch.split)
+                }
                 _ => false,
             };
             if state.matrix_mono || split_playback {
@@ -9533,8 +9996,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     ChannelId::Output(_) => 0,
                     _ => state.sel_out,
                 };
-                let cur = channel_level(state, cid, out)
-                    * trim_factor(channel_trim(state, cid));
+                let cur = channel_level(state, cid, out) * trim_factor(channel_trim(state, cid));
                 let new_vol = db_to_vol(vol_to_db(cur) + delta_db).clamp(0.0, 2.0);
                 set_channel_volume(state, cid, out, new_vol);
                 notify_osc(state, OscOutbound::Volume(cid, out, new_vol));
@@ -9760,10 +10222,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // A controller connecting after startup shouldn't stay blind
             // until the next manual change — snapshot everything once.
             if state.osc_dialect == crate::osc::OscDialect::Global {
-                send_global_state(
-                    state,
-                    &crate::osc_global::SendControl::SendState,
-                );
+                send_global_state(state, &crate::osc_global::SendControl::SendState);
             } else {
                 notify_rme_page(state, state.rme.page);
             }
@@ -9781,12 +10240,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if !on {
                 state.show_osc_log = false;
             }
-            state.prefs_dirty = true;
+            state.host_dirty = true;
             rebuild_osc_config(state);
         }
         Message::SetOscMode(mode) => {
             state.osc_dialect = mode;
-            state.prefs_dirty = true;
+            state.host_dirty = true;
             rebuild_osc_config(state);
         }
         Message::OscRecvPortChanged(text) => state.osc_recv_text = text,
@@ -9802,7 +10261,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.osc_send_port = port;
                 }
             }
-            state.prefs_dirty = true;
+            state.host_dirty = true;
             rebuild_osc_config(state);
         }
         Message::ToggleDevicePanel => {
@@ -9895,8 +10354,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     fail(state, "assign stereo", &e);
                 }
             }
-            let old_outputs: [Option<usize>; OUTPUT_DESTS] =
-                std::array::from_fn(|i| old_assign[i]);
+            let old_outputs: [Option<usize>; OUTPUT_DESTS] = std::array::from_fn(|i| old_assign[i]);
             let new_outputs: [Option<usize>; OUTPUT_DESTS] =
                 std::array::from_fn(|i| state.assign[i]);
             let old_count = old_outputs.iter().flatten().count();
@@ -9992,12 +10450,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::CloseOptions => state.options_menu = OptionsMenu::Closed,
         Message::SetSurround51(on) => {
             state.surround_51 = on;
-            state.prefs_dirty = true;
+            state.host_dirty = true;
             sync_surround_bridge(state);
         }
         Message::SetSurround71(on) => {
             state.surround_71 = on;
-            state.prefs_dirty = true;
+            state.host_dirty = true;
             sync_surround_bridge(state);
         }
         Message::ToggleAbout => {
@@ -10060,6 +10518,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 } else {
                     enforce_control_room_stereo(state);
                     state.host_scene = Some(state.device.capture_scene());
+                    adopt_active_master_members(state);
                 }
             }
         }
@@ -10077,6 +10536,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 } else {
                     enforce_control_room_stereo(state);
                     state.host_scene = Some(state.device.capture_scene());
+                    adopt_active_master_members(state);
                 }
             }
         }
@@ -10203,8 +10663,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::HostVolumeUnity => {
             if pw_clock::set_fireface_sink_unity() {
                 state.host_volume = pw_clock::fireface_sink_volume();
-                state.notice =
-                    Some(("Host volume set to 0 dB".into(), Instant::now()));
+                state.notice = Some(("Host volume set to 0 dB".into(), Instant::now()));
             }
         }
         Message::EnginePoll => {
@@ -10217,8 +10676,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             let is_mock = state.device.is_mock();
             return Task::perform(
                 async move {
-                    let sink_running =
-                        follows && !is_mock && pw_clock::fireface_sink_running();
+                    let sink_running = follows && !is_mock && pw_clock::fireface_sink_running();
                     let host_volume = if follows && !is_mock {
                         pw_clock::fireface_sink_volume()
                     } else {
@@ -10244,11 +10702,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 let sink_started = sink_running && !state.last_sink_running;
                 let new_rate = stream.map(|s| s.rate);
                 let model_rate = state.device.settings().sample_rate;
-                let rate_changed = rate_needs_mixer_reapply(
-                    state.last_card_rate,
-                    new_rate,
-                    model_rate,
-                );
+                let rate_changed =
+                    rate_needs_mixer_reapply(state.last_card_rate, new_rate, model_rate);
                 if let Some(rate) = new_rate {
                     if rate_changed && state.engine_rate_mode != EngineRateMode::Follow {
                         // Keep the scene/model in step with the rate the
@@ -10269,11 +10724,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     } else {
                         "Fireface playback started"
                     };
-                    schedule_mixer_reapply(
-                        state,
-                        Duration::from_secs(1),
-                        reason,
-                    );
+                    schedule_mixer_reapply(state, Duration::from_secs(1), reason);
                 }
                 state.last_sink_running = sink_running;
                 state.engine = clock;
@@ -10288,7 +10739,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             format!(
                                 "The device did not accept {}; it is still at {}.",
                                 rate_label(wanted),
-                                actual.map(rate_label).unwrap_or_else(|| "its current rate".into())
+                                actual
+                                    .map(rate_label)
+                                    .unwrap_or_else(|| "its current rate".into())
                             ),
                             Instant::now(),
                         ));
@@ -10381,11 +10834,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if on && source.is_none() {
                 return Task::none();
             }
-            if let Err(e) = state.device.set_external_input(
-                on,
-                source,
-                state.control_room.external_gain_db,
-            ) {
+            if let Err(e) =
+                state
+                    .device
+                    .set_external_input(on, source, state.control_room.external_gain_db)
+            {
                 fail(state, "external input", &e);
             }
             state.device.settings_mut().external_input = on;
@@ -10409,8 +10862,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::ApplyControlRoomSettings => {
             state.control_room = state.control_room_draft.clone();
             state.control_room_settings_open = false;
-            state.prefs_dirty = true;
-            flush_prefs(state);
+            state.host_dirty = true;
+            flush_host_settings(state);
             if state.device.settings().dim {
                 if let Err(e) = state
                     .device
@@ -10483,24 +10936,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::SnapshotClicked(n) => {
             state.active_snapshot = Some(n as usize);
             state.snapshot_dirty = false;
-            let scene = state
-                .snapshots
-                .get(n as usize - 1)
-                .cloned()
-                .flatten()
-                .or_else(|| {
-                    if state.device.is_mock() {
-                        None
-                    } else {
-                        load_scene_file(&format!("Mix {n}"))
-                    }
-                });
+            let scene = state.snapshots.get(n as usize - 1).cloned().flatten();
             if let Some(scene) = scene {
                 if let Err(e) = state.device.apply_scene(&scene) {
                     fail(state, "snapshot", &e);
                 } else {
                     enforce_control_room_stereo(state);
                     state.host_scene = Some(state.device.capture_scene());
+                    adopt_active_master_members(state);
                 }
             }
             notify_osc_raw(state, "/snapshot/active", vec![OscType::Int(n as i32)]);
@@ -10511,23 +10954,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     .host_scene
                     .clone()
                     .unwrap_or_else(|| state.device.capture_scene());
-                let saved = if state.device.is_mock() {
-                    Ok(())
-                } else {
-                    save_scene_file(&format!("Mix {n}"), &scene)
-                };
-                if let Err(e) = saved {
-                    log::warn!("Failed to store snapshot 'Mix {n}': {e}");
-                } else {
-                    if let Some(slot) = state.snapshots.get_mut(n - 1) {
-                        *slot = Some(scene);
-                    }
-                    state.snapshot_dirty = false;
-                    if let Some(slot) = state.stored_snapshots.get_mut(n - 1) {
-                        *slot = true;
-                    }
-                    notify_osc_bool(state, format!("/snapshot/{n}/stored"), true);
+                if let Some(slot) = state.snapshots.get_mut(n - 1) {
+                    *slot = Some(scene);
                 }
+                state.snapshot_dirty = false;
+                if let Some(slot) = state.stored_snapshots.get_mut(n - 1) {
+                    *slot = true;
+                }
+                state.workspace_dirty = true;
+                notify_osc_bool(state, format!("/snapshot/{n}/stored"), true);
             }
         }
         Message::GroupEditToggle => match state.group_edit.take() {
@@ -10589,9 +11024,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::LayoutStore => {
             if let Some(n) = state.active_layout {
                 state.layouts[(n - 1) as usize] = Some(state.collapsed.clone());
-                if let Err(e) = crate::layouts::save_layout_file(n as u8, &state.collapsed) {
-                    log::warn!("Failed to store layout {n}: {e}");
-                }
+                state.workspace_dirty = true;
             }
         }
     }
@@ -10677,25 +11110,19 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     {
         return Ok(());
     }
-    let old_has_serial = state
-        .device_target
-        .as_ref()
-        .is_some_and(|target| target.serial.is_some());
-    let old_is_uc = state.device.is_uc_model();
-    let old_key = scene_key(state);
-    if state.device.needs_scene_restore() {
-        let scene = state.device.capture_scene();
-        if old_has_serial || old_is_uc {
-            let _ = totalcontrol_core::scene::save_auto_scene_for(&old_key, &scene);
-        } else {
-            let _ = totalcontrol_core::scene::save_auto_scene(&scene);
-        }
-    }
+    // Save the outgoing unit's live workspace before its state is replaced.
+    save_current_workspace(state);
     let new = DeviceHandle::open_target(&target)
         .ok_or_else(|| format!("{} is not connected", target.label()))?;
-    let prefs = prefs_of(state);
     replace_device_handle(state, new);
     state.device_target = Some(state.device.target());
+    state.layout = state
+        .layout_document
+        .resolve_for(state.device.canonical_model());
+    crate::theme::install_palette(state.layout.colors.clone());
+    state.current_unit_key = None;
+    state.current_workspace_path = None;
+    state.startup_workspace_scene = None;
     // The new unit has its own layout, topology and scene; never carry the
     // old device's host model into it.
     state.host_scene = None;
@@ -10723,6 +11150,13 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.pending_host_merge = None;
     state.undo_stack.clear();
     state.redo_stack.clear();
+    // The groups and masters name channels of the old unit; the incoming
+    // workspace supplies its own after the handle is open.
+    state.groups = Default::default();
+    state.group_edit = None;
+    state.fader_ganged = false;
+    state.mute_master = MasterSet::default();
+    state.solo_master = MasterSet::default();
     state.connected = state.device.is_connected();
     state.input_meters = vec![MeterAnim::new(); state.device.inputs().len()];
     state.playback_meters = vec![MeterAnim::new(); state.device.playbacks().len()];
@@ -10746,36 +11180,29 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.renaming = None;
     state.editing = None;
     state.drag_range = None;
-    state.last_saved_json = None;
     state.last_activity = Instant::now();
     state.startup_scene = None;
     state.startup_scene_due = None;
     state.startup_scene_full_rewrite = false;
     state.last_sink_running = false;
     state.last_card_rate = None;
-    apply_prefs(state, prefs);
+    // The incoming unit has its own current workspace and host settings.
+    restore_startup_workspace(state);
     apply_allowed_rates(state);
     state.rate_follow.reset();
+    apply_startup_sync(state);
+    if state.host_scene.is_none() {
+        state.host_scene = Some(state.device.capture_scene());
+    }
     enforce_control_room_stereo(state);
     state.sel_out = state
         .sel_out
         .min(state.device.output_pair_count().saturating_sub(1));
     state.sel_out_side = state.sel_out_side.min(1);
-    if state.device.needs_scene_restore() {
-        if let Some(scene) = load_scene_for_current(state) {
-            state.host_scene = Some(scene.clone());
-            if state.device.apply_scene(&scene).is_ok() {
-                enforce_control_room_stereo(state);
-                state.host_scene = Some(state.device.capture_scene());
-            }
-        }
-    }
-    if state.host_scene.is_none() {
-        state.host_scene = Some(state.device.capture_scene());
-    }
     if let Err(e) = apply_control_room_assignments(state) {
         log::debug!("Control Room assignments not restored: {e}");
     }
+    adopt_active_master_members(state);
     restart_surround_bridge(state);
     // The UC's input meters come from a PipeWire capture tap that is opened
     // only after the scene is applied; without this a live switch to the UC
@@ -10802,6 +11229,7 @@ fn fail(state: &mut TotalControl, what: &str, error: &dyn std::fmt::Display) {
 /// Hides the window in the tray by closing it: the process, and with it the
 /// ticks, the front panel's DIM and the reconnect logic, keeps running.
 fn hide_window(state: &mut TotalControl) -> Task<Message> {
+    save_current_workspace(state);
     state.window_hidden = true;
     match state.window_id.take() {
         Some(id) => window::close(id),
@@ -10820,9 +11248,19 @@ fn show_window(state: &mut TotalControl) -> Task<Message> {
         .window_size
         .map(|(w, h)| iced::Size::new(w.max(MIN_WINDOW.0), h.max(MIN_WINDOW.1)))
         .unwrap_or(iced::Size::new(1280.0, 800.0));
-    let (id, open) = window::open(crate::window_settings(size, state.fullscreen));
+    let (id, open) = window::open(crate::window_settings(
+        size,
+        state.fullscreen,
+        state.window_position,
+    ));
     state.window_id = Some(id);
-    Task::batch([open.discard(), window::gain_focus(id)])
+    let scroll = iced::Task::perform(
+        async {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        },
+        |_| Message::RestoreWorkspaceScroll,
+    );
+    Task::batch([open.discard(), window::gain_focus(id), scroll])
 }
 
 /// A cheap summary of what the front panel can change behind the app's back
@@ -10838,7 +11276,11 @@ fn panel_fingerprint(state: &TotalControl) -> f64 {
             (o.volume as f64 + if o.mute { 1000.0 } else { 0.0 }) * (1.0 + i as f64 * 0.01)
         })
         .sum::<f64>()
-        + if state.device.settings().dim { 7777.0 } else { 0.0 }
+        + if state.device.settings().dim {
+            7777.0
+        } else {
+            0.0
+        }
 }
 
 /// The tick while something is being dragged or animated: 30 Hz.
@@ -10909,15 +11351,13 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
     // have to poll the channel, which would rebuild the view for meters.
     if state.device_service.is_some() {
         subs.push(
-            Subscription::run(crate::device_service::update_stream)
-                .map(|_| Message::DeviceUpdated),
+            Subscription::run(crate::device_service::update_stream).map(|_| Message::DeviceUpdated),
         );
         // Meter canvases schedule their own frames while a signal is
         // visible.  When every level and held peak has fallen, they stop;
         // this edge is what starts them again on the next transient.
         subs.push(
-            Subscription::run(crate::device_service::meter_stream)
-                .map(|_| Message::MeterWake),
+            Subscription::run(crate::device_service::meter_stream).map(|_| Message::MeterWake),
         );
     }
     // Another app (or `pw-metadata` by hand) can change the graph clock;
@@ -11012,9 +11452,7 @@ fn handle_global_event(
                 {
                     Some(Message::NudgeVolume(-1.0))
                 }
-                Key::Named(keyboard::key::Named::F11) => {
-                    Some(Message::ToggleFullscreen(id))
-                }
+                Key::Named(keyboard::key::Named::F11) => Some(Message::ToggleFullscreen(id)),
                 Key::Named(keyboard::key::Named::Tab) => Some(Message::TabPressed),
                 Key::Named(keyboard::key::Named::Escape) => Some(Message::EscapePressed),
                 _ => None,
@@ -11039,6 +11477,10 @@ fn handle_global_event(
         iced::Event::Window(window::Event::Resized(size)) => {
             Some(Message::WindowSize(size.width, size.height))
         }
+        iced::Event::Window(window::Event::Moved(point)) => Some(Message::WindowMoved(
+            point.x.round() as i32,
+            point.y.round() as i32,
+        )),
         iced::Event::Window(window::Event::CloseRequested) => Some(Message::CloseRequested),
         iced::Event::Window(window::Event::Closed) => Some(Message::WindowClosed(id)),
         iced::Event::Window(window::Event::Opened { size, .. }) => {
@@ -11369,9 +11811,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     const LABEL_W: f32 = 180.0;
     let section = |label: &'static str| -> Element<'static, Message> {
         row![
-            text(label)
-                .color(theme::text_sec())
-                .size(text_size),
+            text(label).color(theme::text_sec()).size(text_size),
             iced::widget::rule::horizontal(1),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -11418,18 +11858,14 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
 
     let caps = state.device.capabilities();
     if caps.protocol_features && !state.device.is_uc_model() {
-        let knob_cell = |label: &'static str, k: Element<'static, Message>| -> Element<'static, Message> {
-            column![
-                k,
-                text(label)
-                    .color(theme::text_sec())
-                    .size(text_size),
-            ]
-            .spacing(theme::SPACE_SM * scale)
-            .align_x(iced::Alignment::Center)
-            .width(Length::Fill)
-            .into()
-        };
+        let knob_cell =
+            |label: &'static str, k: Element<'static, Message>| -> Element<'static, Message> {
+                column![k, text(label).color(theme::text_sec()).size(text_size),]
+                    .spacing(theme::SPACE_SM * scale)
+                    .align_x(iced::Alignment::Center)
+                    .width(Length::Fill)
+                    .into()
+            };
         let mut output_row = row![].spacing(theme::SPACE_MD * scale);
         if caps.pitch {
             output_row = output_row.push(knob_cell(
@@ -11468,9 +11904,8 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
             ));
         }
         if caps.pitch || caps.width {
-            body = body.push(
-                column![section("OUTPUT"), output_row].spacing(theme::SPACE_MD * scale),
-            );
+            body =
+                body.push(column![section("OUTPUT"), output_row].spacing(theme::SPACE_MD * scale));
         }
 
         // The global flags as a two-column grid of equal toggles, the same
@@ -11490,10 +11925,18 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
         // The Fireface options word lives in the device group above; its
         // host-side modes stay here.
         if caps.eq_for_record && !state.device.is_uc_family() {
-            flags.push(("EQ for Record", settings.eq_for_record, Message::EqForRecordChanged));
+            flags.push((
+                "EQ for Record",
+                settings.eq_for_record,
+                Message::EqForRecordChanged,
+            ));
         }
         if caps.optical_out && !state.device.is_uc_family() {
-            flags.push(("Opt Out: SPDIF", settings.optical_out_spdif, Message::OpticalOutFormatChanged));
+            flags.push((
+                "Opt Out: SPDIF",
+                settings.optical_out_spdif,
+                Message::OpticalOutFormatChanged,
+            ));
         }
         if !flags.is_empty() {
             let mut grid = column![section("GLOBAL")].spacing(theme::SPACE_SM * scale);
@@ -11722,16 +12165,16 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             card = card
                 .push(item("Open Workspace…", Message::WorkspaceOpen))
                 .push(item("Save Workspace", Message::WorkspaceSave))
-                .push(item(
-                    "Factory Workspaces  ▸",
-                    Message::WorkspaceFactory,
-                ))
+                .push(item("Factory Workspaces  ▸", Message::WorkspaceFactory))
                 .push(item("Save Workspace As…", Message::WorkspaceSaveAs));
         }
         WorkspaceMenu::Factory => {
             card = card.push(item("‹  Factory Workspaces", Message::WorkspaceBack));
             for layout in workspaces::SurroundLayout::ALL {
-                card = card.push(item(layout.menu_label(), Message::LoadSurroundWorkspace(layout)));
+                card = card.push(item(
+                    layout.menu_label(),
+                    Message::LoadSurroundWorkspace(layout),
+                ));
             }
         }
         WorkspaceMenu::Closed => {}
@@ -11803,11 +12246,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             .size(16.0 * scale)
             .text_size(text_size)
     };
-    let help = |text_value: &'static str| {
-        text(text_value)
-            .color(theme::text_sec())
-            .size(text_size)
-    };
+    let help = |text_value: &'static str| text(text_value).color(theme::text_sec()).size(text_size);
     let header = text("TotalControl settings")
         .color(theme::text_primary())
         .size(text_size);
@@ -12062,9 +12501,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let ucx = state.device.is_ucx_model();
     let section = |label: &'static str| -> Element<'static, Message> {
         row![
-            text(label)
-                .color(theme::text_sec())
-                .size(text_size),
+            text(label).color(theme::text_sec()).size(text_size),
             iced::widget::rule::horizontal(1),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -12130,14 +12567,18 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         let list: Vec<String> = options.iter().map(|s| s.to_string()).collect();
         let selected = options[if current { 1 } else { 0 }].to_string();
         let second = options[1];
-        field(pick_list(list, Some(selected), move |s| message(s == second)))
+        field(pick_list(list, Some(selected), move |s| {
+            message(s == second)
+        }))
     };
-    let choice_row =
-        |label: &'static str, options: [&'static str; 2], current: bool, message: fn(bool) -> Message| {
-            row![caption(label), choice(options, current, message)]
-                .spacing(theme::SPACE_MD * scale)
-                .align_y(iced::Alignment::Center)
-        };
+    let choice_row = |label: &'static str,
+                      options: [&'static str; 2],
+                      current: bool,
+                      message: fn(bool) -> Message| {
+        row![caption(label), choice(options, current, message)]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center)
+    };
 
     let firmware = state
         .device
@@ -12225,9 +12666,27 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         // UC-only: the Gain tab's reference levels are one word (`0x17`).
         // The UCX sets them per channel, in the channel panels.
         body = body
-            .push(ref_row("Line In", ["Lo Gain", "+4 dBu", "-10 dBV"], [0, 1, 3], settings.line_in_ref, Message::LineInRefSelected))
-            .push(ref_row("Line Out", ["Hi Gain", "+4 dBu", "-10 dBV"], [2, 3, 1], settings.line_out_ref, Message::LineOutRefSelected))
-            .push(ref_row("Phones", ["Hi Gain", "+4 dBu", "-10 dBV"], [1, 3, 2], settings.phones_ref, Message::PhonesRefSelected));
+            .push(ref_row(
+                "Line In",
+                ["Lo Gain", "+4 dBu", "-10 dBV"],
+                [0, 1, 3],
+                settings.line_in_ref,
+                Message::LineInRefSelected,
+            ))
+            .push(ref_row(
+                "Line Out",
+                ["Hi Gain", "+4 dBu", "-10 dBV"],
+                [2, 3, 1],
+                settings.line_out_ref,
+                Message::LineOutRefSelected,
+            ))
+            .push(ref_row(
+                "Phones",
+                ["Hi Gain", "+4 dBu", "-10 dBV"],
+                [1, 3, 2],
+                settings.phones_ref,
+                Message::PhonesRefSelected,
+            ));
     }
     if uc || ucx {
         // Both options words carry the output format.  The UCX adds
@@ -12269,9 +12728,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Firmware"),
-                text(firmware)
-                    .color(theme::text_primary())
-                    .size(text_size),
+                text(firmware).color(theme::text_primary()).size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -12281,9 +12738,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Serial"),
-                text(serial)
-                    .color(theme::text_primary())
-                    .size(text_size),
+                text(serial).color(theme::text_primary()).size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -12376,7 +12831,11 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let quanta_for_pick = quanta.clone();
     let quantum_pick = field(pick_list(quantum_opts, Some(quantum_sel), move |label| {
         let idx = quantum_list.iter().position(|l| *l == label).unwrap_or(0);
-        Message::EngineQuantum(if idx == 0 { 0 } else { quanta_for_pick[idx - 1] })
+        Message::EngineQuantum(if idx == 0 {
+            0
+        } else {
+            quanta_for_pick[idx - 1]
+        })
     }));
 
     let follow = state.engine_rate_mode == EngineRateMode::Follow;
@@ -12482,7 +12941,11 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 delta.in_shorts + delta.out_shorts,
             ),
             ("recover", delta.recoveries.to_string(), delta.recoveries),
-            ("events", delta.events_dropped.to_string(), delta.events_dropped),
+            (
+                "events",
+                delta.events_dropped.to_string(),
+                delta.events_dropped,
+            ),
         ] {
             let colour = if bad == 0 {
                 theme::text_sec()
@@ -12523,8 +12986,8 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         );
     }
     body.spacing(theme::SPACE_MD * scale)
-    .width(Length::Fill)
-    .into()
+        .width(Length::Fill)
+        .into()
 }
 
 /// Per-field difference of two cumulative driver counter readings.
@@ -12537,9 +13000,7 @@ fn transport_delta(
         out_urbs: now.out_urbs.saturating_sub(base.out_urbs),
         out_gaps: now.out_gaps.saturating_sub(base.out_gaps),
         out_shorts: now.out_shorts.saturating_sub(base.out_shorts),
-        out_status_errors: now
-            .out_status_errors
-            .saturating_sub(base.out_status_errors),
+        out_status_errors: now.out_status_errors.saturating_sub(base.out_status_errors),
         urb_errors: now.urb_errors.saturating_sub(base.urb_errors),
         recoveries: now.recoveries.saturating_sub(base.recoveries),
         events_dropped: now.events_dropped.saturating_sub(base.events_dropped),
@@ -12552,7 +13013,6 @@ fn transport_delta(
         in_status_errors: now.in_status_errors.saturating_sub(base.in_status_errors),
     }
 }
-
 
 /// The latency line.  While the card plays, it uses the card's actual period
 /// and the USB queue from the module parameters.  The UCX line is a
@@ -12856,6 +13316,9 @@ fn section_header(label: &str, scale: f32) -> Element<'_, Message> {
     .into()
 }
 
+/// Widget id of the page scrollable, used to restore its saved offset.
+const WORKSPACE_SCROLL_ID: &str = "workspace-page";
+
 /// Wraps a view's body in the root background, filling the window, with a
 /// vertical scrollbar for when the stacked sections (or the matrix grid)
 /// don't fit the window height.
@@ -12867,6 +13330,11 @@ fn page<'a>(body: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
             // horizontally together, with the scrollbar at the bottom, and
             // vertically when the content is taller than the window.
             scrollable(body)
+                .id(WORKSPACE_SCROLL_ID)
+                .on_scroll(|viewport| {
+                    let offset = viewport.absolute_offset();
+                    Message::WorkspaceScrolled(offset.x, offset.y)
+                })
                 .direction(scrollable::Direction::Both {
                     vertical: theme::thin_scrollbar(),
                     horizontal: theme::thin_scrollbar(),
@@ -12920,12 +13388,9 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     ]
     .spacing(theme::SPACE_TIGHT);
 
-    // Secondary session tools: submix / clock. Scene save/load used to
-    // live here too — moved into the sidebar's Snapshots panel (see
-    // `sidebar::snapshots_panel`'s own comment), since it's the exact
-    // same `save_scene_file`/`load_scene_file` mechanism as the Mix 1-8
-    // slots there, just with free-form names instead of fixed ones —
-    // no reason to keep two separate homes for one feature.
+    // Secondary session tools: submix / clock. Scene save/load lives in
+    // the sidebar's Snapshots panel (see `sidebar::snapshots_panel`'s own
+    // comment); the slots are part of the current workspace.
     // Flat fields, like everything else in the bar: this was the bar's
     // only boxed element (a `chip`), and read as dropped into the corner.
     let out_labels = state.display_pair_labels();
@@ -12947,44 +13412,39 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     let device_labels: Vec<String> = targets.iter().map(DeviceTarget::label).collect();
     let targets_for_pick = targets.clone();
     let session = row![
-            text("Device")
-                .color(theme::text_sec())
-                .size(theme::TEXT_XS * scale),
-            pick_list(
-                device_labels,
-                Some(current_target.label()),
-                move |label| {
-                    let target = targets_for_pick
-                        .iter()
-                        .find(|target| target.label() == label)
-                        .cloned()
-                        .unwrap_or_else(|| current_target.clone());
-                    Message::SelectDevice(target)
-                },
-            )
-            .style(theme::pick_list)
-            .menu_style(theme::menu)
-            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .text_size(theme::TEXT_MD * scale),
-            text("Submix")
-                .color(theme::text_sec())
-                .size(theme::TEXT_XS * scale),
-            pick_list(
-                out_labels,
-                Some(selected_pair_label.clone()),
-                move |label| {
-                    let display = out_labels_pick
-                        .iter()
-                        .position(|l| *l == label)
-                        .unwrap_or(0);
-                    Message::SelectOutput(display_to_internal.get(display).copied().unwrap_or(display))
-                },
-            )
-            .style(theme::pick_list)
-            .menu_style(theme::menu)
-            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .text_size(theme::TEXT_MD * scale),
-
+        text("Device")
+            .color(theme::text_sec())
+            .size(theme::TEXT_XS * scale),
+        pick_list(device_labels, Some(current_target.label()), move |label| {
+            let target = targets_for_pick
+                .iter()
+                .find(|target| target.label() == label)
+                .cloned()
+                .unwrap_or_else(|| current_target.clone());
+            Message::SelectDevice(target)
+        },)
+        .style(theme::pick_list)
+        .menu_style(theme::menu)
+        .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+        .text_size(theme::TEXT_MD * scale),
+        text("Submix")
+            .color(theme::text_sec())
+            .size(theme::TEXT_XS * scale),
+        pick_list(
+            out_labels,
+            Some(selected_pair_label.clone()),
+            move |label| {
+                let display = out_labels_pick
+                    .iter()
+                    .position(|l| *l == label)
+                    .unwrap_or(0);
+                Message::SelectOutput(display_to_internal.get(display).copied().unwrap_or(display))
+            },
+        )
+        .style(theme::pick_list)
+        .menu_style(theme::menu)
+        .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+        .text_size(theme::TEXT_MD * scale),
     ]
     .spacing(theme::SPACE_SM * scale)
     .align_y(iced::Alignment::Center);
@@ -13037,7 +13497,9 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
         .size(theme::TEXT_MD * scale),
     )
     .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
-    .style(theme::tab_toggle(state.workspace_menu != WorkspaceMenu::Closed))
+    .style(theme::tab_toggle(
+        state.workspace_menu != WorkspaceMenu::Closed,
+    ))
     .on_press(Message::ToggleWorkspace);
 
     // Options > Reset Mix and Settings.  Reset Mix is a submenu; Settings
@@ -13115,18 +13577,11 @@ fn output_meter_available(state: &TotalControl, out_idx: usize) -> bool {
         out_idx / 2
     };
     let inputs_ok = state.device.inputs().iter().enumerate().all(|(i, ch)| {
-        ch.volumes.get(pair).copied().unwrap_or(0.0) == 0.0
-            || state.device.has_input_meter(i)
+        ch.volumes.get(pair).copied().unwrap_or(0.0) == 0.0 || state.device.has_input_meter(i)
     });
-    let playbacks_ok = state
-        .device
-        .playbacks()
-        .iter()
-        .enumerate()
-        .all(|(i, ch)| {
-            ch.volumes.get(pair).copied().unwrap_or(0.0) == 0.0
-                || playback_meter_available(state, i)
-        });
+    let playbacks_ok = state.device.playbacks().iter().enumerate().all(|(i, ch)| {
+        ch.volumes.get(pair).copied().unwrap_or(0.0) == 0.0 || playback_meter_available(state, i)
+    });
     inputs_ok && playbacks_ok
 }
 
@@ -13207,6 +13662,12 @@ fn strip_params<'a>(
     let base = strip::StripParams {
         cid,
         layout: &state.layout,
+        connection_features: crate::widgets::layout::Features {
+            fx: state.device.capabilities().fx,
+            trim: true,
+            eq: state.device.capabilities().eq,
+            dynamics: state.device.capabilities().dynamics,
+        },
         output_idx,
         bus_label: state
             .pair_labels()
@@ -13271,8 +13732,7 @@ fn strip_params<'a>(
             .find(|(c, _)| *c == cid)
             .map(|(_, k)| *k),
         mute: false,
-        pfl: state.control_room.pfl_replaces_solo
-            && matches!(cid, ChannelId::Input(_)),
+        pfl: state.control_room.pfl_replaces_solo && matches!(cid, ChannelId::Input(_)),
         solo: false,
         mute_armed: false,
         solo_armed: false,
@@ -13311,7 +13771,11 @@ fn strip_params<'a>(
             let linked = state.device.input_pair_linked(i / 2);
             let gain_right = ch.gain_right.or_else(|| {
                 if linked && i % 2 == 0 {
-                    state.device.inputs().get(i + 1).and_then(|right| right.gain)
+                    state
+                        .device
+                        .inputs()
+                        .get(i + 1)
+                        .and_then(|right| right.gain)
                 } else {
                     None
                 }
@@ -13328,19 +13792,11 @@ fn strip_params<'a>(
                             let pan = if level > 0.0 {
                                 balance
                             } else {
-                                state
-                                    .device
-                                    .pair_block_balance(cid, block)
-                                    .unwrap_or(0)
+                                state.device.pair_block_balance(cid, block).unwrap_or(0)
                             };
                             (level, pan)
                         })
-                        .unwrap_or_else(|| {
-                            (
-                                state.device.matrix_cell(cid, block).unwrap_or(0.0),
-                                0,
-                            )
-                        })
+                        .unwrap_or_else(|| (state.device.matrix_cell(cid, block).unwrap_or(0.0), 0))
                 } else {
                     (state.device.matrix_cell(cid, block).unwrap_or(0.0), 0)
                 }
@@ -13366,13 +13822,8 @@ fn strip_params<'a>(
                     let pan = if peak > 0.0 {
                         output_balance_from_volumes(left_volume, right_volume)
                     } else {
-                        let block = state
-                            .device
-                            .matrix_blocks_for_pair(output_idx)[0];
-                        state
-                            .device
-                            .pair_block_balance(cid, block)
-                            .unwrap_or(0)
+                        let block = state.device.matrix_blocks_for_pair(output_idx)[0];
+                        state.device.pair_block_balance(cid, block).unwrap_or(0)
                     };
                     (peak, pan)
                 }
@@ -13452,19 +13903,11 @@ fn strip_params<'a>(
                             let pan = if level > 0.0 {
                                 balance
                             } else {
-                                state
-                                    .device
-                                    .pair_block_balance(cid, block)
-                                    .unwrap_or(0)
+                                state.device.pair_block_balance(cid, block).unwrap_or(0)
                             };
                             (level, pan)
                         })
-                        .unwrap_or_else(|| {
-                            (
-                                state.device.matrix_cell(cid, block).unwrap_or(0.0),
-                                0,
-                            )
-                        })
+                        .unwrap_or_else(|| (state.device.matrix_cell(cid, block).unwrap_or(0.0), 0))
                 } else {
                     (state.device.matrix_cell(cid, block).unwrap_or(0.0), 0)
                 }
@@ -13490,13 +13933,8 @@ fn strip_params<'a>(
                     let pan = if peak > 0.0 {
                         output_balance_from_volumes(left_volume, right_volume)
                     } else {
-                        let block = state
-                            .device
-                            .matrix_blocks_for_pair(output_idx)[0];
-                        state
-                            .device
-                            .pair_block_balance(cid, block)
-                            .unwrap_or(0)
+                        let block = state.device.matrix_blocks_for_pair(output_idx)[0];
+                        state.device.pair_block_balance(cid, block).unwrap_or(0)
                     };
                     (peak, pan)
                 }
@@ -13785,9 +14223,7 @@ fn channel_level(state: &TotalControl, cid: ChannelId, out: usize) -> f32 {
 fn stereo_pair(cid: ChannelId) -> (ChannelId, ChannelId) {
     match cid {
         ChannelId::Input(i) => (ChannelId::Input(i & !1), ChannelId::Input(i | 1)),
-        ChannelId::Playback(i) => {
-            (ChannelId::Playback(i & !1), ChannelId::Playback(i | 1))
-        }
+        ChannelId::Playback(i) => (ChannelId::Playback(i & !1), ChannelId::Playback(i | 1)),
         ChannelId::Output(i) => (ChannelId::Output(i & !1), ChannelId::Output(i | 1)),
     }
 }
@@ -13899,9 +14335,7 @@ fn fx_reserve(main_space: f32, natural_width: f32, fx_extent: f32) -> f32 {
 /// Route is rendered as a Stack overlay, so its row needs the strip's
 /// right edge while it is open *or* still sliding out.
 fn route_visible(state: &TotalControl, cid: ChannelId, now: Instant) -> bool {
-    state
-        .flyout_open
-        .contains(&(cid, strip::FlyoutKind::Route))
+    state.flyout_open.contains(&(cid, strip::FlyoutKind::Route))
         || state
             .flyout_anim
             .get(&(cid, strip::FlyoutKind::Route))
@@ -14037,9 +14471,9 @@ fn settings_reference_pick(
         left: 1.0 * scale,
     })
     .text_size(theme::TEXT_SM * scale)
-    .text_line_height(iced::widget::text::LineHeight::Absolute(
-        iced::Pixels((SETTINGS_CONTROL_H - 2.0) * scale),
-    ))
+    .text_line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+        (SETTINGS_CONTROL_H - 2.0) * scale,
+    )))
     .width(Length::Fill)
     .handle(iced::widget::pick_list::Handle::None);
     let label = container(
@@ -14144,14 +14578,10 @@ fn settings_knob_row<'a>(
     label: Element<'a, Message>,
     knob: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    row![
-        label,
-        iced::widget::Space::new().width(Length::Fill),
-        knob,
-    ]
-    .align_y(iced::Alignment::Center)
-    .width(Length::Fill)
-    .into()
+    row![label, iced::widget::Space::new().width(Length::Fill), knob,]
+        .align_y(iced::Alignment::Center)
+        .width(Length::Fill)
+        .into()
 }
 
 /// A standalone label row.  The text sits at the bottom of its slot, just
@@ -14168,7 +14598,12 @@ fn settings_label_slot<'a>(
         .into()
 }
 
-fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> Element<'_, Message> {
+fn settings_popover(
+    state: &TotalControl,
+    cid: ChannelId,
+    width: f32,
+    scale: f32,
+) -> Element<'_, Message> {
     let p = strip_params(state, cid, state.sel_out);
     let caps = state.device.capabilities();
     // The reference dropdowns in the channel panels are UCX registers; the
@@ -14187,8 +14622,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
     // the control stays engaged and inert (the locked style keeps the lit
     // outline rather than the disabled dimming).
     let cr = is_control_room_cid(state, cid);
-    let can_toggle =
-        !cr && (!matches!(cid, ChannelId::Playback(_)) || p.stereo_split_supported);
+    let can_toggle = !cr && (!matches!(cid, ChannelId::Playback(_)) || p.stereo_split_supported);
     let tip = if cr {
         "Control Room channels are always stereo"
     } else {
@@ -14237,7 +14671,9 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
     };
 
     if let ChannelId::Input(idx) = cid {
-        let mut col = column![].spacing(theme::SPACE_TIGHT * scale).width(Length::Fill);
+        let mut col = column![]
+            .spacing(theme::SPACE_TIGHT * scale)
+            .width(Length::Fill);
         col = col.push(settings_slot(Some(stereo), SETTINGS_ROW_CTRL, scale));
 
         // Row 2 — the reference readout for the channels whose dropdown is
@@ -14267,14 +14703,16 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
         } else {
             Length::Fill
         };
-        let mut pre = row![].spacing(SETTINGS_CTRL_GAP * scale).width(Length::Fill);
+        let mut pre = row![]
+            .spacing(SETTINGS_CTRL_GAP * scale)
+            .width(Length::Fill);
         let mut pre_ctrl = false;
         if p.has_48v {
             pre = pre.push(
                 button(strip::centered_label("48V", theme::TEXT_SM * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .width(button_width)
-                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+                    .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
                     .style(theme::phantom_button(p.phantom))
                     .on_press(Message::Phantom(idx, !p.phantom)),
             );
@@ -14285,7 +14723,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 button(strip::centered_label("PAD", theme::TEXT_SM * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .width(button_width)
-                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+                    .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
                     .style(theme::stereo_button(p.pad))
                     .on_press(Message::Pad(idx, !p.pad)),
             );
@@ -14296,7 +14734,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 button(strip::centered_label("INST", theme::TEXT_SM * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                     .width(button_width)
-                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+                    .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
                     .style(theme::stereo_button(p.instrument))
                     .on_press(Message::Instrument(idx, !p.instrument)),
             );
@@ -14306,12 +14744,18 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             if p.has_level {
                 let options = ["-10dBV", "+4dBu", "LoGain"];
                 let codes = [0u16, 1, 2];
-                pre = pre.push(settings_reference_pick(options, codes, p.level.code(), scale, move |code| {
-                    Message::LevelChanged(
-                        idx,
-                        InputLevel::from_code(code).unwrap_or(InputLevel::Plus4dBu),
-                    )
-                }));
+                pre = pre.push(settings_reference_pick(
+                    options,
+                    codes,
+                    p.level.code(),
+                    scale,
+                    move |code| {
+                        Message::LevelChanged(
+                            idx,
+                            InputLevel::from_code(code).unwrap_or(InputLevel::Plus4dBu),
+                        )
+                    },
+                ));
                 pre_ctrl = true;
             } else if (4..=7).contains(&idx) {
                 pre = pre.push(settings_reference_pick(
@@ -14331,14 +14775,16 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
         ));
 
         // Row 4 — AutoSet (and the Babyface sensitivity switch).
-        let mut auto = row![].spacing(SETTINGS_CTRL_GAP * scale).width(Length::Fill);
+        let mut auto = row![]
+            .spacing(SETTINGS_CTRL_GAP * scale)
+            .width(Length::Fill);
         let mut auto_ctrl = false;
         if p.has_autoset {
             auto = auto.push(hint(
                 button(strip::centered_label("AUTOSET", theme::TEXT_SM * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .width(Length::Fill)
-                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+                    .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
                     .style(theme::stereo_button(p.autoset))
                     .on_press(Message::Autoset(idx, !p.autoset)),
                 "AutoSet — automatic gain reduction to prevent overloads",
@@ -14356,7 +14802,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 button(strip::centered_label(label, theme::TEXT_SM * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .width(Length::Fill)
-                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+                    .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
                     .style(theme::plain_button)
                     .on_press(Message::Sensitivity(idx, !p.sensitivity_plus4)),
             );
@@ -14402,7 +14848,9 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                     log_scale: false,
                     modifiers: p.modifiers,
                     scale,
-                    on_change: Box::new(move |v| Message::Gain(idx, (v.round() as u32).min(gain_max))),
+                    on_change: Box::new(move |v| {
+                        Message::Gain(idx, (v.round() as u32).min(gain_max))
+                    }),
                     on_reset: Box::new(move || Message::Gain(idx, 0)),
                 })
                 .into(),
@@ -14467,9 +14915,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                     .width(Length::Fill)
                     .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
                     .style(theme::stereo_button(ms_on))
-                    .on_press_maybe(
-                        can_ms.then_some(Message::InputMsProcChanged(idx, !ms_on)),
-                    ),
+                    .on_press_maybe(can_ms.then_some(Message::InputMsProcChanged(idx, !ms_on))),
                 "Mid/side processing on the stereo pair",
                 scale,
             )
@@ -14484,7 +14930,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                         button(strip::centered_label(label, theme::TEXT_SM * scale))
                             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                             .width(Length::Fill)
-                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+                            .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
                             .style(theme::phase_button(on))
                             .on_press(Message::PhaseChanged(ChannelId::Input(channel), !on)),
                         if on { "Phase inverted" } else { "Phase normal" },
@@ -14495,11 +14941,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 let left = idx & !1;
                 let right = left + 1;
                 let left_on = state.device.inputs().get(left).is_some_and(|c| c.phase);
-                let right_on = state
-                    .device
-                    .inputs()
-                    .get(right)
-                    .is_some_and(|c| c.phase);
+                let right_on = state.device.inputs().get(right).is_some_and(|c| c.phase);
                 settings_pair(
                     phase_button("Ø L", left, left_on),
                     phase_button("R Ø", right, right_on),
@@ -14517,7 +14959,9 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
     }
 
     if let ChannelId::Playback(i) = cid {
-        let mut col = column![].spacing(theme::SPACE_TIGHT * scale).width(Length::Fill);
+        let mut col = column![]
+            .spacing(theme::SPACE_TIGHT * scale)
+            .width(Length::Fill);
         col = col.push(settings_slot(Some(stereo), SETTINGS_ROW_CTRL, scale));
         let width_knob = caps.channel_width.then(|| {
             let modifiers = state.modifiers;
@@ -14600,7 +15044,9 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
         1..=3 => Some((state.device.settings().line_out_ref, false)),
         _ => None,
     };
-    let mut col = column![].spacing(theme::SPACE_TIGHT * scale).width(Length::Fill);
+    let mut col = column![]
+        .spacing(theme::SPACE_TIGHT * scale)
+        .width(Length::Fill);
     col = col.push(settings_slot(Some(stereo), SETTINGS_ROW_CTRL, scale));
     col = col.push(settings_label_slot(
         ref_group.map(|_| {
@@ -14617,21 +15063,19 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
         scale,
     ));
     col = col.push(settings_slot(
-        ref_group
-            .filter(|_| ucx)
-            .map(|(current, phones)| {
-                settings_reference_pick(
-                    ["-10dBV", "+4dBu", "HiGain"],
-                    [0, 1, 2],
-                    current,
-                    scale,
-                    if phones {
-                        Message::PhonesRefSelected
-                    } else {
-                        Message::LineOutRefSelected
-                    },
-                )
-            }),
+        ref_group.filter(|_| ucx).map(|(current, phones)| {
+            settings_reference_pick(
+                ["-10dBV", "+4dBu", "HiGain"],
+                [0, 1, 2],
+                current,
+                scale,
+                if phones {
+                    Message::PhonesRefSelected
+                } else {
+                    Message::LineOutRefSelected
+                },
+            )
+        }),
         SETTINGS_ROW_PICK,
         scale,
     ));
@@ -14681,7 +15125,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 button(strip::centered_label(label, theme::TEXT_SM * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .width(Length::Fill)
-                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+                    .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
                     .style(theme::phase_button(on))
                     .on_press(Message::OutputPhaseChanged(idx, !on)),
                 if on { "Phase inverted" } else { "Phase normal" },
@@ -14691,16 +15135,8 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
         if p.stereo_linked || cr {
             let left = out & !1;
             let right = left + 1;
-            let left_on = state
-                .device
-                .outputs()
-                .get(left)
-                .is_some_and(|o| o.phase_l);
-            let right_on = state
-                .device
-                .outputs()
-                .get(right)
-                .is_some_and(|o| o.phase_r);
+            let left_on = state.device.outputs().get(left).is_some_and(|o| o.phase_l);
+            let right_on = state.device.outputs().get(right).is_some_and(|o| o.phase_r);
             settings_pair(
                 phase_button("Ø L", left, left_on),
                 phase_button("R Ø", right, right_on),
@@ -14712,9 +15148,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             } else {
                 state.device.outputs().get(out).is_some_and(|o| o.phase_r)
             };
-            row![phase_button("Ø", out, on)]
-                .width(Length::Fill)
-                .into()
+            row![phase_button("Ø", out, on)].width(Length::Fill).into()
         }
     });
     col = col.push(settings_slot(phase, SETTINGS_ROW_CTRL, scale));
@@ -14727,11 +15161,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             .get(out & !1)
             .is_some_and(|o| o.no_trim)
     } else {
-        state
-            .device
-            .outputs()
-            .get(out)
-            .is_some_and(|o| o.no_trim)
+        state.device.outputs().get(out).is_some_and(|o| o.no_trim)
     };
     let no_trim = caps.no_trim.then(|| {
         hint(
@@ -14758,11 +15188,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             .get(out & !1)
             .is_some_and(|o| o.talkback)
     } else {
-        state
-            .device
-            .outputs()
-            .get(out)
-            .is_some_and(|o| o.talkback)
+        state.device.outputs().get(out).is_some_and(|o| o.talkback)
     };
     let talkback = caps.talkback.then(|| {
         hint(
@@ -14824,7 +15250,7 @@ fn dynamics_popover(
                      value_text: String,
                      reset: f32,
                      mutate: fn(&mut Dynamics, f32)|
-     -> Element<'static, Message> {
+          -> Element<'static, Message> {
         let d = d;
         let knob_box = 54.0 * ds;
         let face = container(knob(Knob {
@@ -14985,8 +15411,12 @@ fn dynamics_popover(
     let row_label = |top: &'static str, bottom: &'static str| -> Element<'static, Message> {
         container(
             column![
-                text(top).size(theme::TEXT_XS * scale).color(theme::text_sec()),
-                text(bottom).size(theme::TEXT_XS * scale).color(theme::text_sec()),
+                text(top)
+                    .size(theme::TEXT_XS * scale)
+                    .color(theme::text_sec()),
+                text(bottom)
+                    .size(theme::TEXT_XS * scale)
+                    .color(theme::text_sec()),
             ]
             .width(Length::Fill),
         )
@@ -15067,11 +15497,19 @@ fn dynamics_popover(
     let mut auto = column![].spacing(theme::KNOB_LABEL_GAP * scale);
     auto = auto.push(
         row![
-            toggle(d.auto_level, Message::DynamicsChanged(
-                cid,
-                Dynamics { auto_level: !d.auto_level, ..d }
-            )),
-            text("auto level").size(theme::TEXT_XS * scale).color(theme::text_sec()),
+            toggle(
+                d.auto_level,
+                Message::DynamicsChanged(
+                    cid,
+                    Dynamics {
+                        auto_level: !d.auto_level,
+                        ..d
+                    }
+                )
+            ),
+            text("auto level")
+                .size(theme::TEXT_XS * scale)
+                .color(theme::text_sec()),
             iced::widget::Space::new().width(Length::Fill),
         ]
         .spacing(theme::SPACE_SM * scale)
@@ -15138,7 +15576,12 @@ fn dynamics_popover(
 /// Gain, which is Mic/Instrument-only), so unlike `eq_popover` there's
 /// no `Option`-shaped hardware gate to check here, just the channel kind.
 /// Same "pushes the row" shape as `settings_popover`/`eq_popover`.
-fn trim_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> Element<'_, Message> {
+fn trim_popover(
+    state: &TotalControl,
+    cid: ChannelId,
+    width: f32,
+    scale: f32,
+) -> Element<'_, Message> {
     if matches!(cid, ChannelId::Output(_)) {
         return container(iced::widget::Space::new()).into();
     }
@@ -15146,7 +15589,9 @@ fn trim_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) ->
     let trim = channel_trim(state, cid);
 
     let col = column![
-        text("Trim").size(theme::TEXT_SM * scale).color(theme::text_sec()),
+        text("Trim")
+            .size(theme::TEXT_SM * scale)
+            .color(theme::text_sec()),
         container(knob(Knob {
             value: trim,
             range: (-65.0, 0.0),
@@ -15178,7 +15623,12 @@ fn trim_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) ->
 /// stretch the row; its controls scroll when the window is too short to
 /// show them all. The frequency knobs are log-scaled, matching the plot's
 /// axis.
-fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> Element<'_, Message> {
+fn eq_popover(
+    state: &TotalControl,
+    cid: ChannelId,
+    width: f32,
+    scale: f32,
+) -> Element<'_, Message> {
     let eq = match cid {
         ChannelId::Input(idx) => state.device.inputs().get(idx).and_then(|c| c.eq),
         ChannelId::Output(idx) => state.device.outputs().get(idx).and_then(|c| c.eq),
@@ -15218,9 +15668,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
         scale,
         modifiers,
         EqPlotActions {
-            on_band: Box::new(move |band, freq, gain| {
-                Message::EqBandPoint(cid, band, freq, gain)
-            }),
+            on_band: Box::new(move |band, freq, gain| Message::EqBandPoint(cid, band, freq, gain)),
             on_band_reset: Box::new(move |band| Message::EqBandReset(cid, band)),
             on_band_q: Box::new(move |band, q| Message::EqBandQ(cid, band, q)),
             on_low_cut: Box::new(move |freq| Message::EqLowCutFreq(cid, freq)),
@@ -15248,28 +15696,22 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
             (_, EqBandType::Off) => ("Off", "Off (click for Bell)", EqBandType::Bell),
             (1, EqBandType::Bell) => ("Bell", "Bell (click for Off)", EqBandType::Off),
             (1, _) => ("Bell", "Bell (fixed for band 2)", EqBandType::Bell),
-            (0, EqBandType::Bell) => (
+            (0, EqBandType::Bell) => ("Bell", "Bell (click for Low Shelf)", EqBandType::LowShelf),
+            (0, EqBandType::LowShelf) => ("Low", "Low Shelf (click for Off)", EqBandType::Off),
+            (0, _) => (
                 "Bell",
-                "Bell (click for Low Shelf)",
-                EqBandType::LowShelf,
+                "Bell (band 1 has no shelf on this side)",
+                EqBandType::Bell,
             ),
-            (0, EqBandType::LowShelf) => {
-                ("Low", "Low Shelf (click for Off)", EqBandType::Off)
+            (2, EqBandType::Bell) => ("Bell", "Bell (click for High Shelf)", EqBandType::HighShelf),
+            (2, EqBandType::HighShelf) => {
+                ("High", "High Shelf (click for Hi Cut)", EqBandType::LowPass)
             }
-            (0, _) => ("Bell", "Bell (band 1 has no shelf on this side)", EqBandType::Bell),
-            (2, EqBandType::Bell) => (
-                "Bell",
-                "Bell (click for High Shelf)",
-                EqBandType::HighShelf,
+            (2, EqBandType::LowPass) => (
+                "Hi Cut",
+                "Hi Cut, low pass (click for Off)",
+                EqBandType::Off,
             ),
-            (2, EqBandType::HighShelf) => (
-                "High",
-                "High Shelf (click for Hi Cut)",
-                EqBandType::LowPass,
-            ),
-            (2, EqBandType::LowPass) => {
-                ("Hi Cut", "Hi Cut, low pass (click for Off)", EqBandType::Off)
-            }
             (2, _) => ("Bell", "Bell (band 3 has no low shelf)", EqBandType::Bell),
             _ => ("Off", "Off", EqBandType::Bell),
         };
@@ -15385,9 +15827,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
                     log_scale: false,
                     modifiers,
                     scale: eq_scale,
-                    on_change: Box::new(move |v| {
-                        Message::EqBandQ(cid, band, v.clamp(0.7, 5.0))
-                    }),
+                    on_change: Box::new(move |v| Message::EqBandQ(cid, band, v.clamp(0.7, 5.0))),
                     on_reset: Box::new(move || Message::EqBandQ(cid, band, 0.7)),
                 }),
                 "Band Q",
@@ -15466,11 +15906,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
     if let Some(lc) = lc_button {
         low_cut_row = low_cut_row.push(lc);
     }
-    col = col.push(
-        low_cut_row
-            .push(freq_col)
-            .push(slope_row),
-    );
+    col = col.push(low_cut_row.push(freq_col).push(slope_row));
 
     container(
         scrollable(col)
@@ -15514,16 +15950,9 @@ fn with_flyout<'a>(
     let Some((cid, x)) = route else {
         return row_element;
     };
-    let open = state
-        .flyout_open
-        .contains(&(cid, strip::FlyoutKind::Route));
-    let Some(width) = flyout_slot(
-        state,
-        cid,
-        strip::FlyoutKind::Route,
-        strip::FLYOUT_W,
-        now,
-    ) else {
+    let open = state.flyout_open.contains(&(cid, strip::FlyoutKind::Route));
+    let Some(width) = flyout_slot(state, cid, strip::FlyoutKind::Route, strip::FLYOUT_W, now)
+    else {
         return row_element;
     };
     if !open && width <= 0.0 {
@@ -15641,7 +16070,9 @@ fn fx_header_row(
                 .padding([0.0, theme::SPACE_MD * scale])
                 .style(theme::toggle_button(on, theme::ACCENT))
                 .on_press(toggle),
-            text(name).size(theme::TEXT_SM * scale).color(theme::text_sec()),
+            text(name)
+                .size(theme::TEXT_SM * scale)
+                .color(theme::text_sec()),
             iced::widget::Space::new().width(Length::Fill),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -15675,9 +16106,9 @@ fn fx_centered_pick(
             left: 1.0 * scale,
         })
         .text_size(theme::TEXT_XS * scale)
-        .text_line_height(iced::widget::text::LineHeight::Absolute(
-            iced::Pixels((height - 2.0) * scale),
-        ))
+        .text_line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(
+            (height - 2.0) * scale,
+        )))
         .width(Length::Fill)
         .handle(iced::widget::pick_list::Handle::None);
     let label = container(
@@ -15930,13 +16361,13 @@ fn fx_controls(
     }
     container(
         band
-        // Inset on the left only: the columns add up to the panel width.
-        .padding(iced::Padding {
-            top: top_pad * scale,
-            left: theme::SPACE_SM * scale,
-            right: 0.0,
-            bottom: 0.0,
-        }),
+            // Inset on the left only: the columns add up to the panel width.
+            .padding(iced::Padding {
+                top: top_pad * scale,
+                left: theme::SPACE_SM * scale,
+                right: 0.0,
+                bottom: 0.0,
+            }),
     )
     .height(Length::Fixed(height * scale))
     .align_y(iced::Alignment::Start)
@@ -15947,10 +16378,7 @@ fn fx_controls(
 
 /// A fixed-pitch row holding a single knob, for the panels whose fader sits
 /// in the next column over.
-fn fx_row_one<'a>(
-    cell: Element<'a, Message>,
-    scale: f32,
-) -> Element<'a, Message> {
+fn fx_row_one<'a>(cell: Element<'a, Message>, scale: f32) -> Element<'a, Message> {
     container(
         container(cell)
             .width(Length::Fill)
@@ -15990,13 +16418,13 @@ fn reverb_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     );
     let type_row = fx_type_row(
         pick_list(
-            REVERB_TYPES.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+            REVERB_TYPES
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>(),
             Some(reverb_type_name(r.kind).to_string()),
             move |name| {
-                let kind = REVERB_TYPES
-                    .iter()
-                    .position(|n| *n == name)
-                    .unwrap_or(0) as u8;
+                let kind = REVERB_TYPES.iter().position(|n| *n == name).unwrap_or(0) as u8;
                 Message::ReverbChanged(Reverb { kind, ..r })
             },
         )
@@ -16120,12 +16548,9 @@ fn reverb_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         ),
         scale,
     );
-    let volume_column = column![
-        iced::widget::Space::new().height(Length::Fill),
-        volume
-    ]
-    .height(Length::Fixed(FX_REV_CONTROLS_H * scale))
-    .width(Length::Fill);
+    let volume_column = column![iced::widget::Space::new().height(Length::Fill), volume]
+        .height(Length::Fixed(FX_REV_CONTROLS_H * scale))
+        .width(Length::Fill);
 
     let rows = column![row1, row2, row3].spacing(0.0).width(Length::Fill);
     let controls = fx_controls(
@@ -16262,11 +16687,15 @@ fn reverb_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             .into(),
     };
 
-    container(column![header, type_row, controls, tail].spacing(0.0).width(Length::Fill))
-        .width(Length::Fixed(FX_W * scale))
-        .style(theme::panel)
-        .clip(true)
-        .into()
+    container(
+        column![header, type_row, controls, tail]
+            .spacing(0.0)
+            .width(Length::Fill),
+    )
+    .width(Length::Fixed(FX_W * scale))
+    .style(theme::panel)
+    .clip(true)
+    .into()
 }
 
 fn echo_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
@@ -16290,10 +16719,7 @@ fn echo_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
             ECHO_TYPES.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
             echo_type.to_string(),
             move |name| {
-                let kind = ECHO_TYPES
-                    .iter()
-                    .position(|n| *n == name)
-                    .unwrap_or(0) as u8;
+                let kind = ECHO_TYPES.iter().position(|n| *n == name).unwrap_or(0) as u8;
                 Message::EchoChanged(Echo { kind, ..e })
             },
             24.0,
@@ -16392,8 +16818,7 @@ fn echo_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     let knobs = column![row1, row2, row3, row4, high_cut]
         .spacing(0.0)
         .width(Length::Fixed(100.0 * scale));
-    let meters = container(fx_meter_column(state, scale))
-        .width(Length::Fixed(60.0 * scale));
+    let meters = container(fx_meter_column(state, scale)).width(Length::Fixed(60.0 * scale));
     let controls = container(
         row![knobs, meters]
             .spacing(theme::SPACE_SM * scale)
@@ -16408,11 +16833,15 @@ fn echo_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     .width(Length::Fill)
     .style(theme::fx_controls);
 
-    container(column![header, type_row, controls].spacing(0.0).width(Length::Fill))
-        .width(Length::Fixed(FX_W * scale))
-        .style(theme::panel)
-        .clip(true)
-        .into()
+    container(
+        column![header, type_row, controls]
+            .spacing(0.0)
+            .width(Length::Fill),
+    )
+    .width(Length::Fixed(FX_W * scale))
+    .style(theme::panel)
+    .clip(true)
+    .into()
 }
 
 /// The Assign menu: a card anchored at the Control Room panel's left edge,
@@ -16505,13 +16934,9 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
         col = col.push(
             iced::widget::mouse_area(
                 iced::widget::button(
-                    container(
-                        text(*name)
-                            .size(theme::TEXT_MD * scale)
-                            .center(),
-                    )
-                    .width(Length::Fill)
-                    .align_x(iced::Alignment::Center),
+                    container(text(*name).size(theme::TEXT_MD * scale).center())
+                        .width(Length::Fill)
+                        .align_x(iced::Alignment::Center),
                 )
                 .width(Length::Fixed(entry_w))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
@@ -16561,11 +16986,7 @@ fn control_room_width(state: &TotalControl, scale: f32) -> f32 {
 /// Control Room width including the slideout currently open beside one of its
 /// channels. The header and the page width follow this, so the section grows
 /// left with the panel instead of leaving the header behind.
-fn control_room_visual_width(
-    state: &TotalControl,
-    scale: f32,
-    now: Instant,
-) -> f32 {
+fn control_room_visual_width(state: &TotalControl, scale: f32, now: Instant) -> f32 {
     let mut extra = 0.0f32;
     for dest in [2usize, 3, 4, 5, 1, 0] {
         let Some(pair) = state.assign[dest] else {
@@ -16674,7 +17095,6 @@ fn assign_gap_width(
     }
 }
 
-
 /// Options > Reset Mix (manual 25.10): rewrite the captured scene, then push
 /// it in one go. Every entry writes the whole mixer, which is what makes this
 /// cheaper than clicking a matrix cell at a time.
@@ -16739,6 +17159,7 @@ fn apply_reset_mix(state: &mut TotalControl, kind: ResetMix) {
                 let linked = outputs_linked || state.is_output_assigned(pair);
                 let _ = state.device.set_output_linked(pair, linked);
             }
+            adopt_active_master_members(state);
             state.notice = Some((
                 "Channel stereo/mono reset".into(),
                 std::time::Instant::now(),
@@ -16752,6 +17173,7 @@ fn apply_reset_mix(state: &mut TotalControl, kind: ResetMix) {
         fail(state, "reset_mix", &e);
         return;
     }
+    adopt_active_master_members(state);
     state.notice = Some((
         RESET_MIX
             .iter()
@@ -16797,11 +17219,15 @@ fn off_dynamics(d: &mut Option<totalcontrol_core::Dynamics>) {
     }
 }
 
-fn set_output_volumes(scene: &mut totalcontrol_core::Scene, main_pair: usize, b_pair: Option<usize>) {
+fn set_output_volumes(
+    scene: &mut totalcontrol_core::Scene,
+    main_pair: usize,
+    b_pair: Option<usize>,
+) {
     for (i, out) in scene.outputs.iter_mut().enumerate() {
         let pair = i / 2;
         out.volume = if pair == main_pair || Some(pair) == b_pair {
-            0.316   // -10 dB
+            0.316 // -10 dB
         } else {
             1.0
         };
@@ -16916,8 +17342,10 @@ fn control_room_panel(
     // open slideouts' extra width. During an add/clear, absolute x positions
     // let the existing slots slide to their new indexes.
     let strips: Element<'_, Message> = if state.assign_anim.is_some() {
-        let mut layers: Vec<Element<'_, Message>> =
-            vec![iced::widget::Space::new().width(Length::Fill).height(Length::Fill).into()];
+        let mut layers: Vec<Element<'_, Message>> = vec![iced::widget::Space::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()];
         for (x, item) in strip_items {
             layers.push(
                 container(item)
@@ -17002,7 +17430,9 @@ fn control_room_panel(
                 .width(Length::Fill),
         )
         .padding(theme::SPACE_SM * scale)
-        .width(Length::Fixed((CONTROL_ROOM_W - 2.0 * theme::SPACE_SM) * scale))
+        .width(Length::Fixed(
+            (CONTROL_ROOM_W - 2.0 * theme::SPACE_SM) * scale,
+        ))
         .style(theme::fx_controls)
         .into()
     };
@@ -17011,8 +17441,18 @@ fn control_room_panel(
     // Mute FX; then a gap and Assign at the bottom.
     let body = column![
         group(vec![
-            cell("dim", theme::TEXT_MD, settings.dim, Some(Message::Dim(!settings.dim))),
-            cell("recall", theme::TEXT_MD, false, Some(Message::ControlRoomRecall)),
+            cell(
+                "dim",
+                theme::TEXT_MD,
+                settings.dim,
+                Some(Message::Dim(!settings.dim))
+            ),
+            cell(
+                "recall",
+                theme::TEXT_MD,
+                false,
+                Some(Message::ControlRoomRecall)
+            ),
             cell(
                 "speaker B",
                 theme::TEXT_SM,
@@ -17178,9 +17618,7 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
     let section = |label: &'static str| -> Element<'static, Message> {
         container(
             row![
-                text(label)
-                    .color(theme::text_primary())
-                    .size(text_size),
+                text(label).color(theme::text_primary()).size(text_size),
                 iced::widget::rule::horizontal(1),
             ]
             .spacing(theme::SPACE_MD * scale)
@@ -17255,7 +17693,11 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
         row_with("Input", tb_pick.into()),
         row_with(
             "Dim",
-            db_control(draft.talkback_dim_db, Message::ControlRoomTalkbackDim, scale),
+            db_control(
+                draft.talkback_dim_db,
+                Message::ControlRoomTalkbackDim,
+                scale
+            ),
         ),
         section("LISTENBACK"),
         row_with("Input", lb_pick.into()),
@@ -17388,13 +17830,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
         let l = pair * 2;
         let linked = state.device.input_pair_linked(pair);
         let full_right = rendered_strip_width(state, ChannelId::Input(l + 1));
-        let extra = stereo_extra_width(
-            state,
-            ChannelId::Input(l),
-            linked,
-            full_right,
-            anim_now,
-        );
+        let extra = stereo_extra_width(state, ChannelId::Input(l), linked, full_right, anim_now);
         let mut channels = vec![l];
         if extra > 0.0 {
             channels.push(l + 1);
@@ -17451,8 +17887,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 // animated, so the panel slides out and every later strip
                 // is pushed right a frame at a time.
                 input_strips = input_strips.push(
-                    row![strip_widget, settings_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        settings_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else if let Some(panel_w) = flyout_slot(
@@ -17463,8 +17902,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 anim_now,
             ) {
                 input_strips = input_strips.push(
-                    row![strip_widget, eq_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        eq_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else if let Some(panel_w) = flyout_slot(
@@ -17475,8 +17917,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 anim_now,
             ) {
                 input_strips = input_strips.push(
-                    row![strip_widget, dynamics_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        dynamics_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else if let Some(panel_w) = flyout_slot(
@@ -17487,8 +17932,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 anim_now,
             ) {
                 input_strips = input_strips.push(
-                    row![strip_widget, trim_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        trim_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else {
@@ -17521,13 +17969,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
         let l = pair * 2;
         let linked = state.device.playback_linked(pair);
         let full_right = rendered_strip_width(state, ChannelId::Playback(l + 1));
-        let extra = stereo_extra_width(
-            state,
-            ChannelId::Playback(l),
-            linked,
-            full_right,
-            anim_now,
-        );
+        let extra = stereo_extra_width(state, ChannelId::Playback(l), linked, full_right, anim_now);
         let mut channels = vec![l];
         if extra > 0.0 {
             channels.push(l + 1);
@@ -17566,8 +18008,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 anim_now,
             ) {
                 pb_strips = pb_strips.push(
-                    row![strip_widget, settings_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        settings_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else if let Some(panel_w) = flyout_slot(
@@ -17578,8 +18023,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 anim_now,
             ) {
                 pb_strips = pb_strips.push(
-                    row![strip_widget, trim_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        trim_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else {
@@ -17590,10 +18038,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
             if state.flyout_open.contains(&(cid, strip::FlyoutKind::Route))
                 || route_visible(state, cid, anim_now)
             {
-                pb_open_x = Some((
-                    cid,
-                    pb_width + (pb_item_count - 1) as f32 * theme::SPACE_MD,
-                ));
+                pb_open_x = Some((cid, pb_width + (pb_item_count - 1) as f32 * theme::SPACE_MD));
             }
         }
     }
@@ -17650,13 +18095,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
         let l = pair * 2;
         let linked = state.device.output_linked(pair);
         let full_right = rendered_strip_width(state, ChannelId::Output(l + 1));
-        let extra = stereo_extra_width(
-            state,
-            ChannelId::Output(l),
-            linked,
-            full_right,
-            anim_now,
-        );
+        let extra = stereo_extra_width(state, ChannelId::Output(l), linked, full_right, anim_now);
         let mut channels = vec![l];
         if extra > 0.0 {
             channels.push(l + 1);
@@ -17695,8 +18134,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 anim_now,
             ) {
                 out_strips = out_strips.push(
-                    row![strip_widget, settings_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        settings_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else if let Some(panel_w) = flyout_slot(
@@ -17707,8 +18149,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 anim_now,
             ) {
                 out_strips = out_strips.push(
-                    row![strip_widget, eq_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        eq_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else if let Some(panel_w) = flyout_slot(
@@ -17719,8 +18164,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                 anim_now,
             ) {
                 out_strips = out_strips.push(
-                    row![strip_widget, dynamics_popover(state, cid, panel_w, state.ui_scale)]
-                        .spacing(0.0),
+                    row![
+                        strip_widget,
+                        dynamics_popover(state, cid, panel_w, state.ui_scale)
+                    ]
+                    .spacing(0.0),
                 );
                 item_width += panel_w;
             } else {
@@ -17832,11 +18280,9 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
         // Every section title spans its own strips, the way the Control
         // Room's does, so a break appears wherever the row has slack.
         column![
-            container(section_header("HARDWARE INPUTS", scale))
-                .width(Length::Fixed(input_width)),
+            container(section_header("HARDWARE INPUTS", scale)).width(Length::Fixed(input_width)),
             with_flyout(state, input_strips.into(), input_open_x),
-            container(section_header("SOFTWARE PLAYBACK", scale))
-                .width(Length::Fixed(pb_width)),
+            container(section_header("SOFTWARE PLAYBACK", scale)).width(Length::Fixed(pb_width)),
             with_flyout(state, pb_strips.into(), pb_open_x),
         ]
         .spacing(theme::SPACE_LG)
@@ -17851,11 +18297,9 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
         // between the strips and the section is the break in the line.
         let break_w = (out_width - cr_w - strips_width).max(0.0);
         row![
-            container(section_header("HARDWARE OUTPUTS", scale))
-                .width(Length::Fixed(strips_width)),
+            container(section_header("HARDWARE OUTPUTS", scale)).width(Length::Fixed(strips_width)),
             iced::widget::Space::new().width(Length::Fixed(break_w)),
-            container(section_header("CONTROL ROOM", scale))
-                .width(Length::Fixed(cr_w)),
+            container(section_header("CONTROL ROOM", scale)).width(Length::Fixed(cr_w)),
         ]
         .spacing(0.0)
         .width(Length::Fixed(out_width))
@@ -17864,11 +18308,11 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
         section_header("HARDWARE OUTPUTS", scale)
     };
     let body = column![sources, outputs_header, out_row]
-    .spacing(theme::SPACE_LG)
-    // Give the page's bidirectional scrollable the real row width, so a
-    // row wider than the window scrolls instead of clipping its right-hand
-    // strips or making the last visible strip look narrower.
-    .width(Length::Fixed(input_width.max(pb_width).max(out_width)));
+        .spacing(theme::SPACE_LG)
+        // Give the page's bidirectional scrollable the real row width, so a
+        // row wider than the window scrolls instead of clipping its right-hand
+        // strips or making the last visible strip look narrower.
+        .width(Length::Fixed(input_width.max(pb_width).max(out_width)));
 
     (page(body), fx_overlay)
 }
@@ -18017,17 +18461,23 @@ fn quick_block<'a>(
         break;
     }
     let gap = theme::SPACE_MD * state.ui_scale;
-    let head = container(column![heading, picker].spacing(gap).align_x(iced::Alignment::Center))
-        .width(Length::Fixed(strip_w))
-        .center_x(Length::Fixed(strip_w));
+    let head = container(
+        column![heading, picker]
+            .spacing(gap)
+            .align_x(iced::Alignment::Center),
+    )
+    .width(Length::Fixed(strip_w))
+    .center_x(Length::Fixed(strip_w));
     let body: Element<'a, Message> = match panel {
         // A stack, not a row: the strip alone sets the height, and the
         // panel's layer fills it (a `Fill` panel in a row would take all
         // the room the page offers).
         Some((panel, panel_w)) => iced::widget::stack![
-            row![strip_widget, iced::widget::Space::new().width(panel_w + gap)],
-            row![iced::widget::Space::new().width(strip_w + gap), panel]
-                .height(Length::Fill),
+            row![
+                strip_widget,
+                iced::widget::Space::new().width(panel_w + gap)
+            ],
+            row![iced::widget::Space::new().width(strip_w + gap), panel].height(Length::Fill),
         ]
         .into(),
         None => strip_widget,
@@ -18105,10 +18555,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
             dest_labels.clone(),
             dest_labels.get(selected_display).cloned(),
             move |label| {
-                let display = dest_for_pick
-                    .iter()
-                    .position(|l| *l == label)
-                    .unwrap_or(0);
+                let display = dest_for_pick.iter().position(|l| *l == label).unwrap_or(0);
                 Message::SelectOutput(
                     display_order_for_pick
                         .get(display)
@@ -18227,33 +18674,29 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::{
-        any_channel_muted, any_channel_soloed, apply_pending_resize,
-        channel_trim, trim_factor, trim_meter_levels,
-        apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
-        global_feedback, global_feedback_is_typed, global_messages, global_state_commands,
-        input_gain_knob_label, temporary_group_exists, TotalControl,
-        choose_startup_target,
-        frames_ms, converter_frames, is_undoable, new, new_with_device,
-        apply_startup_sync, apply_control_room_assignments, sync_control_room_runtime,
-        attach_device_service, prefs_of, mute_armed, solo_armed, power_sum_output_meters,
-        apply_workspace, capture_workspace, save_workspace_to,
-        reorder_pair_volumes, fx_reserve, fx_slot,
-        uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
-        ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
-        DeviceKind, DeviceTarget, EditField, EngineRateMode, MeterAnim, Message, PwClock,
-        METER_RELEASE_DB_S, RateChoice, RowMode, View, rate_choices, strength_snapshot,
-        ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
-        control_room_visual_width,
-        is_control_room_cid, strip_params, ResetMix, OptionsMenu, WorkspaceMenu,
-        FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
-        FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W, StartupMismatch,
+        any_channel_muted, any_channel_soloed, apply_control_room_assignments, apply_host_settings,
+        apply_pending_resize, apply_startup_sync, apply_workspace, apply_workspace_gui,
+        attach_device_service, capture_workspace, channel_is_muted, channel_is_soloed,
+        channel_trim, choose_startup_kind, choose_startup_target, control_room_visual_width,
+        control_room_width, converter_frames, frames_ms, fx_reserve, fx_slot, global_feedback,
+        global_feedback_is_typed, global_messages, global_state_commands, host_settings_of,
+        input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
+        power_sum_output_meters, rate_choices, reorder_pair_volumes, save_workspace_to, solo_armed,
+        strength_snapshot, strip_params, sync_control_room_runtime, temporary_group_exists,
+        trim_factor, trim_meter_levels, uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
+        ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
+        DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
+        PwClock, RateChoice, ResetMix, RowMode, RtlEstimate, StartupMismatch, TotalControl, View,
+        WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H,
+        FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
+        METER_RELEASE_DB_S, ZOOM_STEP,
     };
     use crate::osc::OscOutbound;
-    use std::path::PathBuf;
     use crate::sidebar;
     use crate::theme;
     use crate::widgets::strip;
     use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
     use totalcontrol_core::fireface::UcxDump;
     use totalcontrol_core::RmeDevice;
@@ -18311,7 +18754,10 @@ mod tests {
         while Instant::now() < deadline && bus.lock().unwrap().at.is_none() {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(bus.lock().unwrap().at.is_some(), "the service publishes meters");
+        assert!(
+            bus.lock().unwrap().at.is_some(),
+            "the service publishes meters"
+        );
 
         let _ = state.device.set_volume(ChannelId::Output(0), 0, 0.25);
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -18497,13 +18943,8 @@ mod tests {
             .cloned()
             .expect("connect the Fireface UCX");
 
-        let mut state = new_with_device(
-            false,
-            None,
-            None,
-            Some(DeviceKind::Ucx),
-            ucx.serial.clone(),
-        );
+        let mut state =
+            new_with_device(false, None, None, Some(DeviceKind::Ucx), ucx.serial.clone());
         assert_eq!(state.device_target.as_ref(), Some(&ucx));
         assert_eq!(state.device.canonical_model(), "Fireface UCX");
 
@@ -18552,10 +18993,7 @@ mod tests {
     #[test]
     fn explicit_preference_wins_when_it_is_still_connected() {
         assert_eq!(
-            choose_startup_kind(
-                &[DeviceKind::Uc, DeviceKind::Ucx],
-                Some(DeviceKind::Ucx)
-            ),
+            choose_startup_kind(&[DeviceKind::Uc, DeviceKind::Ucx], Some(DeviceKind::Ucx)),
             Some(DeviceKind::Ucx)
         );
     }
@@ -18565,10 +19003,7 @@ mod tests {
         // Startup policy is only chosen when the current device is absent;
         // when both are present, the saved/current model wins.
         assert_eq!(
-            choose_startup_kind(
-                &[DeviceKind::Uc, DeviceKind::Ucx],
-                Some(DeviceKind::Uc)
-            ),
+            choose_startup_kind(&[DeviceKind::Uc, DeviceKind::Ucx], Some(DeviceKind::Uc)),
             Some(DeviceKind::Uc)
         );
     }
@@ -18646,8 +19081,14 @@ mod tests {
         assert_eq!(out[1], 0.0, "pair 0 (ch1) has no signal routed to it");
         assert_eq!(out[2], 0.0, "pair 1 (ch2) has no signal routed to it");
         assert_eq!(out[3], 0.0, "pair 1 (ch3) has no signal routed to it");
-        assert_eq!(out[4], 1.0, "pair 2 (ch4) should read the full routed signal");
-        assert_eq!(out[5], 1.0, "pair 2 (ch5) should read the full routed signal");
+        assert_eq!(
+            out[4], 1.0,
+            "pair 2 (ch4) should read the full routed signal"
+        );
+        assert_eq!(
+            out[5], 1.0,
+            "pair 2 (ch5) should read the full routed signal"
+        );
     }
 
     #[test]
@@ -18673,10 +19114,7 @@ mod tests {
         let mut state = new(true, None, None);
         let _ = update(&mut state, Message::ToggleAssign);
         assert_eq!(state.assign_menu, AssignMenu::Destinations);
-        let _ = update(
-            &mut state,
-            Message::StripHovered(Some(ChannelId::Input(0))),
-        );
+        let _ = update(&mut state, Message::StripHovered(Some(ChannelId::Input(0))));
         assert_eq!(
             state.assign_menu,
             AssignMenu::Destinations,
@@ -18765,9 +19203,9 @@ mod tests {
         assert!(state.surround_71);
         assert!(!state.surround_51_running);
         assert!(!state.surround_71_running);
-        let prefs = prefs_of(&state);
-        assert!(prefs.surround_51);
-        assert!(prefs.surround_71);
+        let workspace = capture_workspace(&state);
+        assert!(workspace.surround_51);
+        assert!(workspace.surround_71);
     }
 
     #[test]
@@ -18900,9 +19338,7 @@ mod tests {
         let now = Instant::now();
         let before = control_room_visual_width(&state, 1.0, now);
         let cid = ChannelId::Output(4);
-        state
-            .flyout_open
-            .insert((cid, strip::FlyoutKind::Settings));
+        state.flyout_open.insert((cid, strip::FlyoutKind::Settings));
         let after = control_room_visual_width(&state, 1.0, now);
         assert!(
             (after - before - strip::STRIP_W).abs() < 1e-3,
@@ -18945,7 +19381,10 @@ mod tests {
         assert!(state.window_hidden, "with a tray the app lives on, hidden");
         // Another window's close is none of our business.
         state.window_id = Some(id);
-        let _ = update(&mut state, Message::WindowClosed(iced::window::Id::unique()));
+        let _ = update(
+            &mut state,
+            Message::WindowClosed(iced::window::Id::unique()),
+        );
         assert_eq!(state.window_id, Some(id));
     }
 
@@ -18962,11 +19401,11 @@ mod tests {
     #[test]
     fn keep_in_tray_defaults_on_and_only_an_opt_out_is_saved() {
         let mut state = new(true, None, None);
-        assert_eq!(prefs_of(&state).keep_in_tray, None);
+        assert_eq!(host_settings_of(&state).keep_in_tray, None);
         let _ = update(&mut state, Message::SetKeepInTray(false));
-        let prefs = prefs_of(&state);
+        let prefs = host_settings_of(&state);
         assert_eq!(prefs.keep_in_tray, Some(false));
-        apply_prefs(&mut state, prefs);
+        apply_host_settings(&mut state, prefs);
         assert!(!state.keep_in_tray);
         assert!(!is_undoable(&Message::SetKeepInTray(true)));
     }
@@ -19117,7 +19556,10 @@ mod tests {
         let _ = update(&mut state, Message::Mute(cid, true));
         assert!(state.device.inputs()[0].mute);
         let _ = update(&mut state, Message::Undo);
-        assert!(!state.device.inputs()[0].mute, "undo should revert the mute");
+        assert!(
+            !state.device.inputs()[0].mute,
+            "undo should revert the mute"
+        );
     }
 
     #[test]
@@ -19138,12 +19580,14 @@ mod tests {
             state.device.settings().word_clock_termination,
             "undoing a mixer edit must not roll back a device setting"
         );
-        assert!(state
-            .host_scene
-            .as_ref()
-            .unwrap()
-            .settings
-            .word_clock_termination);
+        assert!(
+            state
+                .host_scene
+                .as_ref()
+                .unwrap()
+                .settings
+                .word_clock_termination
+        );
     }
 
     #[test]
@@ -19154,7 +19598,10 @@ mod tests {
         let _ = update(&mut state, Message::Undo);
         assert!(!state.device.inputs()[0].mute);
         let _ = update(&mut state, Message::Redo);
-        assert!(state.device.inputs()[0].mute, "redo should reapply the mute");
+        assert!(
+            state.device.inputs()[0].mute,
+            "redo should reapply the mute"
+        );
     }
 
     #[test]
@@ -19163,7 +19610,10 @@ mod tests {
         let cid = ChannelId::Input(0);
         let _ = update(&mut state, Message::Mute(cid, true));
         let _ = update(&mut state, Message::Undo);
-        assert!(!state.redo_stack.is_empty(), "sanity: undo should have populated redo");
+        assert!(
+            !state.redo_stack.is_empty(),
+            "sanity: undo should have populated redo"
+        );
         let _ = update(&mut state, Message::Mute(cid, true));
         assert!(
             state.redo_stack.is_empty(),
@@ -19290,7 +19740,10 @@ mod tests {
         let edit = state.group_edit.as_ref().expect("session open");
         assert_eq!(edit.target, None, "every place flashes until one is picked");
 
-        let _ = update(&mut state, Message::GroupLinkToggle(1, sidebar::GroupLink::Fader));
+        let _ = update(
+            &mut state,
+            Message::GroupLinkToggle(1, sidebar::GroupLink::Fader),
+        );
         let edit = state.group_edit.as_ref().expect("session open");
         assert_eq!(edit.target, Some((1, sidebar::GroupLink::Fader)));
         assert!(edit.pending.is_empty());
@@ -19306,11 +19759,17 @@ mod tests {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
         let _ = update(&mut state, Message::GroupEditToggle);
-        let _ = update(&mut state, Message::GroupLinkToggle(0, sidebar::GroupLink::Fader));
+        let _ = update(
+            &mut state,
+            Message::GroupLinkToggle(0, sidebar::GroupLink::Fader),
+        );
         let _ = update(&mut state, Message::StripClicked(a));
         let _ = update(&mut state, Message::EscapePressed);
         assert!(state.group_edit.is_none());
-        assert!(state.groups[0].members.is_empty(), "Escape leaves the group alone");
+        assert!(
+            state.groups[0].members.is_empty(),
+            "Escape leaves the group alone"
+        );
         assert!(!state.groups[0].fader_linked);
     }
 
@@ -19343,9 +19802,15 @@ mod tests {
         let a = ChannelId::Input(0);
         let b = ChannelId::Input(4);
         let _ = update(&mut state, Message::GroupEditToggle);
-        let _ = update(&mut state, Message::GroupLinkToggle(0, sidebar::GroupLink::Fader));
+        let _ = update(
+            &mut state,
+            Message::GroupLinkToggle(0, sidebar::GroupLink::Fader),
+        );
         let _ = update(&mut state, Message::StripClicked(a));
-        let _ = update(&mut state, Message::GroupLinkToggle(1, sidebar::GroupLink::Mute));
+        let _ = update(
+            &mut state,
+            Message::GroupLinkToggle(1, sidebar::GroupLink::Mute),
+        );
         let _ = update(&mut state, Message::StripClicked(b));
         let _ = update(&mut state, Message::GroupEditToggle);
         assert_eq!(state.groups[0].members, vec![a]);
@@ -19399,7 +19864,8 @@ mod tests {
         state.device.set_protocol_features(false);
         let _ = update(&mut state, Message::TrimChanged(ChannelId::Input(0), -3.0));
         assert_eq!(
-            state.device.inputs()[0].trim, -3.0,
+            state.device.inputs()[0].trim,
+            -3.0,
             "trim is mixer-side and works in both grammars"
         );
         // The second change belongs to the same gesture, so it adds no
@@ -19424,7 +19890,11 @@ mod tests {
         // Messages that are not protocol-bound still land, and still push.
         let _ = update(&mut state, Message::Mute(ChannelId::Input(0), true));
         assert!(state.device.inputs()[0].mute);
-        assert_eq!(state.undo_stack.len(), pushed + 1, "a real action still pushes a scene");
+        assert_eq!(
+            state.undo_stack.len(),
+            pushed + 1,
+            "a real action still pushes a scene"
+        );
     }
 
     #[test]
@@ -19444,23 +19914,14 @@ mod tests {
     #[test]
     fn the_old_default_sidebar_width_migrates_to_the_new_one() {
         let mut state = new(true, None, None);
-        apply_prefs(
-            &mut state,
-            crate::prefs::Prefs {
-                sidebar_width: Some(sidebar::OLD_DEFAULT_WIDTHS[0]),
-                ..Default::default()
-            },
-        );
+        let mut workspace = crate::workspaces::Workspace::default();
+        workspace.view.sidebar_width = sidebar::OLD_DEFAULT_WIDTHS[0];
+        apply_workspace_gui(&mut state, &workspace);
         assert_eq!(state.sidebar_width, sidebar::DEFAULT_WIDTH);
 
         let mut custom = new(true, None, None);
-        apply_prefs(
-            &mut custom,
-            crate::prefs::Prefs {
-                sidebar_width: Some(250.0),
-                ..Default::default()
-            },
-        );
+        workspace.view.sidebar_width = 250.0;
+        apply_workspace_gui(&mut custom, &workspace);
         assert_eq!(custom.sidebar_width, 250.0);
     }
 
@@ -19491,7 +19952,10 @@ mod tests {
     #[test]
     fn eq_plot_drag_updates_frequency_and_gain_together() {
         let mut state = new(true, None, None);
-        let _ = update(&mut state, Message::EqBandPoint(ChannelId::Input(0), 0, 2_500, 6.5));
+        let _ = update(
+            &mut state,
+            Message::EqBandPoint(ChannelId::Input(0), 0, 2_500, 6.5),
+        );
         let eq = state.device.inputs()[0].eq.unwrap();
         assert_eq!(eq.bands[0].freq_hz, 2_500);
         assert!((eq.bands[0].gain_db - 6.5).abs() < 0.01);
@@ -19500,7 +19964,10 @@ mod tests {
     #[test]
     fn eq_plot_double_click_resets_the_band() {
         let mut state = new(true, None, None);
-        let _ = update(&mut state, Message::EqBandPoint(ChannelId::Input(0), 0, 2_500, 6.5));
+        let _ = update(
+            &mut state,
+            Message::EqBandPoint(ChannelId::Input(0), 0, 2_500, 6.5),
+        );
         let _ = update(&mut state, Message::EqBandQ(ChannelId::Input(0), 0, 3.0));
         let _ = update(&mut state, Message::EqBandReset(ChannelId::Input(0), 0));
         let eq = state.device.inputs()[0].eq.unwrap();
@@ -19670,14 +20137,8 @@ mod tests {
         let mut state = new(true, None, None);
         let out = state.sel_out;
         state.device.set_input_pair_linked(0, false).unwrap();
-        state
-            .device
-            .set_input_volume(0, 0, out, 0.1)
-            .unwrap();
-        state
-            .device
-            .set_input_volume(0, 1, out, 0.5)
-            .unwrap();
+        state.device.set_input_volume(0, 0, out, 0.1).unwrap();
+        state.device.set_input_volume(0, 1, out, 0.5).unwrap();
         state.device.set_input_pair_linked(0, true).unwrap();
 
         let params = super::strip_params(&state, ChannelId::Input(0), out);
@@ -19689,14 +20150,8 @@ mod tests {
         let mut state = new(true, None, None);
         let out = state.sel_out;
         state.device.set_playback_linked(0, false).unwrap();
-        state
-            .device
-            .set_playback_volume(0, 0, out, 0.1)
-            .unwrap();
-        state
-            .device
-            .set_playback_volume(0, 1, out, 0.5)
-            .unwrap();
+        state.device.set_playback_volume(0, 0, out, 0.1).unwrap();
+        state.device.set_playback_volume(0, 1, out, 0.5).unwrap();
         state.device.set_playback_linked(0, true).unwrap();
 
         let params = super::strip_params(&state, ChannelId::Playback(0), out);
@@ -19714,7 +20169,10 @@ mod tests {
 
         let _ = update(&mut state, Message::StereoLinkChanged(cid, false));
         assert!(state.device.playbacks()[0].split);
-        assert!(state.device.playbacks()[1].split, "split mirrors across both channels of the pair");
+        assert!(
+            state.device.playbacks()[1].split,
+            "split mirrors across both channels of the pair"
+        );
         assert!(
             state.stereo_anim.contains_key(&ChannelId::Playback(0)),
             "the split must animate the rest of the row instead of snapping"
@@ -19736,15 +20194,32 @@ mod tests {
         let a = ChannelId::Input(0);
         let b = ChannelId::Input(2);
 
-        let _ = update(&mut state, Message::ToggleFlyout(a, strip::FlyoutKind::Settings));
-        let _ = update(&mut state, Message::ToggleFlyout(b, strip::FlyoutKind::Settings));
-        assert!(state.flyout_open.contains(&(a, strip::FlyoutKind::Settings)));
-        assert!(state.flyout_open.contains(&(b, strip::FlyoutKind::Settings)));
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(a, strip::FlyoutKind::Settings),
+        );
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(b, strip::FlyoutKind::Settings),
+        );
+        assert!(state
+            .flyout_open
+            .contains(&(a, strip::FlyoutKind::Settings)));
+        assert!(state
+            .flyout_open
+            .contains(&(b, strip::FlyoutKind::Settings)));
 
         // Re-pressing the same strip's own trigger still closes just it.
-        let _ = update(&mut state, Message::ToggleFlyout(a, strip::FlyoutKind::Settings));
-        assert!(!state.flyout_open.contains(&(a, strip::FlyoutKind::Settings)));
-        assert!(state.flyout_open.contains(&(b, strip::FlyoutKind::Settings)));
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(a, strip::FlyoutKind::Settings),
+        );
+        assert!(!state
+            .flyout_open
+            .contains(&(a, strip::FlyoutKind::Settings)));
+        assert!(state
+            .flyout_open
+            .contains(&(b, strip::FlyoutKind::Settings)));
     }
 
     #[test]
@@ -19756,9 +20231,14 @@ mod tests {
         // Settings then EQ on the SAME strip: the width morphs directly
         // from the Settings width to the EQ width, without a full
         // slide-out then slide-in.
-        let _ = update(&mut state, Message::ToggleFlyout(a, strip::FlyoutKind::Settings));
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(a, strip::FlyoutKind::Settings),
+        );
         let _ = update(&mut state, Message::ToggleFlyout(a, strip::FlyoutKind::Eq));
-        assert!(!state.flyout_open.contains(&(a, strip::FlyoutKind::Settings)));
+        assert!(!state
+            .flyout_open
+            .contains(&(a, strip::FlyoutKind::Settings)));
         assert!(state.flyout_open.contains(&(a, strip::FlyoutKind::Eq)));
         let eq_anim = state
             .flyout_anim
@@ -19776,8 +20256,14 @@ mod tests {
         // Route stays exclusive with itself across DIFFERENT strips too
         // (the Stack overlay only positions one popover) — but doesn't
         // touch `a`'s still-open EQ.
-        let _ = update(&mut state, Message::ToggleFlyout(a, strip::FlyoutKind::Route));
-        let _ = update(&mut state, Message::ToggleFlyout(b, strip::FlyoutKind::Route));
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(a, strip::FlyoutKind::Route),
+        );
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(b, strip::FlyoutKind::Route),
+        );
         assert!(
             !state.flyout_open.contains(&(a, strip::FlyoutKind::Route)),
             "opening b's Route flyout must close a's"
@@ -19815,7 +20301,10 @@ mod tests {
         assert!(!any_channel_muted(&state), "it never mutes everything");
         assert!(state.mute_master.suspended, "the master switches off");
         let _ = update(&mut state, Message::GlobalMuteToggle);
-        assert!(!state.mute_master.suspended, "a second press switches it on");
+        assert!(
+            !state.mute_master.suspended,
+            "a second press switches it on"
+        );
     }
 
     #[test]
@@ -19830,7 +20319,10 @@ mod tests {
 
         let _ = update(&mut state, Message::GlobalSoloToggle);
         assert!(!any_channel_soloed(&state));
-        assert!(channel_is_muted(&state, a), "solo-clear must not touch mute state");
+        assert!(
+            channel_is_muted(&state, a),
+            "solo-clear must not touch mute state"
+        );
     }
 
     #[test]
@@ -19904,7 +20396,10 @@ mod tests {
         // Master on: clicking either half toggles and removes the pair.
         let _ = update(&mut state, Message::Mute(left, true));
         assert!(state.mute_master.members.contains(&left));
-        assert!(state.mute_master.members.contains(&right), "the pair rides along");
+        assert!(
+            state.mute_master.members.contains(&right),
+            "the pair rides along"
+        );
         let _ = update(&mut state, Message::Mute(right, false));
         assert!(!state.mute_master.members.contains(&left));
         assert!(!state.mute_master.members.contains(&right));
@@ -19921,7 +20416,10 @@ mod tests {
         assert!(channel_is_muted(&state, right));
         let _ = update(&mut state, Message::GlobalMuteToggle);
         let _ = update(&mut state, Message::GlobalMuteToggle);
-        assert!(state.mute_master.members.is_empty(), "removed stays removed");
+        assert!(
+            state.mute_master.members.is_empty(),
+            "removed stays removed"
+        );
     }
 
     #[test]
@@ -19932,7 +20430,10 @@ mod tests {
 
         let _ = update(&mut state, Message::Solo(left, true));
         assert!(state.solo_master.members.contains(&left));
-        assert!(state.solo_master.members.contains(&right), "the pair rides along");
+        assert!(
+            state.solo_master.members.contains(&right),
+            "the pair rides along"
+        );
         let _ = update(&mut state, Message::Solo(right, false));
         assert!(!state.solo_master.members.contains(&left));
         assert!(!state.solo_master.members.contains(&right));
@@ -19947,7 +20448,10 @@ mod tests {
         assert!(channel_is_soloed(&state, right));
         let _ = update(&mut state, Message::GlobalSoloToggle);
         let _ = update(&mut state, Message::GlobalSoloToggle);
-        assert!(state.solo_master.members.is_empty(), "removed stays removed");
+        assert!(
+            state.solo_master.members.is_empty(),
+            "removed stays removed"
+        );
     }
 
     #[test]
@@ -20063,7 +20567,10 @@ mod tests {
     fn the_fader_master_gangs_one_member_and_ignores_an_empty_group() {
         let mut state = new(true, None, None);
         state.selected.insert(ChannelId::Input(0));
-        assert!(temporary_group_exists(&state), "one Shift+click makes a member");
+        assert!(
+            temporary_group_exists(&state),
+            "one Shift+click makes a member"
+        );
         assert!(!state.fader_ganged, "a stored group starts off");
 
         let _ = update(&mut state, Message::FaderGroupToggle);
@@ -20086,7 +20593,11 @@ mod tests {
 
         assert!(state.selected.is_empty(), "the fader group is untouched");
         assert!(!state.fader_ganged, "the F master stays off");
-        assert_eq!(state.focus_channel, Some(b), "the last select is the target");
+        assert_eq!(
+            state.focus_channel,
+            Some(b),
+            "the last select is the target"
+        );
 
         let _ = update(&mut state, Message::RmeSelect(b, false));
         assert_eq!(state.focus_channel, None);
@@ -20103,8 +20614,15 @@ mod tests {
         let _ = update(&mut state, Message::StripClicked(b));
 
         assert!(state.selected.contains(&a), "the group member stays");
-        assert!(!state.selected.contains(&b), "the plain click does not join");
-        assert_eq!(state.focus_channel, Some(b), "the plain click moves the focus");
+        assert!(
+            !state.selected.contains(&b),
+            "the plain click does not join"
+        );
+        assert_eq!(
+            state.focus_channel,
+            Some(b),
+            "the plain click moves the focus"
+        );
         assert!(state.fader_ganged, "a Shift+click turns the group on");
     }
 
@@ -20119,12 +20637,15 @@ mod tests {
         let pan_before = super::channel_pan(&state, b, 0);
 
         let _ = update(&mut state, Message::PanChanged(a, 0, 60));
-        assert_eq!(super::channel_pan(&state, b, 0), pan_before, "pan stays per channel");
+        assert_eq!(
+            super::channel_pan(&state, b, 0),
+            pan_before,
+            "pan stays per channel"
+        );
 
         // A fader move propagates the same relative amount: halving a's
         // level halves b's, whatever their absolute starting points.
-        let a_shown = state.device.inputs()[0].volumes[0]
-            * trim_factor(channel_trim(&state, a));
+        let a_shown = state.device.inputs()[0].volumes[0] * trim_factor(channel_trim(&state, a));
         let b_before = state.device.inputs()[4].volumes[0];
         let _ = update(&mut state, Message::VolumeChanged(a, 0, a_shown * 0.5));
         let b_after = state.device.inputs()[4].volumes[0];
@@ -20146,7 +20667,8 @@ mod tests {
 
         let _ = update(&mut state, Message::VolumeChanged(a, 0, 0.4));
         assert_eq!(
-            state.device.inputs()[4].volumes[0], b_before,
+            state.device.inputs()[4].volumes[0],
+            b_before,
             "F off leaves the other fader alone"
         );
     }
@@ -20181,7 +20703,10 @@ mod tests {
         let mut state = new(true, None, None);
         state.active_snapshot = Some(1);
         assert!(!state.snapshot_dirty);
-        let _ = update(&mut state, Message::VolumeChanged(ChannelId::Input(0), 0, 0.5));
+        let _ = update(
+            &mut state,
+            Message::VolumeChanged(ChannelId::Input(0), 0, 0.5),
+        );
         assert!(state.snapshot_dirty, "a fader drag step is a mix change");
         let _ = update(&mut state, Message::SnapshotClicked(1));
         assert!(!state.snapshot_dirty, "recalling the slot clears it");
@@ -20199,7 +20724,10 @@ mod tests {
         let _ = update(&mut state, Message::RenameCommit);
         assert_eq!(state.renaming, None);
         assert_eq!(state.labels.get(&cid).map(String::as_str), Some("Vocal"));
-        assert!(state.undo_stack.is_empty(), "a label is not part of the mix");
+        assert!(
+            state.undo_stack.is_empty(),
+            "a label is not part of the mix"
+        );
 
         // Editing starts from the current label; an empty commit restores
         // the hardware name.
@@ -20220,7 +20748,10 @@ mod tests {
         assert_eq!(state.renaming, Some(cid));
         let _ = update(&mut state, Message::RenameChanged("Kick".into()));
         // A later click: the field reports it lost focus.
-        let _ = update(&mut state, Message::FieldFocus(EditField::Rename, cid, false));
+        let _ = update(
+            &mut state,
+            Message::FieldFocus(EditField::Rename, cid, false),
+        );
         assert_eq!(state.renaming, None);
         assert_eq!(state.labels.get(&cid).map(String::as_str), Some("Kick"));
     }
@@ -20230,7 +20761,10 @@ mod tests {
         let mut state = new(true, None, None);
         let cid = ChannelId::Input(0);
         let _ = update(&mut state, Message::RenameStart(cid));
-        let _ = update(&mut state, Message::FieldFocus(EditField::Rename, cid, true));
+        let _ = update(
+            &mut state,
+            Message::FieldFocus(EditField::Rename, cid, true),
+        );
         assert_eq!(state.renaming, Some(cid));
     }
 
@@ -20273,7 +20807,7 @@ mod tests {
     }
 
     #[test]
-    fn prefs_round_trip_through_the_state() {
+    fn workspace_gui_round_trips_through_the_state() {
         let mut state = new(true, None, None);
         state.view = View::Matrix;
         state.sidebar_open = false;
@@ -20283,23 +20817,39 @@ mod tests {
         state.sidebar_panels_open.groups = false;
         state.show_original_names = true;
         state.labels.insert(ChannelId::Output(2), "Monitors".into());
-        let saved = prefs_of(&state);
+        state.active_snapshot = Some(2);
+        state.active_layout = Some(4);
+        state.workspace_scroll = (12.0, 34.0);
+        let saved = capture_workspace(&state);
 
         let mut fresh = new(true, None, None);
-        apply_prefs(&mut fresh, saved.clone());
-        assert_eq!(prefs_of(&fresh), saved);
+        apply_workspace_gui(&mut fresh, &saved);
+        assert_eq!(fresh.view, View::Matrix);
+        assert!(!fresh.sidebar_open);
+        assert_eq!(fresh.sidebar_width, 300.0);
+        assert_eq!(fresh.row_mode, RowMode::Two);
+        assert_eq!(fresh.ui_scale, 1.25);
+        assert!(!fresh.sidebar_panels_open.groups);
+        assert!(fresh.show_original_names);
+        assert_eq!(
+            fresh.labels.get(&ChannelId::Output(2)).map(String::as_str),
+            Some("Monitors")
+        );
+        assert_eq!(fresh.active_snapshot, Some(2));
+        assert_eq!(fresh.active_layout, Some(4));
+        assert_eq!(fresh.workspace_scroll, (12.0, 34.0));
     }
 
     #[test]
-    fn an_older_two_row_choice_survives_the_new_layout_setting() {
-        let mut state = new(true, None, None);
+    fn an_older_two_row_choice_survives_migration() {
         let old: crate::prefs::Prefs = serde_json::from_str(r#"{ "two_row": true }"#).unwrap();
-        apply_prefs(&mut state, old);
-        assert_eq!(state.row_mode, RowMode::Two);
+        assert_eq!(super::legacy_row_mode(&old), RowMode::Two);
         let old: crate::prefs::Prefs = serde_json::from_str(r#"{ "two_row": false }"#).unwrap();
-        apply_prefs(&mut state, old);
-        assert_eq!(state.row_mode, RowMode::Three, "false was only the old default");
-        assert!(!serde_json::to_string(&prefs_of(&state)).unwrap().contains("two_row"));
+        assert_eq!(
+            super::legacy_row_mode(&old),
+            RowMode::Three,
+            "false was only the old default"
+        );
     }
 
     #[test]
@@ -20327,7 +20877,10 @@ mod tests {
             value: 0.0,
             since: now,
         });
-        assert!(fx_slot(&state, now).is_some(), "still visible while closing");
+        assert!(
+            fx_slot(&state, now).is_some(),
+            "still visible while closing"
+        );
         assert!(
             fx_slot(&state, now + Duration::from_millis(200)).is_none(),
             "gone once the tween settles"
@@ -20374,39 +20927,40 @@ mod tests {
         let mut state = new(true, None, None);
         let _ = update(&mut state, Message::WindowSize(1500.0, 900.0));
         assert_eq!(state.window_width, 1500.0, "the layout width follows");
-        assert!(!state.prefs_dirty, "a resize step does not rewrite the file");
-        assert_eq!(prefs_of(&state).window_size, Some((1500.0, 900.0)));
+        assert!(state.workspace_dirty, "the window size is workspace state");
+        assert_eq!(state.window_size, Some((1500.0, 900.0)));
+        assert_eq!(capture_workspace(&state).window_size, Some((1500.0, 900.0)));
         let _ = update(&mut state, Message::SaveNow);
-        assert!(!state.prefs_dirty, "flushed at close");
+        assert!(!state.host_dirty, "flushed at close");
     }
 
     #[test]
-    fn hand_edited_prefs_are_clamped_to_reachable_values() {
+    fn hand_edited_workspaces_are_clamped_to_reachable_values() {
         let mut state = new(true, None, None);
-        apply_prefs(
-            &mut state,
-            crate::prefs::Prefs {
-                sidebar_width: Some(10_000.0),
-                ui_scale: Some(9.0),
-                labels: vec![(ChannelId::Input(0), "   ".into())],
-                ..Default::default()
-            },
-        );
+        let mut workspace = crate::workspaces::Workspace::default();
+        workspace.view.sidebar_width = 10_000.0;
+        workspace.view.ui_scale = 9.0;
+        workspace.labels.push((ChannelId::Input(0), "   ".into()));
+        apply_workspace_gui(&mut state, &workspace);
         assert_eq!(state.sidebar_width, sidebar::MAX_WIDTH);
         assert_eq!(state.ui_scale, theme::SCALE_MAX);
         assert!(state.labels.is_empty(), "a blank label is no label");
     }
 
     #[test]
-    fn layout_changes_mark_prefs_dirty_and_mix_changes_do_not() {
+    fn layout_changes_mark_the_workspace_dirty_and_mix_changes_do_not_touch_host_settings() {
         let mut state = new(true, None, None);
+        state.workspace_dirty = false;
         let _ = update(&mut state, Message::Mute(ChannelId::Input(0), true));
-        assert!(!state.prefs_dirty);
+        assert!(!state.host_dirty);
+        assert!(state.workspace_dirty, "a mix change is workspace state");
+        state.workspace_dirty = false;
         let _ = update(&mut state, Message::SetRowMode(RowMode::Two));
-        assert!(state.prefs_dirty);
-        // No `prefs_path` in tests, so the flush writes nothing.
+        assert!(state.workspace_dirty);
+        assert!(!state.host_dirty, "row mode is not a host setting");
+        // No `host_settings_path` in tests, so the flush writes nothing.
         let _ = update(&mut state, Message::Tick);
-        assert!(!state.prefs_dirty);
+        assert!(!state.host_dirty);
     }
 
     #[test]
@@ -20447,12 +21001,18 @@ mod tests {
         let mut state = new(true, None, None);
         state.active_snapshot = Some(1);
         for col in 0..4 {
-            let _ = update(&mut state, Message::MatrixHover(ChannelId::Input(0), col, true));
-            let _ = update(&mut state, Message::MatrixHover(ChannelId::Input(0), col, false));
+            let _ = update(
+                &mut state,
+                Message::MatrixHover(ChannelId::Input(0), col, true),
+            );
+            let _ = update(
+                &mut state,
+                Message::MatrixHover(ChannelId::Input(0), col, false),
+            );
         }
         assert!(state.undo_stack.is_empty());
         assert!(!state.snapshot_dirty);
-        assert!(!state.prefs_dirty);
+        assert!(!state.host_dirty);
     }
 
     #[test]
@@ -20501,8 +21061,14 @@ mod tests {
     #[test]
     fn a_different_control_starts_a_new_step() {
         let mut state = new(true, None, None);
-        let _ = update(&mut state, Message::VolumeChanged(ChannelId::Input(4), 0, 0.5));
-        let _ = update(&mut state, Message::VolumeChanged(ChannelId::Input(5), 0, 0.5));
+        let _ = update(
+            &mut state,
+            Message::VolumeChanged(ChannelId::Input(4), 0, 0.5),
+        );
+        let _ = update(
+            &mut state,
+            Message::VolumeChanged(ChannelId::Input(5), 0, 0.5),
+        );
         let _ = update(&mut state, Message::Mute(ChannelId::Input(0), true));
         assert_eq!(state.undo_stack.len(), 3);
     }
@@ -20510,13 +21076,19 @@ mod tests {
     #[test]
     fn a_simulated_session_keeps_its_snapshots_in_memory() {
         let mut state = new(true, None, None);
-        assert_eq!(state.stored_snapshots, [false; 8], "never reads the real slots");
+        assert_eq!(
+            state.stored_snapshots, [false; 8],
+            "never reads the real slots"
+        );
         let cid = ChannelId::Input(4);
         let _ = update(&mut state, Message::SnapshotClicked(3));
         let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
         let _ = update(&mut state, Message::SnapshotStore);
         assert!(state.stored_snapshots[2]);
-        assert!(state.snapshots[2].is_some(), "stored in memory, not on disk");
+        assert!(
+            state.snapshots[2].is_some(),
+            "stored in memory, not on disk"
+        );
         let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.1));
         let _ = update(&mut state, Message::SnapshotClicked(3));
         assert!((state.device.inputs()[4].volumes[0] - 0.5).abs() < 1e-6);
@@ -20592,7 +21164,7 @@ mod tests {
         let _ = update(&mut state, Message::EngineQuantum(128));
         let e = state.engine.unwrap();
         assert_eq!((e.effective_rate(), e.effective_quantum()), (96_000, 128));
-        assert!(state.prefs_dirty, "the choice is remembered");
+        assert!(state.host_dirty, "the choice is remembered");
         assert!(state.undo_stack.is_empty(), "not part of the mix");
         // Back to PipeWire's own values.
         let _ = update(&mut state, Message::EngineQuantum(0));
@@ -20604,9 +21176,9 @@ mod tests {
         // A choice made with `--mock` once landed in the preferences and
         // was forced on the real PipeWire at the next real launch.
         let mut state = new(true, None, None);
-        apply_prefs(
+        apply_host_settings(
             &mut state,
-            crate::prefs::Prefs {
+            crate::host_settings::HostSettings {
                 engine_force_quantum: Some(0),
                 ..Default::default()
             },
@@ -20615,16 +21187,27 @@ mod tests {
         let _ = update(&mut state, Message::EngineQuantum(128));
         assert_eq!(state.engine.unwrap().effective_quantum(), 128, "simulated");
         assert_eq!(state.engine_force_quantum, 0, "remembered choice untouched");
-        assert_eq!(prefs_of(&state).engine_force_quantum, Some(0));
+        assert_eq!(host_settings_of(&state).engine_force_quantum, Some(0));
     }
 
     #[test]
     fn quick_strips_fill_a_tall_view_within_bounds() {
         use super::{quick_fit, QUICK_SCALE_MAX, QUICK_SCALE_MULT};
-        assert_eq!(quick_fit(500.0), QUICK_SCALE_MULT, "a short view keeps the floor");
-        assert_eq!(quick_fit(5000.0), QUICK_SCALE_MAX, "a huge one stops at the cap");
+        assert_eq!(
+            quick_fit(500.0),
+            QUICK_SCALE_MULT,
+            "a short view keeps the floor"
+        );
+        assert_eq!(
+            quick_fit(5000.0),
+            QUICK_SCALE_MAX,
+            "a huge one stops at the cap"
+        );
         let f = quick_fit(1000.0);
-        assert!(f > QUICK_SCALE_MULT && f < QUICK_SCALE_MAX, "1080p grows: {f}");
+        assert!(
+            f > QUICK_SCALE_MULT && f < QUICK_SCALE_MAX,
+            "1080p grows: {f}"
+        );
     }
 
     #[test]
@@ -20640,17 +21223,24 @@ mod tests {
     #[test]
     fn the_first_launch_picks_a_zoom_from_the_monitor_and_later_ones_keep_the_users() {
         let mut state = new(true, None, None);
-        apply_prefs(&mut state, crate::prefs::Prefs::default());
-        assert!(state.initial_zoom_pending, "nothing saved: ask the monitor");
-        let _ = update(&mut state, Message::MonitorSize(Some(iced::Size::new(2560.0, 1440.0))));
+        state.initial_zoom_pending = true;
+        let _ = update(
+            &mut state,
+            Message::MonitorSize(Some(iced::Size::new(2560.0, 1440.0))),
+        );
         assert_eq!(state.ui_scale, 1.25);
-        assert!(!state.initial_zoom_pending && state.prefs_dirty);
-        let _ = update(&mut state, Message::MonitorSize(Some(iced::Size::new(3840.0, 2160.0))));
+        assert!(!state.initial_zoom_pending && state.host_dirty);
+        let _ = update(
+            &mut state,
+            Message::MonitorSize(Some(iced::Size::new(3840.0, 2160.0))),
+        );
         assert_eq!(state.ui_scale, 1.25, "asked once only");
 
         let mut saved = new(true, None, None);
-        apply_prefs(&mut saved, crate::prefs::Prefs { ui_scale: Some(1.0), ..Default::default() });
-        assert!(!saved.initial_zoom_pending, "a saved zoom is never overridden");
+        let mut workspace = crate::workspaces::Workspace::default();
+        workspace.view.ui_scale = 1.0;
+        apply_workspace_gui(&mut saved, &workspace);
+        assert_eq!(saved.ui_scale, 1.0, "a saved zoom is never overridden");
     }
 
     #[test]
@@ -20659,7 +21249,10 @@ mod tests {
         let _ = update(&mut state, Message::WindowSize(1400.0, 900.0));
         assert!(state.sidebar_open);
         let _ = update(&mut state, Message::WindowSize(700.0, 900.0));
-        assert!(state.sidebar_open, "narrow window keeps the right panel visible");
+        assert!(
+            state.sidebar_open,
+            "narrow window keeps the right panel visible"
+        );
         let _ = update(&mut state, Message::WindowSize(1400.0, 900.0));
         assert!(state.sidebar_open);
         // The user can still collapse it explicitly; resizing never reopens it.
@@ -20684,12 +21277,19 @@ mod tests {
         use super::{tick_interval, TICK_ACTIVE, TICK_HIDDEN, TICK_IDLE, TICK_METERS};
         let mut state = new(true, None, None);
         state.last_activity = Instant::now() - Duration::from_secs(10);
-        assert_eq!(tick_interval(&state), TICK_IDLE, "nothing happened for a while");
+        assert_eq!(
+            tick_interval(&state),
+            TICK_IDLE,
+            "nothing happened for a while"
+        );
 
         // The user doing anything wakes it, even a message that changes
         // nothing visible.  With no drag or animation that is the meter
         // rate, not the interaction rate.
-        let _ = update(&mut state, Message::ToggleSidebarPanel(sidebar::Panel::Groups));
+        let _ = update(
+            &mut state,
+            Message::ToggleSidebarPanel(sidebar::Panel::Groups),
+        );
         assert_eq!(tick_interval(&state), TICK_METERS);
 
         // Background polls do not count as activity.
@@ -20853,13 +21453,15 @@ mod tests {
                 .output()
                 .ok()
                 .and_then(|out| {
-                    String::from_utf8_lossy(&out.stdout).lines().find_map(|line| {
-                        if line.contains("RME") && line.contains("pro-input-0") {
-                            line.split_whitespace().next().map(str::to_owned)
-                        } else {
-                            None
-                        }
-                    })
+                    String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .find_map(|line| {
+                            if line.contains("RME") && line.contains("pro-input-0") {
+                                line.split_whitespace().next().map(str::to_owned)
+                            } else {
+                                None
+                            }
+                        })
                 });
             let Some(src) = src else { return vec![] };
             let out = Command::new("timeout")
@@ -20911,13 +21513,15 @@ mod tests {
             .output()
             .ok()
             .and_then(|out| {
-                String::from_utf8_lossy(&out.stdout).lines().find_map(|line| {
-                    if line.contains("RME") && line.contains("pro-output-0") {
-                        line.split_whitespace().next().map(str::to_owned)
-                    } else {
-                        None
-                    }
-                })
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .find_map(|line| {
+                        if line.contains("RME") && line.contains("pro-output-0") {
+                            line.split_whitespace().next().map(str::to_owned)
+                        } else {
+                            None
+                        }
+                    })
             });
         let mut tone = if std::env::var_os("TOTALCONTROL_PROBE_PLAYER").is_some() {
             None
@@ -21110,10 +21714,17 @@ mod tests {
         let cid = ChannelId::Output(out);
         let _ = update(&mut state, Message::StripClicked(cid));
         assert_eq!(state.focus_channel, Some(cid));
-        assert!(state.selected.is_empty(), "a plain click does not join the group");
+        assert!(
+            state.selected.is_empty(),
+            "a plain click does not join the group"
+        );
         assert_eq!(
             state.sel_out,
-            if state.device.outputs_one_per_pair() { out } else { out / 2 }
+            if state.device.outputs_one_per_pair() {
+                out
+            } else {
+                out / 2
+            }
         );
     }
 
@@ -21123,12 +21734,22 @@ mod tests {
         state.sel_out = 0;
         let out = state.device.outputs().len() - 1;
         let cid = ChannelId::Output(out);
-        let _ = update(&mut state, Message::ToggleFlyout(cid, strip::FlyoutKind::Settings));
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(cid, strip::FlyoutKind::Settings),
+        );
         assert_eq!(state.focus_channel, Some(cid));
-        assert!(state.selected.is_empty(), "a control click does not join the group");
+        assert!(
+            state.selected.is_empty(),
+            "a control click does not join the group"
+        );
         assert_eq!(
             state.sel_out,
-            if state.device.outputs_one_per_pair() { out } else { out / 2 }
+            if state.device.outputs_one_per_pair() {
+                out
+            } else {
+                out / 2
+            }
         );
     }
 
@@ -21261,7 +21882,10 @@ mod tests {
             },
         );
         let volume = state.device.outputs()[0].volume;
-        assert!((volume - 0.501).abs() < 0.01, "expected -6 dB, got {volume}");
+        assert!(
+            (volume - 0.501).abs() < 0.01,
+            "expected -6 dB, got {volume}"
+        );
     }
 
     #[test]
@@ -21301,7 +21925,10 @@ mod tests {
             },
         );
         let volume = state.device.inputs()[1].volumes[0];
-        assert!((volume - 0.251).abs() < 0.01, "expected -12 dB, got {volume}");
+        assert!(
+            (volume - 0.251).abs() < 0.01,
+            "expected -12 dB, got {volume}"
+        );
     }
 
     #[test]
@@ -21391,19 +22018,13 @@ mod tests {
         );
 
         let all_mix = global_state_commands(&state, &SendControl::SendMix(1));
-        let one_submix = global_state_commands(
-            &state,
-            &SendControl::SendSubmix {
-                submix: 0,
-                mode: 1,
-            },
-        );
+        let one_submix =
+            global_state_commands(&state, &SendControl::SendSubmix { submix: 0, mode: 1 });
         assert!(!one_submix.is_empty());
         assert!(all_mix.len() > one_submix.len());
-        assert!(one_submix.iter().all(|c| matches!(
-            c,
-            GlobalCommand::Mix { submix: 0, .. }
-        )));
+        assert!(one_submix
+            .iter()
+            .all(|c| matches!(c, GlobalCommand::Mix { submix: 0, .. })));
 
         let all = global_state_commands(&state, &SendControl::SendAll(2));
         assert!(all.len() > all_mix.len());
@@ -21419,11 +22040,7 @@ mod tests {
     #[test]
     fn global_feedback_uses_native_paths_and_values() {
         use crate::osc_global::{Bus, ChannelControl, GlobalCommand, MixControl};
-        let volume = global_feedback(&OscOutbound::Volume(
-            ChannelId::Input(2),
-            4,
-            0.25118864,
-        ));
+        let volume = global_feedback(&OscOutbound::Volume(ChannelId::Input(2), 4, 0.25118864));
         assert!(matches!(
             volume,
             Some(GlobalCommand::Mix {
@@ -21452,7 +22069,10 @@ mod tests {
             Message::SetOscMode(crate::osc::OscDialect::Global),
         );
         assert_eq!(state.osc_dialect, crate::osc::OscDialect::Global);
-        assert_eq!(prefs_of(&state).osc_mode, crate::osc::OscDialect::Global);
+        assert_eq!(
+            host_settings_of(&state).osc_mode,
+            crate::osc::OscDialect::Global
+        );
         state.osc_enabled = true;
         let _ = update(
             &mut state,
@@ -21622,7 +22242,7 @@ mod tests {
         assert_eq!(workspace.scene.settings.sample_rate, 48_000);
         assert_eq!(state.engine_force_rate, 96_000, "the fixed choice is kept");
         assert_eq!(
-            prefs_of(&state).engine_rate_mode,
+            host_settings_of(&state).engine_rate_mode,
             Some(EngineRateMode::Follow)
         );
     }
@@ -21662,13 +22282,10 @@ mod tests {
     fn the_rate_mode_is_remembered_without_becoming_mix_state() {
         let mut state = new(true, None, None);
         state.workspace_dirty = false;
-        let _ = update(
-            &mut state,
-            Message::EngineRateMode(EngineRateMode::Follow),
-        );
+        let _ = update(&mut state, Message::EngineRateMode(EngineRateMode::Follow));
         assert_eq!(state.engine_rate_mode, EngineRateMode::Follow);
         assert_eq!(
-            prefs_of(&state).engine_rate_mode,
+            host_settings_of(&state).engine_rate_mode,
             Some(EngineRateMode::Follow)
         );
         assert!(state.undo_stack.is_empty(), "the mode is not a mix edit");
@@ -21677,7 +22294,7 @@ mod tests {
         let _ = update(&mut state, Message::EngineRateMode(EngineRateMode::Auto));
         assert_eq!(state.engine_rate_mode, EngineRateMode::Auto);
         assert_eq!(
-            prefs_of(&state).engine_rate_mode,
+            host_settings_of(&state).engine_rate_mode,
             Some(EngineRateMode::Auto)
         );
     }
@@ -21685,9 +22302,9 @@ mod tests {
     #[test]
     fn an_older_preference_file_infers_the_rate_mode() {
         let mut fixed = new(true, None, None);
-        apply_prefs(
+        apply_host_settings(
             &mut fixed,
-            crate::prefs::Prefs {
+            crate::host_settings::HostSettings {
                 engine_force_rate: Some(96_000),
                 ..Default::default()
             },
@@ -21695,9 +22312,9 @@ mod tests {
         assert_eq!(fixed.engine_rate_mode, EngineRateMode::Fixed);
 
         let mut automatic = new(true, None, None);
-        apply_prefs(
+        apply_host_settings(
             &mut automatic,
-            crate::prefs::Prefs {
+            crate::host_settings::HostSettings {
                 engine_force_rate: Some(0),
                 ..Default::default()
             },
@@ -21707,10 +22324,8 @@ mod tests {
 
     #[test]
     fn saving_a_workspace_writes_the_file_and_clears_dirty() {
-        let dir = std::env::temp_dir().join(format!(
-            "totalcontrol-app-workspace-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("totalcontrol-app-workspace-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("saved.tcws");
         let mut state = new(true, None, None);
@@ -21744,7 +22359,10 @@ mod tests {
         target.engine_rate_mode = EngineRateMode::Fixed;
         apply_workspace(&mut target, &workspace, PathBuf::from("/tmp/test.tcws")).unwrap();
         assert_eq!(target.view, View::Mixer);
-        assert_eq!(target.labels.get(&ChannelId::Input(0)).map(String::as_str), Some("Vocal"));
+        assert_eq!(
+            target.labels.get(&ChannelId::Input(0)).map(String::as_str),
+            Some("Vocal")
+        );
         assert!(target.groups[1].fader_linked);
         assert!(target.collapsed.contains(&ChannelId::Playback(0)));
         assert_eq!(target.snapshot_names[2], "Stereo");
@@ -21775,7 +22393,10 @@ mod tests {
         let _ = update(&mut state, Message::WorkspaceConfirm);
         assert_eq!(state.workspace_pending, None);
         assert_eq!(
-            state.labels.get(&ChannelId::Playback(0)).map(String::as_str),
+            state
+                .labels
+                .get(&ChannelId::Playback(0))
+                .map(String::as_str),
             Some("Front L")
         );
     }
@@ -21785,7 +22406,11 @@ mod tests {
         for (layout, seven_one, downmix) in [
             (crate::workspaces::SurroundLayout::Direct51, false, false),
             (crate::workspaces::SurroundLayout::Direct71, true, false),
-            (crate::workspaces::SurroundLayout::Downmix51To40, false, true),
+            (
+                crate::workspaces::SurroundLayout::Downmix51To40,
+                false,
+                true,
+            ),
             (crate::workspaces::SurroundLayout::Downmix71To40, true, true),
         ] {
             let mut state = new(true, None, None);
@@ -21802,11 +22427,17 @@ mod tests {
             assert!(!state.show_original_names);
             assert!(!state.labels.contains_key(&ChannelId::Input(0)));
             assert_eq!(
-                state.labels.get(&ChannelId::Playback(0)).map(String::as_str),
+                state
+                    .labels
+                    .get(&ChannelId::Playback(0))
+                    .map(String::as_str),
                 Some("Front L")
             );
             assert_eq!(
-                state.labels.get(&ChannelId::Playback(2)).map(String::as_str),
+                state
+                    .labels
+                    .get(&ChannelId::Playback(2))
+                    .map(String::as_str),
                 Some("Center")
             );
             assert!(!state.groups[0].members.is_empty());
@@ -21821,12 +22452,7 @@ mod tests {
             assert_eq!(state.device.playbacks()[0].volumes[first_pair], 1.0);
             assert!(state.device.playbacks()[2].split);
             assert_eq!(
-                state
-                    .host_scene
-                    .as_ref()
-                    .unwrap()
-                    .matrix_overrides
-                    .len(),
+                state.host_scene.as_ref().unwrap().matrix_overrides.len(),
                 if downmix { 2 } else { 0 }
             );
         }
@@ -21920,12 +22546,8 @@ mod tests {
         );
         assert!(!state.device.has_pair_cell_override(left, 0));
         assert!(!state.device.has_pair_cell_override(right, 0));
-        assert!(
-            (state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4
-        );
-        assert!(
-            (state.device.matrix_cell(right, right_block).unwrap() - 1.0).abs() < 1e-4
-        );
+        assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4);
+        assert!((state.device.matrix_cell(right, right_block).unwrap() - 1.0).abs() < 1e-4);
         assert_eq!(super::channel_pan(&state, left, 0), 75);
 
         // Re-split: the two blocks return to hard L and hard R.
@@ -22012,8 +22634,12 @@ mod tests {
     #[test]
     fn linked_pair_labels_drop_the_l_r_suffix() {
         let mut state = new(true, None, None);
-        state.labels.insert(ChannelId::Playback(0), "Front L".into());
-        state.labels.insert(ChannelId::Playback(1), "Front R".into());
+        state
+            .labels
+            .insert(ChannelId::Playback(0), "Front L".into());
+        state
+            .labels
+            .insert(ChannelId::Playback(1), "Front R".into());
         state.device.set_playback_linked(0, true).unwrap();
         assert_eq!(
             super::user_pair_label(&state, ChannelId::Playback(0)),
@@ -22046,8 +22672,325 @@ mod tests {
         assert!((state.device.outputs()[0].volume - 0.25).abs() < 1e-6);
     }
 
-}
+    #[test]
+    fn restored_mutes_and_solos_join_the_master_sets() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Playback(2);
+        // A restored scene set the states without UI mute/solo clicks.
+        state.device.set_input_mute(0, 0, true).unwrap();
+        state.device.set_playback_mute(1, 0, true).unwrap();
+        state.device.set_input_solo(0, 0, true).unwrap();
+        assert!(state.mute_master.members.is_empty());
+        assert!(state.solo_master.members.is_empty());
 
+        super::adopt_active_master_members(&mut state);
+        assert!(state.mute_master.members.contains(&a));
+        assert!(state.mute_master.members.contains(&b));
+        assert!(state.solo_master.members.contains(&a));
+
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!any_channel_muted(&state));
+        assert!(state.mute_master.suspended);
+    }
+
+    #[test]
+    fn adopting_masters_keeps_a_suspended_set_and_drops_stale_live_members() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::Mute(a, true));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(state.mute_master.suspended);
+        assert!(!channel_is_muted(&state, a));
+
+        super::adopt_active_master_members(&mut state);
+        assert!(
+            state.mute_master.members.contains(&a),
+            "a suspended set keeps its held member"
+        );
+
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        let _ = update(&mut state, Message::Mute(a, false));
+        state.mute_master.members.push(a);
+        super::adopt_active_master_members(&mut state);
+        assert!(!state.mute_master.members.contains(&a));
+    }
+
+    #[test]
+    fn a_mute_group_joins_its_propagated_members_to_the_master_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        state.groups[0] = sidebar::Group {
+            members: vec![a, b],
+            mute_linked: true,
+            ..Default::default()
+        };
+
+        let _ = update(&mut state, Message::Mute(a, true));
+        assert!(channel_is_muted(&state, b), "the linked group mutes b too");
+        assert!(state.mute_master.members.contains(&a));
+        assert!(
+            state.mute_master.members.contains(&b),
+            "the propagated mute is part of the master's set"
+        );
+
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!channel_is_muted(&state, a));
+        assert!(
+            !channel_is_muted(&state, b),
+            "the master releases the group"
+        );
+
+        let _ = update(&mut state, Message::Mute(a, false));
+        assert!(!state.mute_master.members.contains(&a));
+        assert!(
+            !state.mute_master.members.contains(&b),
+            "unmuting the group releases the propagated member"
+        );
+    }
+
+    #[test]
+    fn a_solo_group_joins_its_propagated_members_to_the_master_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        state.groups[0] = sidebar::Group {
+            members: vec![a, b],
+            solo_linked: true,
+            ..Default::default()
+        };
+
+        let _ = update(&mut state, Message::Solo(a, true));
+        assert!(channel_is_soloed(&state, b));
+        assert!(state.solo_master.members.contains(&a));
+        assert!(state.solo_master.members.contains(&b));
+
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(!channel_is_soloed(&state, a));
+        assert!(!channel_is_soloed(&state, b));
+    }
+
+    #[test]
+    fn a_snapshot_recall_rebuilds_the_master_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let _ = update(&mut state, Message::Mute(a, true));
+        state.snapshots[0] = Some(state.device.capture_scene());
+        state.mute_master.members.clear();
+
+        let _ = update(&mut state, Message::SnapshotClicked(1));
+        assert!(state.mute_master.members.contains(&a));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!channel_is_muted(&state, a));
+    }
+
+    fn workspace_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "totalcontrol-current-workspace-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_current_workspace_restores_gui_and_scene_at_start() {
+        let dir = workspace_test_dir("restore");
+        let path = dir.join("current-test.tcws");
+        let mut saved = crate::workspaces::Workspace::default();
+        saved.name = "Live".into();
+        saved.scene = new(true, None, None).device.capture_scene();
+        saved.scene.name = "Live".into();
+        saved.view.view = View::Matrix;
+        saved.view.sidebar_width = 310.0;
+        saved.window_size = Some((1600.0, 900.0));
+        saved.view.scroll = (7.0, 11.0);
+        saved.groups[0].members.push(ChannelId::Input(0));
+        saved.mute_master.members.push(ChannelId::Input(1));
+        saved.mute_master.suspended = true;
+        crate::workspaces::save(&path, &saved).unwrap();
+
+        let mut state = new(true, None, None);
+        super::restore_startup_workspace_at(&mut state, Some("test-unit".into()), path.clone());
+        assert_eq!(state.view, View::Matrix);
+        assert_eq!(state.sidebar_width, 310.0);
+        assert_eq!(state.window_size, Some((1600.0, 900.0)));
+        assert_eq!(state.workspace_scroll, (7.0, 11.0));
+        assert_eq!(state.groups[0].members, saved.groups[0].members);
+        assert_eq!(state.mute_master.members, saved.mute_master.members);
+        assert!(state.mute_master.suspended);
+        assert_eq!(state.workspace_name, "Live");
+        assert!(
+            state.workspace_path.is_none(),
+            "a recovered workspace uses Save As"
+        );
+        assert_eq!(
+            state.current_workspace_path.as_deref(),
+            Some(path.as_path())
+        );
+        assert_eq!(state.startup_workspace_scene.as_ref().unwrap().name, "Live");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dirty_current_workspace_writes_once_and_stays_clean() {
+        let dir = workspace_test_dir("autosave");
+        let path = dir.join("current-test.tcws");
+        let mut state = new(true, None, None);
+        state.current_workspace_path = Some(path.clone());
+        state.current_unit_key = Some("test-unit".into());
+        state.workspace_name = "Autosave".into();
+        state.workspace_dirty = true;
+        super::save_current_workspace(&mut state);
+        assert!(!state.workspace_dirty);
+        let saved = crate::workspaces::load(&path).unwrap();
+        assert_eq!(saved.name, "Autosave");
+
+        // A clean workspace is not rewritten.
+        std::fs::remove_file(&path).unwrap();
+        super::save_current_workspace(&mut state);
+        assert!(!path.exists(), "a clean workspace is skipped");
+
+        // A failed write leaves it dirty for the next retry.
+        state.workspace_dirty = true;
+        state.current_workspace_path = Some(dir.clone());
+        super::save_current_workspace(&mut state);
+        assert!(state.workspace_dirty, "a failure is retried later");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_tick_writes_a_dirty_current_workspace_after_a_minute() {
+        let dir = workspace_test_dir("periodic");
+        let path = dir.join("current-test.tcws");
+        let mut state = new(true, None, None);
+        state.current_workspace_path = Some(path.clone());
+        state.current_unit_key = Some("test-unit".into());
+        state.workspace_name = "Periodic".into();
+        state.workspace_dirty = true;
+        state.last_workspace_save = Instant::now() - Duration::from_secs(61);
+
+        let _ = update(&mut state, Message::Tick);
+        assert!(!state.workspace_dirty);
+        assert!(path.is_file());
+        assert_eq!(crate::workspaces::load(&path).unwrap().name, "Periodic");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_mock_session_uses_a_temporary_workspace_path() {
+        let mut state = new(true, None, None);
+        state.host_settings.active_unit = Some("real-unit".into());
+        let (key, path) = super::resolve_current_workspace(&mut state);
+        assert!(key.is_none(), "a simulation has no persistent unit key");
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "a mock must not write into the user's data directory"
+        );
+        assert!(!path.starts_with(totalcontrol_core::workspace::data_dir()));
+    }
+
+    #[test]
+    fn legacy_migration_maps_prefs_and_slots_into_a_workspace() {
+        let state = new(true, None, None);
+        let prefs = crate::prefs::Prefs {
+            view: Some(View::Matrix),
+            two_row: Some(true),
+            ui_scale: Some(1.25),
+            labels: vec![(ChannelId::Input(0), "Vocal".into())],
+            sidebar_width: Some(260.0),
+            ..Default::default()
+        };
+        let mut scene = state.device.capture_scene();
+        scene.name = "Old".into();
+        let mut snapshot = scene.clone();
+        snapshot.name = "One".into();
+        let mut layout = HashSet::new();
+        layout.insert(ChannelId::Input(0));
+        let workspace = super::workspace_from_legacy(
+            &state,
+            Some(prefs),
+            Some(scene),
+            std::array::from_fn(|i| (i == 2).then(|| snapshot.clone())),
+            std::array::from_fn(|i| (i == 3).then(|| layout.clone())),
+        )
+        .expect("legacy inputs migrate");
+        assert_eq!(workspace.view.view, View::Matrix);
+        assert_eq!(workspace.view.row_mode, RowMode::Two);
+        assert_eq!(workspace.view.ui_scale, 1.25);
+        assert_eq!(workspace.labels[0].1, "Vocal");
+        assert_eq!(workspace.snapshots[2].scene.as_ref().unwrap().name, "One");
+        assert_eq!(
+            workspace.layouts[3].as_ref().unwrap(),
+            &layout,
+            "Layout 4.json becomes slot 4"
+        );
+    }
+
+    #[test]
+    fn a_uc_strip_requests_the_no_fx_template_and_a_ucx_the_full_one() {
+        let mut uc = new(true, None, None);
+        uc.device = DeviceHandle::open_mock_uc();
+        uc.connected = true;
+        let strip = strip_params(&uc, ChannelId::Input(0), 0);
+        assert!(!strip.connection_features.fx, "the UC has no FX bus");
+        assert!(!strip.connection_features.eq, "the UC has no EQ");
+        assert!(
+            !strip.connection_features.dynamics,
+            "the UC has no Dynamics"
+        );
+        assert_eq!(
+            crate::widgets::layout::TemplateId::for_channel(
+                crate::widgets::layout::ChannelKind::Input,
+                false,
+                strip.connection_features,
+            ),
+            crate::widgets::layout::TemplateId::InputMonoNoFx
+        );
+
+        let mut ucx = new(true, None, None);
+        ucx.device = DeviceHandle::open_mock_ucx();
+        ucx.connected = true;
+        let strip = strip_params(&ucx, ChannelId::Input(0), 0);
+        assert!(strip.connection_features.fx);
+        assert!(strip.connection_features.eq);
+        assert!(strip.connection_features.dynamics);
+        assert_eq!(
+            crate::widgets::layout::TemplateId::for_channel(
+                crate::widgets::layout::ChannelKind::Input,
+                false,
+                strip.connection_features,
+            ),
+            crate::widgets::layout::TemplateId::InputMono
+        );
+    }
+
+    #[test]
+    fn an_incompatible_current_workspace_starts_a_new_one() {
+        let dir = workspace_test_dir("mismatch");
+        let path = dir.join("current-test.tcws");
+        let mut saved = crate::workspaces::Workspace::default();
+        saved.scene = new(true, None, None).device.capture_scene();
+        saved.scene.model = "A different interface".into();
+        crate::workspaces::save(&path, &saved).unwrap();
+
+        let mut state = new(true, None, None);
+        super::restore_startup_workspace_at(&mut state, None, path.clone());
+        assert_eq!(
+            state.startup_workspace_scene.as_ref().unwrap().model,
+            state.device.canonical_model()
+        );
+        assert!(!state.workspace_dirty, "the new file is written now");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
 
 impl Drop for TotalControl {
     fn drop(&mut self) {

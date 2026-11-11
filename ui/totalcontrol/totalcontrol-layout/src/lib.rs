@@ -13,6 +13,8 @@
 //! `docs/spec/TOTALCONTROL-GUI-SPEC.md` §2.8.  The tests here pin the
 //! invariants so documentation, preview and runtime cannot drift silently.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A rectangle in logical or scaled pixels.
@@ -242,6 +244,16 @@ impl Features {
             dynamics: false,
         }
     }
+
+    /// No optional controls at all: the playback and output no-FX shape.
+    pub const fn none() -> Self {
+        Self {
+            fx: false,
+            trim: false,
+            eq: false,
+            dynamics: false,
+        }
+    }
 }
 
 impl Default for Features {
@@ -257,10 +269,15 @@ pub enum TemplateId {
     InputMono,
     InputStereo,
     InputMonoNoFx,
+    InputStereoNoFx,
     PlaybackStereo,
+    PlaybackStereoNoFx,
     OutputStereo,
+    OutputStereoNoFx,
     OutputMono,
+    OutputMonoNoFx,
     ControlRoom,
+    ControlRoomNoFx,
 }
 
 impl TemplateId {
@@ -269,21 +286,31 @@ impl TemplateId {
             Self::InputMono => "Input mono",
             Self::InputStereo => "Input stereo",
             Self::InputMonoNoFx => "Input mono, no FX",
+            Self::InputStereoNoFx => "Input stereo, no FX",
             Self::PlaybackStereo => "Playback stereo",
+            Self::PlaybackStereoNoFx => "Playback stereo, no FX",
             Self::OutputStereo => "Output stereo",
+            Self::OutputStereoNoFx => "Output stereo, no FX",
             Self::OutputMono => "Output mono",
+            Self::OutputMonoNoFx => "Output mono, no FX",
             Self::ControlRoom => "Control Room",
+            Self::ControlRoomNoFx => "Control Room, no FX",
         }
     }
 
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 12] = [
         Self::InputMono,
         Self::InputStereo,
         Self::InputMonoNoFx,
+        Self::InputStereoNoFx,
         Self::PlaybackStereo,
+        Self::PlaybackStereoNoFx,
         Self::OutputStereo,
+        Self::OutputStereoNoFx,
         Self::OutputMono,
+        Self::OutputMonoNoFx,
         Self::ControlRoom,
+        Self::ControlRoomNoFx,
     ];
 
     /// The document token for this template.
@@ -292,10 +319,57 @@ impl TemplateId {
             Self::InputMono => "InputMono",
             Self::InputStereo => "InputStereo",
             Self::InputMonoNoFx => "InputMonoNoFx",
+            Self::InputStereoNoFx => "InputStereoNoFx",
             Self::PlaybackStereo => "PlaybackStereo",
+            Self::PlaybackStereoNoFx => "PlaybackStereoNoFx",
             Self::OutputStereo => "OutputStereo",
+            Self::OutputStereoNoFx => "OutputStereoNoFx",
             Self::OutputMono => "OutputMono",
+            Self::OutputMonoNoFx => "OutputMonoNoFx",
             Self::ControlRoom => "ControlRoom",
+            Self::ControlRoomNoFx => "ControlRoomNoFx",
+        }
+    }
+
+    /// The standard template for a channel and the connection's effective
+    /// features.  A unit without the FX bus, EQ or Dynamics picks the
+    /// matching no-FX template; a layout document cannot add those elements
+    /// back.
+    pub fn for_channel(kind: ChannelKind, stereo: bool, features: Features) -> Self {
+        match kind {
+            ChannelKind::Input => {
+                if features.eq || features.dynamics {
+                    if stereo {
+                        Self::InputStereo
+                    } else {
+                        Self::InputMono
+                    }
+                } else if stereo {
+                    Self::InputStereoNoFx
+                } else {
+                    Self::InputMonoNoFx
+                }
+            }
+            ChannelKind::Playback => {
+                if features.fx {
+                    Self::PlaybackStereo
+                } else {
+                    Self::PlaybackStereoNoFx
+                }
+            }
+            ChannelKind::Output => {
+                if features.fx || features.eq || features.dynamics {
+                    if stereo {
+                        Self::OutputStereo
+                    } else {
+                        Self::OutputMono
+                    }
+                } else if stereo {
+                    Self::OutputStereoNoFx
+                } else {
+                    Self::OutputMonoNoFx
+                }
+            }
         }
     }
 
@@ -351,6 +425,12 @@ pub const TEMPLATES: &[TemplateSpec] = &[
         false,
     ),
     TemplateSpec::new(
+        TemplateId::InputStereoNoFx,
+        ChannelKind::Input,
+        Features::no_fx(),
+        true,
+    ),
+    TemplateSpec::new(
         TemplateId::PlaybackStereo,
         ChannelKind::Playback,
         Features {
@@ -359,6 +439,12 @@ pub const TEMPLATES: &[TemplateSpec] = &[
             eq: false,
             dynamics: false,
         },
+        true,
+    ),
+    TemplateSpec::new(
+        TemplateId::PlaybackStereoNoFx,
+        ChannelKind::Playback,
+        Features::none(),
         true,
     ),
     TemplateSpec::new(
@@ -373,6 +459,12 @@ pub const TEMPLATES: &[TemplateSpec] = &[
         true,
     ),
     TemplateSpec::new(
+        TemplateId::OutputStereoNoFx,
+        ChannelKind::Output,
+        Features::none(),
+        true,
+    ),
+    TemplateSpec::new(
         TemplateId::OutputMono,
         ChannelKind::Output,
         Features {
@@ -384,6 +476,12 @@ pub const TEMPLATES: &[TemplateSpec] = &[
         false,
     ),
     TemplateSpec::new(
+        TemplateId::OutputMonoNoFx,
+        ChannelKind::Output,
+        Features::none(),
+        false,
+    ),
+    TemplateSpec::new(
         TemplateId::ControlRoom,
         ChannelKind::Output,
         Features {
@@ -392,6 +490,12 @@ pub const TEMPLATES: &[TemplateSpec] = &[
             eq: true,
             dynamics: true,
         },
+        true,
+    ),
+    TemplateSpec::new(
+        TemplateId::ControlRoomNoFx,
+        ChannelKind::Output,
+        Features::none(),
         true,
     ),
 ];
@@ -1623,11 +1727,26 @@ fn is_hex_color(value: &str) -> bool {
     }
 }
 
+/// One optional override for a device model or family.  A present section
+/// replaces the default section as a whole; an absent one inherits it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct LayoutOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<LayoutMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visual: Option<VisualTokens>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colors: Option<ColorScheme>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub templates: Option<Vec<LayoutTemplate>>,
+}
+
 /// One JSON document for the complete GUI layout and its visual scheme.
 ///
-/// The same document is consumed by the preview and, from the next runtime
-/// step, by the GUI.  Missing fields fall back to the compiled defaults and
-/// unknown fields are rejected.
+/// The same document is consumed by the preview and by the GUI.  Missing
+/// fields fall back to the compiled defaults and unknown fields are
+/// rejected.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GuiLayoutConfig {
@@ -1641,6 +1760,8 @@ pub struct GuiLayoutConfig {
     pub colors: ColorScheme,
     #[serde(default = "default_templates")]
     pub templates: Vec<LayoutTemplate>,
+    /// Optional per-device overrides keyed by canonical model or family.
+    pub devices: BTreeMap<String, LayoutOverride>,
 }
 
 impl Default for GuiLayoutConfig {
@@ -1652,6 +1773,7 @@ impl Default for GuiLayoutConfig {
             visual: VISUAL,
             colors: ColorScheme::default(),
             templates: default_templates(),
+            devices: BTreeMap::new(),
         }
     }
 }
@@ -1709,6 +1831,50 @@ impl GuiLayoutConfig {
         serde_json::to_string_pretty(self).expect("layout config serializes")
     }
 
+    /// The effective layout for one connected model: the document's default
+    /// sections with the longest matching device or family override applied.
+    /// Capabilities stay in the caller: an override can arrange supported
+    /// elements but cannot add an unsupported one.
+    pub fn resolve_for(&self, model: &str) -> Self {
+        let Some(over) = self.device_override(model) else {
+            return self.clone();
+        };
+        let mut resolved = self.clone();
+        resolved.devices.clear();
+        if let Some(geometry) = &over.geometry {
+            resolved.geometry = geometry.clone();
+        }
+        if let Some(visual) = &over.visual {
+            resolved.visual = visual.clone();
+        }
+        if let Some(colors) = &over.colors {
+            resolved.colors = colors.clone();
+        }
+        if let Some(templates) = &over.templates {
+            resolved.templates = templates.clone();
+        }
+        resolved
+    }
+
+    fn device_override(&self, model: &str) -> Option<&LayoutOverride> {
+        if let Some(over) = self.devices.get(model) {
+            return Some(over);
+        }
+        let model = model.to_ascii_lowercase();
+        self.devices
+            .iter()
+            .filter(|(key, _)| {
+                let key = key.to_ascii_lowercase();
+                model.starts_with(&key)
+                    && model[key.len()..]
+                        .chars()
+                        .next()
+                        .is_none_or(|next| next.is_whitespace() || next == '-' || next == '(')
+            })
+            .max_by_key(|(key, _)| key.len())
+            .map(|(_, over)| over)
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.schema != CONFIG_SCHEMA {
             return Err(format!(
@@ -1716,6 +1882,30 @@ impl GuiLayoutConfig {
                 self.schema
             ));
         }
+        self.validate_effective()?;
+        for (name, over) in &self.devices {
+            let mut effective = self.clone();
+            effective.devices.clear();
+            if let Some(geometry) = &over.geometry {
+                effective.geometry = geometry.clone();
+            }
+            if let Some(visual) = &over.visual {
+                effective.visual = visual.clone();
+            }
+            if let Some(colors) = &over.colors {
+                effective.colors = colors.clone();
+            }
+            if let Some(templates) = &over.templates {
+                effective.templates = templates.clone();
+            }
+            effective
+                .validate_effective()
+                .map_err(|error| format!("devices.{name}: {error}"))?;
+        }
+        Ok(())
+    }
+
+    fn validate_effective(&self) -> Result<(), String> {
         let m = &self.geometry;
         let sizes = [
             ("strip_w", m.strip_w),
@@ -1942,6 +2132,73 @@ mod config_tests {
         assert_eq!(
             ids,
             TEMPLATES.iter().map(|spec| spec.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_device_override_merges_over_the_default_document() {
+        let text = r##"{
+            "devices": {
+                "Fireface UC": {
+                    "geometry": {"strip_w": 94.0, "content_w": 82.0, "button_w": 40.0, "pan_x": 14.0, "db_x": 22.0, "track_x": 28.0},
+                    "colors": {"accent": {"solo": "#ffcc00"}}
+                },
+                "Fireface": {
+                    "geometry": {"strip_w": 96.0}
+                }
+            }
+        }"##;
+        let document = GuiLayoutConfig::from_json(text).expect("device override loads");
+        let uc = document.resolve_for("Fireface UC");
+        assert_eq!(uc.geometry.strip_w, 94.0);
+        assert_eq!(uc.colors.accent.solo, "#ffcc00");
+        assert_eq!(uc.templates, default_templates());
+        assert!(uc.devices.is_empty(), "the resolved view has no overrides");
+
+        // The exact model wins over the shorter family key.
+        let ucx = document.resolve_for("Fireface UCX");
+        assert_eq!(ucx.geometry.strip_w, 96.0);
+        assert_eq!(ucx.colors, ColorScheme::default());
+
+        // No matching key keeps the document's own default.
+        assert_eq!(
+            document.resolve_for("Babyface Pro FS").geometry,
+            LayoutMetrics::default()
+        );
+    }
+
+    #[test]
+    fn device_capabilities_choose_the_no_fx_template() {
+        let full = Features::all();
+        let uc = Features {
+            fx: false,
+            trim: true,
+            eq: false,
+            dynamics: false,
+        };
+        assert_eq!(
+            TemplateId::for_channel(ChannelKind::Input, false, full),
+            TemplateId::InputMono
+        );
+        assert_eq!(
+            TemplateId::for_channel(ChannelKind::Input, false, uc),
+            TemplateId::InputMonoNoFx
+        );
+        assert_eq!(
+            TemplateId::for_channel(ChannelKind::Input, true, uc),
+            TemplateId::InputStereoNoFx
+        );
+        assert_eq!(
+            TemplateId::for_channel(ChannelKind::Playback, true, uc),
+            TemplateId::PlaybackStereoNoFx
+        );
+        assert_eq!(
+            TemplateId::for_channel(ChannelKind::Output, true, uc),
+            TemplateId::OutputStereoNoFx
+        );
+        assert_eq!(
+            TemplateId::for_channel(ChannelKind::Output, false, full),
+            TemplateId::OutputMono
         );
     }
 

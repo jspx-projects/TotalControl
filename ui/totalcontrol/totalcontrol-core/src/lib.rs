@@ -35,6 +35,7 @@ pub mod pw_follow;
 pub mod pw_input;
 pub mod pw_meter;
 pub mod scene;
+pub mod workspace;
 #[cfg(feature = "usb")]
 pub mod usb;
 
