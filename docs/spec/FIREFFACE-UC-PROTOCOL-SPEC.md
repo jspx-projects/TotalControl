@@ -86,14 +86,19 @@ code = 6 - dB
 
 Output channel indices are:
 
-| Output pair | Channels |
-|---|---|
-| Phones 7/8 | 10, 11 |
-| AN1/2 | 4, 5 |
-| AN3/4 | 6, 7 |
-| AN5/6 | 8, 9 |
-| SPDIF | 12, 13 |
-| ADAT 1/2 … 7/8 | 14 … 21 |
+| Output pair | `0x1a` channels | `0x12` master base |
+|---|---|---|
+| AN1/2 | 4, 5 | `0x43e0` |
+| AN3/4 | 6, 7 | `0x43e2` |
+| AN5/6 | 8, 9 | `0x43e4` |
+| Phones | 16, 17 | `0x43e6` |
+| SPDIF | 18, 19 | `0x43e8` |
+| ADAT 1/2 | 20, 21 | `0x43ea` |
+| ADAT 3/4 | 22, 23 | `0x43ec` |
+| ADAT 5/6 | 24, 25 | `0x43ee` |
+| ADAT 7/8 | 32, 33 | `0x43f0` |
+
+The master base is the left channel; the right channel is `base + 1`.
 
 An output pair carries balance as two distinct channel levels.  The linked
 fader is the pair level: moving it applies one common dB offset to both
