@@ -335,29 +335,62 @@ fn parse_spec(spec: &str) -> Option<(u32, usize)> {
 
 fn spawn_record(monitor: &Monitor) -> Option<Child> {
     Command::new("pw-record")
-        .arg("--target")
-        // The index (PipeWire's Pulse object serial) is the reliable
-        // target while the source is suspended; a name falls back to the
-        // default sink, which may be an entirely different card.
-        .arg(monitor.index.to_string())
-        .arg("--format")
-        .arg("s32")
-        // Do not pin the meter tap to the rate seen at discovery: that
-        // would hold the whole graph at 48 kHz when the device switches to
-        // 88.2 kHz or higher.  The tap follows the graph rate; the rate in
-        // `Monitor` is still watched so the monitor is respawned when the
-        // device changes speed.
-        .arg("--channels")
-        .arg(monitor.channels.to_string())
-        .arg("--media-category")
-        .arg("Capture")
-        .arg("--raw")
-        .arg("-")
+        .args(record_args(monitor, pw_record_takes_raw()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()
+}
+
+fn record_args(monitor: &Monitor, raw_flag: bool) -> Vec<String> {
+    let mut args = vec![
+        "--target".to_string(),
+        // The index (PipeWire's Pulse object serial) is the reliable
+        // target while the source is suspended; a name falls back to the
+        // default sink, which may be an entirely different card.
+        monitor.index.to_string(),
+        "--format".to_string(),
+        "s32".to_string(),
+        // Do not pin the meter tap to the rate seen at discovery: that
+        // would hold the whole graph at 48 kHz when the device switches to
+        // 88.2 kHz or higher.  The tap follows the graph rate; the rate in
+        // `Monitor` is still watched so the monitor is respawned when the
+        // device changes speed.
+        "--channels".to_string(),
+        monitor.channels.to_string(),
+        "--media-category".to_string(),
+        "Capture".to_string(),
+    ];
+    if raw_flag {
+        args.push("--raw".to_string());
+    }
+    args.push("-".to_string());
+    args
+}
+
+/// Whether this `pw-record` accepts `--raw`.  PipeWire 1.0.x has no such
+/// option and exits on it, which left every meter dead (Ubuntu 24.04,
+/// PipeWire 1.0.5); it already writes raw samples when the file is `-`
+/// (measured: no RIFF header, 18 x 4 bytes per frame).  Asked once.
+fn pw_record_takes_raw() -> bool {
+    static TAKES_RAW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TAKES_RAW.get_or_init(|| {
+        Command::new("pw-record")
+            .arg("--help")
+            .stdin(Stdio::null())
+            .output()
+            .map(|out| {
+                help_lists_raw(&String::from_utf8_lossy(&out.stdout))
+                    || help_lists_raw(&String::from_utf8_lossy(&out.stderr))
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn help_lists_raw(help: &str) -> bool {
+    help.split_whitespace()
+        .any(|word| word.trim_end_matches(',') == "--raw")
 }
 
 /// Read raw S32LE frames from the child and accumulate per-channel
@@ -446,7 +479,40 @@ fn sleep_interruptible(stop: &AtomicBool, total: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_peaks, parse_source, parse_spec, MAX_CHANNELS};
+    use super::{add_peaks, help_lists_raw, parse_source, parse_spec, record_args, Monitor, MAX_CHANNELS};
+
+    const PW_RECORD_1_0_5_HELP: &str = "pw-record [options] [<file>|-]
+  -h, --help                            Show this help
+      --version                         Show version
+  -v, --verbose                         Enable verbose operations
+  -R, --remote                          Remote daemon name
+      --media-type                      Set media type (default Audio)
+      --target                          Set node target serial or name (default auto)
+      --format                          Sample format s8, s16, s24, s32, f32, f64 (req. for rec) (default s16)
+  -P  --properties                      Set node properties
+";
+
+    fn uc_monitor() -> Monitor {
+        Monitor { name: "alsa_input.usb-RME_Fireface_UC.pro-input-0".into(), index: 185, rate: 48000, channels: 18 }
+    }
+
+    #[test]
+    fn pipewire_1_0_record_is_not_given_the_raw_flag() {
+        let raw = help_lists_raw(PW_RECORD_1_0_5_HELP);
+        assert!(!raw, "PipeWire 1.0.5 pw-record lists no --raw");
+        let args = record_args(&uc_monitor(), raw);
+        assert!(!args.iter().any(|a| a == "--raw"), "{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+    }
+
+    #[test]
+    fn a_record_that_lists_raw_gets_it_before_stdout() {
+        assert!(help_lists_raw("      --raw                             RAW mode"));
+        let args = record_args(&uc_monitor(), true);
+        let n = args.len();
+        assert_eq!(&args[n - 2..], ["--raw", "-"]);
+    }
+
 
     #[test]
     fn picks_the_widest_rme_sink() {
