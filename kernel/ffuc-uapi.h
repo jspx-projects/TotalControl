@@ -31,6 +31,7 @@ enum ffuc_model {
 	FFUC_MODEL_UNKNOWN	= 0,
 	FFUC_MODEL_UC		= 1,
 	FFUC_MODEL_UCX		= 2,
+	FFUC_MODEL_BABYFACE_CLASSIC	= 3,
 };
 
 enum ffuc_transport {

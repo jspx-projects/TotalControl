@@ -31,6 +31,7 @@ detail.
 | `spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` | Fireface UCX transport, registers, writes and readback |
 | `spec/FIREFFACE-UC-PROTOCOL-SPEC.md` | Fireface UC transport, registers, writes and readback |
 | `spec/BABYFACE-PRO-PROTOCOL-SPEC.md` | Babyface Pro FS transport, ALSA surface, USB protocol and DSP blocks |
+| `spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md` | Babyface-classic transport, PCM streams, metering and hwdep ABI |
 | `spec/TOTALCONTROL-OSC-SPEC.md` | TotalMix FX OSC address space, pages, scales and feedback |
 | `TOTALCONTROL-Manual.md` | installation, setup, use and troubleshooting |
 | `DEVELOPMENT-TOOLS.md` | development-only backends, probes and capture helpers |
@@ -316,8 +317,9 @@ twice: once at connect and once after the reload.
 
 The production transport is the kernel module `snd-fireface-uc`. It owns USB
 enumeration, alternate settings, the isochronous and interrupt URB engines,
-the ALSA PCM device and one hwdep control node per card. TotalControl owns the
-device model and writes through hwdep; PipeWire and the DAW use the ALSA PCM.
+the ALSA PCM device and one hwdep control node per card. It covers the Fireface
+UC/UCX and the Babyface-classic native transport. TotalControl owns the device
+model and writes through hwdep; PipeWire and the DAW use the ALSA PCM.
 
 The audio path has four parts:
 
