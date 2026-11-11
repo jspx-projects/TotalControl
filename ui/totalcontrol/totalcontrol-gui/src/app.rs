@@ -18576,7 +18576,6 @@ const QUICK_STRIP_UNIT: f32 = 330.0;
 fn quick_block<'a>(
     state: &'a TotalControl,
     cid: ChannelId,
-    heading: Element<'a, Message>,
     picker: Element<'a, Message>,
     strip_widget: Element<'a, Message>,
     strip_w: f32,
@@ -18614,13 +18613,9 @@ fn quick_block<'a>(
         break;
     }
     let gap = theme::SPACE_MD * state.ui_scale;
-    let head = container(
-        column![heading, picker]
-            .spacing(gap)
-            .align_x(iced::Alignment::Center),
-    )
-    .width(Length::Fixed(strip_w))
-    .center_x(Length::Fixed(strip_w));
+    let head = container(picker)
+        .width(Length::Fixed(strip_w))
+        .center_x(Length::Fixed(strip_w));
     let body: Element<'a, Message> = match panel {
         // A stack, not a row: the strip alone sets the height, and the
         // panel's layer fills it (a `Fill` panel in a row would take all
@@ -18757,15 +18752,9 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
         // strip it chooses, so the two columns read as one sentence (this
         // source, into this destination) and the destination no longer
         // has to be changed from the top bar.
-        let caption = |label: &'static str| {
-            text(label)
-                .color(theme::text_sec())
-                .size(theme::TEXT_XS * scale)
-        };
         let source_block = quick_block(
             state,
             quick_channel,
-            caption("SOURCE").into(),
             source_picker.into(),
             strip::strip(finish_params(state, source_params)),
             strip_w,
@@ -18774,7 +18763,6 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
         let dest_block = quick_block(
             state,
             dest_cid,
-            caption("DESTINATION").into(),
             dest_picker.into(),
             strip::strip(finish_params(state, dest_params)),
             strip_w,
