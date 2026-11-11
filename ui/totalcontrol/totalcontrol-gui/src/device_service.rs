@@ -721,6 +721,30 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
+    fn set_input_balance(
+        &mut self,
+        pair: usize,
+        output: usize,
+        balance: i8,
+    ) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_input_balance(pair, output, balance);
+        });
+        Ok(())
+    }
+
+    fn set_pair_block_balance(
+        &mut self,
+        channel: ChannelId,
+        block: usize,
+        balance: i8,
+    ) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_pair_block_balance(channel, block, balance);
+        });
+        Ok(())
+    }
+
     fn set_input_mute(&mut self, pair: usize, which: usize, mute: bool) -> Result<(), Error> {
         self.run(move |d| {
             let _ = d.set_input_mute(pair, which, mute);
@@ -744,6 +768,18 @@ impl RmeDevice for Mirror {
     ) -> Result<(), Error> {
         self.run(move |d| {
             let _ = d.set_playback_volume(pair, which, output, volume);
+        });
+        Ok(())
+    }
+
+    fn set_playback_balance(
+        &mut self,
+        pair: usize,
+        output: usize,
+        balance: i8,
+    ) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_playback_balance(pair, output, balance);
         });
         Ok(())
     }

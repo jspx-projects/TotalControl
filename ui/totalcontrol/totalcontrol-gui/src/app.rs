@@ -493,6 +493,60 @@ impl RmeDevice for DeviceHandle {
     fn volume(&self, ch: ChannelId, out: usize) -> Result<f32, totalcontrol_core::Error> {
         delegate!(self, volume(ch, out))
     }
+    /// These pair-level methods carry the linked balance.  The default trait
+    /// implementation updates the local model and calls `set_volume` for
+    /// each side, which loses the balance in a device-service mirror when
+    /// both levels are zero.  Delegate them so the service applies the pair
+    /// operation to its own model too.
+    fn set_input_volume(
+        &mut self,
+        pair: usize,
+        which: usize,
+        output: usize,
+        volume: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_input_volume(pair, which, output, volume))
+    }
+    fn set_playback_volume(
+        &mut self,
+        pair: usize,
+        which: usize,
+        output: usize,
+        volume: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_playback_volume(pair, which, output, volume))
+    }
+    fn set_input_balance(
+        &mut self,
+        pair: usize,
+        output: usize,
+        balance: i8,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_input_balance(pair, output, balance))
+    }
+    fn set_playback_balance(
+        &mut self,
+        pair: usize,
+        output: usize,
+        balance: i8,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_playback_balance(pair, output, balance))
+    }
+    fn pair_block_balance(
+        &self,
+        channel: ChannelId,
+        block: usize,
+    ) -> Option<i8> {
+        delegate!(self, pair_block_balance(channel, block))
+    }
+    fn set_pair_block_balance(
+        &mut self,
+        channel: ChannelId,
+        block: usize,
+        balance: i8,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_pair_block_balance(channel, block, balance))
+    }
     fn set_pan(
         &mut self,
         ch: ChannelId,
@@ -22586,6 +22640,55 @@ mod tests {
         let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
         assert!((state.device.inputs()[0].volumes[0] - 0.5).abs() < 1e-4);
         assert!((state.device.inputs()[1].volumes[0] - 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_device_service_link_keeps_the_input_balance_at_zero_volume() {
+        let mut state = new(true, None, None);
+        attach_device_service(&mut state);
+        let cid = ChannelId::Input(0);
+
+        // The balance is set while the pair is silent, then the fader goes
+        // up and back down through the service.  The service's pair model
+        // must carry the stored balance; a per-channel volume path would
+        // lose it and the knob would snap back to centre.
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.0));
+        let _ = update(&mut state, Message::PanChanged(cid, 0, -50));
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.5));
+        let _ = update(&mut state, Message::VolumeChanged(cid, 0, 0.0));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pan = 0;
+        while Instant::now() < deadline {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            pan = super::channel_pan(&state, cid, 0);
+            if pan == -50 {
+                // Give a later snapshot a chance to overwrite it again.
+                std::thread::sleep(Duration::from_millis(30));
+                if let (Some(rx), DeviceHandle::Mirror(m)) =
+                    (&mut state.device_updates, &mut state.device)
+                {
+                    while let Ok(snapshot) = rx.try_recv() {
+                        m.update(snapshot);
+                    }
+                }
+                pan = super::channel_pan(&state, cid, 0);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(pan, -50, "the service kept the stored input balance");
+        assert_eq!(
+            state.device.pair_block_balance(cid, 0),
+            Some(-50),
+            "the balance lives in the service model, not only the mirror"
+        );
     }
 
     #[test]
