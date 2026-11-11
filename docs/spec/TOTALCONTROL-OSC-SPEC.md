@@ -835,3 +835,44 @@ Cue replaces the target submix with the cued output's fader and matrix
 records, sets the target FX returns to `-65.0 dB`, and writes the monitor
 mask. Releasing Cue restores the target from the model and returns
 `0x3f98` to its idle value.
+
+## 14. UC surface support
+
+The UC accepts both OSC dialects, but only part of the surface is backed by
+UC device writes.  This table records the observed UC capability; a path not
+listed as device-backed is host-side state or unsupported on the UC.
+
+| Family | UC behaviour |
+|---|---|
+| Input gain | Device-backed: `0x1a` (1 dB on inputs 1/2, half-dB on 3/4) |
+| 48 V | Device-backed through page-2 `phantom`; page-1 phantom is OnOff |
+| Instrument | Device-backed through page-2 `instrument` |
+| PAD | Host-side/UI-only; no OSC device write observed |
+| Input mute, solo, stereo, width, MS, PFL, FX send | Host-side |
+| Matrix fader and balance | Device-backed: `0x12` |
+| Matrix solo and group flags | Host-side |
+| Output fader | Device-backed: `0x1a` and `0x12` masters |
+| Output volume and balance paths | Host-side |
+| Output loopback | Device-backed: `0x15` |
+| Output FX return, crossfeed, delay, reference, talkback select | Host-side |
+| Control Room main mono | Device-backed |
+| Other Control Room controls | Host-side |
+| Global mute/solo, undo/redo, groups | Host-side |
+| Snapshot load | Device-backed scene write |
+| Snapshot save, layout load | Host-side |
+| EQ, low cut, dynamics, Auto Level, Room EQ | Not available through the UC OSC surface |
+| Reverb, echo, DURec | Not available through the UC OSC surface |
+
+Phase is a special case: classic page-2 `/2/phase` produced no UC device
+write, while the TotalMix UI phase control writes request `0x18`.  Do not
+describe OSC phase as a UC device-backed control.
+
+The UC manual specifies a Peak and RMS meter for every input, playback and
+hardware output, calculated in the device hardware.  The UC manual specifies hardware Peak/RMS meters.  The `0x85` stream carries
+them: words `w91`/`w93` and `w139`/`w141` are left/right meter pairs, and they
+scale monotonically with a -6/-20/-40/-60 dBFS test tone.  The full channel
+stride and section order remain to be mapped; TotalControl currently still
+uses the host audio path.  TotalControl currently feeds UC meters from the host audio
+path and does not start the UC `0x85`/`0x8d` streams; that is an implementation
+gap, not evidence that the device lacks meters.  The `0x8b` endpoint carries
+no status payload in the captured connects.
