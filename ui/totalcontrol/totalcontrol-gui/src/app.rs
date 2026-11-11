@@ -4502,6 +4502,7 @@ fn finish_startup_setup(state: &mut TotalControl) {
     }
     sync_surround_bridge(state);
     restore_engine(state);
+    adopt_active_master_members(state);
     state.device.begin_metering();
     maybe_attach_device_service(state);
 }
@@ -5296,17 +5297,17 @@ fn set_channel_solo(state: &mut TotalControl, cid: ChannelId, s: bool) {
 
 fn channel_is_muted(state: &TotalControl, cid: ChannelId) -> bool {
     match cid {
-        ChannelId::Input(ch) => state.device.inputs()[ch].mute,
-        ChannelId::Playback(ch) => state.device.playbacks()[ch].mute,
-        ChannelId::Output(ch) => state.device.outputs()[ch].mute,
+        ChannelId::Input(ch) => state.device.inputs().get(ch).is_some_and(|c| c.mute),
+        ChannelId::Playback(ch) => state.device.playbacks().get(ch).is_some_and(|c| c.mute),
+        ChannelId::Output(ch) => state.device.outputs().get(ch).is_some_and(|c| c.mute),
     }
 }
 
 fn channel_is_soloed(state: &TotalControl, cid: ChannelId) -> bool {
     match cid {
-        ChannelId::Input(ch) => state.device.inputs()[ch].solo,
-        ChannelId::Playback(ch) => state.device.playbacks()[ch].solo,
-        ChannelId::Output(ch) => state.device.outputs()[ch].solo,
+        ChannelId::Input(ch) => state.device.inputs().get(ch).is_some_and(|c| c.solo),
+        ChannelId::Playback(ch) => state.device.playbacks().get(ch).is_some_and(|c| c.solo),
+        ChannelId::Output(ch) => state.device.outputs().get(ch).is_some_and(|c| c.solo),
     }
 }
 
@@ -5326,6 +5327,50 @@ fn all_channel_ids(state: &TotalControl) -> Vec<ChannelId> {
 /// reads this too, hence `pub(crate)`).
 pub(crate) fn any_channel_muted(state: &TotalControl) -> bool {
     all_channel_ids(state).into_iter().any(|cid| channel_is_muted(state, cid))
+}
+
+/// Rebuild the mute and solo master sets from the channels' own states.
+///
+/// The masters are automatic: a muted channel belongs to the mute set and
+/// a soloed channel to the solo set.  The UI keeps that true while it edits,
+/// but a scene loaded from disk or a device state restored on reconnect can
+/// set the channel states without going through the mute/solo clicks.  Call
+/// this once those states are in place so the master acts on them.
+pub(crate) fn adopt_active_master_members(state: &mut TotalControl) {
+    let ids = all_channel_ids(state);
+    let muted: Vec<ChannelId> = ids
+        .iter()
+        .copied()
+        .filter(|cid| channel_is_muted(state, *cid))
+        .collect();
+    let soloed: Vec<ChannelId> = ids
+        .into_iter()
+        .filter(|cid| channel_is_soloed(state, *cid))
+        .collect();
+    // A suspended set is deliberately unmuted, so keep its members.  A live
+    // set follows the channels: anything no longer muted leaves it.
+    if !state.mute_master.suspended {
+        state
+            .mute_master
+            .members
+            .retain(|cid| muted.contains(cid));
+    }
+    if !state.solo_master.suspended {
+        state
+            .solo_master
+            .members
+            .retain(|cid| soloed.contains(cid));
+    }
+    for cid in muted {
+        if !state.mute_master.members.contains(&cid) {
+            state.mute_master.members.push(cid);
+        }
+    }
+    for cid in soloed {
+        if !state.solo_master.members.contains(&cid) {
+            state.solo_master.members.push(cid);
+        }
+    }
 }
 
 /// Whether the global fader group has any member. The group exists as soon
@@ -8292,6 +8337,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         if state.host_scene.is_none() {
                             state.host_scene = Some(state.device.capture_scene());
                         }
+                        adopt_active_master_members(state);
                         if !deferred_ucx_restore {
                             if let Err(e) = apply_control_room_assignments(state) {
                                 log::debug!("Control Room assignments not restored: {e}");
@@ -10723,6 +10769,8 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.pending_host_merge = None;
     state.undo_stack.clear();
     state.redo_stack.clear();
+    state.mute_master = MasterSet::default();
+    state.solo_master = MasterSet::default();
     state.connected = state.device.is_connected();
     state.input_meters = vec![MeterAnim::new(); state.device.inputs().len()];
     state.playback_meters = vec![MeterAnim::new(); state.device.playbacks().len()];
@@ -10773,6 +10821,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     if state.host_scene.is_none() {
         state.host_scene = Some(state.device.capture_scene());
     }
+    adopt_active_master_members(state);
     if let Err(e) = apply_control_room_assignments(state) {
         log::debug!("Control Room assignments not restored: {e}");
     }
@@ -18228,7 +18277,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 mod tests {
     use super::{
         any_channel_muted, any_channel_soloed, apply_pending_resize,
-        channel_trim, trim_factor, trim_meter_levels,
+        channel_trim, trim_factor, trim_meter_levels, adopt_active_master_members,
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
         global_feedback, global_feedback_is_typed, global_messages, global_state_commands,
         input_gain_knob_label, temporary_group_exists, TotalControl,
@@ -19550,6 +19599,48 @@ mod tests {
             4,
             "the set persists, including the stereo partners"
         );
+    }
+
+    #[test]
+    fn restored_mutes_join_the_master_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Playback(2);
+        // A scene or device state restored the mutes without the UI mute
+        // clicks, so the master set is still empty.
+        state.device.set_input_mute(0, 0, true).unwrap();
+        state.device.set_playback_mute(1, 0, true).unwrap();
+        assert!(state.mute_master.members.is_empty());
+
+        adopt_active_master_members(&mut state);
+        assert!(state.mute_master.members.contains(&a));
+        assert!(state.mute_master.members.contains(&b));
+
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!any_channel_muted(&state), "one press clears the restored mutes");
+        assert!(state.mute_master.suspended);
+    }
+
+    #[test]
+    fn adopting_mutes_keeps_a_suspended_set_and_drops_stale_members() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::Mute(a, true));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(state.mute_master.suspended);
+        assert!(!channel_is_muted(&state, a));
+
+        // The held member is deliberately unmuted; reconnecting keeps it.
+        adopt_active_master_members(&mut state);
+        assert!(state.mute_master.members.contains(&a));
+
+        // A stale member that is no longer muted leaves a live set.
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        let _ = update(&mut state, Message::Mute(a, false));
+        state.mute_master.members.push(a);
+        adopt_active_master_members(&mut state);
+        assert!(!state.mute_master.members.contains(&a));
     }
 
     #[test]

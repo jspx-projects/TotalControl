@@ -200,6 +200,7 @@ fn main() -> iced::Result {
                 state.prefs_path = Some(path);
             }
             app::apply_startup_sync(&mut state);
+            app::adopt_active_master_members(&mut state);
             if !state.startup_compare_pending {
                 if let Err(e) = app::apply_control_room_assignments(&mut state) {
                     log::debug!("Control Room assignments not restored: {e}");

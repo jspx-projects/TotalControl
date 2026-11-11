@@ -352,7 +352,9 @@ buttons. A master that is switched off takes a muted version of its colour.
 
 The mute and solo groups build themselves. You do not have to set anything
 up: every channel you mute joins the global mute group, and every channel you
-solo joins the global solo group. All you need to remember is the button.
+solo joins the global solo group. All you need to remember is the button. The
+groups also follow the mixer itself, so channels restored muted from a saved
+scene or after reconnecting the interface are already in them.
 
 `M` is on when TotalControl starts. Press it and the whole mute group switches
 off for the moment: the master and every held channel show the pause mark

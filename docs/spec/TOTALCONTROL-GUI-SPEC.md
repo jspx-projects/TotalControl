@@ -55,7 +55,9 @@ member unmutes and the master and each held channel show the pause mark;
 pressing it again mutes the set. A member click toggles that channel and
 removes it from the set, a linked pair leaving together; muting any other
 channel mutes it and adds it, whatever the master's state. The master can also be switched off while the set
-is empty. The set is global: it silences the channel on every routing.
+is empty. The set is global: it silences the channel on every routing. A
+scene load or device reconnect rebuilds the set from the channels' mute
+states; a suspended set keeps its members.
 
 The middle button is the **Solo master**, the same machine with the pause mark
 after the letter, over the current submix; it is also lit from the first frame
