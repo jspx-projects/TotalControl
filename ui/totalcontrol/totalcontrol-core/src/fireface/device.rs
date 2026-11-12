@@ -739,6 +739,11 @@ pub struct Fireface {
     /// Mono matrix cells that the per-pair model cannot express. Key is
     /// `(source 0..35, output block 0..17)`; 18..35 are software playbacks.
     matrix_overrides: HashMap<(usize, usize), f32>,
+    /// Pairs a source is actively routed to: `(source 0..35, pair)`.
+    /// A matrix cell reports a level only for an active send; a source
+    /// fader value in a submix the source is not routed into must not
+    /// appear in that submix's column.
+    routed_pairs: HashSet<(usize, usize)>,
     /// UCX IF1 words collected during one scene apply.  `Some` while a
     /// batch is open; `write_word`/`write_words` then append instead of
     /// sending one USB transfer per register.  `vendor_out`/`vendor_in`
@@ -1215,6 +1220,7 @@ impl Fireface {
             ucx_heartbeat_due: Instant::now(),
             ignore_output_until: None,
             matrix_overrides: HashMap::new(),
+            routed_pairs: HashSet::new(),
             write_batch: Arc::new(Mutex::new(None)),
             async_writer: None,
         };
@@ -1633,7 +1639,14 @@ impl Fireface {
             let Some(channel) = Self::matrix_source_channel(source) else {
                 continue;
             };
-            let gain = self.matrix_cell(channel, block).unwrap_or(0.0)
+            // The phase rewrite re-sends the device's existing cells, so take
+            // the raw per-pair gain rather than the routed-cell view.
+            let gain = self
+                .matrix_overrides
+                .get(&(source, block))
+                .copied()
+                .or_else(|| self.matrix_default(channel, block))
+                .unwrap_or(0.0)
                 * self.trim_gain(channel);
             self.uc_write_matrix(block, source, gain)?;
         }
@@ -1749,7 +1762,7 @@ impl Fireface {
         Ok(())
     }
 
-    fn uc_write_input(&self, idx: usize, pair: usize, _volume: f32) -> Result<(), Error> {
+    fn uc_write_input(&mut self, idx: usize, pair: usize, _volume: f32) -> Result<(), Error> {
         let pan = self.inputs[idx].pans.get(pair).copied().unwrap_or(0);
         // Any input can be mono or a linked stereo pair.  Only an unlinked
         // one is panned into both sides; a linked pair keeps left on the
@@ -1767,6 +1780,7 @@ impl Fireface {
             // already the raw UC matrix block order.  Do not run it through
             // matrix_block(): that maps the internal Phones-first order and
             // would shift every crosspoint.
+            self.record_routing(idx, pair, l.max(r));
             self.uc_write_matrix(pair * 2, idx, l)?;
             return self.uc_write_matrix(pair * 2 + 1, idx, r);
         }
@@ -1780,17 +1794,20 @@ impl Fireface {
         let balance = pan.clamp(-100, 100) as f32 / 100.0;
         let gl = left * (1.0 - balance.max(0.0));
         let gr = right * (1.0 + balance.min(0.0));
+        self.record_routing(base, pair, gl);
+        self.record_routing(other, pair, gr);
         self.uc_write_matrix(pair * 2, base, gl)?;
         self.uc_write_matrix(pair * 2 + 1, other, gr)
     }
 
-    fn uc_write_playback(&self, idx: usize, pair: usize, volume: f32) -> Result<(), Error> {
+    fn uc_write_playback(&mut self, idx: usize, pair: usize, volume: f32) -> Result<(), Error> {
         let dev = self.playbacks[idx].id;
         let block = pair * 2 + (dev % 2);
         let pan = self.playbacks[idx].pans.get(pair).copied().unwrap_or(0);
         let volume = volume * self.trim_gain(ChannelId::Playback(idx));
         let (left, right) = pan_split(volume, pan);
         let gain = if dev % 2 == 0 { left } else { right };
+        self.record_routing(18 + dev, pair, gain);
         // `pair` is the display column; the raw UC block order is the same.
         self.uc_write_matrix(block, 18 + dev, gain)
     }
@@ -2958,6 +2975,17 @@ impl Fireface {
             // source volume is still indexed by output pair because that is
             // how the per-pair channel model stores it.
             let model_block = dsp;
+            let raw_cell = |channel: ChannelId| {
+                let source = Fireface::matrix_source_index(channel);
+                source
+                    .and_then(|source| {
+                        this.matrix_overrides
+                            .get(&(source, model_block))
+                            .copied()
+                            .or_else(|| this.matrix_default_ucx(channel, model_block))
+                    })
+                    .unwrap_or(0.0)
+            };
             for (idx, ch) in this.inputs.iter().enumerate() {
                 let gain = this
                     .cell_gain(ChannelId::Input(idx), model_block)
@@ -3927,6 +3955,25 @@ impl Fireface {
 
 }
 
+impl Fireface {
+
+    /// Whether a source has an active send into one output pair.
+    pub fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
+        Self::matrix_source_index(channel)
+            .is_some_and(|source| self.routed_pairs.contains(&(source, pair)))
+    }
+
+    /// Track whether a crosspoint write leaves an active send.  A cell at
+    /// or below zero gain is not a send; every other write is.
+    fn record_routing(&mut self, source: usize, pair: usize, gain: f32) {
+        if gain > 0.0 {
+            self.routed_pairs.insert((source, pair));
+        } else {
+            self.routed_pairs.remove(&(source, pair));
+        }
+    }
+}
+
 impl RmeDevice for Fireface {
     fn model_name(&self) -> &str {
         self.model.name()
@@ -4131,6 +4178,7 @@ impl RmeDevice for Fireface {
         if Self::matrix_source_index(channel).is_none() {
             return false;
         }
+<<<<<<< HEAD
         // A routing exists while it has a level (GUI spec 8.1.1).  Both
         // sides of the pair contribute, so a split pair is routed when
         // either channel carries a send.
@@ -4169,6 +4217,20 @@ impl RmeDevice for Fireface {
         match self.cell_gain(channel, block) {
             Some(gain) if gain > 0.0 => Some(gain),
             _ => None,
+=======
+        // A cell reports a level only when the source is routed to that
+        // pair.  The per-submix fader value of a source that is not routed
+        // there belongs to a different submix and must not leak in.  This is
+        // the shared path for every device that derives cells from the
+        // per-pair channel model.
+        if !self.routed_pairs.contains(&(source, block / 2)) {
+            return Some(0.0);
+        }
+        if self.is_uc() {
+            self.matrix_default(channel, block)
+        } else {
+            self.matrix_default_ucx(channel, block)
+>>>>>>> 6d00776 (fix(matrix): report only routed sends in a matrix cell)
         }
     }
 
@@ -4247,6 +4309,7 @@ impl RmeDevice for Fireface {
                     ))
                 }
             };
+            self.record_routing(source, block / 2, gain);
             return self.ucx_write_matrix(
                 block as u8,
                 source_kind,
@@ -4254,7 +4317,12 @@ impl RmeDevice for Fireface {
             );
         }
         self.uc_write_matrix(block, source, gain * self.trim_gain(channel))?;
+<<<<<<< HEAD
         if self.matrix_natural(channel, block) {
+=======
+        self.record_routing(source, block / 2, gain);
+        if Self::matrix_natural(channel, block) {
+>>>>>>> 6d00776 (fix(matrix): report only routed sends in a matrix cell)
             let pair = block / 2;
             match channel {
                 ChannelId::Input(i) => {
@@ -8908,6 +8976,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn phones_routings_stay_in_their_own_column() {
         // Desk report: Phones is Out 7/8, and moving playback 1/2's fader
         // must not paint a value into Out 1/2.  Pair 3 is Out 7/8.  Start
@@ -9061,6 +9130,63 @@ mod tests {
         assert_eq!(dev.routed_pairs_for(ChannelId::Playback(0)), vec![0, 3]);
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 0), Some(0.5));
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 6), Some(1.0));
+=======
+    fn matrix_cell_reports_only_routed_columns() {
+        // Route AN1/2 into output pair 3 (Out 7/8, the phones pair) the way
+        // TotalMix does with a crosspoint double click: both sides at 0 dB.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Input(1), 7, 1.0).unwrap();
+        for block in [0usize, 2, 4] {
+            dev.set_matrix_cell(ChannelId::Input(0), block, 0.0).unwrap();
+            dev.set_matrix_cell(ChannelId::Input(1), block + 1, 0.0).unwrap();
+        }
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(1), 7), Some(1.0));
+        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
+
+        // A source that was never routed keeps its columns inactive even
+        // though the per-submix fader model holds values for every pair.
+        for channel in [ChannelId::Playback(0), ChannelId::Playback(1)] {
+            let idx = match channel {
+                ChannelId::Playback(i) => i,
+                _ => unreachable!(),
+            };
+            for pair in 0..9 {
+                dev.playbacks[idx].volumes[pair] = 1.0;
+            }
+        }
+        for pair in 0..9 {
+            let block = pair * 2;
+            assert!(
+                !dev.matrix_cell_routed(ChannelId::Playback(0), pair),
+                "playback 1 is not routed to pair {pair}"
+            );
+            assert_eq!(
+                dev.matrix_cell(ChannelId::Playback(0), block),
+                Some(0.0),
+                "pair {pair} must stay an inactive cell"
+            );
+        }
+        // The routed input cell still reads its gain.
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
+    }
+
+    #[test]
+    fn routed_playback_cell_follows_its_own_fader_only() {
+        let (mut dev, _writes) = open(Model::Uc);
+        // Route playback 1/2 into pair 3 and move its fader there.
+        dev.set_matrix_cell(ChannelId::Playback(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(1), 7, 1.0).unwrap();
+        assert!(dev.matrix_cell_routed(ChannelId::Playback(0), 3));
+        // Unrouted pairs stay inactive even though the fader has a value
+        // in the submix the model stores.
+        assert!(!dev.matrix_cell_routed(ChannelId::Playback(0), 0));
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 0), Some(0.0));
+        // Zeroing the send clears the routed state.
+        dev.set_matrix_cell(ChannelId::Playback(0), 6, 0.0).unwrap();
+        assert!(!dev.matrix_cell_routed(ChannelId::Playback(0), 3));
+>>>>>>> 6d00776 (fix(matrix): report only routed sends in a matrix cell)
     }
 
     #[test]
