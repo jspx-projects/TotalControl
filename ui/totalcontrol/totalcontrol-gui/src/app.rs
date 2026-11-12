@@ -1214,12 +1214,27 @@ impl DeviceHandle {
 
     pub fn device_output_meters(&self) -> Option<Vec<f32>> {
         match self {
-            DeviceHandle::Mirror(d) => Some(d.meters().outputs.to_vec()),
+            DeviceHandle::Mirror(d) if d.info().device_output_meters => {
+                Some(d.meters().outputs.to_vec())
+            }
+            DeviceHandle::Mirror(_) => None,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.output_meters_internal(true),
             #[cfg(feature = "alsa")]
             DeviceHandle::BabyfaceClassic(d) => Some(d.output_meters()),
             _ => None,
+        }
+    }
+
+    /// True when the backend supplies its own hardware-output meters.
+    /// Without them the GUI sums the output levels from the matrix
+    /// (`output_meters_from`).
+    pub fn has_device_output_meters(&self) -> bool {
+        match self {
+            DeviceHandle::Mirror(d) => d.info().device_output_meters,
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(_) | DeviceHandle::BabyfaceClassic(_) => true,
+            _ => false,
         }
     }
 

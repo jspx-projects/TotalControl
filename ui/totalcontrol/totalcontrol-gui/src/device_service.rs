@@ -117,6 +117,9 @@ pub struct DeviceInfo {
     /// The backend supplies its own software-playback metering, so the
     /// PipeWire sink tap is not needed.
     pub device_playback_meters: bool,
+    /// The backend supplies its own hardware-output meters.  Without them
+    /// the GUI sums the output levels from the matrix.
+    pub device_output_meters: bool,
 }
 
 /// The channel model as the UI should draw it.  Replaced wholesale when the
@@ -1538,6 +1541,7 @@ fn capture_info(device: &DeviceHandle) -> DeviceInfo {
             .map(|i| device.has_input_meter(i))
             .collect(),
         device_playback_meters: device.has_device_playback_meters(),
+        device_output_meters: device.has_device_output_meters(),
     }
 }
 
@@ -1829,6 +1833,39 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         false
+    }
+
+    #[test]
+    fn a_mirror_leaves_output_meters_to_the_gui_when_the_device_has_none() {
+        // The mock has no hardware-output meters, so its meter snapshot's
+        // 18 output slots stay zero.  A Mirror that hands those out pins
+        // every output meter at -inf instead of letting the GUI sum the
+        // matrix (`output_meters_from`).
+        assert_eq!(mock().device_output_meters(), None);
+        let service = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| !service.snapshot().scene.outputs.is_empty()),
+            "the initial snapshot arrives"
+        );
+        let mut snapshot = service.snapshot();
+        let without = DeviceHandle::Mirror(super::Mirror::new(
+            snapshot.clone(),
+            service.command_sender(),
+            service.meter_bus(),
+        ));
+        assert!(!without.has_device_output_meters());
+        assert_eq!(without.device_output_meters(), None);
+
+        // A backend that has them (the UCX hwdep path) still gets its
+        // device meters through the Mirror.
+        snapshot.info.device_output_meters = true;
+        let with = DeviceHandle::Mirror(super::Mirror::new(
+            snapshot,
+            service.command_sender(),
+            service.meter_bus(),
+        ));
+        assert_eq!(with.device_output_meters().map(|m| m.len()), Some(18));
+        service.stop();
     }
 
     #[test]
