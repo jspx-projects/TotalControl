@@ -1299,9 +1299,9 @@ mod tests {
         // Set volume for input 0 towards output 2 only
         dev.set_volume(ChannelId::Input(0), 2, 0.3).unwrap();
         assert!((dev.volume(ChannelId::Input(0), 2).unwrap() - 0.3).abs() < 1e-6);
-        // Other outputs should be unchanged (default 0 dB = 1.0)
-        assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 1.0).abs() < 1e-6);
-        assert!((dev.volume(ChannelId::Input(0), 5).unwrap() - 1.0).abs() < 1e-6);
+        // Other outputs stay unrouted (a factory input has no sends).
+        assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 0.0).abs() < 1e-6);
+        assert!((dev.volume(ChannelId::Input(0), 5).unwrap() - 0.0).abs() < 1e-6);
     }
 
     #[test]

@@ -535,6 +535,16 @@ fn pan_split(volume: f32, pan: i8) -> (f32, f32) {
     (l, r)
 }
 
+/// Equal-power pan for a mono source into a stereo bus (GUI spec: -3 dB at
+/// centre).  The balance law above is for a stereo source, where centre is
+/// 0 dB per side.
+fn pan_split_equal_power(volume: f32, pan: i8) -> (f32, f32) {
+    let v = volume.clamp(0.0, 2.0);
+    let theta = (pan.clamp(-100, 100) as f32 / 100.0 + 1.0)
+        * std::f32::consts::FRAC_PI_4;
+    (v * theta.cos(), v * theta.sin())
+}
+
 /// A Fireface UC or UCX opened over the kernel hwdep transport.
 pub struct Fireface {
     transport: Arc<Mutex<Box<dyn ControlTransport>>>,
@@ -1388,11 +1398,15 @@ impl Fireface {
             ChannelId::Input(i) => {
                 let ch = self.inputs.get(i)?;
                 let volume = *ch.volumes.get(pair)?;
-                if i < 4 {
-                    // The four analog inputs are mono: the pair value is
+                if i < 4 && !self.input_pair_linked(i / 2) {
+                    // An unlinked analog input is mono: the pair value is
                     // split across the output sides by the pan law.
-                    let (left, right) =
-                        pan_split(volume, ch.pans.get(pair).copied().unwrap_or(0));
+                    let pan = ch.pans.get(pair).copied().unwrap_or(0);
+                    let (left, right) = if self.output_linked(pair) {
+                        pan_split_equal_power(volume, pan)
+                    } else {
+                        pan_split(volume, pan)
+                    };
                     Some(if block % 2 == 0 { left } else { right })
                 } else if block % 2 == i % 2 {
                     Some(volume)
@@ -1594,10 +1608,18 @@ impl Fireface {
 
     fn uc_write_input(&self, idx: usize, pair: usize, _volume: f32) -> Result<(), Error> {
         let pan = self.inputs[idx].pans.get(pair).copied().unwrap_or(0);
-        if idx < 4 {
+        // The first four inputs can be mono or a linked stereo pair.  Only
+        // an unlinked one is panned into both sides; a linked pair keeps
+        // left on the left and right on the right, or the two channels sum
+        // to +6 dB on a stereo bus.
+        if idx < 4 && !self.input_pair_linked(idx / 2) {
             let volume = self.inputs[idx].volumes.get(pair).copied().unwrap_or(0.0)
                 * self.trim_gain(ChannelId::Input(idx));
-            let (l, r) = pan_split(volume, pan);
+            let (l, r) = if self.output_linked(pair) {
+                pan_split_equal_power(volume, pan)
+            } else {
+                pan_split(volume, pan)
+            };
             // `pair` is the matrix display column (AN1/2 first), which is
             // already the raw UC matrix block order.  Do not run it through
             // matrix_block(): that maps the internal Phones-first order and
@@ -7231,7 +7253,10 @@ mod tests {
     #[test]
     fn ucx_input_matrix_and_fader_table() {
         let (mut dev, writes) = open(Model::Ucx);
-        // Input 4 (AN5) into pair 1 (AN1/2, DSP outputs 0/1).
+        // Input 4 (AN5) into pair 1 (AN1/2, DSP outputs 0/1).  Seed the
+        // right side so the linked-pair test starts from the old unity
+        // default for its partner channel.
+        dev.set_volume(ChannelId::Input(5), 1, 1.0).unwrap();
         dev.set_volume(ChannelId::Input(4), 1, 0.5).unwrap();
         let w = writes.lock().unwrap();
         let words: Vec<(u16, u16)> = w
@@ -7434,12 +7459,14 @@ mod tests {
     #[test]
     fn ucx_live_width_change_is_one_burst() {
         let (mut dev, writes) = open(Model::Ucx);
+        dev.set_volume(ChannelId::Input(4), 1, 1.0).unwrap();
+        dev.set_volume(ChannelId::Input(5), 1, 1.0).unwrap();
         writes.lock().unwrap().clear();
-        dev.set_channel_width(ChannelId::Input(0), 0.0).unwrap();
+        dev.set_channel_width(ChannelId::Input(4), 0.0).unwrap();
         let w = writes.lock().unwrap();
         assert_eq!(w.len(), 1, "one USB burst for the whole width update");
         match &w[0] {
-            Write::Words(words) => assert!(words.len() > 8),
+            Write::Words(words) => assert!(!words.is_empty()),
             other => panic!("expected IF1 words, got {other:?}"),
         }
     }
@@ -7447,12 +7474,14 @@ mod tests {
     #[test]
     fn async_writer_flushes_live_words() {
         let (mut dev, writes) = open_async(Model::Ucx);
+        dev.set_volume(ChannelId::Input(4), 1, 1.0).unwrap();
+        dev.set_volume(ChannelId::Input(5), 1, 1.0).unwrap();
         writes.lock().unwrap().clear();
-        dev.set_channel_width(ChannelId::Input(0), 0.0).unwrap();
+        dev.set_channel_width(ChannelId::Input(4), 0.0).unwrap();
         dev.flush_writer().unwrap();
         let w = written_words(&writes);
         let mixed = ucx::matrix_gain(std::f32::consts::FRAC_1_SQRT_2 as f64);
-        assert!(w.contains(&(0x4000, mixed)));
+        assert!(w.contains(&(ucx::matrix_reg(0, Source::Input(4)), mixed)));
     }
 
     #[test]
@@ -8020,6 +8049,13 @@ mod tests {
         let (mut dev, writes) = open(Model::Ucx);
         dev.set_main_out(Some(1)).unwrap();
         dev.set_cue_target(Some(0)).unwrap();
+        // Seed the source submix the cue copies and restores.
+        for input in dev.inputs.iter_mut() {
+            input.volumes.iter_mut().for_each(|v| *v = 1.0);
+        }
+        for playback in dev.playbacks.iter_mut() {
+            playback.volumes.iter_mut().for_each(|v| *v = 1.0);
+        }
         dev.inputs[0].volumes[1] = 0.5;
         dev.inputs[0].pans[1] = 0;
         writes.lock().unwrap().clear();
@@ -8607,9 +8643,38 @@ mod tests {
     }
 
     #[test]
+    fn factory_defaults_are_straight_playback() {
+        for model in [Model::Uc, Model::Ucx] {
+            let (dev, _writes) = open(model);
+            for input in dev.inputs() {
+                assert!(
+                    input.volumes.iter().all(|volume| *volume == 0.0),
+                    "{model:?} input {:?} starts unrouted",
+                    input.name
+                );
+            }
+            let order = dev.output_order();
+            for (idx, playback) in dev.playbacks().iter().enumerate() {
+                let pair = idx / 2;
+                let target = order.get(pair).copied().unwrap_or(pair);
+                for (output, volume) in playback.volumes.iter().enumerate() {
+                    let expected = if output == target { 1.0 } else { 0.0 };
+                    assert!(
+                        (*volume - expected).abs() < 1e-6,
+                        "{model:?} playback {} output {output}: {volume} != {expected}",
+                        playback.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn uc_input_matrix_uses_display_columns() {
         let (mut dev, writes) = open(Model::Uc);
-        // Matrix column 0 is AN1/2, which is raw UC block 0.
+        // Matrix column 0 is AN1/2, which is raw UC block 0.  Hard-left pan
+        // keeps the mono equal-power law from splitting the value.
+        dev.set_pan(ChannelId::Input(0), 0, -100).unwrap();
         dev.set_volume(ChannelId::Input(0), 0, 0.5).unwrap();
         let w = writes.lock().unwrap();
         let (value, index) = uc::matrix_word(0.5, 0);
@@ -8713,6 +8778,7 @@ mod tests {
         // spec 8.1.1).
         let (mut dev, _writes) = open(Model::Uc);
         dev.clear_all_routings();
+        dev.set_pan(ChannelId::Input(0), 3, -100).unwrap();
         dev.set_volume(ChannelId::Input(0), 3, 1.0).unwrap();
         assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
         assert_eq!(dev.routed_pairs_for(ChannelId::Input(0)), vec![3]);
@@ -8734,6 +8800,7 @@ mod tests {
         // so the routing stays visible and unmuting restores the same cell.
         let (mut dev, _writes) = open(Model::Uc);
         dev.clear_all_routings();
+        dev.set_pan(ChannelId::Input(0), 3, -100).unwrap();
         dev.set_volume(ChannelId::Input(0), 3, 1.0).unwrap();
         assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
 
@@ -8783,6 +8850,8 @@ mod tests {
     #[test]
     fn uc_playback_pan_attenuates_the_matching_side() {
         let (mut dev, writes) = open(Model::Uc);
+        dev.set_volume(ChannelId::Playback(0), 2, 1.0).unwrap();
+        dev.set_volume(ChannelId::Playback(1), 2, 1.0).unwrap();
         writes.lock().unwrap().clear();
         dev.set_pan(ChannelId::Playback(0), 2, 50).unwrap();
 
@@ -8880,6 +8949,7 @@ mod tests {
     #[test]
     fn uc_fader_after_phase_does_not_negate_the_matrix_level() {
         let (mut dev, writes) = open(Model::Uc);
+        dev.set_pan(ChannelId::Input(0), 0, -100).unwrap();
         dev.set_phase(0, true).unwrap();
         writes.lock().unwrap().clear();
         dev.set_volume(ChannelId::Input(0), 0, 1.0).unwrap();
@@ -8895,6 +8965,7 @@ mod tests {
         let (mut dev, writes) = open(Model::Uc);
         // Playback 1 (source 18) into AN4 (block 3), the side its stereo
         // pair does not normally reach.
+        dev.set_volume(ChannelId::Playback(0), 1, 1.0).unwrap();
         dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
             .unwrap();
         let (value, index) = uc::matrix_word(0.5, 3 * 36 + 18);
@@ -8995,15 +9066,18 @@ mod tests {
     #[test]
     fn uc_mono_input_cell_is_independent_and_cleared_by_pan() {
         let (mut dev, _writes) = open(Model::Uc);
-        // AN1 is mono: its pair value is pan-derived (both sides 1.0 at
-        // centre).  A mono-cell edit changes only the addressed side.
+        // AN1 is mono: its pair value is split by the equal-power pan law,
+        // so a centred 1.0 send is 1/sqrt(2) on each side.  A mono-cell
+        // edit changes only the addressed side.
+        let side = std::f32::consts::FRAC_1_SQRT_2;
+        dev.set_volume(ChannelId::Input(0), 1, 1.0).unwrap();
         dev.set_matrix_cell(ChannelId::Input(0), 2, 0.5).unwrap();
         assert_eq!(dev.matrix_cell(ChannelId::Input(0), 2), Some(0.5));
-        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 3), Some(1.0));
+        assert!((dev.matrix_cell(ChannelId::Input(0), 3).unwrap() - side).abs() < 1e-6);
         // Moving the pan/volume returns both sides to the pair model.
         dev.set_volume(ChannelId::Input(0), 1, 0.8).unwrap();
-        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 2), Some(0.8));
-        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 3), Some(0.8));
+        assert!((dev.matrix_cell(ChannelId::Input(0), 2).unwrap() - 0.8 * side).abs() < 1e-6);
+        assert!((dev.matrix_cell(ChannelId::Input(0), 3).unwrap() - 0.8 * side).abs() < 1e-6);
     }
 
     #[test]
@@ -9091,8 +9165,10 @@ mod tests {
         assert_eq!(w[31], Write::Vendor(protocol::req::PGA, 6, 21));
         assert_eq!(w[32], Write::Vendor(protocol::req::MIXER, 0x2000, 1008));
         assert_eq!(w[33], Write::Vendor(protocol::req::MIXER, 0x2000, 1009));
-        assert_eq!(w[34], Write::Vendor(protocol::req::MIXER, 0x2000, 576));
-        assert_eq!(w[35], Write::Vendor(protocol::req::MIXER, 0x2000, 612));
+        // Input 1 is unrouted by default, so its cells are written at -inf;
+        // the output masters above stay at unity.
+        assert_eq!(w[34], Write::Vendor(protocol::req::MIXER, 0x0000, 576));
+        assert_eq!(w[35], Write::Vendor(protocol::req::MIXER, 0x0000, 612));
 
         // Outputs are numeric ascending and written in reverse order, so
         // the final pair pushed is AN1/2 (encoder 4/5, masters 992/993).

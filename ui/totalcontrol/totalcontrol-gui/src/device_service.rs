@@ -1787,9 +1787,19 @@ mod tests {
             }),
             "the initial snapshot arrives"
         );
-        // The mock starts with unity sends, so the cell is routed.
-        assert!(mirror.matrix_cell_routed(ChannelId::Input(0), 0));
-        assert!(mirror.matrix_cell(ChannelId::Input(0), 0).is_some());
+        // A factory input starts unrouted; a level creates the routing.
+        assert!(!mirror.matrix_cell_routed(ChannelId::Input(0), 0));
+
+        assert!(mirror.set_volume(ChannelId::Input(0), 0, 1.0));
+        assert!(
+            wait_for(|| {
+                while let Ok(snapshot) = updates.try_recv() {
+                    mirror.update(snapshot);
+                }
+                mirror.matrix_cell_routed(ChannelId::Input(0), 0)
+            }),
+            "a level creates the mirror's routing"
+        );
 
         assert!(mirror.set_volume(ChannelId::Input(0), 0, 0.0));
         assert!(
