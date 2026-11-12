@@ -455,6 +455,15 @@ impl RmeDevice for DeviceHandle {
     fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
         delegate!(self, matrix_cell(channel, block))
     }
+    fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
+        delegate!(self, matrix_cell_routed(channel, pair))
+    }
+    fn routed_pairs_for(&self, channel: ChannelId) -> Vec<usize> {
+        delegate!(self, routed_pairs_for(channel))
+    }
+    fn clear_all_routings(&mut self) {
+        delegate!(self, clear_all_routings())
+    }
     fn set_matrix_cell(
         &mut self,
         channel: ChannelId,
@@ -490,10 +499,11 @@ impl RmeDevice for DeviceHandle {
     fn settings_mut(&mut self) -> &mut totalcontrol_core::DeviceSettings {
         delegate!(self, settings_mut)
     }
-    /// The UC defers its input meter tap until the startup scene is latched
-    /// (`TOTALCONTROL_DEFER_METER_TAP`).  The trait default is a no-op, so without
-    /// this forward the Fireface backend's tap is never started and the AN5
-    /// meter stays flat even though the hardware capture is live.
+    /// The UC defers its input meter tap until the startup scene has been
+    /// written (`TOTALCONTROL_DEFER_METER_TAP`).  The trait default is a
+    /// no-op, so without this forward the Fireface backend's tap is never
+    /// started and the AN5 meter stays flat even though the hardware capture
+    /// is live.
     fn begin_metering(&mut self) {
         delegate!(self, begin_metering)
     }
@@ -2157,6 +2167,10 @@ pub enum Message {
     MatrixCellChanged(ChannelId, usize, f32),
     /// Toggle Matrix Mono Mode (one mono cell vs the stereo pair).
     ToggleMatrixMono,
+    /// Switch the TotalMix routing view (UC manual 26.5.1).
+    SetRoutingMode(RoutingMode),
+    /// In Free mode: bind a strip to an output pair.
+    SetFreeTarget(ChannelId, usize),
     /// Cursor-key fader nudge, in dB (+ = louder).
     NudgeVolume(f32),
     FaderPressed(ChannelId, usize, f32, Option<(f32, f32)>),
@@ -2508,6 +2522,27 @@ pub struct MasterSet {
     pub suspended: bool,
 }
 
+/// TotalMix's two routing views (UC manual 26.5.1).  They differ only in
+/// which routing a channel strip's fader is bound to: Submix binds it to the
+/// selected hardware output, Free binds it to the strip's own target.  In
+/// both modes a fader edit changes exactly one routing; only Trim fans a
+/// fader out to all of a channel's active routings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RoutingMode {
+    #[default]
+    Submix,
+    Free,
+}
+
+impl RoutingMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            RoutingMode::Submix => "Submix",
+            RoutingMode::Free => "Free",
+        }
+    }
+}
+
 pub struct TotalControl {
     pub device: DeviceHandle,
     /// The effective layout for the connected model.
@@ -2520,6 +2555,13 @@ pub struct TotalControl {
     pub sel_out: usize,
     /// Selected side of a split output pair (0 = left, 1 = right).
     pub sel_out_side: usize,
+    /// TotalMix routing view (UC manual 26.5.1).  Submix binds every strip's
+    /// fader to the selected hardware output; Free lets each strip show and
+    /// edit its own routing target (`free_target`).
+    pub routing_mode: RoutingMode,
+    /// In Free mode, the output pair each source strip is bound to.  Key is
+    /// the source channel id's index space (see `free_target_key`).
+    pub free_target: std::collections::HashMap<usize, usize>,
     /// Last front-panel OUT selection seen by `Message::Tick` — when it
     /// changes, `sel_out` follows (TotalMix highlights the panel's
     /// current submix). `None` = never seen (no panel / first tick).
@@ -3338,6 +3380,8 @@ pub fn new_with_device(
         device_target,
         connected,
         sel_out: 0,
+        routing_mode: RoutingMode::Submix,
+        free_target: std::collections::HashMap::new(),
         sel_out_side: 0,
         last_panel_out: None,
         view: View::Mixer,
@@ -3707,6 +3751,8 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             fx_panel: state.show_fx_panel,
             ui_scale: state.ui_scale,
             sel_out: state.sel_out,
+            routing_mode: state.routing_mode,
+            free_target: state.free_target.clone(),
             sel_out_side: state.sel_out_side,
             quick_channel: state.quick_channel,
             show_original_names: state.show_original_names,
@@ -4899,7 +4945,7 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
             Err(e) => eprintln!("auto scene load failed: {e:?}"),
         }
         // Only now may the meter tap open the capture PCM and start the
-        // engine; the scene above is latched at that point.
+        // engine; the startup scene has been written by this point.
         state.device.begin_metering();
         return;
     }
@@ -5055,9 +5101,11 @@ fn rate_needs_mixer_reapply(last: Option<u32>, current: Option<u32>, model_rate:
 
 /// Force the PipeWire graph through the ordinary engine-rate path.  A
 /// followed rate passes `remember = false`: it is runtime state, not the
-/// user's fixed-rate preference.  The UC capture side is suspended and its
-/// scene shadow-written before the graph restarts, so routing and meters
-/// survive the rate change.
+/// user's fixed-rate preference.
+///
+/// The UC applies `0x12` writes to the running engine, so a rate change needs
+/// no scene shadow write, no capture-side suspend and no re-apply afterwards:
+/// the routes are already in the device and survive the graph restart.
 fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     if remember && !state.device.is_mock() {
         state.engine_force_rate = rate;
@@ -5071,40 +5119,6 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     if !state.device.rate_follows_sound_server() {
         return;
     }
-    let uc = state.device.is_uc_model();
-    // The UC latches matrix routing at engine start.  A scene written while
-    // the engine is running only updates its shadow state; the next engine
-    // start applies it.
-    //
-    // Before a rate change, close the capture side so the kernel no longer
-    // locks the playback rate to the old value.  Keep playback running, write
-    // the full scene into the shadow, then change the rate.  PipeWire restarts
-    // the playback stream at the new rate, and that restarted engine latches
-    // the scene we just wrote.
-    let suspended_source = if uc && rate > 0 {
-        let source = pw_clock::fireface_source_name();
-        if let Some(source) = &source {
-            if pw_clock::set_source_suspended(source, true) {
-                // Let the kernel clear the capture hw_params (the rate lock)
-                // before touching the graph.
-                std::thread::sleep(Duration::from_millis(120));
-            } else {
-                log::warn!("Could not suspend the RME source for the rate change");
-            }
-        }
-        source
-    } else {
-        None
-    };
-    if uc && rate > 0 {
-        // Shadow write before the rate change.  Playback is still running, so
-        // this does not disturb the current audio; the rate-change engine
-        // restart latches it.
-        let scene = state.device.capture_scene();
-        if let Err(e) = state.device.apply_scene(&scene) {
-            log::warn!("Scene shadow write before rate change failed: {e:?}");
-        }
-    }
     if let Err(e) = pw_clock::force_rate(rate) {
         log::warn!("Setting the PipeWire rate failed: {e}");
     }
@@ -5117,16 +5131,6 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
             .card_stream
             .is_some()
             .then_some((rate, Instant::now()));
-        if let Some(source) = suspended_source {
-            pw_clock::set_source_suspended(&source, false);
-        }
-        // Fallback for a backend/card where the restart did not latch the
-        // shadow state.
-        schedule_mixer_reapply(
-            state,
-            Duration::from_millis(1_500),
-            "host sample-rate change",
-        );
     } else {
         state.pending_device_rate = None;
     }
@@ -5568,10 +5572,126 @@ fn apply_trim(state: &mut TotalControl, cid: ChannelId, db: f32) {
         ChannelId::Input(_) | ChannelId::Playback(_) => vec![cid],
         ChannelId::Output(_) => return,
     };
+    // Trim moves every routing of the channel together.  At the bottom it
+    // also removes the one routing the strip currently shows; the channel's
+    // other routings keep their levels (GUI spec 8.1.1).  The shown routing
+    // is the selected submix in Submix mode, or the channel's own target in
+    // Free mode.
+    let bottomed = db <= -64.99;
+    let shown: Vec<(ChannelId, usize)> = if bottomed {
+        targets
+            .iter()
+            .filter_map(|target| strip_target_pair(state, *target).map(|pair| (*target, pair)))
+            .collect()
+    } else {
+        Vec::new()
+    };
     for target in targets {
         if let Err(e) = state.device.set_trim(target, db) {
             fail(state, "set_trim", &e);
         }
+    }
+    for (target, pair) in shown {
+        // Clear the pair's send and any mono cell on either side, so a
+        // non-natural crosspoint goes with it.
+        let _ = state.device.set_volume(target, pair, 0.0);
+        for block in state.device.matrix_blocks_for_pair(pair) {
+            let _ = state.device.set_matrix_cell(target, block, 0.0);
+        }
+    }
+}
+
+/// The output a source strip's fader edits.  TotalMix binds the strip to one
+/// routing at a time: in Submix it is the selected hardware output, in Free
+/// it is the strip's own target (UC manual 26.5.1).  `None` means the strip
+/// has no bound routing, so the fader only stores the value.
+fn strip_target_pair(state: &TotalControl, cid: ChannelId) -> Option<usize> {
+    // An output strip is its own master, not a routing between channels.
+    if matches!(cid, ChannelId::Output(_)) {
+        return None;
+    }
+    match state.routing_mode {
+        RoutingMode::Submix => Some(
+            state
+                .sel_out
+                .min(state.device.output_pair_count().saturating_sub(1)),
+        ),
+        // Free: this channel's own target.  A channel that was never given
+        // one shows its first routing, which is what TotalMix's Free view
+        // displays.  Never fall back to the global selection, or every
+        // channel would follow it again.
+        RoutingMode::Free => state
+            .free_target
+            .get(&free_target_key(state, cid))
+            .copied()
+            .or_else(|| state.device.routed_pairs_for(cid).first().copied()),
+    }
+}
+
+/// Parity of a channel within its pair: 0 for the odd (first) channel, 1 for
+/// the even (second) one (GUI spec 8.1.2).
+pub(crate) fn channel_parity(cid: ChannelId) -> usize {
+    match cid {
+        ChannelId::Input(i) => i % 2,
+        ChannelId::Playback(i) => i % 2,
+        ChannelId::Output(i) => i % 2,
+    }
+}
+
+/// The channel of the same pair as `cid` that has `parity`.
+fn channel_with_parity(cid: ChannelId, parity: usize) -> ChannelId {
+    let offset = parity.min(1);
+    match cid {
+        ChannelId::Input(i) => ChannelId::Input((i & !1) + offset),
+        ChannelId::Playback(i) => ChannelId::Playback((i & !1) + offset),
+        ChannelId::Output(i) => ChannelId::Output((i & !1) + offset),
+    }
+}
+
+/// Key for `free_target`.  A routing target belongs to a *pair*, not to each
+/// side: a linked pair selects one target for both channels, and a split pair
+/// selects one per side (GUI spec 8.1).  The key space keeps inputs,
+/// playback and outputs apart.
+fn free_target_key(state: &TotalControl, cid: ChannelId) -> usize {
+    let sides = state.device.outputs_one_per_pair();
+    match cid {
+        ChannelId::Input(i) => i / if sides { 1 } else { 2 },
+        ChannelId::Playback(i) => 1000 + i / if sides { 1 } else { 2 },
+        ChannelId::Output(i) => 2000 + i / if sides { 1 } else { 2 },
+    }
+}
+
+/// Which channels a routing-target choice applies to: a linked pair changes
+/// both sides, a split pair only the side the routing field belongs to.
+fn free_target_channels(state: &TotalControl, cid: ChannelId) -> Vec<ChannelId> {
+    let linked = match cid {
+        ChannelId::Input(i) => state.device.input_pair_linked(i / 2),
+        ChannelId::Playback(i) => state.device.playback_linked(i / 2),
+        ChannelId::Output(i) => state.device.output_linked(i / 2),
+    };
+    match cid {
+        ChannelId::Output(_) => vec![cid],
+        _ if linked => {
+            let other = match cid {
+                ChannelId::Input(i) => ChannelId::Input(i ^ 1),
+                ChannelId::Playback(i) => ChannelId::Playback(i ^ 1),
+                ChannelId::Output(i) => ChannelId::Output(i ^ 1),
+            };
+            vec![cid, other]
+        }
+        _ => vec![cid],
+    }
+}
+
+/// Set a channel's Free-mode routing target.  Only Free mode has per-channel
+/// targets; in Submix the selected output is the one global target.
+fn set_free_target(state: &mut TotalControl, cid: ChannelId, pair: usize) {
+    if state.routing_mode != RoutingMode::Free {
+        return;
+    }
+    for channel in free_target_channels(state, cid) {
+        let key = free_target_key(state, channel);
+        state.free_target.insert(key, pair);
     }
 }
 
@@ -5579,8 +5699,27 @@ fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f
     // The caller passes the level shown next to the fader; the model
     // stores the send before trim.
     let send = effective_to_send(state, cid, v);
-    if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) && out == state.sel_out {
-        if let Some(block) = selected_output_block(state) {
+    let bound = if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) {
+        strip_target_pair(state, cid)
+    } else {
+        None
+    };
+    if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) {
+        // A linked (or single-channel) output has no sided block: the strip
+        // then edits the whole pair through the per-submix model, which is
+        // how TotalMix's stereo routings behave.
+        let block = bound.and_then(|pair| {
+            if state.device.outputs_one_per_pair() || state.device.output_linked(pair) {
+                None
+            } else {
+                output_block_for_pair(
+                    &state.device.output_display_order(),
+                    pair,
+                    state.sel_out_side,
+                )
+            }
+        });
+        if let Some(block) = block {
             // A linked pair keeps its balance across the two source cells
             // while the fader moves the pair level.  At level 0 the cells
             // are silent, so the stored balance is the only state left.
@@ -5606,6 +5745,10 @@ fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f
             let _ = state.device.set_matrix_cell(cid, block, send);
             return;
         }
+        // No bound routing, or a linked output pair: the fader edits the
+        // whole pair through the per-submix model, which is how TotalMix's
+        // stereo routings behave.  `out` is already the bound pair: the
+        // strip supplies it from `strip_target_pair`.
     }
     let _ = match cid {
         ChannelId::Input(ch) => state.device.set_input_volume(ch / 2, ch % 2, out, send),
@@ -5957,8 +6100,13 @@ fn apply_grouped_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v:
     notify_osc(state, OscOutbound::Volume(cid, out, v));
     for sel in others {
         // Hardware outputs carry their own index instead of a submix.
+        // In Free mode every channel keeps its own target; in Submix the
+        // one selected output is the shared target.
         let peer_out = match sel {
             ChannelId::Output(i) => i,
+            _ if state.routing_mode == RoutingMode::Free => {
+                strip_target_pair(state, sel).unwrap_or(out)
+            }
             _ => out,
         };
         let cur = channel_level(state, sel, peer_out) * trim_factor(channel_trim(state, sel));
@@ -8070,6 +8218,8 @@ fn is_undoable(message: &Message) -> bool {
             | Message::MeterWake
             | Message::SetView(_)
             | Message::ToggleMatrixMono
+            | Message::SetRoutingMode(_)
+            | Message::SetFreeTarget(_, _)
             | Message::QuickChannelSelected(_)
             | Message::QuickDestination(_)
             | Message::SelectOutput(_)
@@ -8340,6 +8490,8 @@ fn changes_workspace(message: &Message) -> bool {
             | Message::QuickDestination(_)
             | Message::SelectOutput(_)
             | Message::ToggleMatrixMono
+            | Message::SetRoutingMode(_)
+            | Message::SetFreeTarget(_, _)
     ) || changes_prefs(message)
         || changes_mix(message)
 }
@@ -8366,7 +8518,6 @@ fn needs_protocol_features(message: &Message) -> bool {
             | Message::EchoChanged(..)
             | Message::FxReturnChanged(..)
             | Message::FxSendChanged(..)
-            | Message::ResetMix(_)
             | Message::PhaseChanged(..)
             | Message::OutputPhaseChanged(..)
             | Message::PitchChanged(_)
@@ -8465,6 +8616,54 @@ fn follow_graph_stream(
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     })
+}
+
+/// Apply one source cell edit.  A pair is 1/2, 3/4: an odd and an even
+/// channel, linked or unlinked.  Every rule keeps the source channel's
+/// parity (GUI spec 8.1.2).
+///
+///   A1 source linked, dest linked   -> two cells: odd->odd, even->even
+///   A2 source linked, dest unlinked -> one cell, from the source's odd or
+///                                      even channel to the same parity
+///                                      channel of the pair
+///   B1 source mono,   dest linked   -> one cell, on the pair channel of the
+///                                      same parity
+///   B2 source mono,   dest mono     -> one cell, source to dest
+fn apply_matrix_cell(state: &mut TotalControl, cid: ChannelId, block: usize, v: f32) {
+    let source_linked = match cid {
+        ChannelId::Input(i) => state.device.input_pair_linked(i / 2),
+        ChannelId::Playback(i) => state.device.playback_linked(i / 2),
+        ChannelId::Output(_) => false,
+    };
+    let split_playback = match cid {
+        ChannelId::Playback(i) => state.device.playbacks().get(i).is_some_and(|ch| ch.split),
+        _ => false,
+    };
+    let source_linked = source_linked && !split_playback;
+    let dest_linked = state.device.output_linked(block / 2);
+    let src_parity = channel_parity(cid);
+    let pair_start = (block / 2) * 2;
+    let send = effective_to_send(state, cid, v);
+    match (source_linked, dest_linked) {
+        (true, true) => apply_grouped_volume(state, cid, block / 2, v),
+        (true, false) => {
+            let source = channel_with_parity(cid, block % 2);
+            if let Err(e) = state.device.set_matrix_cell(source, block, send) {
+                fail(state, "set_matrix_cell", &e);
+            }
+        }
+        (false, true) => {
+            let cell = pair_start + src_parity;
+            if let Err(e) = state.device.set_matrix_cell(cid, cell, send) {
+                fail(state, "set_matrix_cell", &e);
+            }
+        }
+        (false, false) => {
+            if let Err(e) = state.device.set_matrix_cell(cid, block, send) {
+                fail(state, "set_matrix_cell", &e);
+            }
+        }
+    }
 }
 
 pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
@@ -10137,19 +10336,29 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             apply_grouped_volume(state, cid, out, v);
         }
         Message::MatrixCellChanged(cid, block, v) => {
-            let split_playback = match cid {
-                ChannelId::Playback(i) => {
-                    state.device.playbacks().get(i).is_some_and(|ch| ch.split)
-                }
-                _ => false,
-            };
-            if state.matrix_mono || split_playback {
-                let send = effective_to_send(state, cid, v);
-                if let Err(e) = state.device.set_matrix_cell(cid, block, send) {
-                    fail(state, "set_matrix_cell", &e);
-                }
+            if matches!(cid, ChannelId::Output(_)) {
+                // The Outputs row is each output channel's own master, not
+                // a matrix source.  Reuse the fader path so linked pairs
+                // and ganged faders behave like the output strips.
+                apply_grouped_volume(state, cid, 0, v);
             } else {
-                apply_grouped_volume(state, cid, block / 2, v);
+                apply_matrix_cell(state, cid, block, v);
+            }
+        }
+        Message::SetRoutingMode(mode) => {
+            state.routing_mode = mode;
+            state.last_activity = Instant::now();
+        }
+        Message::SetFreeTarget(cid, pair) => {
+            // Free mode targets are per pair and never touch the global
+            // submix; Submix keeps one global target for every channel.
+            if state.routing_mode == RoutingMode::Free {
+                set_free_target(state, cid, pair);
+                state.last_activity = Instant::now();
+            } else {
+                state.sel_out = pair.min(state.device.output_pair_count().saturating_sub(1));
+                state.sel_out_side = 0;
+                state.last_activity = Instant::now();
             }
         }
         Message::ToggleMatrixMono => {
@@ -13588,7 +13797,7 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     }
     let device_labels: Vec<String> = targets.iter().map(DeviceTarget::label).collect();
     let targets_for_pick = targets.clone();
-    let session = row![
+    let mut session = row![
         text("Device")
             .color(theme::text_sec())
             .size(theme::TEXT_XS * scale),
@@ -13604,27 +13813,38 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
         .menu_style(theme::menu)
         .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
         .text_size(theme::TEXT_MD * scale),
-        text("Submix")
-            .color(theme::text_sec())
-            .size(theme::TEXT_XS * scale),
-        pick_list(
-            out_labels,
-            Some(selected_pair_label.clone()),
-            move |label| {
-                let display = out_labels_pick
-                    .iter()
-                    .position(|l| *l == label)
-                    .unwrap_or(0);
-                Message::SelectOutput(display_to_internal.get(display).copied().unwrap_or(display))
-            },
-        )
-        .style(theme::pick_list)
-        .menu_style(theme::menu)
-        .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-        .text_size(theme::TEXT_MD * scale),
     ]
     .spacing(theme::SPACE_SM * scale)
     .align_y(iced::Alignment::Center);
+    // Free routing has no selected submix, so the selector is meaningless
+    // there (GUI spec 8.1).
+    if state.routing_mode == RoutingMode::Submix {
+        session = session
+            .push(
+                text("Submix")
+                    .color(theme::text_sec())
+                    .size(theme::TEXT_XS * scale),
+            )
+            .push(
+                pick_list(
+                    out_labels,
+                    Some(selected_pair_label.clone()),
+                    move |label| {
+                        let display = out_labels_pick
+                            .iter()
+                            .position(|l| *l == label)
+                            .unwrap_or(0);
+                        Message::SelectOutput(
+                            display_to_internal.get(display).copied().unwrap_or(display),
+                        )
+                    },
+                )
+                .style(theme::pick_list)
+                .menu_style(theme::menu)
+                .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+                .text_size(theme::TEXT_MD * scale),
+            );
+    }
 
     // The knob/T mark without its tile, beside the wordmark and sized off
     // the wordmark's own height. A missing asset just falls back to the
@@ -13812,7 +14032,9 @@ fn strip_params<'a>(
     // out must equal i or the wrong master moves.
     let output_idx = match cid {
         ChannelId::Output(i) => i,
-        _ => output_idx,
+        // Submix: the one selected output.  Free: the channel's own target,
+        // so its fader shows and edits the routing it is bound to.
+        _ => strip_target_pair(state, cid).unwrap_or(output_idx),
     };
     // FX send on inputs and software playbacks, FX Return on outputs: the
     // thin fader TotalMix draws beside the main one.
@@ -14382,8 +14604,10 @@ fn split_pair_levels(
     block: usize,
 ) -> Option<(ChannelId, ChannelId, f32, i8)> {
     let (left, right) = stereo_pair(cid);
-    let left_level = state.device.matrix_cell(left, block)?;
-    let right_level = state.device.matrix_cell(right, block)?;
+    // A cell with no level is no routing (GUI spec 8.1.1), so an absent cell
+    // is a zero side here rather than "no pair to balance".
+    let left_level = state.device.matrix_cell(left, block).unwrap_or(0.0);
+    let right_level = state.device.matrix_cell(right, block).unwrap_or(0.0);
     Some((
         left,
         right,
@@ -14540,21 +14764,39 @@ fn route_visible(state: &TotalControl, cid: ChannelId, now: Instant) -> bool {
 /// The route flyout's content — one button per output bus, current
 /// selection highlighted. `width` is the caller's animated tween value;
 /// `.clip(true)` keeps the list from spilling out past it mid-animation.
-fn route_popover(state: &TotalControl, width: f32, scale: f32) -> Element<'_, Message> {
+fn route_popover(
+    state: &TotalControl,
+    cid: ChannelId,
+    width: f32,
+    scale: f32,
+) -> Element<'_, Message> {
     let mut list = column![].spacing(theme::SPACE_TIGHT);
     let labels = state.display_pair_labels();
     let display_to_internal = state.device.output_display_order();
-    let selected_display = state.device.display_pair_index(state.sel_out);
+    // Submix: every channel's field shows the one selected output.  Free:
+    // the field belongs to this channel, so it shows and edits that
+    // channel's own target (GUI spec 8.1).
+    let current_pair = match state.routing_mode {
+        RoutingMode::Submix => state.sel_out,
+        RoutingMode::Free => strip_target_pair(state, cid)
+            .or_else(|| state.device.routed_pairs_for(cid).first().copied())
+            .unwrap_or(state.sel_out),
+    };
+    let current_display = state.device.display_pair_index(current_pair);
     for (display, label) in labels.iter().enumerate() {
         let internal = display_to_internal.get(display).copied().unwrap_or(display);
+        let message = match state.routing_mode {
+            RoutingMode::Submix => Message::SelectOutput(internal),
+            RoutingMode::Free => Message::SetFreeTarget(cid, internal),
+        };
         list = list.push(
             button(strip::left_label_wide(label.clone(), theme::TEXT_DIALOG * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
-                // The bus a strip routes to is a position, not an "on"
+                // The bus a channel routes to is a position, not an "on"
                 // state: the graphite thumb, not the white fill.
-                .style(theme::segment_button(display == selected_display))
-                .on_press(Message::SelectOutput(internal)),
+                .style(theme::segment_button(display == current_display))
+                .on_press(message),
         );
     }
     // Floats over the next strips, so it is a raised card with a shadow,
@@ -16184,7 +16426,7 @@ fn with_flyout<'a>(
     if !open && width <= 0.0 {
         return row_element;
     }
-    let content = route_popover(state, width, state.ui_scale);
+    let content = route_popover(state, cid, width, state.ui_scale);
     // `opaque` captures clicks across its *own* widget's bounds — those
     // have to be just the small popover itself (its natural, tightly-fit
     // size), not the Length::Fill positioning container around it. Get
@@ -17341,6 +17583,15 @@ fn apply_reset_mix(state: &mut TotalControl, kind: ResetMix) {
 
     match kind {
         ResetMix::StraightPlayback | ResetMix::StraightToMain | ResetMix::TotalReset => {
+            state.device.clear_all_routings();
+            // A straight-playback preset leaves nothing but the 1:1
+            // playback routes (manual table: "nothing else routed").  An
+            // input fader or a mono matrix cell that survives here is a
+            // routing the reset did not remove.
+            for inp in scene.inputs.iter_mut() {
+                silence(&mut inp.volumes);
+            }
+            scene.matrix_overrides.clear();
             for (i, pb) in scene.playbacks.iter_mut().enumerate() {
                 silence(&mut pb.volumes);
                 let pair = (i / 2).min(pairs - 1);
@@ -17368,6 +17619,10 @@ fn apply_reset_mix(state: &mut TotalControl, kind: ResetMix) {
                 silence(&mut inp.volumes);
             }
             scene.matrix_overrides.clear();
+            // Drop the routings themselves too: a routing exists while it has
+            // a level, so leaving the crosspoint state behind lets the scene
+            // apply restore the routes and the reset does nothing.
+            state.device.clear_all_routings();
         }
         ResetMix::ClearEffects => clear_effects(&mut scene),
         ResetMix::SetOutputVolumes => set_output_volumes(&mut scene, main_pair, b_pair),
@@ -18544,6 +18799,44 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     (page(body), fx_overlay)
 }
 
+/// Submix / Free radio buttons, mirroring TotalMix's Routing Mode option
+/// (UC manual 26.5.1).  The modes differ only in which routing a strip's
+/// fader is bound to; fader edits change one routing in both.
+fn routing_mode_picker(state: &TotalControl, scale: f32) -> Element<'static, Message> {
+    let mut row = row![].spacing(theme::SPACE_SM);
+    for mode in [RoutingMode::Submix, RoutingMode::Free] {
+        row = row.push(
+            iced::widget::radio(
+                mode.label(),
+                mode,
+                Some(state.routing_mode),
+                Message::SetRoutingMode,
+            )
+            .size(theme::TEXT_XS * scale * 1.1)
+            .text_size(theme::TEXT_XS * scale),
+        );
+    }
+    // In Free mode the caption tells the user which routing the focused
+    // strip edits; Submix always follows the selected hardware output.
+    let hint = match state.routing_mode {
+        RoutingMode::Submix => "Submix: strips edit the selected output".to_string(),
+        RoutingMode::Free => match state.focus_channel {
+            Some(cid) => {
+                let pair = strip_target_pair(state, cid);
+                let name = pair
+                    .map(|p| state.device.outputs().get(p * 2).map(|o| o.name.clone()))
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "-".into());
+                format!("Free: {cid:?} to {name}")
+            }
+            None => "Free: select a channel to set its target".to_string(),
+        },
+    };
+    row.push(text(hint).size(theme::TEXT_XS * scale).color(theme::text_sec()))
+        .align_y(iced::Alignment::Center)
+        .into()
+}
+
 fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     // The caption reads out the cell under the pointer, and is the how-to
@@ -18557,11 +18850,20 @@ fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
         .color(theme::text_sec()),
     }
     .size(theme::TEXT_XS * scale);
+    // The caption alternates between the long how-to and a short hover
+    // readout.  A fixed-height, clipped box keeps the grid from moving when
+    // the pointer enters a cell and the text changes length.
+    let caption = container(caption)
+        .width(Length::Fill)
+        .height(Length::Fixed(theme::TEXT_XS * 2.4 * scale))
+        .clip(true);
     let body = column![
         section_header("MATRIX MIXER", scale),
         row![
             caption,
-            iced::widget::Space::new().width(Length::Fill),
+            routing_mode_picker(state, scale),
+            // The submix column highlight has no meaning without a selected
+            // submix (GUI spec 8.1).
             iced::widget::button(strip::centered_label_auto("MONO MODE", theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .style(theme::toggle_button(state.matrix_mono, theme::ACCENT))
@@ -18755,7 +19057,7 @@ fn quick_block<'a>(
             Eq => eq_popover(state, cid, panel_w, big_scale),
             Dynamics => dynamics_popover(state, cid, panel_w, big_scale),
             Trim => trim_popover(state, cid, panel_w, big_scale),
-            Route => route_popover(state, panel_w, big_scale),
+            Route => route_popover(state, cid, panel_w, big_scale),
         };
         panel = Some((content, panel_w));
         break;
@@ -18969,6 +19271,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 mod tests {
     use super::{
         any_channel_muted, any_channel_soloed, apply_control_room_assignments, apply_host_settings,
+        channel_parity, channel_with_parity, strip_target_pair, RoutingMode,
         apply_pending_resize, apply_startup_sync, apply_workspace, apply_workspace_gui,
         attach_device_service, capture_workspace, channel_is_muted, channel_is_soloed,
         channel_trim, choose_startup_kind, choose_startup_target, control_room_visual_width,
@@ -21084,6 +21387,348 @@ mod tests {
         assert_eq!(state.renaming, Some(b), "the answer about `a` is ignored");
     }
 
+    /// The cells a click writes, computed the way the Matrix handler does.
+    fn matrix_edit_cells(
+        state: &TotalControl,
+        cid: ChannelId,
+        block: usize,
+    ) -> Vec<(ChannelId, usize)> {
+        let source_linked = match cid {
+            ChannelId::Input(i) => state.device.input_pair_linked(i / 2),
+            ChannelId::Playback(i) => state.device.playback_linked(i / 2),
+            ChannelId::Output(_) => false,
+        };
+        let dest_linked = state.device.output_linked(block / 2);
+        let src_parity = channel_parity(cid);
+        match (source_linked, dest_linked) {
+            (true, true) => vec![
+                (channel_with_parity(cid, 0), (block / 2) * 2),
+                (channel_with_parity(cid, 1), (block / 2) * 2 + 1),
+            ],
+            (true, false) => vec![(channel_with_parity(cid, block % 2), block)],
+            (false, true) => vec![(cid, (block / 2) * 2 + src_parity)],
+            (false, false) => vec![(cid, block)],
+        }
+    }
+
+    #[test]
+    fn clear_all_submixes_removes_every_routing() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        let pair = state.device.output_pair_count() - 1;
+        state.device.set_output_linked(pair, true).unwrap();
+        // Establish a couple of routes.
+        let _ = update(
+            &mut state,
+            Message::MatrixCellChanged(ChannelId::Input(0), pair * 2, 1.0),
+        );
+        assert!(state.device.matrix_cell_routed(ChannelId::Input(0), pair));
+        assert!(
+            !state
+                .device
+                .routed_pairs_for(ChannelId::Input(0))
+                .is_empty()
+        );
+
+        // Reset Mix > Clear all submixes must leave nothing routed.
+        let _ = update(
+            &mut state,
+            Message::ResetMix(ResetMix::ClearSubmixes),
+        );
+        assert!(
+            state
+                .device
+                .routed_pairs_for(ChannelId::Input(0))
+                .is_empty(),
+            "no channel stays routed after clearing the submixes"
+        );
+        assert!(state
+            .device
+            .matrix_cell(ChannelId::Input(0), pair * 2)
+            .is_none());
+    }
+
+    #[test]
+    fn reset_mix_runs_on_a_unit_without_dsp_protocol_features() {
+        // The UC has no EQ/FX DSP, so `protocol_features()` is false even
+        // though it speaks the vendor protocol and drives the mixer.  Reset
+        // Mix is a routing operation and must not be gated by that flag.
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_uc();
+        state.connected = true;
+        assert!(!state.device.protocol_features());
+
+        state
+            .device
+            .set_volume(ChannelId::Input(0), 0, 1.0)
+            .unwrap();
+        assert_eq!(state.device.volume(ChannelId::Input(0), 0).unwrap(), 1.0);
+
+        let _ = update(&mut state, Message::ResetMix(ResetMix::ClearSubmixes));
+
+        assert_eq!(
+            state.device.volume(ChannelId::Input(0), 0).unwrap(),
+            0.0,
+            "the UC applies Clear all submixes like any other unit"
+        );
+        assert!(
+            state
+                .device
+                .routed_pairs_for(ChannelId::Input(0))
+                .is_empty(),
+            "the level is the routing, so the cleared send is no routing"
+        );
+        assert!(state.device.matrix_cell(ChannelId::Input(0), 0).is_none());
+    }
+
+    #[test]
+    fn straight_playback_clears_input_routes() {
+        // The table in the manual: playbacks 1:1, nothing else routed.  An
+        // input send that survives the preset is a routing the reset missed.
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_uc();
+        state.connected = true;
+        state
+            .device
+            .set_volume(ChannelId::Input(0), 0, 1.0)
+            .unwrap();
+        assert!(!state
+            .device
+            .routed_pairs_for(ChannelId::Input(0))
+            .is_empty());
+
+        let _ = update(
+            &mut state,
+            Message::ResetMix(ResetMix::StraightPlayback),
+        );
+
+        assert!(
+            state
+                .device
+                .routed_pairs_for(ChannelId::Input(0))
+                .is_empty(),
+            "the input is not routed after straight playback"
+        );
+        assert_eq!(state.device.volume(ChannelId::Input(0), 0).unwrap(), 0.0);
+        // Playback 1/2 is routed 1:1 into its own output pair.
+        assert_eq!(
+            state.device.volume(ChannelId::Playback(0), 0).unwrap(),
+            1.0
+        );
+    }
+
+    fn two_free_routes() -> TotalControl {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_uc();
+        state.connected = true;
+        for pair in 0..state.device.output_pair_count() {
+            state
+                .device
+                .set_volume(ChannelId::Input(0), pair, 0.0)
+                .unwrap();
+        }
+        state
+            .device
+            .set_volume(ChannelId::Input(0), 0, 1.0)
+            .unwrap();
+        state
+            .device
+            .set_volume(ChannelId::Input(0), 3, 1.0)
+            .unwrap();
+        let _ = update(&mut state, Message::SetRoutingMode(RoutingMode::Free));
+        let _ = update(&mut state, Message::SetFreeTarget(ChannelId::Input(0), 0));
+        state
+    }
+
+    #[test]
+    fn a_free_fader_bottomed_removes_only_the_shown_route() {
+        // Two routes, the free target is pair 0.  Moving that fader to the
+        // bottom removes pair 0 and leaves pair 3 (GUI spec 8.1.1).
+        let mut state = two_free_routes();
+        assert_eq!(
+            super::strip_target_pair(&state, ChannelId::Input(0)),
+            Some(0)
+        );
+
+        let _ = update(
+            &mut state,
+            Message::VolumeChanged(ChannelId::Input(0), 0, 0.0),
+        );
+
+        assert_eq!(
+            state
+                .device
+                .routed_pairs_for(ChannelId::Input(0)),
+            vec![3],
+            "only the shown route is removed"
+        );
+        assert_eq!(
+            state.device.volume(ChannelId::Input(0), 3).unwrap(),
+            1.0,
+            "the other route keeps its level"
+        );
+    }
+
+    #[test]
+    fn a_free_trim_bottomed_removes_only_the_shown_route() {
+        // The trim control is the same rule: at the bottom the shown routing
+        // reaches -inf and is removed; the other routing stays.
+        let mut state = two_free_routes();
+
+        let _ = update(
+            &mut state,
+            Message::TrimChanged(ChannelId::Input(0), -65.0),
+        );
+
+        assert_eq!(
+            state
+                .device
+                .routed_pairs_for(ChannelId::Input(0)),
+            vec![3],
+            "trim at the bottom removes only the shown route"
+        );
+        assert_eq!(
+            state.device.volume(ChannelId::Input(0), 3).unwrap(),
+            1.0,
+            "the other route keeps its level"
+        );
+        // The fader itself reads the bottom because trim scales the send.
+        let params = super::strip_params(&state, ChannelId::Input(0), 0);
+        assert!(params.vol < 1e-3, "the fader is at the bottom");
+    }
+
+    #[test]
+    fn the_outputs_row_edits_the_channel_master() {
+        // The Outputs row is a master volume, not a matrix source.  A drag or
+        // wheel there must reach the output fader, not set_matrix_cell.
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_uc();
+        state.connected = true;
+        let out = ChannelId::Output(0);
+        assert_ne!(state.device.outputs()[0].volume, 0.5);
+
+        let _ = update(&mut state, Message::MatrixCellChanged(out, 0, 0.5));
+
+        assert!((state.device.outputs()[0].volume - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn matrix_case_a1_linked_pair_into_linked_pair_writes_two_cells() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        // The last output pair, whichever the device has.
+        let pair = state.device.output_pair_count() - 1;
+        state.device.set_output_linked(pair, true).unwrap();
+        let base = pair * 2;
+        let cells = matrix_edit_cells(&state, ChannelId::Input(0), base);
+        assert_eq!(
+            cells,
+            vec![(ChannelId::Input(0), base), (ChannelId::Input(1), base + 1)],
+            "a click on the odd cell writes odd->odd and even->even"
+        );
+        // Any of the four cells in a linked pair writes the same two.
+        for clicked in [base, base + 1] {
+            assert_eq!(
+                matrix_edit_cells(&state, ChannelId::Input(0), clicked),
+                vec![(ChannelId::Input(0), base), (ChannelId::Input(1), base + 1)],
+                "click {clicked} must write both parity cells"
+            );
+        }
+    }
+
+    #[test]
+    fn matrix_case_a2_linked_pair_into_mono_column_writes_one_parity_cell() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        let pair = state.device.output_pair_count() - 1;
+        state.device.set_output_linked(pair, false).unwrap();
+        let base = pair * 2;
+        // The odd column writes the odd source channel only.
+        assert_eq!(
+            matrix_edit_cells(&state, ChannelId::Input(0), base),
+            vec![(ChannelId::Input(0), base)]
+        );
+        // The even column writes the even source channel only.
+        assert_eq!(
+            matrix_edit_cells(&state, ChannelId::Input(0), base + 1),
+            vec![(ChannelId::Input(1), base + 1)]
+        );
+    }
+
+    #[test]
+    fn matrix_case_b1_mono_source_into_linked_pair_writes_matching_parity() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, false).unwrap();
+        let pair = state.device.output_pair_count() - 1;
+        state.device.set_output_linked(pair, true).unwrap();
+        let base = pair * 2;
+        // The odd mono channel always lands on the pair's odd cell, whichever
+        // of the two cells was clicked.
+        for clicked in [base, base + 1] {
+            assert_eq!(
+                matrix_edit_cells(&state, ChannelId::Input(0), clicked),
+                vec![(ChannelId::Input(0), base)]
+            );
+        }
+        // The even mono channel lands on the pair's even cell.
+        for clicked in [base, base + 1] {
+            assert_eq!(
+                matrix_edit_cells(&state, ChannelId::Input(1), clicked),
+                vec![(ChannelId::Input(1), base + 1)]
+            );
+        }
+    }
+
+    #[test]
+    fn matrix_case_b2_mono_source_into_mono_column_writes_the_clicked_cell() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, false).unwrap();
+        let pair = state.device.output_pair_count() - 1;
+        state.device.set_output_linked(pair, false).unwrap();
+        let block = pair * 2 + 1;
+        assert_eq!(
+            matrix_edit_cells(&state, ChannelId::Input(1), block),
+            vec![(ChannelId::Input(1), block)]
+        );
+    }
+
+    #[test]
+    fn free_mode_routing_targets_are_per_channel() {
+        let mut state = new(true, None, None);
+        state.routing_mode = RoutingMode::Free;
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Playback(0);
+        let before = state.sel_out;
+
+        // Choosing a destination in one channel's routing field must change
+        // only that channel's target, never the global submix.
+        let _ = update(&mut state, Message::SetFreeTarget(a, 3));
+        assert_eq!(state.sel_out, before, "Free mode must not move the submix");
+        assert_eq!(strip_target_pair(&state, a), Some(3));
+        let b_target = strip_target_pair(&state, b);
+        assert_ne!(b_target, Some(3), "another channel keeps its own target");
+
+        let _ = update(&mut state, Message::SetFreeTarget(b, 1));
+        assert_eq!(strip_target_pair(&state, b), Some(1));
+        assert_eq!(
+            strip_target_pair(&state, a),
+            Some(3),
+            "the first channel keeps its target"
+        );
+        assert_eq!(state.sel_out, before);
+    }
+
+    #[test]
+    fn submix_mode_routing_target_is_global() {
+        let mut state = new(true, None, None);
+        state.routing_mode = RoutingMode::Submix;
+        let _ = update(&mut state, Message::SelectOutput(3));
+        assert_eq!(state.sel_out, 3);
+        // Every channel's field follows the one selected submix.
+        assert_eq!(strip_target_pair(&state, ChannelId::Input(0)), Some(3));
+        assert_eq!(strip_target_pair(&state, ChannelId::Playback(0)), Some(3));
+    }
+
     #[test]
     fn a_click_away_applies_a_typed_db_value() {
         let mut state = new(true, None, None);
@@ -21799,8 +22444,7 @@ mod tests {
         apply_startup_sync(&mut state);
 
         // Park the existing player if the caller supplied it, then start a
-        // known tone after the scene is in the UC shadow.  The tone starts
-        // the engine and latches the scene.
+        // known tone after the scene has been applied.
         if let (Ok(stream), Some(sink)) = (
             std::env::var("TOTALCONTROL_PROBE_STREAM"),
             totalcontrol_core::pw_clock::fireface_sink_name(),
@@ -21865,8 +22509,7 @@ mod tests {
 
         if std::env::var_os("TOTALCONTROL_PROBE_SCENE_ONLY").is_some() {
             // The caller has parked the player so the UC engine is idle.
-            // Re-write the scene with the test Phones level; the next engine
-            // start (player return) latches it.
+            // Re-write the scene with the test Phones level.
             let scene = state.device.capture_scene();
             if let Err(e) = state.device.apply_scene(&scene) {
                 log::warn!("probe scene reapply failed: {e:?}");
@@ -22904,12 +23547,12 @@ mod tests {
         // The default split cells are hard L and hard R.
         state.sel_out_side = 0;
         assert_eq!(state.device.matrix_cell(left, left_block), Some(1.0));
-        assert_eq!(state.device.matrix_cell(right, left_block), Some(0.0));
+        assert_eq!(state.device.matrix_cell(right, left_block), None);
         assert_eq!(super::channel_pan(&state, left, 0), -100);
 
         state.sel_out_side = 1;
         assert_eq!(super::channel_pan(&state, left, 0), 100);
-        assert_eq!(state.device.matrix_cell(left, right_block), Some(0.0));
+        assert_eq!(state.device.matrix_cell(left, right_block), None);
         assert_eq!(state.device.matrix_cell(right, right_block), Some(1.0));
 
         // Centre only the left block: both source cells get the pair level
@@ -22919,7 +23562,7 @@ mod tests {
         assert_eq!(super::channel_pan(&state, left, 0), 0);
         assert!((state.device.matrix_cell(left, left_block).unwrap() - 1.0).abs() < 1e-4);
         assert!((state.device.matrix_cell(right, left_block).unwrap() - 1.0).abs() < 1e-4);
-        assert_eq!(state.device.matrix_cell(left, right_block), Some(0.0));
+        assert_eq!(state.device.matrix_cell(left, right_block), None);
         assert_eq!(state.device.matrix_cell(right, right_block), Some(1.0));
 
         // The fader moves the pair level and keeps the balance.
@@ -22931,7 +23574,7 @@ mod tests {
         let _ = update(&mut state, Message::PanChanged(left, 0, -100));
         let _ = update(&mut state, Message::VolumeChanged(left, 0, 0.25));
         assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4);
-        assert_eq!(state.device.matrix_cell(right, left_block), Some(0.0));
+        assert_eq!(state.device.matrix_cell(right, left_block), None);
 
         // Re-link: the natural cells become the stereo pair send and
         // balance, and the per-block overrides are cleared.

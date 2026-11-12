@@ -280,6 +280,19 @@ A followed rate change is a runtime change, so it does not add an undo step or
 mark the workspace dirty. The chosen mode is remembered in the application
 preferences, not in a workspace.
 
+### About dialog
+
+Click the TotalControl mark and wordmark in the top bar to open About. It
+names the version and the build identifier, the device TotalControl is
+driving and that device's state, links to the repository and lists the
+gestures and keys the window answers to.
+
+The build identifier looks like `921a5ec-20261112T150445Z`: the git commit the
+build came from, an optional `dirty` marker for a build with uncommitted
+changes, and the UTC time of the build. Quote it when you report a problem,
+and run `totalcontrol-gui --build-id` to print the identifier of the installed
+binary without opening the window.
+
 ### Graphics and window size
 
 TotalControl draws the mixer window on the GPU. A redraw updates the whole
@@ -309,8 +322,9 @@ TotalControl offers three views:
   output link state the same way, and a split output selects the chosen
   side. The two strips render and behave like their Mixer counterparts.
 - **Mixer**: all strips on three rows, TotalMix-style.
-- **Matrix**: the complete routing grid; double-click a cell to toggle it
-  between off and unity.
+- **Matrix**: the complete routing grid; drag or scroll a cell to change its
+  value, and double-click it to toggle between off and unity. The `Outputs`
+  row edits each hardware output channel's own master volume.
 
 These are also the tabs in the top bar, next to the `OPTIONS` menu.
 
@@ -485,6 +499,11 @@ This is the same model as TotalMix FX:
 - The meter on an input or playback strip shows the channel after its trim
   and before the sends; the meter on an output shows the finished bus.
 
+A routing exists only while its send level is above −∞. Drag a channel fader
+all the way down and that channel's route into the current output is removed;
+raise it again and the route comes back. Dragging a Matrix cell to −∞ does the
+same for that crosspoint. There is no separate delete action.
+
 ## 5. Working in stereo
 
 Input and playback pairs can be linked. When linked:
@@ -580,6 +599,11 @@ The `EQ` and `D` buttons open the equalizer and the dynamics panel. See
 `T` on an input or playback strip is the pre-fader trim of the channel: it
 attenuates the channel before all of its sends, whatever output it plays
 into. The tab lights while trim is active, and its tooltip shows the value.
+
+At its bottom position the trim makes the routing currently shown reach −∞:
+that routing is removed, while the channel's other routings keep their
+levels. This is the same rule as moving the send fader itself to the bottom,
+and the strip's fader shows the effective level.
 
 ## 7. Equalizer
 
@@ -891,7 +915,8 @@ front-panel equivalent controls of the unit.
 
 - **Drag** a fader, knob, matrix cell or EQ handle to change it. The drag
   keeps working even when the pointer leaves the control or the window,
-  until you release it.
+  until you release it. The pointer stays ordinary over these controls; the
+  resize cursor appears only while a matrix cell is being dragged.
 - **Hold Shift** while dragging for fine adjustment. This works on faders,
   knobs, matrix cells and EQ handles.
 - **Scroll** over a fader or knob nudges it. On a knob that shows two values,
@@ -925,7 +950,7 @@ The `OPTIONS` menu contains `Reset Mix` and `Settings`.
 
 | Entry | Effect |
 |---|---|
-| Straight playback with all to Main Out | playbacks 1:1 to the outputs, each also mixed to Main |
+| Straight playback with all to Main Out | playbacks 1:1 to the outputs, each also mixed to Main; nothing else routed |
 | Straight playback | playbacks 1:1 to the outputs, nothing else routed |
 | Clear all submixes | every input and playback send set to nothing |
 | Clear channel effects | EQ, low cut, dynamics, auto level, reverb, echo and width off |
@@ -933,7 +958,7 @@ The `OPTIONS` menu contains `Reset Mix` and `Settings`.
 | Reset channel names | user names cleared |
 | Set all channels mono/stereo | the stereo or mono mode of every pair |
 | Set inputs mono, outputs stereo | the ADM layout |
-| Total reset | straight playback to Main, effects off, output volumes set |
+| Total reset | straight playback to Main, nothing else routed, effects off, output volumes set |
 
 Choosing one rewrites the whole mixer in one go.
 

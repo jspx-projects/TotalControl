@@ -452,14 +452,30 @@ pub trait RmeDevice {
     }
 
     /// Start the input meter tap, if the backend defers it.  The UC's
-    /// meter tap opens the capture PCM, which starts the device engine;
-    /// the startup scene must be written *before* that so the UC latches
-    /// the matrix at engine start.
+    /// meter tap opens the capture PCM, which starts the device engine.
     fn begin_metering(&mut self) {}
 
+    /// Whether a source is routed into one output pair.  A routing exists
+    /// only while its level is above -inf (GUI spec 8.1.1), so this follows
+    /// the cell gain.
+    fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
+        self.matrix_cell(channel, pair * 2).is_some_and(|g| g > 0.0)
+            || self.matrix_cell(channel, pair * 2 + 1).is_some_and(|g| g > 0.0)
+    }
+
+    /// Every pair a source is routed into, in pair order.
+    fn routed_pairs_for(&self, channel: ChannelId) -> Vec<usize> {
+        (0..self.output_pair_count())
+            .filter(|pair| self.matrix_cell_routed(channel, *pair))
+            .collect()
+    }
+
+    /// Drop every routing the model holds, for Reset Mix.
+    fn clear_all_routings(&mut self) {}
+
     /// Gain of one mono matrix cell, `block` 0–17.  `None` when the
-    /// channel has no matrix row.  Default backends answer from the
-    /// per-pair model for the channel's natural side only.
+    /// channel has no matrix row or the cell is not routed.  Default
+    /// backends answer from the per-pair model.
     fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
         if block >= self.output_pair_count() * 2 {
             return None;

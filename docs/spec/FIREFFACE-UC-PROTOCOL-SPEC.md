@@ -162,10 +162,12 @@ Loopback uses request `0x15`.  An index in `0..29` addresses one output
 channel; value `1` feeds that output into the same-numbered input channel.
 The loopback bank is live and changes the running stream.
 
-The matrix is latched when the audio engine starts.  TotalControl writes the
-complete matrix — 36 sources × 18 blocks plus 18 masters — before opening
-PCM.  Subsequent cell writes update the device's stored state and apply at
-the next engine start.  Loopback remains live.
+The matrix applies live.  A `0x12` cell write takes effect on the running
+engine, so a route made while audio plays is audible immediately and a scene
+applied while the engine runs takes effect at once.  TotalControl still writes
+the complete matrix — 36 sources × 18 blocks plus 18 masters — on connect,
+because that is TotalMix's own sequence and because a fresh device holds no
+scene.  Loopback is live as well.
 
 Input gain uses `0x1a` with 1 dB steps for inputs 1/2 and 0.5 dB steps
 (codes 0–36) for inputs 3/4.

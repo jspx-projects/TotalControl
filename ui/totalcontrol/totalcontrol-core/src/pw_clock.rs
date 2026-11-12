@@ -241,9 +241,7 @@ pub fn fireface_sink_running() -> bool {
     })
 }
 
-/// Name of the RME Pro Audio sink/source node, for suspend/resume around a
-/// UC rate change.  The UC latches matrix routing when its engine starts, so
-/// the scene must be written while both PCM directions are closed.
+/// Name of the RME Pro Audio sink/source node.
 fn fireface_node(kind: &str, suffix: &str) -> Option<String> {
     let out = Command::new("pactl")
         .args(["list", "short", kind])

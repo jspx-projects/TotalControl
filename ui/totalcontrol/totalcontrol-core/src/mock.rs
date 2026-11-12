@@ -522,26 +522,28 @@ impl RmeDevice for MockBabyfacePro {
 
     fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
         if let Some(gain) = self.matrix_overrides.get(&(channel, block)) {
-            return Some(*gain);
+            // A zero-gain override is a removed routing, not a cell at 0 dB.
+            return (*gain > 0.0).then_some(*gain);
         }
         let pair = block / 2;
         let side = block % 2;
+        // A cell exists while it has a level: a zero send is no routing, and
+        // the off side of a linked pair carries nothing (GUI spec 8.1.1).
+        let cell_level = |volume: f32, linked: bool, own_side: bool| {
+            if linked {
+                (own_side && volume > 0.0).then_some(volume)
+            } else {
+                (volume > 0.0).then_some(volume)
+            }
+        };
         match channel {
             ChannelId::Input(idx) => {
                 let volume = *self.inputs.get(idx)?.volumes.get(pair)?;
-                if self.input_pair_linked(idx / 2) {
-                    Some(if side == idx % 2 { volume } else { 0.0 })
-                } else {
-                    Some(volume)
-                }
+                cell_level(volume, self.input_pair_linked(idx / 2), side == idx % 2)
             }
             ChannelId::Playback(idx) => {
                 let volume = *self.playbacks.get(idx)?.volumes.get(pair)?;
-                if self.playback_linked(idx / 2) {
-                    Some(if side == idx % 2 { volume } else { 0.0 })
-                } else {
-                    Some(volume)
-                }
+                cell_level(volume, self.playback_linked(idx / 2), side == idx % 2)
             }
             ChannelId::Output(_) => None,
         }

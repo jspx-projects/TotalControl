@@ -127,7 +127,7 @@ the menu, rewrites the whole mixer and pushes it in a single scene apply:
 
 | Entry | Effect |
 |---|---|
-| Straight playback with all to Main Out | playbacks 1:1 to the outputs, each also mixed to Main |
+| Straight playback with all to Main Out | playbacks 1:1 to the outputs, each also mixed to Main; nothing else routed |
 | Straight playback | playbacks 1:1 to the outputs, nothing else routed |
 | Clear all submixes | every input and playback send to zero |
 | Clear channel effects | EQ, low cut, dynamics, Auto Level, Reverb, Echo and Width off |
@@ -135,7 +135,7 @@ the menu, rewrites the whole mixer and pushes it in a single scene apply:
 | Reset channel names | user names cleared |
 | Set all channels mono / stereo | every pair's stereo/mono mode |
 | Set inputs mono, outputs stereo | the ADM layout |
-| Total reset | straight playback to Main plus effects off and output volumes set |
+| Total reset | straight playback to Main, nothing else routed, effects off and output volumes set |
 
 Menu items and dialog body text use the Control Room Settings size: 16 px at
 scale 1.0.  The Workspace and Options menus use the same 224 px width at
@@ -241,6 +241,20 @@ stereo bus; a split pair contributes its two mono buses, and choosing one
 sets the selected side.  Changing a link state updates the list and the
 current title.
 
+### 1.5 About dialog
+
+The brand lockup in the top bar (mark and wordmark) opens the About dialog: a
+centered modal over a dimmed scrim, closed by `Close`, `Esc` or a click
+outside the card. It shows the product name, the package version, the build
+identifier, one line naming the device it is driving and that device's state
+(`disconnected`, `simulated`, `class-compliant` or `proprietary`), the
+repository link and the shortcut table.
+
+The build identifier is `<git hash>[-dirty]-<UTC build time>`, stamped at
+compile time. `dirty` marks a build from a working tree with uncommitted
+changes. The same string is printed by `totalcontrol-gui --build-id`, which
+exits without opening a window or taking the single-instance lock.
+
 ### 2.0 FX fader
 
 Every strip on a unit with an FX bus carries a second, thin fader at the top
@@ -275,7 +289,9 @@ The main fader's value sits in the strip's bottom row, centred on the fader
 track; the collapse button sits at the right edge of that row.
 
 Dragging a fader or knob keeps the ordinary pointer; the grab hand is not
-used, since it covers the values it hovers over.
+used, since it covers the values it hovers over. A Matrix cell also keeps the
+ordinary pointer on hover; the vertical resize cursor appears only while a
+cell drag is in progress.
 
 ### 2.1 Knob appearance
 
@@ -1244,7 +1260,115 @@ Balance is independent of the fader level: it keeps its value at 0 and is
 applied when the fader rises. This applies to a linked input or playback pair
 and to each mono block of a split output.
 
-### 8.1 Signal model and submixes
+### 8.1 Routing mode: Submix and Free
+
+The Options panel carries a `routing` selector — `submix` or `free` — matching
+TotalMix FX's View Options > Routing Mode (UC manual §26.5.1). The same
+selector appears in the Matrix header.
+
+| Mode | What a channel's fader edits | Submix selector |
+|---|---|---|
+| Submix (default) | The selected hardware output's routing for that channel | shown in the top bar and the Matrix |
+| Free | That channel's own routing target; channels may target different outputs | **hidden** |
+
+The modes differ only in which routing a channel is bound to. In both, a fader
+edit changes exactly one routing.
+
+In Free mode each channel pair carries its own routing target, shown in its
+routing field. A linked pair selects one target for both of its channels; a
+split pair lets each side select its own. Choosing a target in Free mode
+changes only the routing field that opened the list: it never moves the global
+selected output, so no other channel's target changes with it. Clicking a
+hardware output strip does not select a submix and does not change any
+channel's target either; the output row is inert for routing. With no selected submix there is
+no submix selector anywhere: the top bar and the Matrix header hide it.
+
+The routing field lists the channel's routings. The entry for the routing the
+fader currently edits is in bold, and an entry carries a check mark while that
+routing is active.
+
+#### 8.1.1 Routing lifetime
+
+A routing exists while its level is above −∞. Moving a fader to the bottom of
+its range and releasing removes that routing: the target leaves the channel's
+routing list and the Matrix cell becomes no routing. Dragging a Matrix cell to
+−∞ does the same. Raising the level on an un-routed channel or cell creates the
+routing again. There is no separate delete action.
+
+The Trim control follows the same rule. It scales every routing of the
+channel, so the strip's fader shows the effective level and reaches the
+bottom with it. At the bottom, the routing currently shown reaches −∞ and is
+removed; the channel's other routings keep their levels.
+
+The free/submix distinction follows UC manual §26.5.1.
+
+The Matrix cell shows:
+
+| Cell | Meaning |
+|---|---|
+| Green | Routed at 0.0 dB |
+| Grey with a number | Routed at another gain |
+| Blue | Routed, muted |
+| Red | Routed, phase inverted |
+| Dark grey, no number | No routing, including a routing turned down to −∞ |
+
+#### 8.1.2 Matrix crosspoints
+
+Terminology: a channel pair is always 1/2, 3/4, so an odd (o) and an even (e)
+channel. A pair can be linked or unlinked; unlinked, it is just two mono
+channels labelled 1 and 2. It is still recognisable as a pair, but now
+unlinked.
+
+**Parity** means no more than "odd or even position in its pair": channel 1 of
+a pair is odd, channel 2 is even. Every rule below is stated in terms of
+parity, because that is the only thing that decides which cell a click writes.
+
+The Matrix establishes a route between channels by clicking matrix cells. Both
+source and destination can have one row (mono channel) or two rows (stereo
+channel: a linked pair). These combinations determine how the Matrix behaves:
+
+- **A. Source linked.** Clicking any of the pair's rows acts on the pair.
+  - **A1. Destination linked.** Clicking any of the four cells writes 2
+    blocks that route the odd input to the odd output channel and the even
+    input to the even output channel. Parity is preserved: odd stays odd,
+    even stays even.
+  - **A2. Destination unlinked.** Clicking in any of the two columns writes a
+    single block, from the source pair's odd or even mono channel to the
+    channel of the same parity in the destination pair.
+- **B. Source mono.**
+  - **B1. Destination linked.** Clicking in any of the two rows writes a block
+    that routes the mono input to the channel of the same parity in the
+    linked output pair.
+  - **B2. Destination mono.** Clicking the cell creates a route from source to
+    destination.
+
+In every case the parity of the source channel is kept, so an odd source
+channel only ever reaches an odd channel and an even source channel only ever
+reaches an even one.
+
+**Only the cells a click would write are editable.** Every other cell of that
+row is drawn inert and cannot be clicked, so the Matrix offers exactly the
+routes the four rules allow:
+
+| Case | Editable cells |
+|---|---|
+| A1 both linked | the odd-to-odd and even-to-even cells; the two cross cells are inert |
+| A2 source linked, destination unlinked | in each single-output column, the source row whose parity matches that output channel |
+| B1 source mono, destination linked | the cell on the destination pair channel matching the source's parity |
+| B2 both mono | the one cell |
+
+Mono Mode makes every cell editable again, addressing exactly the clicked
+cell; it does not change what a crosspoint is.
+
+The Outputs row is each output channel's own master volume, not a routing. It
+always has a level, so it is never drawn as no routing and always shows its
+value; only mute and phase change its colour. Dragging or wheeling one of its
+cells changes that output channel's master volume.
+
+The Matrix also edits with the mouse wheel: one notch per step, Shift for the
+fine step, starting from the value the cell shows.
+
+### 8.2 Signal model and submixes
 
 Each hardware output is a bus. The selected output is the current submix;
 every input and software-playback strip carries an independent send gain and

@@ -1363,6 +1363,22 @@ impl Fireface {
     }
 
     /// Gain the per-pair channel model implies for one mono cell.
+    /// Gain of one cell, whether or not the routing is active.  Internal
+    /// writers that reproduce the device state (scene push, cue copy, output
+    /// phase rewrite) use this; the UI-facing [`matrix_cell`] applies the
+    /// routing test first.
+    fn cell_gain(&self, channel: ChannelId, block: usize) -> Option<f32> {
+        let source = Self::matrix_source_index(channel)?;
+        if let Some(gain) = self.matrix_overrides.get(&(source, block)) {
+            return Some(*gain);
+        }
+        if self.is_uc() {
+            self.matrix_default(channel, block)
+        } else {
+            self.matrix_default_ucx(channel, block)
+        }
+    }
+
     fn matrix_default(&self, channel: ChannelId, block: usize) -> Option<f32> {
         if block >= BLOCKS {
             return None;
@@ -1532,10 +1548,10 @@ impl Fireface {
             self.vendor_out(protocol::req::LOOPBACK, 0, idx)?;
         }
 
-        // Internal pair 0 is Phones.  TotalMix writes it last; the other
-        // pairs go in descending internal order (ADAT 7/8 first).
-        let mut pairs: Vec<usize> = (1..PAIRS).rev().collect();
-        pairs.push(0);
+        // The UC's outputs are numeric ascending (AN1/2 .. ADAT 7/8), so
+        // the scene push walks the pairs in reverse hardware order with no
+        // Phones exception.
+        let pairs: Vec<usize> = (0..PAIRS).rev().collect();
 
         let sources = self.inputs.len() + self.playbacks.len();
         for pair in pairs {
@@ -1567,7 +1583,7 @@ impl Fireface {
                     continue;
                 };
                 for block in [left_block, right_block] {
-                    let gain = self.matrix_cell(channel, block).unwrap_or(0.0)
+                    let gain = self.cell_gain(channel, block).unwrap_or(0.0)
                         * self.trim_gain(channel);
                     self.uc_write_matrix(block, source, gain)?;
                 }
@@ -2779,7 +2795,7 @@ impl Fireface {
             let model_block = dsp;
             for (idx, ch) in this.inputs.iter().enumerate() {
                 let gain = this
-                    .matrix_cell(ChannelId::Input(idx), model_block)
+                    .cell_gain(ChannelId::Input(idx), model_block)
                     .unwrap_or(0.0);
                 if gain != 0.0 {
                     let addr = ucx::matrix_reg(dsp as u8, Source::Input(ch.id));
@@ -2793,7 +2809,7 @@ impl Fireface {
             }
             for (idx, ch) in this.playbacks.iter().enumerate() {
                 let gain = this
-                    .matrix_cell(ChannelId::Playback(idx), model_block)
+                    .cell_gain(ChannelId::Playback(idx), model_block)
                     .unwrap_or(0.0);
                 if gain != 0.0 {
                     let addr = ucx::matrix_reg(dsp as u8, Source::Playback(ch.id));
@@ -3593,9 +3609,9 @@ impl Fireface {
                 ChannelId::Playback(p) => Source::Playback(p),
                 ChannelId::Output(_) => continue,
             };
-            let left = self.matrix_cell(channel, source_left).unwrap_or(0.0)
+            let left = self.cell_gain(channel, source_left).unwrap_or(0.0)
                 * self.dest_trim(channel, target * 2);
-            let right = self.matrix_cell(channel, source_right).unwrap_or(0.0)
+            let right = self.cell_gain(channel, source_right).unwrap_or(0.0)
                 * self.dest_trim(channel, target * 2 + 1);
             self.ucx_write_matrix(target_left as u8, source, left as f64)?;
             self.ucx_write_matrix(target_right as u8, source, right as f64)?;
@@ -3924,15 +3940,48 @@ impl RmeDevice for Fireface {
         }
     }
 
-    fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
-        let source = Self::matrix_source_index(channel)?;
-        if let Some(gain) = self.matrix_overrides.get(&(source, block)) {
-            return Some(*gain);
+    fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
+        if Self::matrix_source_index(channel).is_none() {
+            return false;
         }
-        if self.is_uc() {
-            self.matrix_default(channel, block)
-        } else {
-            self.matrix_default_ucx(channel, block)
+        // A routing exists while it has a level (GUI spec 8.1.1).  Both
+        // sides of the pair contribute, so a split pair is routed when
+        // either channel carries a send.
+        self.matrix_blocks_for_pair(pair)
+            .iter()
+            .any(|block| self.cell_gain(channel, *block).is_some_and(|gain| gain > 0.0))
+    }
+
+    fn routed_pairs_for(&self, channel: ChannelId) -> Vec<usize> {
+        if Self::matrix_source_index(channel).is_none() {
+            return Vec::new();
+        }
+        (0..PAIRS)
+            .filter(|pair| self.matrix_cell_routed(channel, *pair))
+            .collect()
+    }
+
+    /// Drop every routing the model holds, for Reset Mix.
+    fn clear_all_routings(&mut self) {
+        for input in self.inputs.iter_mut() {
+            input.volumes.iter_mut().for_each(|v| *v = 0.0);
+        }
+        for playback in self.playbacks.iter_mut() {
+            playback.volumes.iter_mut().for_each(|v| *v = 0.0);
+        }
+        self.matrix_overrides.clear();
+    }
+
+    fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
+        if Self::matrix_source_index(channel).is_none() {
+            return None;
+        }
+        // Only a cell with a level is routed; -inf is no routing (GUI spec
+        // 8.1.1).  A mono source into a linked pair fills only its own
+        // parity cell, so the other side stays blank (GUI spec 8.1.2).
+        match self.cell_gain(channel, block) {
+            Some(gain) if gain > 0.0 => Some(gain),
+            _ => None,
         }
     }
 
@@ -6257,9 +6306,10 @@ impl RmeDevice for Fireface {
 
         if self.is_uc() {
             // Exact TotalMix app-level connect order: 0x15 bank reset,
-            // then each output pair's 0x1a + 0x12 master + crosspoints,
-            // Phones last.  This must happen before the meter tap opens
-            // the PCM, because the UC latches routing at engine start.
+            // then each output pair's 0x1a level, 0x12 master and
+            // crosspoints.  The matrix applies live; writing it before the
+            // meter tap opens the PCM means the device holds the complete
+            // scene when audio starts.
             self.apply_uc_full_matrix()?;
             // Loopback is per stereo hardware output when the pair is
             // linked (both sides move together), and per channel only
@@ -8577,6 +8627,160 @@ mod tests {
     }
 
     #[test]
+    fn phones_routings_stay_in_their_own_column() {
+        // Desk report: Phones is Out 7/8, and moving playback 1/2's fader
+        // must not paint a value into Out 1/2.  Pair 3 is Out 7/8.  Start
+        // from a clean matrix so the channel model's placeholder levels do
+        // not count as routings.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.clear_all_routings();
+        dev.set_matrix_cell(ChannelId::Playback(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(1), 7, 1.0).unwrap();
+
+        assert!(dev.matrix_cell_routed(ChannelId::Playback(0), 3));
+        assert!(!dev.matrix_cell_routed(ChannelId::Playback(0), 0));
+        assert!(
+            dev.matrix_cell(ChannelId::Playback(0), 0).is_none(),
+            "Out 1 does not show playback 1"
+        );
+        assert!(
+            dev.matrix_cell(ChannelId::Playback(0), 1).is_none(),
+            "Out 2 does not show playback 1"
+        );
+
+        // A level on another pair is a routing there, and only there.
+        dev.set_matrix_cell(ChannelId::Playback(0), 0, 1.0).unwrap();
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 0), Some(1.0));
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 6), Some(1.0));
+    }
+
+    #[test]
+    fn a_linked_pair_cell_writes_both_sides() {
+        // Matrix semantics (GUI spec 8.1): a linked output pair is one
+        // routing across two channels, so a pair-level edit must leave both
+        // cells with the level -- not just the side that was dragged.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Input(0), 7, 1.0).unwrap();
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 7), Some(1.0));
+
+        // Lowering the pair updates both cells.
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 0.5).unwrap();
+        dev.set_matrix_cell(ChannelId::Input(0), 7, 0.5).unwrap();
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(0.5));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 7), Some(0.5));
+    }
+
+    #[test]
+    fn an_output_master_always_has_a_level() {
+        // The Outputs row is a master volume: it must never be reported as
+        // "no routing", whatever the routing test says about sources.
+        let (dev, _writes) = open(Model::Uc);
+        let volume = dev.outputs()[6].volume;
+        assert!(volume > 0.0, "phones master has a level");
+    }
+
+    #[test]
+    fn a_routing_exists_only_while_it_has_a_level() {
+        // GUI spec 8.1.1: a routing exists while its level is above -inf.
+        // Turning the fader to the bottom removes it.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Input(1), 7, 1.0).unwrap();
+        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
+
+        // Bottom out: the routing disappears and the cell has no level.
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 0.0).unwrap();
+        assert!(
+            !dev.matrix_cell_routed(ChannelId::Input(0), 3)
+                || dev.matrix_cell(ChannelId::Input(1), 7).is_some(),
+            "the left side alone has no level"
+        );
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), None);
+
+        // Raising it again re-creates the routing.
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 0.5).unwrap();
+        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(0.5));
+    }
+
+    #[test]
+    fn a_channel_fader_at_minus_inf_removes_its_routing() {
+        // The mixer fader edits the pair send level.  Bottoming it out is a
+        // routing removal, exactly like dragging a Matrix cell down (GUI
+        // spec 8.1.1).
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.clear_all_routings();
+        dev.set_volume(ChannelId::Input(0), 3, 1.0).unwrap();
+        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
+        assert_eq!(dev.routed_pairs_for(ChannelId::Input(0)), vec![3]);
+
+        dev.set_volume(ChannelId::Input(0), 3, 0.0).unwrap();
+        assert!(!dev.matrix_cell_routed(ChannelId::Input(0), 3));
+        assert!(dev.routed_pairs_for(ChannelId::Input(0)).is_empty());
+        assert!(dev.matrix_cell(ChannelId::Input(0), 6).is_none());
+
+        // Raising the fader creates the routing again.
+        dev.set_volume(ChannelId::Input(0), 3, 0.5).unwrap();
+        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(0.5));
+    }
+
+    #[test]
+    fn a_muted_channel_keeps_its_routings() {
+        // Mute silences the device sends and leaves the stored level alone,
+        // so the routing stays visible and unmuting restores the same cell.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.clear_all_routings();
+        dev.set_volume(ChannelId::Input(0), 3, 1.0).unwrap();
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
+
+        dev.set_mute(ChannelId::Input(0), true).unwrap();
+        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
+
+        dev.set_mute(ChannelId::Input(0), false).unwrap();
+        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
+    }
+
+    #[test]
+    fn a_cell_reads_only_for_its_own_routed_pair() {
+        // Submix semantics: moving a source fader may only change the
+        // column of the routing it edits.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.clear_all_routings();
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Input(1), 7, 1.0).unwrap();
+        for pair in 0..9 {
+            if pair == 3 {
+                continue;
+            }
+            assert!(
+                dev.matrix_cell(ChannelId::Playback(0), pair * 2).is_none(),
+                "pair {pair} has no playback 1 routing"
+            );
+        }
+        assert_eq!(dev.routed_pairs_for(ChannelId::Input(0)), vec![3]);
+        assert!(dev.routed_pairs_for(ChannelId::Playback(0)).is_empty());
+    }
+
+    #[test]
+    fn routing_survives_alongside_a_second_destination() {
+        // TotalMix keeps an independent gain per routing; two destinations
+        // for one source are two routed pairs.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.clear_all_routings();
+        dev.set_matrix_cell(ChannelId::Playback(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 0, 0.5).unwrap();
+        assert_eq!(dev.routed_pairs_for(ChannelId::Playback(0)), vec![0, 3]);
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 0), Some(0.5));
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 6), Some(1.0));
+    }
+
+    #[test]
     fn uc_playback_pan_attenuates_the_matching_side() {
         let (mut dev, writes) = open(Model::Uc);
         writes.lock().unwrap().clear();
@@ -8784,7 +8988,8 @@ mod tests {
             .unwrap();
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(0.5));
         dev.set_volume(ChannelId::Playback(0), 2, 0.25).unwrap();
-        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(0.0));
+        // The off side of the pair carries no level: the cell is empty.
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), None);
     }
 
     #[test]
@@ -8804,12 +9009,13 @@ mod tests {
     #[test]
     fn uc_loopback_follows_the_output_pair_link() {
         let (mut dev, writes) = open(Model::Uc);
-        // Outputs default to linked: AN3 loopback moves the AN3/4 pair.
+        // Outputs default to linked: AN3 loopback moves the AN3/4 pair,
+        // which under the numeric-ascending order is indices 4/5.
         dev.set_loopback_channel(4, true).unwrap();
         {
             let w = writes.lock().unwrap();
-            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 2)));
-            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 3)));
+            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 4)));
+            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 5)));
         }
         assert!(dev.outputs()[4].loopback);
         assert!(dev.outputs()[5].loopback);
@@ -8822,8 +9028,8 @@ mod tests {
         dev.set_loopback_channel(4, true).unwrap();
         {
             let w = writes.lock().unwrap();
-            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 2)));
-            assert!(!w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 3)));
+            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 4)));
+            assert!(!w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 5)));
         }
         assert!(dev.outputs()[4].loopback);
         assert!(!dev.outputs()[5].loopback);
@@ -8879,8 +9085,8 @@ mod tests {
             );
         }
 
-        // The first pair is ADAT 7/8: encoder channels 20/21, masters
-        // 1008/1009, then the two blocks interleaved.
+        // Outputs are numeric ascending, so the push walks them in reverse
+        // hardware order: ADAT 7/8 (encoder 20/21, masters 1008/1009) first.
         assert_eq!(w[30], Write::Vendor(protocol::req::PGA, 6, 20));
         assert_eq!(w[31], Write::Vendor(protocol::req::PGA, 6, 21));
         assert_eq!(w[32], Write::Vendor(protocol::req::MIXER, 0x2000, 1008));
@@ -8888,32 +9094,33 @@ mod tests {
         assert_eq!(w[34], Write::Vendor(protocol::req::MIXER, 0x2000, 576));
         assert_eq!(w[35], Write::Vendor(protocol::req::MIXER, 0x2000, 612));
 
-        // Phones is the last pair, with masters 998/999.
-        let phones = w.len() - 76;
-        assert_eq!(w[phones], Write::Vendor(protocol::req::PGA, 6, 10));
-        assert_eq!(w[phones + 1], Write::Vendor(protocol::req::PGA, 6, 11));
+        // Outputs are numeric ascending and written in reverse order, so
+        // the final pair pushed is AN1/2 (encoder 4/5, masters 992/993).
+        let first_pair = w.len() - 76;
+        assert_eq!(w[first_pair], Write::Vendor(protocol::req::PGA, 6, 4));
+        assert_eq!(w[first_pair + 1], Write::Vendor(protocol::req::PGA, 6, 5));
         assert_eq!(
-            w[phones + 2],
-            Write::Vendor(protocol::req::MIXER, 0x2000, 998)
+            w[first_pair + 2],
+            Write::Vendor(protocol::req::MIXER, 0x2000, 992)
         );
         assert_eq!(
-            w[phones + 3],
-            Write::Vendor(protocol::req::MIXER, 0x2000, 999)
+            w[first_pair + 3],
+            Write::Vendor(protocol::req::MIXER, 0x2000, 993)
         );
     }
 
     #[test]
     fn uc_output_volume_uses_the_encoder_channel() {
         let (mut dev, writes) = open(Model::Uc);
-        // Internal output 0 = Phones; the UC encoder puts it at slot 3.
-        // The fader path sets both linked sides; use it here so the two
-        // master blocks are written.
+        // Outputs are numeric ascending: internal pair 0 is AN1/2, whose
+        // UC encoder channels are 4/5.
         dev.set_output_volume(0, 0, 1.0).unwrap();
         let w = writes.lock().unwrap();
-        assert!(w.contains(&Write::Vendor(protocol::req::PGA, 6, 10)));
-        // The 14-bit master must follow the front-panel code.
-        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, 0x2000, 998)));
-        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, 0x2000, 999)));
+        assert!(w.contains(&Write::Vendor(protocol::req::PGA, 6, 4)));
+        // The 14-bit master must follow the front-panel code; outputs are
+        // numeric ascending, so internal pair 0 is master blocks 0/1.
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, 0x2000, 992)));
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, 0x2000, 993)));
     }
 
     #[test]
@@ -8922,41 +9129,43 @@ mod tests {
         dev.set_volume(ChannelId::Output(0), 0, 2.0).unwrap();
         dev.set_volume(ChannelId::Output(0), 0, 0.1).unwrap();
         let w = writes.lock().unwrap();
-        // +6 dB = raw 0, -20 dB = raw 26, both on the Phones encoder.
-        assert!(w.contains(&Write::Vendor(protocol::req::PGA, 0, 10)));
-        assert!(w.contains(&Write::Vendor(protocol::req::PGA, 26, 10)));
+        // +6 dB = raw 0, -20 dB = raw 26, both on the AN1/2 encoder (4).
+        assert!(w.contains(&Write::Vendor(protocol::req::PGA, 0, 4)));
+        assert!(w.contains(&Write::Vendor(protocol::req::PGA, 26, 4)));
     }
 
     #[test]
     fn uc_front_panel_output_volume_becomes_the_phones_fader() {
         let (mut dev, _writes) = open(Model::Uc);
-        // Phones is encoder pair 3, channels 10/11.  Raw 0 = +6 dB.
+        // Phones is encoder pair 3, channels 10/11, i.e. internal channels
+        // 6/7 (Out 7/8).  Raw 0 = +6 dB.
         dev.uc_status_event(&[0, 0, 0x80, 10]);
-        assert!((dev.outputs()[0].volume - 1.9953).abs() < 0.001);
-        assert!((dev.outputs()[1].volume - 1.9953).abs() < 0.001);
+        assert!((dev.outputs()[6].volume - 1.9953).abs() < 0.001);
+        assert!((dev.outputs()[7].volume - 1.9953).abs() < 0.001);
         // Raw 6 = 0 dB on the left channel only.
         dev.uc_status_event(&[0, 0, 6, 10]);
-        assert!((dev.outputs()[0].volume - 1.0).abs() < 1e-6);
-        assert!((dev.outputs()[1].volume - 1.9953).abs() < 0.001);
+        assert!((dev.outputs()[6].volume - 1.0).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - 1.9953).abs() < 0.001);
         // Real PH frame for -20 dB: 00 00 9a 0a.  The low 7 bits are
         // the 6-dB-per-step attenuator code; bit 7 is the output type.
         dev.uc_status_event(&[0, 0, 0x9a, 10]);
-        assert!((dev.outputs()[0].volume - 0.1).abs() < 0.001);
-        assert!((dev.outputs()[1].volume - 0.1).abs() < 0.001);
+        assert!((dev.outputs()[6].volume - 0.1).abs() < 0.001);
+        assert!((dev.outputs()[7].volume - 0.1).abs() < 0.001);
     }
 
     #[test]
     fn uc_startup_suppression_ignores_queued_output_events() {
         let (mut dev, _writes) = open(Model::Uc);
-        let before = dev.outputs()[0].volume;
+        let before = dev.outputs()[6].volume;
         dev.suppress_front_panel_for(Duration::from_millis(50));
         // A front-panel move made while TotalControl was not running can arrive
         // after the connect write.  It must not replace the host scene.
+        // Encoder channel 10 is the Phones left, internal output 6.
         dev.uc_status_event(&[0, 0, 0x9a, 10]);
-        assert!((dev.outputs()[0].volume - before).abs() < 1e-6);
+        assert!((dev.outputs()[6].volume - before).abs() < 1e-6);
         std::thread::sleep(Duration::from_millis(60));
         dev.uc_status_event(&[0, 0, 0x9a, 10]);
-        assert!((dev.outputs()[0].volume - 0.1).abs() < 0.001);
+        assert!((dev.outputs()[6].volume - 0.1).abs() < 0.001);
     }
 
     #[test]
