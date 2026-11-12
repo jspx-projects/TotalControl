@@ -73,6 +73,7 @@
 #define FFUC_STATUS_LEN		4
 #define FFUC_STATUS_OUT_LATCHED	0x80
 #define FFUC_STATUS_GRACE_MS	20
+#define FFUC_RESTART_SETTLE_MS	250	/* UC: minimum engine stop -> start gap */
 
 #define FFUC_MAX_EPS		2	/* endpoints per direction (alt 3) */
 #define FFUC_MAX_URBS		32
@@ -355,6 +356,7 @@ struct ffuc {
 	atomic_t in_shorts;
 	atomic_t in_status_errors;
 	ktime_t last_out_complete;
+	unsigned long engine_stopped_at;	/* jiffies; 0 = never stopped */
 	ktime_t last_in_complete;
 
 	/* identity */
