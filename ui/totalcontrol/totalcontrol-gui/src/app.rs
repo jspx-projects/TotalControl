@@ -3145,10 +3145,12 @@ const STRENGTH_READOUT_GUARD_MS: u64 = 200;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
-/// TotalMix's peak meter release is 20 dB/s.  Use a real dB/s fall rather
+/// TotalMix FX's peak meter release is 10 dB/s (measured on the UCX and
+/// documented for TotalMix; our previous value was 20 dB/s and read twice
+/// too fast against TotalMix's bars).  Use a real dB/s fall rather
 /// than a per-tick easing factor so the same ballistics hold when the UI
 /// tick or meter canvas frame rate changes.
-const METER_RELEASE_DB_S: f32 = 20.0;
+const METER_RELEASE_DB_S: f32 = 10.0;
 /// TotalMix's default peak-hold time.  The visible peak marker stays put
 /// for this long after the last peak, then falls with a short ease-out
 /// (the bar itself falls fast).  The 260 ms tail is deliberately a little
@@ -20186,8 +20188,8 @@ mod tests {
             "peak marker should glide down, not snap: {peak_drop} of {before_peak}"
         );
         assert!(
-            m.frame().value > 0.0 && m.frame().value < 0.05,
-            "the bar should be falling at 20 dB/s, not frozen or snapped: {}",
+            m.frame().value > 0.0 && m.frame().value < 0.12,
+            "the bar should be falling at the 10 dB/s TotalMix rate, not frozen or snapped: {}",
             m.frame().value
         );
     }

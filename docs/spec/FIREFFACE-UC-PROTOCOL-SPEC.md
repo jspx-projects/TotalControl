@@ -389,13 +389,23 @@ couple of dB with the same rule.
 
 ### TotalControl behaviour
 
-- Analog input meters decode records 0..7.  The digital input record region
-  is mapped but still held at silence until its channel map is verified.
+- The detector publishes per channel: a new (digital) level only when the
+  value changes, a zero record when the channel is truly silent, and the
+  `0x47ffff` filler on pages where a channel has no new value.  TotalControl
+  therefore max-merges non-zero records, releases on a zero record and holds
+  across filler pages.
+- The analog group decodes records 0..7 on the analog law; the digital
+  input records are mapped but held silent until their channel identity is
+  verified.
 - Playback and output meters decode records 18..35 and 36..53 on the digital
   scale; saturated records report the over tag as level above 0 dBFS.
 - Input, playback and output peak lines mirror the held level: the page
   carries one level record per channel (peak and RMS words are not part of
   this page's format).
+- Ballistics are host side.  The device supplies the level record (the
+  analog group is a slow detector that needs seconds to settle; the digital
+  group publishes the current level within a page).  TotalControl then
+  applies TotalMix FX's law: 10 dB/s release with a 2 s peak hold.
 
 Input meters measure the physical input before loopback.  A loopback-enabled
 output replaces the input's record signal, but does not change the input meter
