@@ -625,6 +625,11 @@ pub struct Fireface {
     /// Mono matrix cells that the per-pair model cannot express. Key is
     /// `(source 0..35, output block 0..17)`; 18..35 are software playbacks.
     matrix_overrides: HashMap<(usize, usize), f32>,
+    /// Routings as a state independent of gain.  TotalMix keeps a routing
+    /// "active" even when its fader sits at -inf (the routing field shows it
+    /// in bold without an arrow, UC manual 26.3), so a cell's presence in
+    /// this set is what makes it a routed cell, not its gain.
+    routed_pairs: HashSet<(usize, usize)>,
     /// UC input metering through the PipeWire source tap.  The PCM device
     /// stays with PipeWire and the DAW.  The UCX uses its 0x85 input pages.
     input_tap: Option<crate::pw_input::InputTap>,
@@ -1116,6 +1121,7 @@ impl Fireface {
             ucx_heartbeat_due: Instant::now(),
             ignore_output_until: None,
             matrix_overrides: HashMap::new(),
+            routed_pairs: HashSet::new(),
             input_tap,
             write_batch: Arc::new(Mutex::new(None)),
             async_writer: None,
@@ -1363,6 +1369,56 @@ impl Fireface {
     }
 
     /// Gain the per-pair channel model implies for one mono cell.
+    /// Gain of one cell, whether or not the routing is active.  Internal
+    /// writers that reproduce the device state (scene push, cue copy, output
+    /// phase rewrite) use this; the UI-facing [`matrix_cell`] applies the
+    /// routing test first.
+    fn cell_gain(&self, channel: ChannelId, block: usize) -> Option<f32> {
+        let source = Self::matrix_source_index(channel)?;
+        if let Some(gain) = self.matrix_overrides.get(&(source, block)) {
+            return Some(*gain);
+        }
+        if self.is_uc() {
+            self.matrix_default(channel, block)
+        } else {
+            self.matrix_default_ucx(channel, block)
+        }
+    }
+
+    /// Whether a source has an active routing into one output pair.
+    pub fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
+        Self::matrix_source_index(channel)
+            .is_some_and(|source| self.routed_pairs.contains(&(source, pair)))
+    }
+
+    /// Set or clear a routing without touching its gain.  `-inf` on the
+    /// fader keeps the routing (UC manual 26.3).
+    pub fn set_routing(&mut self, channel: ChannelId, pair: usize, routed: bool) {
+        let Some(source) = Self::matrix_source_index(channel) else {
+            return;
+        };
+        if routed {
+            self.routed_pairs.insert((source, pair));
+        } else {
+            self.routed_pairs.remove(&(source, pair));
+        }
+    }
+
+    /// Every pair a source is routed into, in pair order.
+    pub fn routed_pairs_for(&self, channel: ChannelId) -> Vec<usize> {
+        let Some(source) = Self::matrix_source_index(channel) else {
+            return Vec::new();
+        };
+        let mut pairs: Vec<usize> = self
+            .routed_pairs
+            .iter()
+            .filter(|(s, _)| *s == source)
+            .map(|(_, pair)| *pair)
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    }
+
     fn matrix_default(&self, channel: ChannelId, block: usize) -> Option<f32> {
         if block >= BLOCKS {
             return None;
@@ -1567,7 +1623,7 @@ impl Fireface {
                     continue;
                 };
                 for block in [left_block, right_block] {
-                    let gain = self.matrix_cell(channel, block).unwrap_or(0.0)
+                    let gain = self.cell_gain(channel, block).unwrap_or(0.0)
                         * self.trim_gain(channel);
                     self.uc_write_matrix(block, source, gain)?;
                 }
@@ -2779,7 +2835,7 @@ impl Fireface {
             let model_block = dsp;
             for (idx, ch) in this.inputs.iter().enumerate() {
                 let gain = this
-                    .matrix_cell(ChannelId::Input(idx), model_block)
+                    .cell_gain(ChannelId::Input(idx), model_block)
                     .unwrap_or(0.0);
                 if gain != 0.0 {
                     let addr = ucx::matrix_reg(dsp as u8, Source::Input(ch.id));
@@ -2793,7 +2849,7 @@ impl Fireface {
             }
             for (idx, ch) in this.playbacks.iter().enumerate() {
                 let gain = this
-                    .matrix_cell(ChannelId::Playback(idx), model_block)
+                    .cell_gain(ChannelId::Playback(idx), model_block)
                     .unwrap_or(0.0);
                 if gain != 0.0 {
                     let addr = ucx::matrix_reg(dsp as u8, Source::Playback(ch.id));
@@ -3593,9 +3649,9 @@ impl Fireface {
                 ChannelId::Playback(p) => Source::Playback(p),
                 ChannelId::Output(_) => continue,
             };
-            let left = self.matrix_cell(channel, source_left).unwrap_or(0.0)
+            let left = self.cell_gain(channel, source_left).unwrap_or(0.0)
                 * self.dest_trim(channel, target * 2);
-            let right = self.matrix_cell(channel, source_right).unwrap_or(0.0)
+            let right = self.cell_gain(channel, source_right).unwrap_or(0.0)
                 * self.dest_trim(channel, target * 2 + 1);
             self.ucx_write_matrix(target_left as u8, source, left as f64)?;
             self.ucx_write_matrix(target_right as u8, source, right as f64)?;
@@ -3926,14 +3982,10 @@ impl RmeDevice for Fireface {
 
     fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
         let source = Self::matrix_source_index(channel)?;
-        if let Some(gain) = self.matrix_overrides.get(&(source, block)) {
-            return Some(*gain);
+        if !self.routed_pairs.contains(&(source, block / 2)) {
+            return None;
         }
-        if self.is_uc() {
-            self.matrix_default(channel, block)
-        } else {
-            self.matrix_default_ucx(channel, block)
-        }
+        self.cell_gain(channel, block)
     }
 
     fn matrix_blocks_for_pair(&self, pair: usize) -> [usize; 2] {
@@ -4011,12 +4063,14 @@ impl RmeDevice for Fireface {
                     ))
                 }
             };
+            self.set_routing(channel, block / 2, true);
             return self.ucx_write_matrix(
                 block as u8,
                 source_kind,
                 (gain * self.trim_gain(channel)) as f64,
             );
         }
+        self.set_routing(channel, block / 2, true);
         self.uc_write_matrix(block, source, gain * self.trim_gain(channel))?;
         if Self::matrix_natural(channel, block) {
             let pair = block / 2;
@@ -4074,6 +4128,7 @@ impl RmeDevice for Fireface {
                     return Ok(());
                 }
                 let volume = self.inputs[idx].volumes[output];
+                self.set_routing(ChannelId::Input(idx), output, true);
                 if self.is_uc() {
                     self.uc_write_input(idx, output, volume)?;
                 } else {
@@ -4103,10 +4158,12 @@ impl RmeDevice for Fireface {
                     return Ok(());
                 }
                 if self.is_uc() {
+                    self.set_routing(ChannelId::Playback(idx), output, true);
                     let volume = self.playbacks[idx].volumes[output];
                     self.uc_write_playback(idx, output, volume)?;
                     if linked {
                         let other = idx ^ 1;
+                        self.set_routing(ChannelId::Playback(other), output, true);
                         let volume = self.playbacks[other].volumes[output];
                         self.uc_write_playback(other, output, volume)?;
                     }
@@ -8574,6 +8631,58 @@ mod tests {
         let w = writes.lock().unwrap();
         let (value, index) = uc::matrix_word(0.5, 2 * 36 + 18);
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+    }
+
+    #[test]
+    fn a_cell_is_routed_independently_of_its_gain() {
+        // UC manual 26.3: a routing stays active at -inf ("shown in bold
+        // letters, but not have an arrow").  The matrix cell must therefore
+        // report the routing, not infer it from the gain.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Input(1), 7, 1.0).unwrap();
+        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
+
+        // Turn the fader down to silence: the routing stays, the gain drops.
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 0.0).unwrap();
+        assert!(
+            dev.matrix_cell_routed(ChannelId::Input(0), 3),
+            "a routing at -inf is still a routing"
+        );
+        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(0.0));
+    }
+
+    #[test]
+    fn a_cell_reads_only_for_its_own_routed_pair() {
+        // Submix semantics: moving a source fader may only change the
+        // column of the routing it edits.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_matrix_cell(ChannelId::Input(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Input(1), 7, 1.0).unwrap();
+        for pair in 0..9 {
+            if pair == 3 {
+                continue;
+            }
+            assert!(
+                dev.matrix_cell(ChannelId::Playback(0), pair * 2).is_none(),
+                "pair {pair} has no playback 1 routing"
+            );
+        }
+        assert_eq!(dev.routed_pairs_for(ChannelId::Input(0)), vec![3]);
+        assert!(dev.routed_pairs_for(ChannelId::Playback(0)).is_empty());
+    }
+
+    #[test]
+    fn routing_survives_alongside_a_second_destination() {
+        // TotalMix keeps an independent gain per routing; two destinations
+        // for one source are two routed pairs.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_matrix_cell(ChannelId::Playback(0), 6, 1.0).unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 0, 0.5).unwrap();
+        assert_eq!(dev.routed_pairs_for(ChannelId::Playback(0)), vec![0, 3]);
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 0), Some(0.5));
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 6), Some(1.0));
     }
 
     #[test]

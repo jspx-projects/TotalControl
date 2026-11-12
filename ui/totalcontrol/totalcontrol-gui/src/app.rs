@@ -455,6 +455,15 @@ impl RmeDevice for DeviceHandle {
     fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
         delegate!(self, matrix_cell(channel, block))
     }
+    fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
+        delegate!(self, matrix_cell_routed(channel, pair))
+    }
+    fn routed_pairs_for(&self, channel: ChannelId) -> Vec<usize> {
+        delegate!(self, routed_pairs_for(channel))
+    }
+    fn set_routing(&mut self, channel: ChannelId, pair: usize, routed: bool) {
+        delegate!(self, set_routing(channel, pair, routed))
+    }
     fn set_matrix_cell(
         &mut self,
         channel: ChannelId,
@@ -2157,6 +2166,10 @@ pub enum Message {
     MatrixCellChanged(ChannelId, usize, f32),
     /// Toggle Matrix Mono Mode (one mono cell vs the stereo pair).
     ToggleMatrixMono,
+    /// Switch the TotalMix routing view (UC manual 26.5.1).
+    SetRoutingMode(RoutingMode),
+    /// In Free mode: bind a strip to an output pair.
+    SetFreeTarget(ChannelId, usize),
     /// Cursor-key fader nudge, in dB (+ = louder).
     NudgeVolume(f32),
     FaderPressed(ChannelId, usize, f32, Option<(f32, f32)>),
@@ -2508,6 +2521,27 @@ pub struct MasterSet {
     pub suspended: bool,
 }
 
+/// TotalMix's two routing views (UC manual 26.5.1).  They differ only in
+/// which routing a channel strip's fader is bound to: Submix binds it to the
+/// selected hardware output, Free binds it to the strip's own target.  In
+/// both modes a fader edit changes exactly one routing; only Trim fans a
+/// fader out to all of a channel's active routings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RoutingMode {
+    #[default]
+    Submix,
+    Free,
+}
+
+impl RoutingMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            RoutingMode::Submix => "Submix",
+            RoutingMode::Free => "Free",
+        }
+    }
+}
+
 pub struct TotalControl {
     pub device: DeviceHandle,
     /// The effective layout for the connected model.
@@ -2520,6 +2554,13 @@ pub struct TotalControl {
     pub sel_out: usize,
     /// Selected side of a split output pair (0 = left, 1 = right).
     pub sel_out_side: usize,
+    /// TotalMix routing view (UC manual 26.5.1).  Submix binds every strip's
+    /// fader to the selected hardware output; Free lets each strip show and
+    /// edit its own routing target (`free_target`).
+    pub routing_mode: RoutingMode,
+    /// In Free mode, the output pair each source strip is bound to.  Key is
+    /// the source channel id's index space (see `free_target_key`).
+    pub free_target: std::collections::HashMap<usize, usize>,
     /// Last front-panel OUT selection seen by `Message::Tick` — when it
     /// changes, `sel_out` follows (TotalMix highlights the panel's
     /// current submix). `None` = never seen (no panel / first tick).
@@ -3338,6 +3379,8 @@ pub fn new_with_device(
         device_target,
         connected,
         sel_out: 0,
+        routing_mode: RoutingMode::Submix,
+        free_target: std::collections::HashMap::new(),
         sel_out_side: 0,
         last_panel_out: None,
         view: View::Mixer,
@@ -3707,6 +3750,8 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             fx_panel: state.show_fx_panel,
             ui_scale: state.ui_scale,
             sel_out: state.sel_out,
+            routing_mode: state.routing_mode,
+            free_target: state.free_target.clone(),
             sel_out_side: state.sel_out_side,
             quick_channel: state.quick_channel,
             show_original_names: state.show_original_names,
@@ -5575,12 +5620,66 @@ fn apply_trim(state: &mut TotalControl, cid: ChannelId, db: f32) {
     }
 }
 
+/// The output a source strip's fader edits.  TotalMix binds the strip to one
+/// routing at a time: in Submix it is the selected hardware output, in Free
+/// it is the strip's own target (UC manual 26.5.1).  `None` means the strip
+/// has no bound routing, so the fader only stores the value.
+fn strip_target_pair(state: &TotalControl, cid: ChannelId) -> Option<usize> {
+    match state.routing_mode {
+        RoutingMode::Submix => Some(
+            state
+                .sel_out
+                .min(state.device.output_pair_count().saturating_sub(1)),
+        ),
+        RoutingMode::Free => state
+            .free_target
+            .get(&free_target_key(cid))
+            .copied()
+            .or_else(|| {
+                // A strip that was never given a target keeps the first
+                // routing it has, which is what TotalMix shows in Free view.
+                state.device.routed_pairs_for(cid).first().copied()
+            }),
+    }
+}
+
+/// Key for `free_target`: a source channel in one index space, so Input and
+/// Playback ids cannot collide.
+fn free_target_key(cid: ChannelId) -> usize {
+    match cid {
+        ChannelId::Input(i) => i,
+        ChannelId::Playback(i) => 1000 + i,
+        ChannelId::Output(i) => 2000 + i,
+    }
+}
+
+fn set_free_target(state: &mut TotalControl, cid: ChannelId, pair: usize) {
+    if state.routing_mode == RoutingMode::Free {
+        state.free_target.insert(free_target_key(cid), pair);
+    }
+}
+
 fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f32) {
     // The caller passes the level shown next to the fader; the model
     // stores the send before trim.
     let send = effective_to_send(state, cid, v);
-    if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) && out == state.sel_out {
-        if let Some(block) = selected_output_block(state) {
+    if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) {
+        let bound = strip_target_pair(state, cid);
+        // A linked (or single-channel) output has no sided block: the strip
+        // then edits the whole pair through the per-submix model, which is
+        // how TotalMix's stereo routings behave.
+        let block = bound.and_then(|pair| {
+            if state.device.outputs_one_per_pair() || state.device.output_linked(pair) {
+                None
+            } else {
+                output_block_for_pair(
+                    &state.device.output_display_order(),
+                    pair,
+                    state.sel_out_side,
+                )
+            }
+        });
+        if let Some(block) = block {
             // A linked pair keeps its balance across the two source cells
             // while the fader moves the pair level.  At level 0 the cells
             // are silent, so the stored balance is the only state left.
@@ -5606,6 +5705,10 @@ fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f
             let _ = state.device.set_matrix_cell(cid, block, send);
             return;
         }
+        // No bound routing, or a linked output pair: the fader edits the
+        // whole pair through the per-submix model, which is how TotalMix's
+        // stereo routings behave.
+
     }
     let _ = match cid {
         ChannelId::Input(ch) => state.device.set_input_volume(ch / 2, ch % 2, out, send),
@@ -8070,6 +8173,8 @@ fn is_undoable(message: &Message) -> bool {
             | Message::MeterWake
             | Message::SetView(_)
             | Message::ToggleMatrixMono
+            | Message::SetRoutingMode(_)
+            | Message::SetFreeTarget(_, _)
             | Message::QuickChannelSelected(_)
             | Message::QuickDestination(_)
             | Message::SelectOutput(_)
@@ -8340,6 +8445,8 @@ fn changes_workspace(message: &Message) -> bool {
             | Message::QuickDestination(_)
             | Message::SelectOutput(_)
             | Message::ToggleMatrixMono
+            | Message::SetRoutingMode(_)
+            | Message::SetFreeTarget(_, _)
     ) || changes_prefs(message)
         || changes_mix(message)
 }
@@ -10151,6 +10258,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             } else {
                 apply_grouped_volume(state, cid, block / 2, v);
             }
+        }
+        Message::SetRoutingMode(mode) => {
+            state.routing_mode = mode;
+            state.last_activity = Instant::now();
+        }
+        Message::SetFreeTarget(cid, pair) => {
+            set_free_target(state, cid, pair);
+            state.last_activity = Instant::now();
         }
         Message::ToggleMatrixMono => {
             state.matrix_mono = !state.matrix_mono;
@@ -18544,6 +18659,44 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     (page(body), fx_overlay)
 }
 
+/// Submix / Free radio buttons, mirroring TotalMix's Routing Mode option
+/// (UC manual 26.5.1).  The modes differ only in which routing a strip's
+/// fader is bound to; fader edits change one routing in both.
+fn routing_mode_picker(state: &TotalControl, scale: f32) -> Element<'static, Message> {
+    let mut row = row![].spacing(theme::SPACE_SM);
+    for mode in [RoutingMode::Submix, RoutingMode::Free] {
+        row = row.push(
+            iced::widget::radio(
+                mode.label(),
+                mode,
+                Some(state.routing_mode),
+                Message::SetRoutingMode,
+            )
+            .size(theme::TEXT_XS * scale * 1.1)
+            .text_size(theme::TEXT_XS * scale),
+        );
+    }
+    // In Free mode the caption tells the user which routing the focused
+    // strip edits; Submix always follows the selected hardware output.
+    let hint = match state.routing_mode {
+        RoutingMode::Submix => "Submix: strips edit the selected output".to_string(),
+        RoutingMode::Free => match state.focus_channel {
+            Some(cid) => {
+                let pair = strip_target_pair(state, cid);
+                let name = pair
+                    .map(|p| state.device.outputs().get(p * 2).map(|o| o.name.clone()))
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "-".into());
+                format!("Free: {cid:?} to {name}")
+            }
+            None => "Free: select a channel to set its target".to_string(),
+        },
+    };
+    row.push(text(hint).size(theme::TEXT_XS * scale).color(theme::text_sec()))
+        .align_y(iced::Alignment::Center)
+        .into()
+}
+
 fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     // The caption reads out the cell under the pointer, and is the how-to
@@ -18562,6 +18715,7 @@ fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
         row![
             caption,
             iced::widget::Space::new().width(Length::Fill),
+            routing_mode_picker(state, scale),
             iced::widget::button(strip::centered_label_auto("MONO MODE", theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .style(theme::toggle_button(state.matrix_mono, theme::ACCENT))

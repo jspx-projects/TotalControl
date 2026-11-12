@@ -41,6 +41,12 @@ pub struct Crosspoint<Message> {
     /// `false` for the side of an output pair the source has no hardware
     /// path to: drawn as an empty well, inert.
     pub interactive: bool,
+    /// Whether the source is routed to this output at all.  A routing stays
+    /// active at -inf (UC manual 26.3: "shown in bold letters, but not have
+    /// an arrow"), so it is a state of its own: an inactive cell is the
+    /// manual's dark-grey "no routing" field and draws no number, while a
+    /// routed cell at -inf shows the muted/level colour instead.
+    pub routed: bool,
     pub muted: bool,
     pub phase: bool,
     /// Column of the submix picked in the top bar.
@@ -180,7 +186,7 @@ impl<Message: Clone> canvas::Program<Message> for Crosspoint<Message> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let routed = self.interactive && self.shown > f32::EPSILON;
+        let routed = self.interactive && self.routed && self.shown > f32::EPSILON;
         let well = if self.in_sel {
             theme::SURFACE_HI
         } else {

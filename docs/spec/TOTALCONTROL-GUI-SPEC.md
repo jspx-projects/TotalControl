@@ -1244,7 +1244,36 @@ Balance is independent of the fader level: it keeps its value at 0 and is
 applied when the fader rises. This applies to a linked input or playback pair
 and to each mono block of a split output.
 
-### 8.1 Signal model and submixes
+### 8.1 Routing mode: Submix and Free
+
+The Matrix and Mixer header carries a `Routing Mode` radio pair, matching
+TotalMix FX (Fireface UC manual §26.5.1):
+
+| Mode | What a source strip's fader edits |
+|---|---|
+| Submix (default) | The selected hardware output's routing, at the signal's send gain |
+| Free | The routing named by the strip's own target; strips may target different outputs |
+
+The modes differ only in which routing a strip is bound to. In both, a fader
+edit changes exactly one routing; only Trim fans a fader out to all of a
+channel's active routings.
+
+A routing is a state independent of gain. TotalMix keeps it active when the
+fader sits at −∞ ("shown in bold letters, but not have an arrow in the
+front", manual §26.3), so removing a routing is a separate action from
+turning it down.
+
+The Matrix cell shows, per the manual's colour legend:
+
+| Cell | Meaning |
+|---|---|
+| Green | Routed at 0.0 dB |
+| Grey with a number | Routed at another gain |
+| Blue | Routed, muted |
+| Red | Routed, phase inverted |
+| Dark grey, no number | No routing |
+
+### 8.2 Signal model and submixes
 
 Each hardware output is a bus. The selected output is the current submix;
 every input and software-playback strip carries an independent send gain and

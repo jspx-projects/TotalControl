@@ -460,6 +460,28 @@ pub trait RmeDevice {
     /// Gain of one mono matrix cell, `block` 0–17.  `None` when the
     /// channel has no matrix row.  Default backends answer from the
     /// per-pair model for the channel's natural side only.
+    /// Whether a source has an active routing into one output pair.  A
+    /// routing stays active even when its fader sits at -inf (the routing
+    /// field shows it in bold without an arrow, UC manual 26.3), so this is
+    /// independent of the cell's gain.  Backends that do not model separate
+    /// routings answer from the per-pair gain.
+    fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
+        self.matrix_cell(channel, pair * 2).is_some_and(|g| g > 0.0)
+            || self.matrix_cell(channel, pair * 2 + 1).is_some_and(|g| g > 0.0)
+    }
+
+    /// Every pair a source is routed into, in pair order.
+    fn routed_pairs_for(&self, channel: ChannelId) -> Vec<usize> {
+        (0..self.output_pair_count())
+            .filter(|pair| self.matrix_cell_routed(channel, *pair))
+            .collect()
+    }
+
+    /// Set or clear a routing without touching its gain.
+    fn set_routing(&mut self, channel: ChannelId, pair: usize, routed: bool) {
+        let _ = (channel, pair, routed);
+    }
+
     fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
         if block >= self.output_pair_count() * 2 {
             return None;

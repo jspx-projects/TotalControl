@@ -72,6 +72,7 @@ fn cell(
             value,
             shown,
             interactive,
+            routed: state.device.matrix_cell_routed(cid, _pair),
             muted,
             phase,
             in_sel: col / 2 == state.sel_out,

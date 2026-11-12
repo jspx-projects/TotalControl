@@ -43,6 +43,11 @@ pub struct WorkspaceView {
     pub ui_scale: f32,
     pub sel_out: usize,
     pub sel_out_side: usize,
+    /// TotalMix routing view (Submix/Free) and the Free-mode targets.
+    #[serde(default)]
+    pub routing_mode: crate::app::RoutingMode,
+    #[serde(default)]
+    pub free_target: std::collections::HashMap<usize, usize>,
     pub quick_channel: ChannelId,
     pub show_original_names: bool,
     pub matrix_mono: bool,
@@ -80,6 +85,8 @@ impl Default for WorkspaceView {
             ui_scale: default_scale(),
             sel_out: 0,
             sel_out_side: 0,
+            routing_mode: crate::app::RoutingMode::Submix,
+            free_target: std::collections::HashMap::new(),
             quick_channel: ChannelId::Input(0),
             show_original_names: false,
             matrix_mono: false,
