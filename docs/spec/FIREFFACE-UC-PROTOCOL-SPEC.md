@@ -23,6 +23,18 @@ the UC control surface implemented by TotalControl.
 | PC | `0424:3fc5`, `2a39:3fc5`, `2a39:3fce` | interrupt IF0 |
 | AP | `0424:3fc6`, `2a39:3fc6` | isochronous IF0 |
 
+The PC personalities differ in the interrupt transport:
+
+| PC product | Sample words | Engine start |
+|---|---|---|
+| `UC_PC`, `UC_PC_RME` | float32 | alt N; alt reselect only on a rate-band change |
+| `UC_WIN_RME` | S32 | alt 0, then alt N, on every start |
+
+On `UC_WIN_RME` the output latch clears only on the alt 0 → alt N reselect.
+Every UC engine start follows the previous engine stop by at least
+`FFUC_RESTART_SETTLE_MS` (250 ms); an immediate restart leaves `UC_WIN_RME`
+silent in both directions.
+
 The UC uses EP0 vendor requests for control. Two additional endpoints carry
 live information:
 
