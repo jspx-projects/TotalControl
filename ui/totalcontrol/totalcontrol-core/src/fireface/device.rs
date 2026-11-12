@@ -352,13 +352,11 @@ impl Default for UcMeterBank {
 impl UcMeterBank {
     fn merge(slot: &mut [f32], channel: usize, record: u32, analog: bool) {
         // A zero record is a real silence reading; release the channel.
-        // The `0x47ffff` filler means the detector did not refresh this
-        // channel on that page, so the held value stays.
+        // A no-data record (the 0x1fff filler, packet noise outside the
+        // meter's own range) means the detector did not refresh this
+        // channel, so the held value stays.
         if record == 0 {
             slot[channel] = f32::NEG_INFINITY;
-            return;
-        }
-        if !analog && (record >> 8) & 0xffffff == 0x47ffff {
             return;
         }
         let db = if analog {
@@ -366,8 +364,10 @@ impl UcMeterBank {
         } else {
             protocol::uc_digital_dbfs(record)
         };
-        if db > slot[channel] {
-            slot[channel] = db;
+        if let Some(db) = db {
+            if db > slot[channel] {
+                slot[channel] = db;
+            }
         }
     }
 

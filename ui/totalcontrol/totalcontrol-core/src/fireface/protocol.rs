@@ -223,15 +223,6 @@ impl UcMeterPacket {
     }
 }
 
-/// dBFS of a UC analog input level record.  `0` is below the meter range.
-pub fn uc_analog_input_dbfs(record: u32) -> f32 {
-    let u = (record >> 16) as u16 as i32;
-    if u == 0 {
-        return f32::NEG_INFINITY;
-    }
-    (UC_ANALOG_INPUT_ZERO_DBFS - u) as f32 * UC_ANALOG_INPUT_DB_PER_UNIT
-}
-
 /// dBFS above full scale of a saturated UC meter record's over field.
 /// A record that is not saturated returns 0.
 pub fn uc_over_dbfs(record: u32) -> f32 {
@@ -243,15 +234,39 @@ pub fn uc_over_dbfs(record: u32) -> f32 {
 }
 
 /// dBFS of a UC digital meter record (playback, digital inputs, outputs).
-pub fn uc_digital_dbfs(record: u32) -> f32 {
+///
+/// The level field only represents levels from 0 dBFS (0x420000) down to
+/// the bottom of scale at 0x47ffff, and a record at 0x7fffff is saturation
+/// with the over tag in the low byte.  Anything else - the 0x1fff no-data
+/// filler or a level above the meter's own over reach - is no data and
+/// returns NaN; the meter bank holds the previous value for it.
+pub fn uc_digital_dbfs(record: u32) -> Option<f32> {
     let level = ((record >> 8) & 0xffffff) as i64;
     if level == 0 {
-        return f32::NEG_INFINITY;
+        return Some(f32::NEG_INFINITY);
     }
     if level == UC_LEVEL_MAX as i64 {
-        return uc_over_dbfs(record);
+        return Some(uc_over_dbfs(record));
     }
-    -((level - UC_LEVEL_ZERO_DBFS as i64) as f32) * UC_DB_PER_LEVEL_LSB
+    if !(UC_LEVEL_ZERO_DBFS as i64..=(0x4a0000 as i64)).contains(&level) {
+        return None;
+    }
+    Some(-((level - UC_LEVEL_ZERO_DBFS as i64) as f32) * UC_DB_PER_LEVEL_LSB)
+}
+
+/// Analog input records use their own scale; the level range behaves the
+/// same way: 0 is below range and records outside the verified window
+/// (the idle 0x0041..0x0069 packet-noise band below 6740, and the stuck
+/// 0x3321-family code above 7550) are no data.
+pub fn uc_analog_input_dbfs(record: u32) -> Option<f32> {
+    let u = (record >> 16) as u16 as i32;
+    if u == 0 {
+        return Some(f32::NEG_INFINITY);
+    }
+    if !(6740..=7550).contains(&u) {
+        return None;
+    }
+    Some((UC_ANALOG_INPUT_ZERO_DBFS - u) as f32 * UC_ANALOG_INPUT_DB_PER_UNIT)
 }
 
 pub fn power_dbfs(power: u64) -> f32 {
@@ -799,27 +814,38 @@ mod tests {
         // (6800 - u) * 0.12745 dB.  u = 7505 measured -90 dBFS in the loopback
         // sweep.
         let record = (7505u32 << 16) as u32;
-        assert!((uc_analog_input_dbfs(record) + 90.0).abs() < 0.2);
-        assert!((uc_analog_input_dbfs((6800u32 << 16) as u32)).abs() < 1e-5);
-        assert_eq!(uc_analog_input_dbfs(0), f32::NEG_INFINITY);
+        assert!(uc_analog_input_dbfs(record).unwrap() + 90.0 < 0.2);
+        assert!(uc_analog_input_dbfs((6800u32 << 16) as u32).unwrap().abs() < 1e-5);
+        assert_eq!(uc_analog_input_dbfs(0), Some(f32::NEG_INFINITY));
         // The law continues into the OVR zone and bottoms at +6.02 dBFS:
         // u(0 dBFS) = 6800, one unit is 0.12745 dB, so u(6.02) ~= 6752.
         let record = (6752u32 << 16) as u32;
-        assert!((uc_analog_input_dbfs(record) - 6.0).abs() < 0.2);
+        assert!(uc_analog_input_dbfs(record).unwrap() - 6.0 < 0.2);
+        // The idle hum band (u <= 120) and the stuck 0x3321-family code are
+        // no data, not levels.
+        assert_eq!(uc_analog_input_dbfs(0x00460000), None);
+        assert_eq!(uc_analog_input_dbfs(0x33210000), None);
     }
 
     #[test]
     fn uc_digital_records_decode_the_log_scale() {
         // Measured staircase values.
-        assert!((uc_digital_dbfs(0x4975ff00) + 89.8).abs() < 0.1);
-        assert!((uc_digital_dbfs(0x427a5f00) + 5.8).abs() < 0.1);
-        assert!(uc_digital_dbfs(0x47ffff00) < -72.0, "bottom of scale");
-        assert_eq!(uc_digital_dbfs(0), f32::NEG_INFINITY);
+        assert!(uc_digital_dbfs(0x4975ff00).unwrap() + 89.8 < 0.1);
+        assert!(uc_digital_dbfs(0x427a5f00).unwrap() + 5.8 < 0.1);
+        assert!(uc_digital_dbfs(0x47ffff00).unwrap() < -72.0, "bottom of scale");
+        assert_eq!(uc_digital_dbfs(0), Some(f32::NEG_INFINITY));
         // Saturation: the over tag nibble counts half dB steps above 0 dBFS.
-        assert!((uc_digital_dbfs(0x7fffff0f)).abs() < 1e-6);
+        assert!(uc_digital_dbfs(0x7fffff0f).unwrap().abs() < 1e-6);
         assert_eq!(
-            uc_digital_dbfs(0x7fffff2f),
+            uc_digital_dbfs(0x7fffff2f).unwrap(),
             2.0 * 6.0206 / 15.0
         );
+        // No-data fillers are not levels: without the range check the
+        // 0x1fff filler decodes past full scale and pegs the meter.  The
+        // record's ceiling is well past the -90 dBFS staircase value
+        // (0x4975ff); codes above it are reserved/no-data.
+        assert_eq!(uc_digital_dbfs(0x00001fff), None);
+        assert_eq!(uc_digital_dbfs(0x00000fff), None);
+        assert_eq!(uc_digital_dbfs(0x52345600), None, "above the ceiling");
     }
 }
