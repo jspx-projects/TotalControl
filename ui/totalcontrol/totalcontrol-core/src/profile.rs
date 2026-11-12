@@ -87,19 +87,26 @@ impl DeviceProfile {
 
     pub fn build_playbacks(&self) -> Vec<PlaybackChannel> {
         let mut pbs = Vec::new();
+        let outputs = self.output_pair_count();
         for (i, pair) in self.playback_pairs.iter().enumerate() {
             // The id is the real device playback channel, so crosspoints
             // keep addressing the right source regardless of the labels.
-            pbs.push(PlaybackChannel::new(
-                i * 2,
-                &format!("PCM {}", pair.left),
-                self.output_pair_count(),
-            ));
-            pbs.push(PlaybackChannel::new(
-                i * 2 + 1,
-                &format!("PCM {}", pair.right),
-                self.output_pair_count(),
-            ));
+            let mut left = PlaybackChannel::new(i * 2, &format!("PCM {}", pair.left), outputs);
+            let mut right =
+                PlaybackChannel::new(i * 2 + 1, &format!("PCM {}", pair.right), outputs);
+            // Factory default is straight playback: each software playback
+            // pair feeds only its own hardware output pair at unity.  The
+            // volume array is in internal output order, so map the display
+            // pair through `output_order`.
+            let target = self.output_order.get(i).copied().unwrap_or(i);
+            if let Some(slot) = left.volumes.get_mut(target) {
+                *slot = 1.0;
+            }
+            if let Some(slot) = right.volumes.get_mut(target) {
+                *slot = 1.0;
+            }
+            pbs.push(left);
+            pbs.push(right);
         }
         pbs
     }

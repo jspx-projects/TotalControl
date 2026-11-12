@@ -525,7 +525,10 @@ impl InputChannel {
             id,
             name: name.to_string(),
             channel_type,
-            volumes: vec![1.0; outputs],
+            // No send into any output until the user routes the channel.
+            // A routing exists while its level is above -inf, so a 1.0 here
+            // would be a real 0 dB route into every bus (GUI spec 8.1.1).
+            volumes: vec![0.0; outputs],
             pans: vec![0; outputs],
             balance: vec![0; outputs * 2],
             fx_send_db: default_fx_send_channel_db(),
@@ -559,7 +562,9 @@ impl PlaybackChannel {
         Self {
             id,
             name: name.to_string(),
-            volumes: vec![1.0; outputs],
+            // The straight-playback route is set by `build_playbacks`; every
+            // other bus starts unrouted.
+            volumes: vec![0.0; outputs],
             pans: vec![0; outputs],
             balance: vec![0; outputs * 2],
             fx_send_db: default_fx_send_channel_db(),

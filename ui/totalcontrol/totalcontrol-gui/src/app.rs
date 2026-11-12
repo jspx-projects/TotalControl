@@ -21929,6 +21929,7 @@ mod tests {
     fn matrix_drag_then_toggle_undoes_step_by_step() {
         let mut state = new(true, None, None);
         let cid = ChannelId::Input(4);
+        state.device.set_volume(cid, 1, 1.0).unwrap();
         for v in [0.9, 0.7, 0.5] {
             let _ = update(&mut state, Message::VolumeChanged(cid, 1, v));
         }

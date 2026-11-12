@@ -224,9 +224,12 @@ pub mod uc {
 
     /// Linear 0..2 (+6 dB) -> (`wValue`, matrix address) for one crosspoint.
     pub fn matrix_word(linear: f32, address: u16) -> (u16, u16) {
+        // The two level LSBs would be encoded in the address's top bits,
+        // which overlap the four submix banks.  Keep them clear; the gain
+        // error is under 0.0002 dB.
         let level14 = (linear.clamp(0.0, 2.0) * UC_UNITY_LEVEL14 as f32)
             .round()
-            .clamp(0.0, 65535.0) as u32;
+            .clamp(0.0, 65532.0) as u32;
         let value = (level14 >> 2) as u16;
         let index = (((level14 & 3) << 14) as u16) | (address & 0x3fff);
         (value, index)
@@ -570,6 +573,18 @@ mod tests {
         assert_eq!(value, 0x2000);
         assert_eq!(index, 126);
         assert!((uc::linear_from_wvalue(value) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn uc_matrix_word_keeps_the_cell_address_and_14_bit_range() {
+        let address = 36 * 3 + 18;
+        for linear in [0.1, 0.25, 0.5, 0.707, 1.0, 1.5, 2.0] {
+            let (value, index) = uc::matrix_word(linear, address);
+            assert_eq!(index & 0x3fff, address, "gain {linear} moved the cell");
+            assert!(value <= 0x3fff, "gain {linear} exceeded the 14-bit level");
+            let measured = uc::linear_from_wvalue(value);
+            assert!((measured - linear).abs() < 0.001, "gain {linear} -> {measured}");
+        }
     }
 
     #[test]
