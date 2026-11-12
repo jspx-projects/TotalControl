@@ -224,14 +224,15 @@ pub mod uc {
 
     /// Linear 0..2 (+6 dB) -> (`wValue`, matrix address) for one crosspoint.
     pub fn matrix_word(linear: f32, address: u16) -> (u16, u16) {
-        // The two level LSBs would be encoded in the address's top bits,
-        // which overlap the four submix banks.  Keep them clear; the gain
-        // error is under 0.0002 dB.
         let level14 = (linear.clamp(0.0, 2.0) * UC_UNITY_LEVEL14 as f32)
             .round()
             .clamp(0.0, 65532.0) as u32;
+        // The two level LSBs would share wIndex bits 14:15 with the UC's
+        // submix banks.  Keep the cell address plain; the gain error from
+        // dropping the LSBs is below 0.0002 dB.
+        let level14 = level14 & !3;
         let value = (level14 >> 2) as u16;
-        let index = (((level14 & 3) << 14) as u16) | (address & 0x3fff);
+        let index = address & 0x3fff;
         (value, index)
     }
 
@@ -580,11 +581,16 @@ mod tests {
         let address = 36 * 3 + 18;
         for linear in [0.1, 0.25, 0.5, 0.707, 1.0, 1.5, 2.0] {
             let (value, index) = uc::matrix_word(linear, address);
-            assert_eq!(index & 0x3fff, address, "gain {linear} moved the cell");
+            assert_eq!(index, address, "gain {linear} moved the cell");
+            assert_eq!(index & 0xc000, 0, "gain {linear} set a submix-bank bit");
             assert!(value <= 0x3fff, "gain {linear} exceeded the 14-bit level");
             let measured = uc::linear_from_wvalue(value);
             assert!((measured - linear).abs() < 0.001, "gain {linear} -> {measured}");
         }
+        // Fractional gains must not leak their level LSBs into wIndex bits
+        // 14:15.  Captured Phones cell 6/18 is a plain index 234.
+        let (_, index) = uc::matrix_word(0.80082595, 6 * 36 + 18);
+        assert_eq!(index, 234);
     }
 
     #[test]

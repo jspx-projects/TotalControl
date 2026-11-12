@@ -1398,9 +1398,9 @@ impl Fireface {
             ChannelId::Input(i) => {
                 let ch = self.inputs.get(i)?;
                 let volume = *ch.volumes.get(pair)?;
-                if i < 4 && !self.input_pair_linked(i / 2) {
-                    // An unlinked analog input is mono: the pair value is
-                    // split across the output sides by the pan law.
+                if !self.input_pair_linked(i / 2) {
+                    // An unlinked input is mono: its own source is split
+                    // across the output sides by the pan law.
                     let pan = ch.pans.get(pair).copied().unwrap_or(0);
                     let (left, right) = if self.output_linked(pair) {
                         pan_split_equal_power(volume, pan)
@@ -1469,9 +1469,9 @@ impl Fireface {
     /// a playback or stereo input channel into its own side of the output
     /// pair.  The four mono analog inputs are pan-derived instead, so a
     /// per-cell edit there is an override on that side only.
-    fn matrix_natural(channel: ChannelId, block: usize) -> bool {
+    fn matrix_natural(&self, channel: ChannelId, block: usize) -> bool {
         match channel {
-            ChannelId::Input(i) => i >= 4 && block % 2 == i % 2,
+            ChannelId::Input(i) => self.input_pair_linked(i / 2) && block % 2 == i % 2,
             ChannelId::Playback(i) => block % 2 == i % 2,
             ChannelId::Output(_) => false,
         }
@@ -1608,11 +1608,11 @@ impl Fireface {
 
     fn uc_write_input(&self, idx: usize, pair: usize, _volume: f32) -> Result<(), Error> {
         let pan = self.inputs[idx].pans.get(pair).copied().unwrap_or(0);
-        // The first four inputs can be mono or a linked stereo pair.  Only
-        // an unlinked one is panned into both sides; a linked pair keeps
-        // left on the left and right on the right, or the two channels sum
-        // to +6 dB on a stereo bus.
-        if idx < 4 && !self.input_pair_linked(idx / 2) {
+        // Any input can be mono or a linked stereo pair.  Only an unlinked
+        // one is panned into both sides; a linked pair keeps left on the
+        // left and right on the right, or the two channels sum to +6 dB on
+        // a stereo bus.
+        if !self.input_pair_linked(idx / 2) {
             let volume = self.inputs[idx].volumes.get(pair).copied().unwrap_or(0.0)
                 * self.trim_gain(ChannelId::Input(idx));
             let (l, r) = if self.output_linked(pair) {
@@ -3106,10 +3106,9 @@ impl Fireface {
         if !self.is_uc() || data.len() < 4 {
             return;
         }
-        // Byte 3 bit 7 is the output-latch flag, not an encoder channel.
-        if data[3] & 0x80 != 0 {
-            return;
-        }
+        // Byte 3 bit 7 is set on real front-panel events, for inputs and
+        // outputs.  The kernel reports an output latch separately as EV_LATCH,
+        // so bit 7 is not a reason to discard the frame.
         let chan = (data[3] & 0x1f) as usize;
         let raw = (data[2] & 0x7f) as u32;
         if chan <= 0x15 {
@@ -3121,12 +3120,17 @@ impl Fireface {
         if chan < 4 {
             let max = if chan < 2 { 65 } else { 36 };
             let gain = raw.min(max) as u32;
-            if let Some(input) = self.inputs.get_mut(chan) {
-                // Inputs 1/2 report dB; inputs 3/4 report half-dB units,
-                // which is exactly the model's raw gain representation.
-                input.gain = Some(gain);
+            // Byte 2 bit 7 marks a stereo pair command.  Without it the
+            // unit moved one mono channel, so only that parity changes.
+            let stereo = data[2] & 0x80 != 0;
+            for target in [chan, if stereo { chan ^ 1 } else { chan }] {
+                if let Some(input) = self.inputs.get_mut(target) {
+                    // Inputs 1/2 report dB; inputs 3/4 report half-dB units,
+                    // which is exactly the model's raw gain representation.
+                    input.gain = Some(gain);
+                }
+                self.device_input_gain.insert(target, gain);
             }
-            self.device_input_gain.insert(chan, gain);
             return;
         }
         if !(4..=21).contains(&chan) {
@@ -4046,7 +4050,7 @@ impl RmeDevice for Fireface {
                 .get(block / 2)
                 .copied()
                 .ok_or_else(|| Error::InvalidChannel(format!("output block {block}")))?;
-            if Self::matrix_natural(channel, block) {
+            if self.matrix_natural(channel, block) {
                 match channel {
                     ChannelId::Input(i) => {
                         if let Some(slot) =
@@ -4089,7 +4093,7 @@ impl RmeDevice for Fireface {
             );
         }
         self.uc_write_matrix(block, source, gain * self.trim_gain(channel))?;
-        if Self::matrix_natural(channel, block) {
+        if self.matrix_natural(channel, block) {
             let pair = block / 2;
             match channel {
                 ChannelId::Input(i) => {
@@ -8682,6 +8686,43 @@ mod tests {
     }
 
     #[test]
+    fn uc_digital_input_fader_writes_its_parity_cell() {
+        let (mut dev, writes) = open(Model::Uc);
+        // i5 is a mono input.  Its fader writes source 4 into the selected
+        // output pair; it does not write the i6 source.
+        dev.set_input_pair_linked(2, false).unwrap();
+        writes.lock().unwrap().clear();
+        dev.set_volume(ChannelId::Input(4), 0, 0.5).unwrap();
+        let w = writes.lock().unwrap();
+        let uses_source = |source: u16| {
+            w.iter().any(|x| {
+                matches!(
+                    x,
+                    Write::Vendor(protocol::req::MIXER, _, index)
+                        if (index & 0x3fff) == source
+                )
+            })
+        };
+        // A mono input writes its own source 4; it must not touch source 5.
+        assert!(uses_source(4));
+        assert!(!uses_source(5));
+        assert!(!uses_source(36 + 5));
+    }
+
+    #[test]
+    fn uc_digital_input_stereo_fader_writes_both_channels() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_input_pair_linked(2, true).unwrap();
+        dev.set_volume(ChannelId::Input(4), 0, 0.5).unwrap();
+        let right = dev.inputs()[5].volumes[0];
+        let w = writes.lock().unwrap();
+        let (left_value, left_index) = uc::matrix_word(0.5, 4);
+        let (right_value, right_index) = uc::matrix_word(right, 41);
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, left_value, left_index)));
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, right_value, right_index)));
+    }
+
+    #[test]
     fn uc_playback_matrix_uses_display_columns() {
         let (mut dev, writes) = open(Model::Uc);
         // Matrix column 1 is AN3/4; playback 1 left = source 18, raw block 2.
@@ -9227,6 +9268,48 @@ mod tests {
         dev.uc_status_event(&[0, 0, 0x9a, 10]);
         assert!((dev.outputs()[6].volume - 0.1).abs() < 0.001);
         assert!((dev.outputs()[7].volume - 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn uc_front_panel_event_with_byte3_bit7_is_decoded() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let idx = uc::output_from_encoder(11, dev.output_order()).unwrap();
+        let before = dev.outputs()[idx ^ 1].volume;
+        // Captured front-panel Phones event.  Byte 3 bit 7 is set and must
+        // not be mistaken for an output-latch marker.
+        dev.uc_status_event(&[0x62, 0xe3, 0x2b, 0x8b]);
+        assert!((dev.outputs()[idx].volume - uc::output_linear(0x2b)).abs() < 1e-6);
+        assert!((dev.outputs()[idx ^ 1].volume - before).abs() < 1e-6);
+    }
+
+    #[test]
+    fn uc_front_panel_input_event_with_byte3_bit7_is_decoded() {
+        let (mut dev, _writes) = open(Model::Uc);
+        // Captured i1 gain event: channel 0, 21 dB, byte 3 bit 7 set,
+        // byte 2 bit 7 clear, so this is a mono command.
+        let before = dev.inputs()[1].gain;
+        dev.uc_status_event(&[0x9f, 0xb2, 0x15, 0x80]);
+        assert_eq!(dev.inputs()[0].gain, Some(21));
+        assert_eq!(dev.inputs()[1].gain, before);
+    }
+
+    #[test]
+    fn uc_front_panel_input_stereo_command_moves_both_sides() {
+        let (mut dev, _writes) = open(Model::Uc);
+        // Same level byte with bit 7 set: a stereo pair command.
+        dev.uc_status_event(&[0x9f, 0xb2, 0x95, 0x80]);
+        assert_eq!(dev.inputs()[0].gain, Some(21));
+        assert_eq!(dev.inputs()[1].gain, Some(21));
+    }
+
+    #[test]
+    fn uc_front_panel_input_event_uses_the_half_db_range_for_3_4() {
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_input_pair_linked(1, false).unwrap();
+        // Channel 2 (i3), value 30, byte 3 bit 7 set.
+        dev.uc_status_event(&[0, 0, 30, 0x82]);
+        assert_eq!(dev.inputs()[2].gain, Some(30));
+        assert_ne!(dev.inputs()[3].gain, Some(30));
     }
 
     #[test]

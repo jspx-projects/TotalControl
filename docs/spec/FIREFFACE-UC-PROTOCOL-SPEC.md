@@ -28,7 +28,7 @@ live information:
 
 | Endpoint | Direction | Contents |
 |---|---|---|
-| `0x8b` | interrupt IN | Front-panel encoder events and output-latch state |
+| `0x8b` | interrupt IN | Front-panel encoder events and status-ticker frames |
 | `0x85` | bulk IN | 324-byte transport and link state |
 
 Mixer state is write-only.  The host model is the authoritative copy and is
@@ -54,10 +54,10 @@ written to the device on connect and on each change.
 
 ### 2.1 Channel initialization
 
-The UC connect sequence writes request `0x16` with `wValue 0x0000` for slots
-`0..29` and `32..61` (60 writes).  Slots 30 and 31 are skipped.  The slot
-ranges and values are per-device data; they are not derived from the channel
-count.
+The UC connect sequence writes request `0x16` with `wValue 0x0001` for slots
+`0..17` and `32..49` (36 writes).  Slots `18..31` and `50..63` are not written.
+The slot ranges and values are per-device data; they are not derived from the
+channel count.
 
 ## 3. Matrix and channel words
 
@@ -70,16 +70,18 @@ source = 18..35  software playback channels
 block  = 0..17   hardware output blocks
 ```
 
-The value is a signed 16-bit level.  A level of `0x2000` is 0 dB.  A non-zero
-send sets `wIndex` bit 14; a zero send writes the same cell with bit 14 clear.
-Bit 14 is a send-active flag, not a submix selector.
+The effective level is the 12-bit `wValue`; `0x2000` is 0 dB.  The two level
+LSBs that would occupy `wIndex` bits 14:15 are not used for matrix cells.
+Those bits select submix banks for output masters, so a crosspoint write keeps
+them clear and writes the plain cell address.
 
 For a stereo pair, source `N` writes the left cell in block `2p` and source
 `N + 1` writes the right cell in block `2p + 1`; `p` is the output pair.
 
-The output masters use `wIndex = 992 + block`.  The four submix banks occupy
-`wIndex` bits 14:15; an output-balance change writes the left and right
-masters in each bank.
+The output masters use `wIndex = 992 + block`.  The block order is the
+TotalMix display order: AN1/2 is `0`, and Phones 7/8 is `6`.  The four submix
+banks occupy `wIndex` bits 14:15; an output-balance change writes the left and
+right masters in each bank.
 
 Input phase uses request `0x18`:
 
@@ -112,7 +114,7 @@ Output channel indices are:
 | SPDIF | 12, 13 |
 | ADAT 1/2 … 7/8 | 14 … 21 |
 
-The `0x12` master for channel `n` is `992 + n`; the four submix banks are
+The `0x12` master for block `n` is `992 + n`; the four submix banks are
 selected by `wIndex` bits 14:15.
 
 An output pair carries balance as two distinct channel levels.  The linked
@@ -127,6 +129,29 @@ A balance change writes:
 
 The mixer represents input and playback pan/balance with the two source
 levels for the selected output pair.
+
+### 4.1 Front-panel events
+
+A `0x8b` interrupt frame is four bytes:
+
+| Bytes | Meaning |
+|---|---|
+| 2, bits 0–6 | level code (`0..63` for outputs, raw gain for inputs) |
+| 2, bit 7 | stereo pair command: the level applies to both sides |
+| 3, bits 0–4 | encoder channel `0..21` |
+| 3, bit 7 | set on captured front-panel frames |
+
+Byte 3 bit 7 does not make the frame invalid; decode the channel from bits
+0–4.  It is set on captured output frames and on captured input frames.  A
+status-ticker frame uses channel `31` and carries no encoder value; it is
+ignored.
+
+Input gains use channels `0..3`; captured i1 is `9f b2 15 80`, channel `0`,
+value `21`, byte 2 bit 7 clear.  This is a mono command and affects only i1.
+When byte 2 bit 7 is set the frame is a stereo pair command and the level
+applies to both channels of the pair.  The front panel has gain for inputs
+1–4 only; inputs 5–18 produce no gain events.  Output levels use channels
+`4..21`; captured Phones is `62 e3 2b 8b`, channel `11`, value `43`.
 
 ## 5. Switches and references
 
@@ -227,12 +252,13 @@ Inst, reference levels, clock source and optical format.
 
 The mixer group is written from the TotalControl scene: matrix, pans, faders,
 mutes, loopback, output levels and output balance.  The connect sequence
-writes 60 `0x16` channel slots, four `0x1b` DDS words, 11 `0x10` settings
+writes 36 `0x16` channel slots, four `0x1b` DDS words, 11 `0x10` settings
 words, 30 loopback entries, one `0x17` switch reset, four `0x1a` preamps,
 18 `0x1a` output levels and 666 `0x12` matrix/master words.
 
 Front-panel gain and output-level changes arrive on `0x8b` and update the
-live model.  The host scene remains the source for the next connect.
+live model.  Byte 3 bit 7 is present on captured output frames and does not
+suppress the channel.  The host scene remains the source for the next connect.
 
 ## 9. Host-side mixer operations
 

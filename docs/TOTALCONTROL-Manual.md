@@ -546,6 +546,10 @@ independent channel volumes. A split output's own strip shows `MONO` instead
 of the balance knob, whatever the input and playback link states are. A pair
 assigned to the Control Room is always stereo and never splits.
 
+An unlinked input fader is mono and writes only that input's channel. A
+linked input pair is stereo and its fader writes both channels. The UC's
+front-panel volume events use the same mono/stereo distinction.
+
 ## 6. The slideout panels
 
 Pressing a symbol button on a strip opens that channel's panel beside it.
