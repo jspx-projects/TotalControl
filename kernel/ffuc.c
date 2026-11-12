@@ -784,6 +784,39 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_playback = 14,
 		.max_rate = 192000,
 		.ops = &ffuc_ucx_ops,
+	}, {
+		.name = "Fireface UC",
+		.shortname = "Fireface UC",
+		.card_id = "FirefaceUC",
+		.vendor = FFUC_VENDOR_RME,
+		.product = FFUC_PRODUCT_UC_WIN_RME,
+		.iface = 0,
+		.transport = FFUC_XPORT_INTERRUPT,
+		/* The UC_WIN_RME PC personality plays float samples as digital
+		 * distortion and wants S32 samples, as the UCX interrupt
+		 * transport does; its output latch clears only on an
+		 * alt 0 -> alt N reselect, as on the UCX. */
+		.quirks = FFUC_QUIRK_STATUS_LATCH |
+			  FFUC_QUIRK_INT32_SAMPLES |
+			  FFUC_QUIRK_ALT_RESELECT,
+		.model = FFUC_MODEL_UC,
+		.modes = ffuc_pc_modes,
+		.n_modes = ARRAY_SIZE(ffuc_pc_modes),
+		.audio_iface = 0,
+		.out_ep = 0x01,
+		.in_ep = 0x02,
+		.status_iface = 5,
+		.status_ep = 0x8b,
+		.state_iface = 1,
+		.state_out_ep = 0x0c,
+		.state_in_ep = 0x8d,
+		.meter_in_ep = 0x85,
+		.max_channels = 18,
+		.max_rate = 192000,
+		.meter_len = 324,
+		.chan_init = ffuc_uc_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_uc_chan_init),
+		.ops = &ffuc_uc_ops,
 	},
 };
 
@@ -793,7 +826,7 @@ static const struct usb_device_id ffuc_ids[] = {
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_PC_RME, 0),
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[0] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_WIN_RME, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[0] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[8] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UC_MAC, 0),
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[1] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_MAC, 0),
@@ -1513,6 +1546,7 @@ static void ffuc_engine_stop(struct ffuc *chip)
 	}
 	WRITE_ONCE(chip->engine_running, false);
 	ffuc_kill_urbs(chip, chip->ucx || chip->iso);
+	chip->engine_stopped_at = jiffies ?: 1;
 	dev_dbg(&chip->dev->dev, "engine stopped\n");
 }
 
@@ -1653,6 +1687,19 @@ static int ffuc_engine_start(struct ffuc *chip)
 			FFUC_SAMPLE_BYTES;
 	if (WARN_ON(bytes > chip->urb_bytes_max))
 		return -EINVAL;
+	/* PipeWire reconfigures both nodes for a new quantum by closing and
+	 * reopening them within milliseconds.  Windows leaves seconds
+	 * between a session close and the next open; a start that follows
+	 * the close word at once (interface reselect, session words) leaves
+	 * a UC_WIN_RME unit dead in both directions until the module is
+	 * reloaded.  100 ms was enough on the bench; keep a margin. */
+	if (chip->model == FFUC_MODEL_UC && chip->engine_stopped_at) {
+		unsigned long ready = chip->engine_stopped_at +
+				      msecs_to_jiffies(FFUC_RESTART_SETTLE_MS);
+
+		if (time_before(jiffies, ready))
+			msleep(jiffies_to_msecs(ready - jiffies) + 1);
+	}
 
 	/* alt 0 -> alt N reselect clears the UCX IF5 output latch. */
 	if (chip->desc->quirks & FFUC_QUIRK_ALT_RESELECT) {
