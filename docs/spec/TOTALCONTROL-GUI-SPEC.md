@@ -478,7 +478,8 @@ the normal release instead of freezing at their last reading.
 
 Input and playback meters are pre-fader and post-trim: the trim changes the
 reading, the send fader and selected submix do not. Hardware output meters
-are post-fader and go to zero when the output is muted.
+are post-fader and go to zero when the output is muted.  The Fireface UC and
+UCX take both the RMS bar and the peak line from their hardware meter pages.
 
 #### 2.7.2 Fader scale
 

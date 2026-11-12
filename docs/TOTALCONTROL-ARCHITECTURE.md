@@ -170,7 +170,9 @@ Backend-specific behaviour:
 - **Babyface USB**: `panel_tick()` reads the `0x17` panel status and runs the
   host-side panel state machine.
 - **Meters**: the service copies device meter pages into `MeterSnapshot` at the
-  polling rate. Peak hold lives there, so a transient shorter than a canvas
+  polling rate. The UC and UCX both use their `0x85` hardware Peak/RMS pages;
+  the UC page layout is defined in `docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md`
+  §10. Peak hold lives in the snapshot, so a transient shorter than a canvas
   frame is still visible.
 
 The view reads the model through `Mirror` getters, which never lock or block on

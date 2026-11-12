@@ -549,13 +549,16 @@ int ffuc_transport_start(struct ffuc *chip)
 		return 0;
 	chip->state_active = true;
 	/*
-	 * The UC's metering is audio-derived.  Its IF1 0x8d/0x85 streams are
-	 * link/transport telemetry, and keeping those persistent bulk URBs
-	 * running disturbs the PipeWire capture path.  The UC only needs the
-	 * EP0 vendor transport and the 0x8b status endpoint.
+	 * The UC 0x85 endpoint carries the hardware Peak/RMS meter pages.
+	 * Keep the meter URB running for both models; PCM capture remains
+	 * owned by the ALSA/PipeWire stream.
 	 */
-	if (!chip->ucx)
+	if (!chip->ucx) {
+		ret = ffuc_meter_submit(chip);
+		if (ret < 0 && ret != -EALREADY)
+			dev_dbg(&chip->dev->dev, "UC meter URB submit: %d\n", ret);
 		return 0;
+	}
 	ret = ffuc_state_submit(chip);
 	if (ret < 0 && ret != -EALREADY)
 		dev_dbg(&chip->dev->dev, "state URB submit: %d\n", ret);

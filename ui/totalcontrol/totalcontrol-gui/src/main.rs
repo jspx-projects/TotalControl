@@ -93,10 +93,6 @@ fn main() -> iced::Result {
         println!("{}", about::BUILD_ID);
         return Ok(());
     }
-    // Defer the input meter tap (which opens the capture PCM) until the
-    // startup scene has been written, so the device holds the complete
-    // scene when audio starts.
-    std::env::set_var("TOTALCONTROL_DEFER_METER_TAP", "1");
     // `--mock` simulates a Babyface Pro FS; `--mock-ucx` simulates a
     // Fireface UCX (EQ, dynamics, FX bus, Control Room), so the gated UI can
     // be used without the hardware.

@@ -499,11 +499,8 @@ impl RmeDevice for DeviceHandle {
     fn settings_mut(&mut self) -> &mut totalcontrol_core::DeviceSettings {
         delegate!(self, settings_mut)
     }
-    /// The UC defers its input meter tap until the startup scene has been
-    /// written (`TOTALCONTROL_DEFER_METER_TAP`).  The trait default is a
-    /// no-op, so without this forward the Fireface backend's tap is never
-    /// started and the AN5 meter stays flat even though the hardware capture
-    /// is live.
+    /// Forward the deferred meter start to the backend; it is a no-op for
+    /// backends whose meters arrive on the device stream.
     fn begin_metering(&mut self) {
         delegate!(self, begin_metering)
     }
@@ -1250,7 +1247,7 @@ impl DeviceHandle {
         if matches!(self, DeviceHandle::BabyfaceClassic(_)) {
             return true;
         }
-        if matches!(self, DeviceHandle::Fireface(d) if d.model() == FirefaceModel::Ucx) {
+        if matches!(self, DeviceHandle::Fireface(_)) {
             return true;
         }
         false
@@ -1296,7 +1293,7 @@ impl DeviceHandle {
             DeviceHandle::Mock(_) => true,
             DeviceHandle::Mirror(d) => d.info().device_playback_meters || d.info().is_mock,
             #[cfg(feature = "alsa")]
-            DeviceHandle::Fireface(d) => d.model() == FirefaceModel::Ucx,
+            DeviceHandle::Fireface(_) => true,
             _ => false,
         }
     }
@@ -8853,7 +8850,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
     // The class-compliant personality drives routing, preamps and clock and
     // nothing else (see `RmeDevice::protocol_features`). The UI already
     // hides the controls; this is the other half of that, so nothing built
-    // by hand reaches a setter that can only fail.
+    // by hand reaches a setter that can only fail.  Reset Mix is deliberately
+    // not in the list: it is a host-side scene edit that applies to the UC
+    // as well, even though that model's coarse flag is false.
     if needs_protocol_features(&message) && !state.device.protocol_features() {
         // Phase is the one exception: the UC has no EQ/FX DSP, so the
         // coarse protocol_features flag is false there, but it does store
@@ -9113,11 +9112,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         }
                         restart_surround_bridge(state);
                         restore_engine(state);
-                        // `fresh` starts with the deferred meter tap (the
-                        // global TOTALCONTROL_DEFER_METER_TAP), exactly like the
-                        // first launch.  Start it now that the scene and the
-                        // remembered rate are in place; otherwise the input
-                        // meters stay dead after a reconnect.
+                        // Let the backend start any deferred metering after
+                        // the reconnect scene and rate are in place.
                         state.device.begin_metering();
                         // Force the next poll to treat the reopened card as
                         // a fresh stream: schedule the post-start reapply
@@ -19306,6 +19302,46 @@ mod tests {
     use std::time::{Duration, Instant};
     use totalcontrol_core::fireface::UcxDump;
     use totalcontrol_core::RmeDevice;
+
+    #[test]
+    fn clear_all_submixes_clears_the_uc_matrix() {
+        let mut state = new(false, None, None);
+        state.device = DeviceHandle::open_mock_uc();
+        state
+            .device
+            .set_volume(ChannelId::Input(0), 0, 0.5)
+            .unwrap();
+        state
+            .device
+            .set_volume(ChannelId::Playback(0), 0, 0.5)
+            .unwrap();
+        super::apply_reset_mix(&mut state, ResetMix::ClearSubmixes);
+        assert_eq!(state.device.matrix_cell(ChannelId::Input(0), 0), Some(0.0));
+        assert_eq!(
+            state.device.matrix_cell(ChannelId::Playback(0), 0),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn clear_submixes_menu_message_clears_the_uc_matrix() {
+        let mut state = new(false, None, None);
+        state.device = DeviceHandle::open_mock_uc();
+        state
+            .device
+            .set_volume(ChannelId::Input(0), 0, 0.5)
+            .unwrap();
+        state
+            .device
+            .set_volume(ChannelId::Playback(0), 0, 0.5)
+            .unwrap();
+        let _ = update(&mut state, Message::ResetMix(ResetMix::ClearSubmixes));
+        assert_eq!(state.device.matrix_cell(ChannelId::Input(0), 0), Some(0.0));
+        assert_eq!(
+            state.device.matrix_cell(ChannelId::Playback(0), 0),
+            Some(0.0)
+        );
+    }
 
     #[test]
     fn page_feedback_uses_classic_addresses_and_val_companions() {

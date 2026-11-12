@@ -451,8 +451,8 @@ pub trait RmeDevice {
         false
     }
 
-    /// Start the input meter tap, if the backend defers it.  The UC's
-    /// meter tap opens the capture PCM, which starts the device engine.
+    /// Start deferred metering, if the backend needs it.  Backends that
+    /// receive meters from the device leave this as the default no-op.
     fn begin_metering(&mut self) {}
 
     /// Whether a source is routed into one output pair.  A routing exists

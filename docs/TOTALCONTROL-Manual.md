@@ -475,8 +475,8 @@ to unity and use the interface's own faders for monitoring. A linked pair
 shows one meter bar per channel; each bar shows that channel's own signal,
 so linking controls does not copy a signal from one channel to the other.
 
-The meters are read from the interface stream independently of the rest of the
-window. Moving a fader, opening a panel or scrolling does not interrupt or
+The meters are read from the interface's own hardware meter pages
+independently of the rest of the window. Moving a fader, opening a panel or scrolling does not interrupt or
 freeze them. A short transient lights the peak line even when it falls
 between two screen frames. When every meter has been quiet for a moment they
 stop redrawing, so an idle mixer stays still; the next signal wakes them
@@ -587,8 +587,9 @@ Notes:
 - The **reference dropdown** sets the input or output reference level. For
   inputs 5–8 the four channels move together; inputs 3/4 can be linked.
 - `loopback` makes this output's signal available on its input channel, so
-  recording software can capture what the output plays. `no trim` and
-  `talkback` receive are host-side settings.
+  recording software can capture what the output plays. The input meter keeps
+  showing the physical input; the loopback signal is only in the record path.
+  `no trim` and `talkback` receive are host-side settings.
 
 On/off controls sit at the left of their row. Engaged switches light orange
 (`48V`, `stereo`, `autoset`, `inst`, and others) or green (phase).

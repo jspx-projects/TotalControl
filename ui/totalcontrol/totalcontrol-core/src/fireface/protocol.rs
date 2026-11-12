@@ -137,7 +137,121 @@ impl MeterPacket {
     }
 }
 
-/// RMS dBFS from a UCX power value.  Values at or below 31 are "below range".
+/// A 324-byte Fireface UC `0x85` meter page.
+///
+/// Byte 108 begins the 54 32-bit records in display order: 8 analog input,
+/// 10 S/PDIF and ADAT input, 18 playback and 18 hardware output records.
+/// A record uses the meter ABI of the FireWire generation: bits 8..31 are
+/// the level, bits 0..7 the overload field.  A zero record means the
+/// channel was below the meter range, and a page whose records read zero
+/// everywhere is a filler page, not a meter page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UcMeterPacket {
+    pub records: [u32; 54],
+}
+
+impl Default for UcMeterPacket {
+    fn default() -> Self {
+        Self { records: [0; Self::RECORD_COUNT] }
+    }
+}
+
+/// Level field that means 0 dBFS on a UC digital meter record.
+pub const UC_LEVEL_ZERO_DBFS: u32 = 0x420000;
+/// Level field of a saturated UC digital meter record.
+pub const UC_LEVEL_MAX: u32 = 0x7fffff;
+/// dB per level-field LSB so that one octave is `0x8000`.
+const UC_DB_PER_LEVEL_LSB: f32 = 6.0206 / 0x8000 as f32;
+/// Analog input levels sit on their own scale: 0 dBFS at 6800 in the
+/// upper halfword and 7.846 halfword units per dB (0.12745 dB per unit).
+const UC_ANALOG_INPUT_ZERO_DBFS: i32 = 6800;
+const UC_ANALOG_INPUT_DB_PER_UNIT: f32 = 0.12745;
+/// The saturation over field: the low byte's tag nibble is `0xf` and the
+/// upper nibble counts 0..15 half dB steps of headroom over 0 dBFS.
+const UC_OVER_TAG: u8 = 0x0f;
+const UC_OVER_DB_PER_STEP: f32 = 6.0206 / 15.0;
+
+impl UcMeterPacket {
+    pub const LEN: usize = 324;
+    pub const ANALOG_INPUT_COUNT: usize = 8;
+    pub const DIGITAL_INPUT_COUNT: usize = 10;
+    pub const INPUT_COUNT: usize = Self::ANALOG_INPUT_COUNT + Self::DIGITAL_INPUT_COUNT;
+    pub const PLAYBACK_COUNT: usize = 18;
+    pub const OUTPUT_COUNT: usize = 18;
+    pub const RECORD_COUNT: usize = Self::INPUT_COUNT + Self::PLAYBACK_COUNT + Self::OUTPUT_COUNT;
+
+    pub fn parse(b: &[u8]) -> Option<Self> {
+        if b.len() != Self::LEN || b[108..Self::LEN].iter().all(|&byte| byte == 0) {
+            return None;
+        }
+        let mut records = [0u32; Self::RECORD_COUNT];
+        for (i, r) in records.iter_mut().enumerate() {
+            *r = u32::from_le_bytes(b[108 + i * 4..108 + i * 4 + 4].try_into().unwrap());
+        }
+        Some(Self { records })
+    }
+
+    /// Raw analog input record `AN1..AN8`.
+    pub fn analog_input(&self, channel: usize) -> u32 {
+        self.records.get(channel).copied().unwrap_or(0)
+    }
+
+    /// Raw record of a digital input channel (S/PDIF, ADAT).
+    pub fn digital_input(&self, channel: usize) -> u32 {
+        self.records
+            .get(Self::ANALOG_INPUT_COUNT + channel)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Raw record of a playback channel.
+    pub fn playback(&self, channel: usize) -> u32 {
+        self.records
+            .get(Self::INPUT_COUNT + channel)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Raw record of a hardware output channel.
+    pub fn output(&self, channel: usize) -> u32 {
+        self.records
+            .get(Self::INPUT_COUNT + Self::PLAYBACK_COUNT + channel)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+/// dBFS of a UC analog input level record.  `0` is below the meter range.
+pub fn uc_analog_input_dbfs(record: u32) -> f32 {
+    let u = (record >> 16) as u16 as i32;
+    if u == 0 {
+        return f32::NEG_INFINITY;
+    }
+    (UC_ANALOG_INPUT_ZERO_DBFS - u) as f32 * UC_ANALOG_INPUT_DB_PER_UNIT
+}
+
+/// dBFS above full scale of a saturated UC meter record's over field.
+/// A record that is not saturated returns 0.
+pub fn uc_over_dbfs(record: u32) -> f32 {
+    let ratio = record as u8;
+    if ratio & 0x0f != UC_OVER_TAG {
+        return 0.0;
+    }
+    (ratio >> 4) as f32 * UC_OVER_DB_PER_STEP
+}
+
+/// dBFS of a UC digital meter record (playback, digital inputs, outputs).
+pub fn uc_digital_dbfs(record: u32) -> f32 {
+    let level = ((record >> 8) & 0xffffff) as i64;
+    if level == 0 {
+        return f32::NEG_INFINITY;
+    }
+    if level == UC_LEVEL_MAX as i64 {
+        return uc_over_dbfs(record);
+    }
+    -((level - UC_LEVEL_ZERO_DBFS as i64) as f32) * UC_DB_PER_LEVEL_LSB
+}
+
 pub fn power_dbfs(power: u64) -> f32 {
     if power <= 31 {
         return f32::NEG_INFINITY;
@@ -657,5 +771,49 @@ mod tests {
     #[test]
     fn ep0_revision_uses_the_upper_word() {
         assert_eq!(firmware_revision(0x002e_0103), 46);
+    }
+
+    #[test]
+    fn uc_meter_records_map_display_order() {
+        let mut b = [0u8; UcMeterPacket::LEN];
+        b[108..112].copy_from_slice(&0x01000000u32.to_le_bytes());
+        b[140..144].copy_from_slice(&0x02000000u32.to_le_bytes());
+        b[180..184].copy_from_slice(&0x03000000u32.to_le_bytes());
+        b[252..256].copy_from_slice(&0x04000000u32.to_le_bytes());
+        let p = UcMeterPacket::parse(&b).unwrap();
+        assert_eq!(p.analog_input(0), 0x01000000, "byte 108 is AN1");
+        assert_eq!(
+            p.digital_input(0),
+            0x02000000,
+            "byte 140 is the first digital input"
+        );
+        assert_eq!(p.playback(0), 0x03000000, "byte 180 is playback 1");
+        assert_eq!(p.output(0), 0x04000000, "byte 252 is output AN1");
+        assert!(UcMeterPacket::parse(&[0u8; UcMeterPacket::LEN]).is_none());
+    }
+
+    #[test]
+    fn uc_analog_input_records_decode_the_input_scale() {
+        // (6800 - u) * 0.12745 dB.  u = 7505 measured -90 dBFS in the loopback
+        // sweep.
+        let record = (7505u32 << 16) as u32;
+        assert!((uc_analog_input_dbfs(record) + 90.0).abs() < 0.2);
+        assert!((uc_analog_input_dbfs((6800u32 << 16) as u32)).abs() < 1e-5);
+        assert_eq!(uc_analog_input_dbfs(0), f32::NEG_INFINITY);
+    }
+
+    #[test]
+    fn uc_digital_records_decode_the_log_scale() {
+        // Measured staircase values.
+        assert!((uc_digital_dbfs(0x4975ff00) + 89.8).abs() < 0.1);
+        assert!((uc_digital_dbfs(0x427a5f00) + 5.8).abs() < 0.1);
+        assert!(uc_digital_dbfs(0x47ffff00) < -72.0, "bottom of scale");
+        assert_eq!(uc_digital_dbfs(0), f32::NEG_INFINITY);
+        // Saturation: the over tag nibble counts half dB steps above 0 dBFS.
+        assert!((uc_digital_dbfs(0x7fffff0f)).abs() < 1e-6);
+        assert_eq!(
+            uc_digital_dbfs(0x7fffff2f),
+            2.0 * 6.0206 / 15.0
+        );
     }
 }

@@ -15,6 +15,7 @@ the UC control surface implemented by TotalControl.
 - [7. Sample rate and clock](#7-sample-rate-and-clock)
 - [8. State ownership](#8-state-ownership)
 - [9. Host-side mixer operations](#9-host-side-mixer-operations)
+- [10. Metering](#10-metering)
 
 ## 1. Device and control paths
 
@@ -41,7 +42,7 @@ live information:
 | Endpoint | Direction | Contents |
 |---|---|---|
 | `0x8b` | interrupt IN | Front-panel encoder events and status-ticker frames |
-| `0x85` | bulk IN | 324-byte transport and link state |
+| `0x85` | bulk IN | 324-byte hardware Peak/RMS meter pages |
 
 Mixer state is write-only.  The host model is the authoritative copy and is
 written to the device on connect and on each change.
@@ -138,6 +139,12 @@ The low code is `0x00` for input 1 and `0x24 + (input - 1)` for inputs 2–4,
 giving `0x25` for input 2 and `0x27` for input 4.  The value is a signed
 coefficient; phase is not a `0x17` bit on the UC.
 
+Hardware-output phase is carried in the `0x12` cells, not in `0x18`.  An
+inverted cell writes the bitwise complement of the normal `wValue`; the
+`wIndex` address is unchanged.  Toggling output phase rewrites every cell
+routed to that output block.  For example, normal `0x16a0` becomes inverted
+`0xe95f`, and normal `0x3fd9` becomes inverted `0xc026`.
+
 ## 4. Output level and balance
 
 Hardware output level uses request `0x1a` with the 1 dB code:
@@ -228,8 +235,11 @@ option on the UC and does not change this register.
 ## 6. Routing controls
 
 Loopback uses request `0x15`.  An index in `0..29` addresses one output
-channel; value `1` feeds that output into the same-numbered input channel.
-The loopback bank is live and changes the running stream.
+channel in matrix display order; value `1` feeds that output into the
+same-numbered input channel.  The unit ignores a single-index update:
+every change writes the complete 30-entry bank, with `0` for every disabled
+index.  AN5/6 therefore writes indices `4` and `5`.  The loopback bank is
+live and changes the running stream.
 
 The matrix applies live.  A `0x12` cell write takes effect on the running
 engine, so a route made while audio plays is audible immediately and a scene
@@ -315,3 +325,73 @@ resulting cross-feed coefficients as `0x12` cells.
 
 Talkback is a host-side operation.  The UC control stream carries the normal
 matrix and output state produced by the host mixer.
+
+## 10. Metering
+
+The `0x85` bulk stream carries 324-byte meter pages that alternate with
+filler pages whose record region is zero.  Byte 108 begins the 54 32-bit
+records, little-endian and in display order:
+
+| Bytes | Records | Contents |
+|---|---|---|
+| 108..139 | 8 | AN1–AN8 inputs |
+| 140..179 | 10 | S/PDIF and ADAT inputs |
+| 180..251 | 18 | software playback 1–18 |
+| 252..323 | 18 | hardware outputs: AN1–8, S/PDIF L/R, ADAT 1–8 |
+
+Each record uses the meter format of the FireWire generation: bits 8..31
+are the level and bits 0..7 carry the overload field.  A zero record means
+the channel was below the meter range on that page.
+
+### Digital records (playback, outputs, active digital inputs)
+
+The level is logarithmic with one amplitude octave per `0x8000` and
+`0x420000` at 0 dBFS:
+
+```text
+dBFS = (0x420000 - level) * 6.0206 / 0x8000,  level = record >> 8
+```
+
+`level == 0` is below range.  `level == 0x7fffff` is saturation: the record
+is then at or above 0 dBFS and the low byte's upper nibble counts the over
+amount in steps above full scale (tag nibble `0xf`, 15 steps = 6.02 dB, the
+over range the TotalMix FX fader meters show beyond 0 dB).  Measured
+staircase values:
+
+| drive | playback record | dBFS |
+|---|---|---|
+| -89.8 | `0x4975ff00` | -89.8 |
+| -5.8  | `0x427a5f00` | -5.8 |
+
+The detector publishes a new value only when the level changes and fills
+other pages with the bottom code, so a meter implementation max-merges the
+records of each page into the channel's held level.
+
+### Analog input records
+
+The analog inputs carry their level in the upper halfword of the record on a
+coarser scale with 0 dBFS at 6800 and about 0.127 dB per unit:
+
+```text
+u == 0                  -> below range
+dBFS = (6800 - u) * 0.12745,  u = record >> 16
+```
+
+Verified against a −90 … 0 dBFS staircase looped from an output into AN1/2:
+7451 measured values across the sweep with 706 halfword units over 90.03 dB.
+The analog meter settles slowly (seconds on a fresh level), so a reading is
+the detector's hold value, not an instantaneous level.
+
+### TotalControl behaviour
+
+- Analog input meters decode records 0..7.  The digital input record region
+  is mapped but still held at silence until its channel map is verified.
+- Playback and output meters decode records 18..35 and 36..53 on the digital
+  scale; saturated records report the over tag as level above 0 dBFS.
+- Input, playback and output peak lines mirror the held level: the page
+  carries one level record per channel (peak and RMS words are not part of
+  this page's format).
+
+Input meters measure the physical input before loopback.  A loopback-enabled
+output replaces the input's record signal, but does not change the input meter
+or the input bank in the `0x85` page.

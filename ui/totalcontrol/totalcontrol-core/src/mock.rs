@@ -452,6 +452,18 @@ impl RmeDevice for MockBabyfacePro {
         &mut self.outputs
     }
 
+    fn output_display_order(&self) -> Vec<usize> {
+        if self.is_uc() {
+            self.profile.output_order.to_vec()
+        } else {
+            (0..self.output_pair_count()).collect()
+        }
+    }
+
+    fn matrix_uses_display_order(&self) -> bool {
+        self.is_uc()
+    }
+
     fn settings(&self) -> &DeviceSettings {
         &self.settings
     }
