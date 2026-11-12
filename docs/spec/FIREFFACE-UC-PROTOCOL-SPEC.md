@@ -328,84 +328,103 @@ matrix and output state produced by the host mixer.
 
 ## 10. Metering
 
-The `0x85` bulk stream carries 324-byte meter pages that alternate with
-filler pages whose record region is zero.  Byte 108 begins the 54 32-bit
-records, little-endian and in display order:
+The `0x85` bulk stream carries 324-byte pages: 162 little-endian 16-bit
+words.  The stream alternates a data page and a flag page.
 
-| Bytes | Records | Contents |
-|---|---|---|
-| 108..139 | 8 | AN1–AN8 inputs |
-| 140..179 | 10 | S/PDIF and ADAT inputs |
-| 180..251 | 18 | software playback 1–18 |
-| 252..323 | 18 | hardware outputs: AN1–8, S/PDIF L/R, ADAT 1–8 |
+| Page | Marker |
+|---|---|
+| Data | 32-bit word at byte 4 is `0x00001fff` |
+| Flag | 32-bit word at byte 4 is `0` or `1` |
 
-Each record uses the meter format of the FireWire generation: bits 8..31
-are the level and bits 0..7 carry the overload field.  A zero record means
-the channel was below the meter range on that page.
+The data page carries the Peak and OVR words.  The flag page carries the
+software-playback RMS words.  A reader must not apply a flag page to the
+Peak bank.
 
-### Digital records (playback, outputs, active digital inputs)
+### Playback and output Peak/OVR words
 
-The level is logarithmic with one amplitude octave per `0x8000` and
-`0x420000` at 0 dBFS:
+Each data-page stereo pair occupies four 16-bit words:
+
+| Pair words | Contents |
+|---|---|
+| `w` | first channel OVR |
+| `w + 1` | first channel Peak |
+| `w + 2` | second channel OVR |
+| `w + 3` | second channel Peak |
+
+Playback pair `p` starts at `w = 90 + 4p`.  Hardware-output pair `p` starts
+at `w = 126 + 4p`.  Output pair 3 (Main 7/8) is therefore words 138..141,
+bytes 276..283.
+
+A Peak word is a linear 16-bit value:
 
 ```text
-dBFS = (0x420000 - level) * 6.0206 / 0x8000,  level = record >> 8
+Peak dBFS = 20 × log10(word / 32768)
 ```
 
-`level == 0` is below range.  `level == 0x7fffff` is saturation: the record
-is then at or above 0 dBFS and the low byte's upper nibble counts the over
-amount in steps above full scale (tag nibble `0xf`, 15 steps = 6.02 dB, the
-over range the TotalMix FX fader meters show beyond 0 dB).  Measured
-staircase values:
+The OVR word is two bytes:
 
-| drive | playback record | dBFS |
-|---|---|---|
-| -89.8 | `0x4975ff00` | -89.8 |
-| -5.8  | `0x427a5f00` | -5.8 |
+| Bits | Contents |
+|---|---|
+| 15..8 | `0xff` while OVR is active, otherwise not `0xff` |
+| 7..0 | RMS over amount in 0.5 dB steps |
 
-The detector publishes a new value only when the level changes and fills
-other pages with the bottom code, so a meter implementation max-merges the
-records of each page into the channel's held level.
+An OVR is active only when the high byte is `0xff` and the low byte is
+nonzero.  `0xff00` is the no-over filler and must not light the LED.  The
+low byte is the RMS over amount, not a sample count.  The high byte is the
+OVR event that the host counts.
+
+### Playback RMS words
+
+The flag page carries playback RMS for pair `p` at words `75 + 8p` (left)
+and `79 + 8p` (right).  The word is linear power relative to full-scale
+peak squared:
+
+```text
+RMS amplitude = sqrt(word / 32768)
+RMS dBFS      = 10 × log10(word / 32768)
+```
+
+A full-scale sine therefore has word 16384 and reads −3.01 dBFS RMS.
+Playback pair 1 uses bytes 150 and 158.  All nine playback pairs were
+verified with an 18-channel source: each pair's RMS appears only at
+`75 + 8p` and `79 + 8p`.
+
+Output RMS words have not been identified; output RMS is not decoded.
+
+### OVR trigger
+
+TotalMix FX reads the meter values and counts consecutive OVR events on the
+host.  The count is the global **Full scale samples for OVR** preference
+(`FSCntOVR`), default three, range 1..10 on the UC USB settings and 1..15 in
+TotalMix.  No USB control write carries this setting; it is stored in
+TotalMix's host preferences.  The device supplies the OVR marker; the host
+supplies the count and the LED.
 
 ### Analog input records
 
-The analog inputs carry their level in the upper halfword of the record on a
-coarser scale with 0 dBFS at 6800 and about 0.127 dB per unit:
+The analog inputs carry their level in the upper halfword of the data-page
+record on a coarser scale with 0 dBFS at 6800 and about 0.127 dB per unit:
 
 ```text
 u == 0                  -> below range
 dBFS = (6800 - u) * 0.12745,  u = record >> 16
 ```
 
-Verified against a −90 … 0 dBFS staircase looped from an output into AN1/2:
-7451 measured values across the sweep with 706 halfword units over 90.03 dB.
 The law also covers the over zone: the record continues past 0 dBFS and its
-reach bottoms at +6.02 dBFS (the OVR band the TotalMix FX fader meters
-show), measured with the AN5 channel level pushed +6.02 dB at the `0x1a`
-code and a 1-dB over staircase looped into AN1.  The analog meter settles
-slowly (seconds on a fresh level), so a reading is the detector's hold
-value, not an instantaneous level; the over zone is comfortable within a
-couple of dB with the same rule.
+reach bottoms at +6.02 dBFS.  The analog meter settles slowly, so a reading
+is the detector's hold value, not an instantaneous level.
 
 ### TotalControl behaviour
 
-- The detector publishes per channel: a new (digital) level only when the
-  value changes, a zero record when the channel is truly silent, and the
-  `0x47ffff` filler on pages where a channel has no new value.  TotalControl
-  therefore max-merges non-zero records, releases on a zero record and holds
-  across filler pages.
-- The analog group decodes records 0..7 on the analog law; the digital
-  input records are mapped but held silent until their channel identity is
-  verified.
-- Playback and output meters decode records 18..35 and 36..53 on the digital
-  scale; saturated records report the over tag as level above 0 dBFS.
-- Input, playback and output peak lines mirror the held level: the page
-  carries one level record per channel (peak and RMS words are not part of
-  this page's format).
-- Ballistics are host side.  The device supplies the level record (the
-  analog group is a slow detector that needs seconds to settle; the digital
-  group publishes the current level within a page).  TotalControl then
-  applies TotalMix FX's law: 10 dB/s release with a 2 s peak hold.
+- Playback Lower VU bar: flag-page RMS.
+- Playback and output peak line: data-page Peak word.
+- Playback and output OVR: data-page OVR high byte, counted by the host.
+- Analog inputs: data-page analog law.
+- Digital input records are mapped but held silent until their channel
+  identity is verified.
+- Ballistics are host side: 10 dB/s release and a 2 s peak hold.
+- The OVR LED uses the high byte; the low byte is available for a future
+  over-amount readout.
 
 Input meters measure the physical input before loopback.  A loopback-enabled
 output replaces the input's record signal, but does not change the input meter

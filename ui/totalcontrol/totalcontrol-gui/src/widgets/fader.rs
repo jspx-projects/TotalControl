@@ -447,16 +447,27 @@ fn bus_levels(
     snapshot: &MeterSnapshot,
     slot: BusSlot,
     stereo: bool,
-) -> (f32, f32, Option<(f32, f32)>) {
-    let (levels, peaks, index) = match slot {
-        BusSlot::Input(i) => (&snapshot.inputs, &snapshot.input_peaks, i),
-        BusSlot::Playback(i) => (&snapshot.playbacks, &snapshot.playback_peaks, i),
-        BusSlot::Output(i) => (&snapshot.outputs, &snapshot.output_peaks, i),
+) -> (f32, f32, Option<bool>, Option<(f32, f32, Option<bool>)>) {
+    let (levels, peaks, ovr, index) = match slot {
+        BusSlot::Input(i) => (&snapshot.inputs, &snapshot.input_peaks, None, i),
+        BusSlot::Playback(i) => (
+            &snapshot.playbacks,
+            &snapshot.playback_peaks,
+            snapshot.playback_ovr.as_ref(),
+            i,
+        ),
+        BusSlot::Output(i) => (
+            &snapshot.outputs,
+            &snapshot.output_peaks,
+            snapshot.output_ovr.as_ref(),
+            i,
+        ),
     };
     let level = |i: usize| levels.get(i).copied().unwrap_or(0.0);
     let peak = |i: usize| peaks.get(i).copied().unwrap_or(0.0);
-    let right = stereo.then(|| (level(index + 1), peak(index + 1)));
-    (level(index), peak(index), right)
+    let ovr_at = |i: usize| ovr.and_then(|flags| flags.get(i).copied());
+    let right = stereo.then(|| (level(index + 1), peak(index + 1), ovr_at(index + 1)));
+    (level(index), peak(index), ovr_at(index), right)
 }
 
 /// Advance a bus-driven meter by one canvas frame.  Rising levels follow the
@@ -553,6 +564,8 @@ pub struct State {
 struct BusState {
     left: MeterFrame,
     right: Option<MeterFrame>,
+    ovr: Option<bool>,
+    right_ovr: Option<bool>,
 }
 
 impl<Message> canvas::Program<Message> for Fader<Message> {
@@ -756,24 +769,28 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     // then stops scheduling.
                     bus_live = self.show_meter && snapshot.active;
                     let trim = trim_factor(self.meter_trim);
-                    let (left, left_peak, mut right) =
+                    let (left, left_peak, left_ovr, mut right) =
                         bus_levels(&snapshot, *slot, self.meter2.is_some());
                     let left = left * trim;
                     let left_peak = left_peak * trim;
-                    if let Some((value, peak)) = right.as_mut() {
+                    if let Some((value, peak, _)) = right.as_mut() {
                         *value *= trim;
                         *peak *= trim;
                     }
                     let entry = state.bus.get_or_insert_with(|| BusState {
                         left: MeterFrame::still(left),
-                        right: right.map(|(v, _)| MeterFrame::still(v)),
+                        right: right.map(|(v, _, _)| MeterFrame::still(v)),
+                        ovr: left_ovr,
+                        right_ovr: right.and_then(|(_, _, o)| o),
                     });
+                    entry.ovr = left_ovr;
+                    entry.right_ovr = right.and_then(|(_, _, o)| o);
                     let before = entry.left;
                     entry.left =
                         advance_bus(entry.left, left, left_peak, snapshot.connected, *now);
                     bus_moving = paint_moved(before.value, entry.left.value)
                         || paint_moved(before.peak, entry.left.peak);
-                    if let Some((value, peak)) = right {
+                    if let Some((value, peak, _)) = right {
                         match &mut entry.right {
                             Some(frame) => {
                                 let before = *frame;
@@ -854,19 +871,23 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
         // When the service owns metering, the canvas state carries the
         // latest bus frames; the view's own `meter` is only the fallback
         // for the direct-backend path.
-        let (meter, meter2, available, meter2_available) =
+        let (meter, meter2, available, meter2_available, ovr, meter2_ovr) =
             match (self.bus.as_ref(), &state.bus) {
                 (Some(_), Some(bus)) => (
                     bus.left,
                     bus.right,
                     self.meter_available,
                     self.meter2_available,
+                    bus.ovr,
+                    bus.right_ovr,
                 ),
                 _ => (
                     self.meter,
                     self.meter2,
                     self.meter_available,
                     self.meter2_available,
+                    None,
+                    None,
                 ),
             };
         let mut layers: Vec<Geometry> = Vec::with_capacity(4);
@@ -914,8 +935,14 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                 meter.peak,
                 self.scale,
                 available,
+                ovr,
                 meter2.map(|m| {
-                    (m.shown(Instant::now()), m.peak, meter2_available)
+                    (
+                        m.shown(Instant::now()),
+                        m.peak,
+                        meter2_available,
+                        meter2_ovr,
+                    )
                 }),
             );
         }
@@ -1183,12 +1210,13 @@ fn draw_meter(
     peak: f32,
     scale: f32,
     available: bool,
-    right: Option<(f32, f32, bool)>,
+    ovr: Option<bool>,
+    right: Option<(f32, f32, bool, Option<bool>)>,
 ) {
     let (left, right_rect) = meter_split(r, scale, right.is_some());
-    draw_meter_bar(frame, left, level, peak, scale, available);
-    if let (Some(r2), Some((level2, peak2, available2))) = (right_rect, right) {
-        draw_meter_bar(frame, r2, level2, peak2, scale, available2);
+    draw_meter_bar(frame, left, level, peak, scale, available, ovr);
+    if let (Some(r2), Some((level2, peak2, available2, ovr2))) = (right_rect, right) {
+        draw_meter_bar(frame, r2, level2, peak2, scale, available2, ovr2);
     }
 }
 
@@ -1199,6 +1227,7 @@ fn draw_meter_bar(
     peak: f32,
     scale: f32,
     available: bool,
+    ovr: Option<bool>,
 ) {
     if !available {
         // The dark well and the N/A dashes are static and come from
@@ -1285,7 +1314,7 @@ fn draw_meter_bar(
     // can still show the exact overshoot while the LEDs warn.
     let clip_y = r.y;
     let clip_rect = Rectangle::new(Point::new(r.x, clip_y), Size::new(fill_w, clip_h));
-    let clipping = is_overload(p);
+    let clipping = ovr.unwrap_or_else(|| is_overload(p));
     let clip_color = if clipping {
         Color {
             a: FILL_ALPHA,
@@ -1576,13 +1605,16 @@ impl<Message> canvas::Program<Message> for VuMeter {
                     let snapshot = *bus.lock().unwrap();
                     let active = snapshot.active;
                     let trim = trim_factor(self.meter_trim);
-                    let (left, peak, _) = bus_levels(&snapshot, *slot, false);
+                    let (left, peak, ovr, _) = bus_levels(&snapshot, *slot, false);
                     let left = left * trim;
                     let peak = peak * trim;
                     let entry = state.get_or_insert_with(|| BusState {
                         left: MeterFrame::still(left),
                         right: None,
+                        ovr,
+                        right_ovr: None,
                     });
+                    entry.ovr = ovr;
                     let before = entry.left;
                     entry.left =
                         advance_bus(entry.left, left, peak, snapshot.connected, *now);
@@ -1626,6 +1658,7 @@ impl<Message> canvas::Program<Message> for VuMeter {
         };
         let (top, peak) = (level.shown(Instant::now()), level.peak);
         let available = self.available || self.bus.is_some();
+        let ovr = state.as_ref().and_then(|s| s.ovr);
         draw_meter_chrome(
             &mut frame,
             meter_rect,
@@ -1642,8 +1675,15 @@ impl<Message> canvas::Program<Message> for VuMeter {
             peak,
             self.scale,
             available,
-            self.meter2
-                .map(|m| (m.shown(Instant::now()), m.peak, self.meter2_available)),
+            ovr,
+            self.meter2.map(|m| {
+                (
+                    m.shown(Instant::now()),
+                    m.peak,
+                    self.meter2_available,
+                    None,
+                )
+            }),
         );
         vec![frame.into_geometry()]
     }

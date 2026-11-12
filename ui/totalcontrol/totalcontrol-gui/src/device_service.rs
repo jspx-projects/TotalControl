@@ -1293,6 +1293,12 @@ pub struct MeterSnapshot {
     pub input_peaks: [f32; 18],
     pub playback_peaks: [f32; 18],
     pub output_peaks: [f32; 18],
+    /// Device-backed playback OVR flags, already counted for the configured
+    /// consecutive meter updates.  `None` means the backend has no OVR word;
+    /// the fader falls back to its peak threshold.
+    pub playback_ovr: Option<[bool; 18]>,
+    /// Device-backed hardware-output OVR flags.
+    pub output_ovr: Option<[bool; 18]>,
     pub fx: [f32; 2],
     pub fx_overload: [bool; 2],
     /// Whether the device is still connected.  A disconnected device has no
@@ -1311,6 +1317,37 @@ pub struct MeterSnapshot {
 /// The visible meter floor is -60 dB (0.001); the threshold sits a little
 /// below it so a decaying peak stops shortly after it leaves the scale.
 const METER_ACTIVE_FLOOR: f32 = 0.0005;
+
+/// Interim OVR count until the global host setting is wired into the
+/// service.  This is the TotalMix default.
+const OVR_FULL_SCALE_SAMPLES: u8 = 3;
+
+/// Count consecutive device OVR flags.  A flag that is absent resets the
+/// channel immediately; once the count is reached the snapshot exposes OVR
+/// until the next non-over update.
+fn count_ovr(
+    held: &mut Option<[bool; 18]>,
+    counts: &mut [u8; 18],
+    fresh: Option<&[bool]>,
+) {
+    let Some(fresh) = fresh else {
+        *counts = [0; 18];
+        *held = None;
+        return;
+    };
+    let out = held.get_or_insert([false; 18]);
+    for i in 0..18 {
+        if fresh.get(i).copied().unwrap_or(false) {
+            counts[i] = counts[i].saturating_add(1);
+            if counts[i] >= OVR_FULL_SCALE_SAMPLES {
+                out[i] = true;
+            }
+        } else {
+            counts[i] = 0;
+            out[i] = false;
+        }
+    }
+}
 
 /// Whether the meter snapshot has anything worth drawing.  `at` is not a
 /// change signal: it advances every device packet even in silence.
@@ -1518,6 +1555,8 @@ fn run(
     let mut last_overload = [false; 2];
     let mut last_counters = Instant::now() - Duration::from_secs(1);
     let mut peak_at = [[Instant::now(); 18]; 3];
+    let mut ovr_count = [0u8; 18];
+    let mut output_ovr_count = [0u8; 18];
 
     loop {
         // The timeout paces the polling loop at about 120 Hz while still
@@ -1571,12 +1610,22 @@ fn run(
             } else {
                 vec![0.0; 18]
             };
+            let playback_ovr = if connected {
+                device.device_playback_ovr()
+            } else {
+                None
+            };
             let output_peaks = if connected {
                 device
                     .device_output_peaks()
                     .unwrap_or_else(|| outputs.clone())
             } else {
                 vec![0.0; 18]
+            };
+            let output_ovr = if connected {
+                device.device_output_ovr()
+            } else {
+                None
             };
             let fx = if connected {
                 device.fx_meters().unwrap_or([0.0, 0.0])
@@ -1601,6 +1650,16 @@ fn run(
             hold_peaks(&mut m.input_peaks, &input_peaks, &mut peak_at[0], now);
             hold_peaks(&mut m.playback_peaks, &playback_peaks, &mut peak_at[1], now);
             hold_peaks(&mut m.output_peaks, &output_peaks, &mut peak_at[2], now);
+            count_ovr(
+                &mut m.playback_ovr,
+                &mut ovr_count,
+                playback_ovr.as_deref(),
+            );
+            count_ovr(
+                &mut m.output_ovr,
+                &mut output_ovr_count,
+                output_ovr.as_deref(),
+            );
             m.fx = fx;
             m.fx_overload = overload;
             m.connected = connected;

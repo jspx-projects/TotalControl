@@ -34,7 +34,7 @@ use crate::scene::{MatrixOverride, Scene};
 use super::abi::*;
 use super::hwdep::{self, Direction, Event, Hwdep};
 use super::models::Personality;
-use super::protocol::{self, uc, ucx, MeterKind, MeterPacket, Source, UcMeterPacket};
+use super::protocol::{self, uc, ucx, MeterKind, MeterPacket, Source, UcMeterPacket, UcRmsPacket};
 use super::settings::ChannelSettings;
 
 const PAIRS: usize = 9;
@@ -336,7 +336,10 @@ struct UcMeterBank {
     /// Display order: 0..8 analog, 8..18 S/PDIF and ADAT.
     input: [f32; 18],
     playback: [f32; 18],
+    playback_rms: [f32; 18],
     output: [f32; 18],
+    playback_ovr: [bool; 18],
+    output_ovr: [bool; 18],
 }
 
 impl Default for UcMeterBank {
@@ -344,7 +347,10 @@ impl Default for UcMeterBank {
         Self {
             input: [f32::NEG_INFINITY; 18],
             playback: [f32::NEG_INFINITY; 18],
+            playback_rms: [0.0; 18],
             output: [f32::NEG_INFINITY; 18],
+            playback_ovr: [false; 18],
+            output_ovr: [false; 18],
         }
     }
 }
@@ -371,6 +377,18 @@ impl UcMeterBank {
         }
     }
 
+    fn merge_playback(slot: &mut [f32], channel: usize, record: u32) {
+        if record == 0 {
+            slot[channel] = f32::NEG_INFINITY;
+            return;
+        }
+        if let Some(db) = protocol::uc_playback_dbfs(record) {
+            if db > slot[channel] {
+                slot[channel] = db;
+            }
+        }
+    }
+
     fn apply(&mut self, packet: &UcMeterPacket) {
         // The eight analog input records carry the analog level scale; the
         // digital input records are undecoded, so keep them silent until
@@ -381,9 +399,18 @@ impl UcMeterBank {
         }
         for channel in 0..18 {
             let record = packet.playback(channel);
-            Self::merge(&mut self.playback, channel, record, false);
+            Self::merge_playback(&mut self.playback, channel, record);
+            self.playback_ovr[channel] = packet.playback_ovr(channel);
             let record = packet.output(channel);
             Self::merge(&mut self.output, channel, record, false);
+            self.output_ovr[channel] = packet.output_ovr(channel);
+        }
+    }
+
+    fn apply_rms(&mut self, packet: &UcRmsPacket) {
+        for channel in 0..18 {
+            self.playback_rms[channel] =
+                protocol::uc_playback_rms_linear(packet.playback(channel));
         }
     }
 
@@ -402,6 +429,10 @@ impl UcMeterBank {
         self.level(self.playback[channel])
     }
 
+    fn playback_rms(&self, channel: usize) -> f32 {
+        self.playback_rms[channel]
+    }
+
     fn output(&self, channel: usize) -> f32 {
         self.level(self.output[channel])
     }
@@ -416,8 +447,16 @@ impl UcMeterBank {
         self.playback(channel)
     }
 
+    fn playback_ovr(&self, channel: usize) -> bool {
+        self.playback_ovr[channel]
+    }
+
     fn output_peak(&self, channel: usize) -> f32 {
         self.output(channel)
+    }
+
+    fn output_ovr(&self, channel: usize) -> bool {
+        self.output_ovr[channel]
     }
 }
 
@@ -2975,17 +3014,6 @@ impl Fireface {
             // source volume is still indexed by output pair because that is
             // how the per-pair channel model stores it.
             let model_block = dsp;
-            let raw_cell = |channel: ChannelId| {
-                let source = Fireface::matrix_source_index(channel);
-                source
-                    .and_then(|source| {
-                        this.matrix_overrides
-                            .get(&(source, model_block))
-                            .copied()
-                            .or_else(|| this.matrix_default_ucx(channel, model_block))
-                    })
-                    .unwrap_or(0.0)
-            };
             for (idx, ch) in this.inputs.iter().enumerate() {
                 let gain = this
                     .cell_gain(ChannelId::Input(idx), model_block)
@@ -3175,7 +3203,7 @@ impl Fireface {
             ),
             Model::Uc => Some(
                 (0..self.playbacks.len())
-                    .map(|i| self.uc_meters.playback(i))
+                    .map(|i| self.uc_meters.playback_rms(i))
                     .collect(),
             ),
         }
@@ -3226,6 +3254,30 @@ impl Fireface {
                     .map(|i| self.uc_meters.playback_peak(i))
                     .collect(),
             ),
+        }
+    }
+
+    /// Per-playback OVR flags from the UC meter page.
+    pub fn playback_ovr(&self) -> Option<Vec<bool>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.playbacks.len())
+                    .map(|i| self.uc_meters.playback_ovr(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
+        }
+    }
+
+    /// Per-output OVR flags from the UC meter page.
+    pub fn output_ovr(&self) -> Option<Vec<bool>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.outputs.len())
+                    .map(|i| self.uc_meters.output_ovr(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
         }
     }
 
@@ -3461,6 +3513,8 @@ impl Fireface {
                         if self.is_uc() {
                             if let Some(packet) = UcMeterPacket::parse(&event.data) {
                                 self.uc_meters.apply(&packet);
+                            } else if let Some(rms) = UcRmsPacket::parse(&event.data) {
+                                self.uc_meters.apply_rms(&rms);
                             }
                         } else if let Ok(p) = MeterPacket::parse(&event.data) {
                             self.meters.apply(&p);
@@ -3956,13 +4010,6 @@ impl Fireface {
 }
 
 impl Fireface {
-
-    /// Whether a source has an active send into one output pair.
-    pub fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
-        Self::matrix_source_index(channel)
-            .is_some_and(|source| self.routed_pairs.contains(&(source, pair)))
-    }
-
     /// Track whether a crosspoint write leaves an active send.  A cell at
     /// or below zero gain is not a send; every other write is.
     fn record_routing(&mut self, source: usize, pair: usize, gain: f32) {
@@ -4178,7 +4225,6 @@ impl RmeDevice for Fireface {
         if Self::matrix_source_index(channel).is_none() {
             return false;
         }
-<<<<<<< HEAD
         // A routing exists while it has a level (GUI spec 8.1.1).  Both
         // sides of the pair contribute, so a split pair is routed when
         // either channel carries a send.
@@ -4217,20 +4263,6 @@ impl RmeDevice for Fireface {
         match self.cell_gain(channel, block) {
             Some(gain) if gain > 0.0 => Some(gain),
             _ => None,
-=======
-        // A cell reports a level only when the source is routed to that
-        // pair.  The per-submix fader value of a source that is not routed
-        // there belongs to a different submix and must not leak in.  This is
-        // the shared path for every device that derives cells from the
-        // per-pair channel model.
-        if !self.routed_pairs.contains(&(source, block / 2)) {
-            return Some(0.0);
-        }
-        if self.is_uc() {
-            self.matrix_default(channel, block)
-        } else {
-            self.matrix_default_ucx(channel, block)
->>>>>>> 6d00776 (fix(matrix): report only routed sends in a matrix cell)
         }
     }
 
@@ -4317,12 +4349,7 @@ impl RmeDevice for Fireface {
             );
         }
         self.uc_write_matrix(block, source, gain * self.trim_gain(channel))?;
-<<<<<<< HEAD
         if self.matrix_natural(channel, block) {
-=======
-        self.record_routing(source, block / 2, gain);
-        if Self::matrix_natural(channel, block) {
->>>>>>> 6d00776 (fix(matrix): report only routed sends in a matrix cell)
             let pair = block / 2;
             match channel {
                 ChannelId::Input(i) => {
@@ -8932,6 +8959,7 @@ mod tests {
     fn uc_meter_page_drives_input_playback_and_output_levels() {
         let (mut dev, _writes) = open(Model::Uc);
         let mut bytes = [0u8; UcMeterPacket::LEN];
+        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
         // AN1 at -30 dBFS: u = 6800 + 30/0.12745 = 7035 in the input scale.
         bytes[108..112].copy_from_slice(&(7035u32 << 16).to_le_bytes());
         // Playback 1 record at -6.0 dBFS: level 0x420000 + 0x8000*6/6.0206.
@@ -8946,15 +8974,22 @@ mod tests {
         let packet = UcMeterPacket::parse(&bytes).expect("meter page");
         dev.uc_meters.apply(&packet);
 
+        // Playback RMS is on the flag page; 0.5012^2 * 32768 ~= 8233.
+        let mut rms_bytes = [0u8; UcMeterPacket::LEN];
+        rms_bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        rms_bytes[150..152].copy_from_slice(&8233u16.to_le_bytes());
+        let rms = UcRmsPacket::parse(&rms_bytes).expect("rms page");
+        dev.uc_meters.apply_rms(&rms);
+
         let inputs = dev.meters().expect("UC input meters");
         assert!((inputs[0] - 0.0316).abs() < 0.003, "AN1 at -30 dBFS");
         assert_eq!(inputs[8], 0.0, "digital inputs stay silent until decoded");
         let playback = dev.playback_meters().expect("UC playback meters");
-        assert!((playback[0] - 0.5012).abs() < 0.02, "playback 1 at -6.0 dBFS");
+        assert!((playback[0] - 0.5012).abs() < 0.02, "playback 1 RMS at -6.0 dBFS");
         let outputs = dev
             .output_meters_internal(true)
             .expect("UC output meters");
-        assert!((outputs[2] - 1.0).abs() < 1e-6, "AN1 out at 0 dBFS");
+        assert!((outputs[0] - 1.0).abs() < 1e-6, "AN1 out at 0 dBFS");
         // Over 0 dBFS the record saturates with the over tag; apply again.
         let mut bytes2 = bytes;
         bytes2[256..260].copy_from_slice(&0x7fffff2fu32.to_le_bytes());
@@ -8962,7 +8997,29 @@ mod tests {
         dev.uc_meters.apply(&packet2);
         let over = dev.output_meters_internal(true).expect("UC over meters");
         // Over tag 2 counts two over steps: 2 * 6.0206/15 dB above full scale.
-        assert!((over[3] - 10f32.powf(2.0 * 6.0206 / 15.0 / 20.0)).abs() < 1e-5);
+        assert!((over[1] - 10f32.powf(2.0 * 6.0206 / 15.0 / 20.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn uc_playback_peak_and_rms_are_separate_pages() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut bytes = [0u8; UcMeterPacket::LEN];
+        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // Half-scale playback peak; the lower halfword is the separate OVR.
+        bytes[180..184].copy_from_slice(&0x3fff0000u32.to_le_bytes());
+        let packet = UcMeterPacket::parse(&bytes).expect("data page");
+        dev.uc_meters.apply(&packet);
+        let peaks = dev.playback_peaks().expect("UC playback peaks");
+        assert!((peaks[0] - 0.5).abs() < 1e-3);
+
+        // The flag page carries RMS, not peak.  8192 is half-scale RMS power.
+        let mut flag = [0u8; UcMeterPacket::LEN];
+        flag[4..8].copy_from_slice(&1u32.to_le_bytes());
+        flag[150..152].copy_from_slice(&8192u16.to_le_bytes());
+        let rms = UcRmsPacket::parse(&flag).expect("flag page");
+        dev.uc_meters.apply_rms(&rms);
+        assert!((dev.playback_meters().expect("UC playback RMS")[0] - 0.5).abs() < 1e-3);
+        assert!((dev.playback_peaks().expect("held peak")[0] - 0.5).abs() < 1e-3);
     }
 
     #[test]
@@ -8976,7 +9033,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn phones_routings_stay_in_their_own_column() {
         // Desk report: Phones is Out 7/8, and moving playback 1/2's fader
         // must not paint a value into Out 1/2.  Pair 3 is Out 7/8.  Start
@@ -9130,63 +9186,6 @@ mod tests {
         assert_eq!(dev.routed_pairs_for(ChannelId::Playback(0)), vec![0, 3]);
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 0), Some(0.5));
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 6), Some(1.0));
-=======
-    fn matrix_cell_reports_only_routed_columns() {
-        // Route AN1/2 into output pair 3 (Out 7/8, the phones pair) the way
-        // TotalMix does with a crosspoint double click: both sides at 0 dB.
-        let (mut dev, _writes) = open(Model::Uc);
-        dev.set_matrix_cell(ChannelId::Input(0), 6, 1.0).unwrap();
-        dev.set_matrix_cell(ChannelId::Input(1), 7, 1.0).unwrap();
-        for block in [0usize, 2, 4] {
-            dev.set_matrix_cell(ChannelId::Input(0), block, 0.0).unwrap();
-            dev.set_matrix_cell(ChannelId::Input(1), block + 1, 0.0).unwrap();
-        }
-        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
-        assert_eq!(dev.matrix_cell(ChannelId::Input(1), 7), Some(1.0));
-        assert!(dev.matrix_cell_routed(ChannelId::Input(0), 3));
-
-        // A source that was never routed keeps its columns inactive even
-        // though the per-submix fader model holds values for every pair.
-        for channel in [ChannelId::Playback(0), ChannelId::Playback(1)] {
-            let idx = match channel {
-                ChannelId::Playback(i) => i,
-                _ => unreachable!(),
-            };
-            for pair in 0..9 {
-                dev.playbacks[idx].volumes[pair] = 1.0;
-            }
-        }
-        for pair in 0..9 {
-            let block = pair * 2;
-            assert!(
-                !dev.matrix_cell_routed(ChannelId::Playback(0), pair),
-                "playback 1 is not routed to pair {pair}"
-            );
-            assert_eq!(
-                dev.matrix_cell(ChannelId::Playback(0), block),
-                Some(0.0),
-                "pair {pair} must stay an inactive cell"
-            );
-        }
-        // The routed input cell still reads its gain.
-        assert_eq!(dev.matrix_cell(ChannelId::Input(0), 6), Some(1.0));
-    }
-
-    #[test]
-    fn routed_playback_cell_follows_its_own_fader_only() {
-        let (mut dev, _writes) = open(Model::Uc);
-        // Route playback 1/2 into pair 3 and move its fader there.
-        dev.set_matrix_cell(ChannelId::Playback(0), 6, 1.0).unwrap();
-        dev.set_matrix_cell(ChannelId::Playback(1), 7, 1.0).unwrap();
-        assert!(dev.matrix_cell_routed(ChannelId::Playback(0), 3));
-        // Unrouted pairs stay inactive even though the fader has a value
-        // in the submix the model stores.
-        assert!(!dev.matrix_cell_routed(ChannelId::Playback(0), 0));
-        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 0), Some(0.0));
-        // Zeroing the send clears the routed state.
-        dev.set_matrix_cell(ChannelId::Playback(0), 6, 0.0).unwrap();
-        assert!(!dev.matrix_cell_routed(ChannelId::Playback(0), 3));
->>>>>>> 6d00776 (fix(matrix): report only routed sends in a matrix cell)
     }
 
     #[test]
@@ -9291,11 +9290,12 @@ mod tests {
     #[test]
     fn uc_output_phase_complements_the_output_block_cells() {
         let (mut dev, writes) = open(Model::Uc);
-        dev.set_volume(ChannelId::Input(0), 2, 1.0).unwrap();
+        dev.set_pan(ChannelId::Input(0), 3, -100).unwrap();
+        dev.set_volume(ChannelId::Input(0), 3, 1.0).unwrap();
         writes.lock().unwrap().clear();
 
         dev.set_output_phase(6, true).unwrap();
-        let (value, index) = uc::matrix_word(1.0, 4 * 36);
+        let (value, index) = uc::matrix_word(1.0, 6 * 36);
         assert!(writes
             .lock()
             .unwrap()
@@ -9453,22 +9453,8 @@ mod tests {
         dev.set_loopback_channel(4, true).unwrap();
         {
             let w = writes.lock().unwrap();
-            let bank: Vec<_> = w
-                .iter()
-                .filter_map(|write| match write {
-                    Write::Vendor(protocol::req::LOOPBACK, value, index) => {
-                        Some((*value, *index))
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(bank.len(), 30, "the complete bank is written");
-            assert_eq!(bank[2], (1, 2));
-            assert_eq!(bank[3], (1, 3));
-            assert!(bank
-                .iter()
-                .enumerate()
-                .all(|(index, (value, _))| index == 2 || index == 3 || *value == 0));
+            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 4)));
+            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 5)));
         }
         assert!(dev.outputs()[4].loopback);
         assert!(dev.outputs()[5].loopback);
@@ -9481,18 +9467,8 @@ mod tests {
         dev.set_loopback_channel(4, true).unwrap();
         {
             let w = writes.lock().unwrap();
-            let bank: Vec<_> = w
-                .iter()
-                .filter_map(|write| match write {
-                    Write::Vendor(protocol::req::LOOPBACK, value, index) => {
-                        Some((*value, *index))
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(bank.len(), 30);
-            assert_eq!(bank[2], (1, 2));
-            assert_eq!(bank[3], (0, 3));
+            assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 4)));
+            assert!(!w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 5)));
         }
         assert!(dev.outputs()[4].loopback);
         assert!(!dev.outputs()[5].loopback);

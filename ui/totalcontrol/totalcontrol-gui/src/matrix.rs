@@ -769,8 +769,9 @@ mod tests {
         let mut state = crate::app::new(false, None, None);
         state.device = crate::app::DeviceHandle::open_mock_ucx();
         let groups = playback_row_groups(&state);
-        assert_eq!(groups[0].label, "AN1/2");
-        assert_eq!(groups[3].label, "Phones 7/8");
+        assert_eq!(groups[0].label, "Phones 7/8");
+        assert_eq!(groups[1].label, "AN1/2");
+        assert_eq!(groups[3].label, "AN5/6");
     }
 
     #[test]

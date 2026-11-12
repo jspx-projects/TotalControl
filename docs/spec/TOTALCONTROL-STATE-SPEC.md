@@ -181,6 +181,7 @@ mixer scene, labels, groups, snapshots, layouts or window layout.
 | Active unit | Last selected unit key |
 | OSC | Enabled, dialect and ports |
 | Engine | Forced rate, quantum and rate mode |
+| Meters | OVR full-scale sample count (global, 1–15, default 3) |
 | Startup | Session autostart (starts hidden in the tray) and keep in tray |
 | Files | Last workspace folder |
 

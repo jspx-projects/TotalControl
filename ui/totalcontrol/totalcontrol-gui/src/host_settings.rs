@@ -34,6 +34,14 @@ fn send_port() -> u16 {
     9001
 }
 
+fn ovr_samples() -> u8 {
+    3
+}
+
+/// Full-scale samples that trigger OVR, as exposed by TotalMix FX.
+pub const OVR_SAMPLES_MIN: u8 = 1;
+pub const OVR_SAMPLES_MAX: u8 = 15;
+
 /// One unit's operational settings.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -67,6 +75,10 @@ pub struct HostSettings {
     pub engine_force_rate: Option<u32>,
     pub engine_rate_mode: Option<EngineRateMode>,
     pub engine_force_quantum: Option<u32>,
+    /// Consecutive full-scale samples that trigger OVR.  This is a global
+    /// meter preference, shared by every channel and unit.
+    #[serde(default = "ovr_samples")]
+    pub ovr_full_scale_samples: u8,
     pub keep_in_tray: Option<bool>,
     pub workspace_last_dir: Option<PathBuf>,
 }
@@ -84,6 +96,7 @@ impl Default for HostSettings {
             engine_force_rate: None,
             engine_rate_mode: None,
             engine_force_quantum: None,
+            ovr_full_scale_samples: ovr_samples(),
             keep_in_tray: None,
             workspace_last_dir: None,
         }
@@ -100,6 +113,12 @@ impl HostSettings {
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default()
+    }
+
+    /// The global OVR trigger count, clamped to the TotalMix FX range.
+    pub fn ovr_sample_count(&self) -> u8 {
+        self.ovr_full_scale_samples
+            .clamp(OVR_SAMPLES_MIN, OVR_SAMPLES_MAX)
     }
 
     pub fn save(path: &Path, settings: &Self) -> Result<(), String> {
@@ -172,7 +191,17 @@ mod tests {
         assert_eq!(settings.schema, SCHEMA);
         assert_eq!(settings.osc_recv_port, 9000);
         assert_eq!(settings.osc_send_port, 9001);
+        assert_eq!(settings.ovr_sample_count(), 3);
         assert!(settings.units.is_empty());
+    }
+
+    #[test]
+    fn the_global_ovr_sample_count_is_clamped() {
+        let mut settings = HostSettings::default();
+        settings.ovr_full_scale_samples = 0;
+        assert_eq!(settings.ovr_sample_count(), OVR_SAMPLES_MIN);
+        settings.ovr_full_scale_samples = 99;
+        assert_eq!(settings.ovr_sample_count(), OVR_SAMPLES_MAX);
     }
 
     #[test]
@@ -184,9 +213,11 @@ mod tests {
         settings.set_active("Fireface-UCX-1", "Fireface UCX", Some("1"));
         settings.set_current_workspace("Fireface-UCX-1", PathBuf::from("current.tcws"));
         settings.engine_force_rate = Some(96_000);
+        settings.ovr_full_scale_samples = 5;
         HostSettings::save(&path, &settings).unwrap();
         let loaded = HostSettings::load(&path);
         assert_eq!(loaded, settings);
+        assert_eq!(loaded.ovr_sample_count(), 5);
         assert_eq!(loaded.active().unwrap().0, "Fireface-UCX-1");
         assert_eq!(
             loaded.current_workspace("Fireface-UCX-1"),

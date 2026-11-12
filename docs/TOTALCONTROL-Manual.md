@@ -435,7 +435,7 @@ Each meter has two indicators, following TotalMix FX:
   visible; it is held for a fixed two seconds and then decays. Its colour
   follows the same green/yellow/red bands;
 - **overload is the red OVR block** at the top of the meter channel. It
-  lights from -0.1 dBFS.
+  lights after three consecutive full-scale samples (the global default).
 
 Peak hold applies only to the peak line. The RMS bar is not held and keeps
 following the RMS signal. Falling levels use a 20 dB/s release.
@@ -462,10 +462,11 @@ The RMS bar is mathematically correct RMS: a full-scale sine reads about
 makes the RMS reading and the peak line both read 0 dB for a full-scale
 sine; TotalControl does not apply that shift.
 
-TotalControl uses a fixed two-second peak hold. TotalMix FX makes the hold
-time (0.1–9.9 s) and the number of consecutive full-scale samples that
-trigger OVR configurable; TotalControl uses the two-second hold and a
--0.1 dBFS OVR threshold instead.
+TotalControl uses a fixed two-second peak hold and a global OVR trigger of
+three consecutive full-scale samples. OVR is a sample count, not a dB
+threshold. TotalMix FX makes both the hold time (0.1–9.9 s) and the OVR
+sample count (1–15) configurable; TotalControl keeps the two-second hold and
+the three-sample default for now.
 
 The meters show the level as it arrives at the interface. If the host
 (PipeWire) volume is below 0 dB, a full-scale recording reaches the

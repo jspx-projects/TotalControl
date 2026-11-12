@@ -456,7 +456,8 @@ labels are centred in the VU element whether it carries one bar or two.
   below -3 dB, yellow from -3 dB to 0 dB and red above 0 dB;
 - a **peak line** with zero attack, held for a fixed two seconds and then
   decaying; its colour follows the same green/yellow/red bands;
-- the **OVR segment** at the top, which lights from -0.1 dBFS.
+- the **OVR segment** at the top, which lights after three consecutive
+  full-scale samples (the global default).
 
 The VU well is one shade darker than the channel card; it is not a separate
 black panel.  The numeric level text is centred in the VU channel at 60, 40,
@@ -472,9 +473,11 @@ no RMS +3 dB shift is applied. There is no separate red guide across the
 meter bar.
 
 Falling levels use a 20 dB/s release. The peak hold is fixed at two seconds.
-The OVR segment lights from -0.1 dBFS; there is no configurable hold time or
-OVR sample count. If the device disconnects, the meters fall to silence with
-the normal release instead of freezing at their last reading.
+The OVR segment lights after three consecutive full-scale samples. The OVR
+sample count is a global meter setting (1–15, default three), not a dB
+threshold and not a per-channel value. There is no configurable hold time.
+If the device disconnects, the meters fall to silence with the normal
+release instead of freezing at their last reading.
 
 Input and playback meters are pre-fader and post-trim: the trim changes the
 reading, the send fader and selected submix do not. Hardware output meters

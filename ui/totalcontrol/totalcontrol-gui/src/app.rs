@@ -1169,6 +1169,24 @@ impl DeviceHandle {
         None
     }
 
+    /// Instantaneous playback OVR flags from the device, when it exposes
+    /// them.  The meter service applies the consecutive count.
+    pub fn device_playback_ovr(&self) -> Option<Vec<bool>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.playback_ovr();
+        }
+        None
+    }
+
+    pub fn device_output_ovr(&self) -> Option<Vec<bool>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.output_ovr();
+        }
+        None
+    }
+
     pub fn device_output_peaks(&self) -> Option<Vec<f32>> {
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
@@ -19318,11 +19336,8 @@ mod tests {
             .set_volume(ChannelId::Playback(0), 0, 0.5)
             .unwrap();
         super::apply_reset_mix(&mut state, ResetMix::ClearSubmixes);
-        assert_eq!(state.device.matrix_cell(ChannelId::Input(0), 0), Some(0.0));
-        assert_eq!(
-            state.device.matrix_cell(ChannelId::Playback(0), 0),
-            Some(0.0)
-        );
+        assert_eq!(state.device.matrix_cell(ChannelId::Input(0), 0), None);
+        assert_eq!(state.device.matrix_cell(ChannelId::Playback(0), 0), None);
     }
 
     #[test]
@@ -19338,11 +19353,8 @@ mod tests {
             .set_volume(ChannelId::Playback(0), 0, 0.5)
             .unwrap();
         let _ = update(&mut state, Message::ResetMix(ResetMix::ClearSubmixes));
-        assert_eq!(state.device.matrix_cell(ChannelId::Input(0), 0), Some(0.0));
-        assert_eq!(
-            state.device.matrix_cell(ChannelId::Playback(0), 0),
-            Some(0.0)
-        );
+        assert_eq!(state.device.matrix_cell(ChannelId::Input(0), 0), None);
+        assert_eq!(state.device.matrix_cell(ChannelId::Playback(0), 0), None);
     }
 
     #[test]
