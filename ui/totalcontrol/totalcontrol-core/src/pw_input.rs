@@ -362,18 +362,25 @@ fn record_args(monitor: &Monitor, raw_flag: bool) -> Vec<String> {
         "--media-category".to_string(),
         "Capture".to_string(),
     ];
-    if raw_flag {
-        args.push("--raw".to_string());
-    }
-    args.push("-".to_string());
+    args.extend(stdout_args(raw_flag).iter().map(|a| a.to_string()));
     args
+}
+
+/// The tail of a pw-record command line that streams raw S32LE to stdout.
+/// Shared by the input tap, the playback tap and the live probes.
+pub fn stdout_args(raw_flag: bool) -> &'static [&'static str] {
+    if raw_flag {
+        &["--raw", "-"]
+    } else {
+        &["-"]
+    }
 }
 
 /// Whether this `pw-record` accepts `--raw`.  PipeWire 1.0.x has no such
 /// option and exits on it, which left every meter dead (Ubuntu 24.04,
 /// PipeWire 1.0.5); it already writes raw samples when the file is `-`
 /// (measured: no RIFF header, 18 x 4 bytes per frame).  Asked once.
-fn pw_record_takes_raw() -> bool {
+pub fn pw_record_takes_raw() -> bool {
     static TAKES_RAW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *TAKES_RAW.get_or_init(|| {
         Command::new("pw-record")
@@ -479,7 +486,9 @@ fn sleep_interruptible(stop: &AtomicBool, total: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_peaks, help_lists_raw, parse_source, parse_spec, record_args, Monitor, MAX_CHANNELS};
+    use super::{
+        add_peaks, help_lists_raw, parse_source, parse_spec, record_args, Monitor, MAX_CHANNELS,
+    };
 
     const PW_RECORD_1_0_5_HELP: &str = "pw-record [options] [<file>|-]
   -h, --help                            Show this help
@@ -493,7 +502,12 @@ mod tests {
 ";
 
     fn uc_monitor() -> Monitor {
-        Monitor { name: "alsa_input.usb-RME_Fireface_UC.pro-input-0".into(), index: 185, rate: 48000, channels: 18 }
+        Monitor {
+            name: "alsa_input.usb-RME_Fireface_UC.pro-input-0".into(),
+            index: 185,
+            rate: 48000,
+            channels: 18,
+        }
     }
 
     #[test]
@@ -507,12 +521,13 @@ mod tests {
 
     #[test]
     fn a_record_that_lists_raw_gets_it_before_stdout() {
-        assert!(help_lists_raw("      --raw                             RAW mode"));
+        assert!(help_lists_raw(
+            "      --raw                             RAW mode"
+        ));
         let args = record_args(&uc_monitor(), true);
         let n = args.len();
         assert_eq!(&args[n - 2..], ["--raw", "-"]);
     }
-
 
     #[test]
     fn picks_the_widest_rme_sink() {

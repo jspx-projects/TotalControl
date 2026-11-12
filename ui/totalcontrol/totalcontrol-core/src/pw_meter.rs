@@ -320,32 +320,42 @@ fn parse_spec(spec: &str) -> Option<(u32, usize)> {
 
 fn spawn_record(monitor: &Monitor) -> Option<Child> {
     Command::new("pw-record")
-        .arg("--target")
-        // The index (PipeWire's Pulse object serial) is the reliable
-        // target while the sink is suspended; a name falls back to the
-        // default sink, which may be an entirely different card.
-        .arg(monitor.index.to_string())
-        // Without this, the target would still record a source; the
-        // property is what links the stream to the sink's monitor ports.
-        .arg("--properties")
-        .arg("stream.capture.sink=true")
-        .arg("--format")
-        .arg("s32")
-        // Never pin the playback meter to the discovery-time rate: doing
-        // so keeps the graph at that rate when the device runs at 88.2 kHz
-        // or higher.  The tap follows the graph; a rate change is still
-        // detected by `watch_monitor`, which respawns it.
-        .arg("--channels")
-        .arg(monitor.channels.to_string())
-        .arg("--media-category")
-        .arg("Capture")
-        .arg("--raw")
-        .arg("-")
+        .args(record_args(monitor, crate::pw_input::pw_record_takes_raw()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()
+}
+
+fn record_args(monitor: &Monitor, raw_flag: bool) -> Vec<String> {
+    let mut args = vec![
+        "--target".to_string(),
+        // The index (PipeWire's Pulse object serial) is the reliable
+        // target while the sink is suspended; a name falls back to the
+        // default sink, which may be an entirely different card.
+        monitor.index.to_string(),
+        // Without this, the target would still record a source; the
+        // property is what links the stream to the sink's monitor ports.
+        "--properties".to_string(),
+        "stream.capture.sink=true".to_string(),
+        "--format".to_string(),
+        "s32".to_string(),
+        // Never pin the playback meter to the discovery-time rate: doing
+        // so keeps the graph at that rate when the device runs at 88.2 kHz
+        // or higher.  The tap follows the graph; a rate change is still
+        // detected by `watch_monitor`, which respawns it.
+        "--channels".to_string(),
+        monitor.channels.to_string(),
+        "--media-category".to_string(),
+        "Capture".to_string(),
+    ];
+    args.extend(
+        crate::pw_input::stdout_args(raw_flag)
+            .iter()
+            .map(|a| a.to_string()),
+    );
+    args
 }
 
 /// Read raw S32LE frames from the child and accumulate per-channel
@@ -434,7 +444,27 @@ fn sleep_interruptible(stop: &AtomicBool, total: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_peaks, parse_monitor, parse_spec, MAX_CHANNELS};
+    use super::{add_peaks, parse_monitor, parse_spec, record_args, Monitor, MAX_CHANNELS};
+
+    #[test]
+    fn the_playback_tap_omits_raw_when_pw_record_lacks_it() {
+        let monitor = Monitor {
+            name: "alsa_output.usb-RME_Fireface_UC.pro-output-0".into(),
+            index: 7,
+            rate: 48000,
+            channels: 18,
+        };
+        let args = record_args(&monitor, false);
+        assert!(!args.iter().any(|a| a == "--raw"), "{args:?}");
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--properties", "stream.capture.sink=true"]),
+            "{args:?}"
+        );
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        let n = record_args(&monitor, true).len();
+        assert_eq!(&record_args(&monitor, true)[n - 2..], ["--raw", "-"]);
+    }
 
     #[test]
     fn picks_the_widest_rme_sink() {

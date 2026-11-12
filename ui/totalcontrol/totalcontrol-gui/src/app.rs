@@ -22481,9 +22481,10 @@ mod tests {
                     "s32",
                     "--channels",
                     "18",
-                    "--raw",
-                    "-",
                 ])
+                .args(totalcontrol_core::pw_input::stdout_args(
+                    totalcontrol_core::pw_input::pw_record_takes_raw(),
+                ))
                 .output();
             let Ok(out) = out else { return vec![] };
             let mut peaks = vec![0.0f32; 18];
