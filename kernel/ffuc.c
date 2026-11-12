@@ -297,9 +297,15 @@ void ffuc_release_interface(struct usb_interface *intf)
 
 /* -- per-device core sequences --------------------------------------- */
 
+/*
+ * Known-good UC channel init.  The 60-slot zero sequence captured from the
+ * Windows driver is a clear; replaying it without the Windows later state
+ * produces the wrong rate and distorted audio.  Both the PC and AP
+ * personalities use this non-zero sequence.
+ */
 static const struct ffuc_init_range ffuc_uc_chan_init[] = {
-	{ .value = 0x0000, .first = 0,    .count = 30 },
-	{ .value = 0x0000, .first = 0x20, .count = 30 },
+	{ .value = 0x0001, .first = 0,    .count = 18 },
+	{ .value = 0x0001, .first = 0x20, .count = 18 },
 };
 
 static const struct ffuc_init_range ffuc_ucx_chan_init[] = {

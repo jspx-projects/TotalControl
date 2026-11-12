@@ -44,13 +44,14 @@ fn main() {
         "info" => {
             let i = hw.info().expect("info");
             println!(
-                "card {}: {} ({}) abi={} model={} transport={} rate={} channels={} meter={}B",
+                "card {}: {} ({}) abi={} model={} transport={} personality=\"{}\" rate={} channels={} meter={}B",
                 card,
                 i.name_str(),
                 i.serial_str(),
                 i.abi,
                 i.model,
                 i.transport,
+                i.personality_label(),
                 i.rate,
                 i.channels,
                 i.meter_bytes

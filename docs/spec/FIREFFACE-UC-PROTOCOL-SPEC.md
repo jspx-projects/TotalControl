@@ -50,14 +50,46 @@ written to the device on connect and on each change.
 | `0x1a` | OUT | Input gain and output-channel level |
 | `0x1b` | OUT | Rate-generator/pitch coefficients |
 | `0x1c` | IN | Firmware revision |
+| `0x1d` | OUT | Stream-open word |
 | `0x20` | OUT | Global enable |
 
 ### 2.1 Channel initialization
 
-The UC connect sequence writes request `0x16` with `wValue 0x0001` for slots
-`0..17` and `32..49` (36 writes).  Slots `18..31` and `50..63` are not written.
-The slot ranges and values are per-device data; they are not derived from the
-channel count.
+The UC probe writes request `0x16` with `wValue 0x0001` for slots `0..17` and
+`32..49` (36 writes).  Slots `18..31` and `50..63` are not written.  The slot
+ranges and values are per-device data; they are not derived from the channel
+count.
+
+### 2.2 Probe and stream open
+
+The implemented probe sequence is:
+
+| Order | Request | Value |
+|---|---|---|
+| 1 | `0x16` | `0x0001`, slots `0..17` and `32..49` |
+| 2 | `0x10` | `0x0800 / 0xb800` |
+| 3 | `0x20` | `0x0001 / 0x0000` |
+
+The initial 48 kHz stream opens directly after this sequence.  Both UC
+personalities, PC/interrupt and AP/ISO, use this same known-good sequence.
+
+A rate change closes the stream with `0x13 0x000f/0xc000`, writes the new
+`0x10` rate family and the `0x10 / 1487 = 0x0001` commit, waits 200 ms, then
+opens with:
+
+| Request | Value / index |
+|---|---|
+| `0x10` | `0x0000 / 0x8000` |
+| `0x1d` | `0x0000 / 0x0000` |
+| `0x14` | `0x000f / 0xc000` |
+
+The Windows PC driver probe instead writes 60 `0x16` values of `0x0000` for
+slots `0..29` and `32..61`, four `0x1b` DDS words and eleven `0x10` settings
+words.  Its WDM stream open adds `0x10 0x8000/0x8000`, `0x1d` and `0x14`.
+No nonzero `0x16` restore follows the Windows clear.  Replaying the Windows
+clear without the Windows later state produces the wrong rate and distorted
+audio; the Linux initial path does not use it, and that later state is not
+decoded.  The shipped UC init is the sequence above.
 
 ## 3. Matrix and channel words
 
@@ -251,10 +283,10 @@ The device group is read from the unit at connect: input gain, 48 V, PAD,
 Inst, reference levels, clock source and optical format.
 
 The mixer group is written from the TotalControl scene: matrix, pans, faders,
-mutes, loopback, output levels and output balance.  The connect sequence
-writes 36 `0x16` channel slots, four `0x1b` DDS words, 11 `0x10` settings
-words, 30 loopback entries, one `0x17` switch reset, four `0x1a` preamps,
-18 `0x1a` output levels and 666 `0x12` matrix/master words.
+mutes, loopback, output levels and output balance.  The kernel probe writes
+the 36 `0x16` channel slots and the `0x10`/`0x20` words from §2.2.  The host
+scene apply then writes 30 loopback entries, one `0x17` switch reset, four
+`0x1a` preamps, 18 `0x1a` output levels and 666 `0x12` matrix/master words.
 
 Front-panel gain and output-level changes arrive on `0x8b` and update the
 live model.  Byte 3 bit 7 is present on captured output frames and does not

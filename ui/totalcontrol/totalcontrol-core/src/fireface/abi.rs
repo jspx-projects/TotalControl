@@ -136,6 +136,18 @@ impl HwdepInfo {
     pub fn serial_str(&self) -> String {
         cstr(&self.serial)
     }
+
+    /// Human-readable transport/personality identity reported by the driver.
+    pub fn personality_label(&self) -> &'static str {
+        match (self.model, self.transport) {
+            (MODEL_UC, XPORT_INTERRUPT) => "UC PC (interrupt)",
+            (MODEL_UC, XPORT_ISO) => "UC AP (ISO)",
+            (MODEL_UCX, XPORT_ISO) => "UCX ISO",
+            (MODEL_UCX, XPORT_INTERRUPT) => "UCX IF5 (interrupt)",
+            (MODEL_BABYFACE_CLASSIC, XPORT_ISO) => "Babyface classic (ISO)",
+            _ => "unknown",
+        }
+    }
 }
 
 fn cstr(b: &[u8]) -> String {
