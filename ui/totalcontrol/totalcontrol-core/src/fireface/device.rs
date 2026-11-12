@@ -33,6 +33,7 @@ use crate::scene::{MatrixOverride, Scene};
 
 use super::abi::*;
 use super::hwdep::{self, Direction, Event, Hwdep};
+use super::models::Personality;
 use super::protocol::{self, uc, ucx, MeterKind, MeterPacket, Source};
 use super::settings::ChannelSettings;
 
@@ -79,6 +80,7 @@ impl Model {
 pub struct DeviceInfo {
     pub card: i32,
     pub model: Model,
+    pub personality: Personality,
     pub iso: bool,
     pub caps: u32,
     pub channels: usize,
@@ -99,10 +101,17 @@ pub struct DeviceInfo {
 impl DeviceInfo {
     fn from_abi(card: i32, info: HwdepInfo) -> Option<Self> {
         let model = Model::from_abi(info.model)?;
+        let iso = match info.transport {
+            XPORT_INTERRUPT => false,
+            XPORT_ISO => true,
+            _ => return None,
+        };
+        let personality = Personality::from_model(model, iso)?;
         Some(Self {
             card,
             model,
-            iso: info.transport == XPORT_ISO,
+            personality,
+            iso,
             caps: info.caps,
             channels: info.channels as usize,
             inputs: info.inputs as usize,
@@ -986,7 +995,14 @@ impl Fireface {
         async_writer: bool,
     ) -> Result<Self, Error> {
         let model = info.model;
-        let spec = super::models::for_model(model);
+        let spec = super::models::for_personality(info.personality);
+        log::info!(
+            "opened {} as {} (model {:?}, ISO {})",
+            info.name,
+            info.personality.label(),
+            model,
+            info.iso
+        );
         let profile = spec.profile;
         let mut inputs = profile.build_inputs();
         let playbacks = profile.build_playbacks();
@@ -1145,6 +1161,10 @@ impl Fireface {
 
     pub fn model(&self) -> Model {
         self.model
+    }
+
+    pub fn personality(&self) -> Personality {
+        self.info.personality
     }
 
     pub fn spec(&self) -> &'static super::models::ModelSpec {
@@ -6719,6 +6739,8 @@ mod tests {
             let info = DeviceInfo {
                 card: 0,
                 model,
+                personality: Personality::from_model(model, false)
+                    .expect("mock model has a personality"),
                 iso: false,
                 caps: CAP_VENDOR | CAP_WORDS | CAP_METERS | CAP_STATUS | CAP_PCM,
                 channels: 18,

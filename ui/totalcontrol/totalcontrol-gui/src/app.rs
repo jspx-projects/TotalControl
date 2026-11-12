@@ -1725,6 +1725,15 @@ impl DeviceHandle {
         }
     }
 
+    /// The transport/personality of the connected hwdep Fireface.
+    pub fn personality(&self) -> Option<totalcontrol_core::fireface::Personality> {
+        match self {
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => Some(d.personality()),
+            _ => None,
+        }
+    }
+
     /// True for a Fireface UC model regardless of which backend drives it.
     pub fn is_uc_model(&self) -> bool {
         match self {

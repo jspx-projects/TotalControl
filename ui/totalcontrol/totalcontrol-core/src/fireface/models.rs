@@ -10,6 +10,42 @@ use crate::profile::DeviceProfile;
 
 use super::device::Model;
 
+/// Transport/personality identity reported by the kernel for one unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Personality {
+    UcPc,
+    UcAp,
+    UcxIso,
+    UcxIf5,
+}
+
+impl Personality {
+    pub fn from_model(model: Model, iso: bool) -> Option<Self> {
+        Some(match (model, iso) {
+            (Model::Uc, false) => Personality::UcPc,
+            (Model::Uc, true) => Personality::UcAp,
+            (Model::Ucx, true) => Personality::UcxIso,
+            (Model::Ucx, false) => Personality::UcxIf5,
+        })
+    }
+
+    pub fn model(self) -> Model {
+        match self {
+            Personality::UcPc | Personality::UcAp => Model::Uc,
+            Personality::UcxIso | Personality::UcxIf5 => Model::Ucx,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Personality::UcPc => "UC PC (interrupt)",
+            Personality::UcAp => "UC AP (ISO)",
+            Personality::UcxIso => "UCX ISO",
+            Personality::UcxIf5 => "UCX IF5 (interrupt)",
+        }
+    }
+}
+
 pub struct ModelSpec {
     pub model: Model,
     pub name: &'static str,
@@ -106,9 +142,42 @@ pub fn for_model(model: Model) -> &'static ModelSpec {
     }
 }
 
+/// Select the model table from the reported personality.
+pub fn for_personality(personality: Personality) -> &'static ModelSpec {
+    for_model(personality.model())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn personality_is_derived_from_model_and_transport() {
+        assert_eq!(
+            Personality::from_model(Model::Uc, false),
+            Some(Personality::UcPc)
+        );
+        assert_eq!(
+            Personality::from_model(Model::Uc, true),
+            Some(Personality::UcAp)
+        );
+        assert_eq!(
+            Personality::from_model(Model::Ucx, true),
+            Some(Personality::UcxIso)
+        );
+        assert_eq!(
+            Personality::from_model(Model::Ucx, false),
+            Some(Personality::UcxIf5)
+        );
+    }
+
+    #[test]
+    fn personality_selects_its_model_table() {
+        assert_eq!(for_personality(Personality::UcPc).name, "Fireface UC");
+        assert_eq!(for_personality(Personality::UcAp).name, "Fireface UC");
+        assert_eq!(for_personality(Personality::UcxIso).name, "Fireface UCX");
+        assert_eq!(for_personality(Personality::UcxIf5).name, "Fireface UCX");
+    }
 
     #[test]
     fn uc_exposes_routing_phase_and_balance_without_dsp() {

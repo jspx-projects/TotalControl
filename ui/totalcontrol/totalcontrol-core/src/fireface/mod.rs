@@ -16,6 +16,6 @@ pub mod settings;
 
 pub use device::{ControlTransport, DeviceIdentity, DeviceInfo, Fireface, Model, ReadableState};
 pub use dump::UcxDump;
-pub use models::ModelSpec;
+pub use models::{ModelSpec, Personality};
 pub use hwdep::{class_compliant_cards, enumerate, ClassCompliantCard, Direction, Event, Hwdep};
 pub use settings::ChannelSettings;
