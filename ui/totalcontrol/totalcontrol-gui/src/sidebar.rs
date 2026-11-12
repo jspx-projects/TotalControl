@@ -1159,6 +1159,23 @@ fn options_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         scale,
     ));
 
+    // TotalMix's View Options > Routing Mode (UC manual 26.5.1): Submix binds
+    // every strip's fader to the selected hardware output, Free to the
+    // strip's own target.  Both edit one routing per fader change.
+    use crate::app::RoutingMode;
+    body = body.push(options_row(
+        Some("routing"),
+        segmented_row(
+            "submix",
+            "free",
+            state.routing_mode == RoutingMode::Submix,
+            Some(Message::SetRoutingMode(RoutingMode::Submix)),
+            Some(Message::SetRoutingMode(RoutingMode::Free)),
+            scale,
+        ),
+        scale,
+    ));
+
     column![header, body]
         .spacing(theme::SPACE_SM * scale)
         .width(Length::Fill)

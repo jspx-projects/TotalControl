@@ -72,14 +72,33 @@ fn cell(
             value,
             shown,
             interactive,
-            routed: state.device.matrix_cell_routed(cid, _pair),
+            // The Outputs row is a master volume, not a routing: it always
+            // exists, so it is never drawn as "no routing".  Every other
+            // cell is routed exactly while it has a level (GUI spec 8.1.1),
+            // so one side of a split pair can be blank while the other is
+            // routed.
+            routed: match cid {
+                ChannelId::Output(_) => true,
+                _ => state
+                    .device
+                    .matrix_cell(cid, col)
+                    .is_some_and(|gain| gain > 0.0),
+            },
             muted,
             phase,
-            in_sel: col / 2 == state.sel_out,
+            // Free routing has no selected submix, so no column is marked.
+            in_sel: state.routing_mode == crate::app::RoutingMode::Submix
+                && col / 2 == state.sel_out,
             hovered: state.matrix_hover == Some((cid, col)),
             modifiers,
             scale,
-            on_change: Box::new(move |v| Message::MatrixCellChanged(cid, col, v)),
+            // The Outputs row is a channel master, so it follows the output
+            // fader path (linked pairs and undo gestures included).  Every
+            // source cell carries its physical column instead.
+            on_change: Box::new(move |v| match cid {
+                ChannelId::Output(_) => Message::VolumeChanged(cid, 0, v),
+                _ => Message::MatrixCellChanged(cid, col, v),
+            }),
             on_release: Message::RangeCleared(cid),
             on_hover: Box::new(move |over| Message::MatrixHover(cid, col, over)),
         },
@@ -141,15 +160,20 @@ fn input_row_groups(state: &TotalControl) -> Vec<RowGroup> {
     let mut i = 0;
     while i < inputs.len() {
         let ty = inputs[i].channel_type;
-        let (label, count) = if i < 4 {
+        // A pair shows two rows while it is linked (a stereo channel) and one
+        // row per channel while it is unlinked (GUI spec 8.1.2).  This holds
+        // for the first four inputs too: a linked Mic 1/2 pair must offer the
+        // pair's four cells.
+        let pair_linked = i + 1 < inputs.len() && state.device.input_pair_linked(i / 2);
+        let (label, count) = if pair_linked {
+            (pair_bus_label(&inputs[i].name, &inputs[i + 1].name), 2)
+        } else if i < 4 {
             let label = if ty == ChannelType::Mic {
                 format!("Mic {}", i + 1)
             } else {
                 format!("AN {}", i + 1)
             };
             (label, 1)
-        } else if let Some(next) = inputs.get(i + 1) {
-            (pair_bus_label(&inputs[i].name, &next.name), 2)
         } else {
             (inputs[i].name.clone(), 1)
         };
@@ -177,16 +201,44 @@ fn input_row_groups(state: &TotalControl) -> Vec<RowGroup> {
 /// "PH3/4" — that's this session's own established naming, kept).
 fn playback_row_groups(state: &TotalControl) -> Vec<RowGroup> {
     let n = state.device.playbacks().len();
-    (0..n / 2)
-        .map(|pair| RowGroup {
-            label: crate::app::user_pair_label(state, ChannelId::Playback(pair * 2))
-                .or_else(|| state.pair_labels().get(pair).cloned())
-                .unwrap_or_default(),
-            color: crate::app::PB_TAG,
-            first_idx: pair * 2,
-            count: 2,
-        })
-        .collect()
+    let mut groups = Vec::new();
+    for pair in 0..n / 2 {
+        let first = pair * 2;
+        let label = crate::app::user_pair_label(state, ChannelId::Playback(first))
+            .or_else(|| state.pair_labels().get(pair).cloned())
+            .unwrap_or_default();
+        // A linked pair is one two-row stereo channel; an unlinked pair is
+        // two mono channels with a label each (GUI spec 8.1.2).
+        if state.device.playback_linked(pair) {
+            groups.push(RowGroup {
+                label,
+                color: crate::app::PB_TAG,
+                first_idx: first,
+                count: 2,
+            });
+        } else {
+            for side in 0..2 {
+                let idx = first + side;
+                let own = crate::app::user_label(state, ChannelId::Playback(idx))
+                    .map(str::to_string)
+                    .or_else(|| {
+                        state
+                            .device
+                            .playbacks()
+                            .get(idx)
+                            .map(|c| short_label(&c.name).to_string())
+                    })
+                    .unwrap_or_else(|| format!("{label} {}", side + 1));
+                groups.push(RowGroup {
+                    label: own,
+                    color: crate::app::PB_TAG,
+                    first_idx: idx,
+                    count: 1,
+                });
+            }
+        }
+    }
+    groups
 }
 
 /// A mono source's (volume, pan) decoded into what reaches the left and
@@ -298,32 +350,51 @@ fn push_channel_rows<'a>(
             for col in 0..src.volumes.len() * 2 {
                 let pair = col / 2;
                 let stored = src.volumes[pair] * trim_gain;
-                let mono_input = matches!(cid, ChannelId::Input(i) if i < 4);
-                let split_playback = match cid {
-                    ChannelId::Playback(i) => state
-                        .device
-                        .playbacks()
-                        .get(i)
-                        .is_some_and(|ch| ch.split),
-                    _ => false,
-                };
-                let natural = match cid {
-                    ChannelId::Input(i) => i >= 4 && col % 2 == i % 2,
-                    ChannelId::Playback(i) => col % 2 == i % 2,
+                // A linked source pair is a stereo channel (one two-row
+                // group); a split playback channel counts as mono.
+                let source_linked = match cid {
+                    ChannelId::Input(i) => state.device.input_pair_linked(i / 2),
+                    ChannelId::Playback(i) => {
+                        state.device.playback_linked(i / 2)
+                            && !state
+                                .device
+                                .playbacks()
+                                .get(i)
+                                .is_some_and(|ch| ch.split)
+                    }
                     ChannelId::Output(_) => false,
                 };
                 let (shown, interactive) = if state.device.matrix_cells_supported() {
-                    let shown = state.device.matrix_cell(cid, col).unwrap_or(0.0) * trim_gain;
-                    // A split playback channel is already a mono source and
-                    // can address either side.  A mono hardware input keeps
-                    // its pan-derived pair routing unless Mono Mode is on.
+                    // A routed cell carries a level (including one turned
+                    // down to -inf); an unrouted cell is the manual's
+                    // dark-grey "no routing" field.  `matrix_cell` already
+                    // answers None for an unrouted pair, so keep the cell
+                    // inert instead of printing a leaked value.  Only a
+                    // crosspoint's own cell displays it, so a mono source
+                    // into a linked pair fills just the pair's left cell
+                    // (GUI spec 8.1.2).
+                    let shown = match state.device.matrix_cell(cid, col) {
+                        Some(gain) => gain * trim_gain,
+                        None => 0.0,
+                    };
+                    // GUI spec 8.1.2: only the cells a click would write are
+                    // editable.  Parity decides them:
+                    //   A1 both linked   -> odd->odd and even->even
+                    //   A2 linked / mono dest -> the row matching the
+                    //                       destination channel's parity
+                    //   B1 mono / linked dest -> the pair cell matching the
+                    //                       source's parity
+                    //   B2 both mono     -> that one cell
+                    // Mono Mode makes every cell editable, as before.
+                    let src_parity = crate::app::channel_parity(cid);
+                    let dst_parity = col % 2;
+                    let target_linked = state.device.output_linked(col / 2);
                     let interactive = state.matrix_mono
-                        || if split_playback {
-                            true
-                        } else if mono_input {
-                            col % 2 == 0
-                        } else {
-                            natural
+                        || match (source_linked, target_linked) {
+                            (true, true) => src_parity == dst_parity,
+                            (true, false) => src_parity == dst_parity,
+                            (false, true) => src_parity == dst_parity,
+                            (false, false) => true,
                         };
                     (shown, interactive)
                 } else {

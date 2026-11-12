@@ -20,6 +20,12 @@ use crate::widgets::strip::centered_label_colored_auto;
 /// carries as its homepage.
 pub const REPO_URL: &str = "https://github.com/jspx-projects/TotalControl";
 
+/// The identifier of the running build (`<git hash>[-dirty]-<UTC build
+/// time>`), stamped by `build.rs`.  The release profile is deterministic, so
+/// two builds of the same sources share their checksum; this string is what
+/// distinguishes them, in About, in a bug report and in `--build-id`.
+pub const BUILD_ID: &str = env!("TC_BUILD_ID");
+
 /// The card's width cap at `ui_scale == 1.0`: wide enough for the repo URL
 /// on one line, narrow enough to read as a dialog, and capped rather than
 /// fixed so a narrow window shrinks it instead of clipping it.
@@ -128,6 +134,9 @@ pub fn about_modal(state: &TotalControl) -> Element<'_, Message> {
         text("Open-source TotalMix replacement for RME audio interfaces")
             .color(theme::text_sec())
             .size(theme::TEXT_DIALOG * scale),
+        text(format!("Build {BUILD_ID}"))
+            .color(theme::text_sec())
+            .size(theme::TEXT_SM * scale),
         text(device)
             .color(theme::text_sec())
             .size(theme::TEXT_DIALOG * scale),
@@ -198,4 +207,23 @@ pub fn about_modal(state: &TotalControl) -> Element<'_, Message> {
         )
         .on_press(Message::ToggleAbout),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BUILD_ID;
+
+    /// `<hash>[-dirty]-<YYYYMMDDTHHMMSSZ>`, so a bug report can name the
+    /// exact binary. Hosts without `date` fall back to epoch seconds.
+    #[test]
+    fn the_build_id_carries_a_source_and_a_stamp() {
+        let (rest, stamp) = BUILD_ID.rsplit_once('-').expect("a build id ends in its stamp");
+        assert!(!rest.is_empty(), "the hash is missing from {BUILD_ID:?}");
+        assert!(!stamp.is_empty(), "the stamp is missing from {BUILD_ID:?}");
+        let dated = stamp.ends_with('Z') && stamp.len() == 16 && stamp.as_bytes()[8] == b'T';
+        assert!(
+            dated || stamp.chars().all(|c| c.is_ascii_digit()),
+            "unexpected stamp {stamp:?}"
+        );
+    }
 }

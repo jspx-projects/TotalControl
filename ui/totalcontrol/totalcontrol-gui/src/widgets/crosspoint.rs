@@ -29,6 +29,10 @@ use crate::widgets::fader::{t_to_vol, vol_to_t, DOUBLE_CLICK, FINE_SENSITIVITY};
 const DRAG_TRAVEL: f32 = 150.0;
 /// Within this many dB of 0 a crosspoint counts as unity (green).
 const UNITY_DB: f32 = 0.05;
+/// One wheel notch moves a cell this far along the fader travel.
+const WHEEL_STEP: f32 = 0.04;
+/// Shift+wheel.
+const WHEEL_FINE: f32 = 0.008;
 
 pub struct Crosspoint<Message> {
     /// The stored linear gain the gestures start from; `0.0` = unrouted.
@@ -41,11 +45,9 @@ pub struct Crosspoint<Message> {
     /// `false` for the side of an output pair the source has no hardware
     /// path to: drawn as an empty well, inert.
     pub interactive: bool,
-    /// Whether the source is routed to this output at all.  A routing stays
-    /// active at -inf (UC manual 26.3: "shown in bold letters, but not have
-    /// an arrow"), so it is a state of its own: an inactive cell is the
-    /// manual's dark-grey "no routing" field and draws no number, while a
-    /// routed cell at -inf shows the muted/level colour instead.
+    /// Whether the source is routed to this output.  A routing exists only
+    /// while its level is above -inf (GUI spec 8.1.1), so an inactive cell
+    /// is the manual's dark-grey "no routing" field and draws no number.
     pub routed: bool,
     pub muted: bool,
     pub phase: bool,
@@ -139,6 +141,32 @@ impl<Message: Clone> canvas::Program<Message> for Crosspoint<Message> {
                 let over = cursor.is_over(bounds);
                 (over != self.hovered).then(|| canvas::Action::publish((self.on_hover)(over)))
             }
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                // The event is offered to every canvas in the grid.  Only the
+                // one under the pointer may react, or a single notch would
+                // move every cell (GUI spec 8.1/Matrix).
+                if !cursor.is_over(bounds) {
+                    return None;
+                }
+                // Wheel over a cell edits it, like dragging: one step per
+                // notch, Shift for the fine step (GUI spec 8.1/Matrix).
+                let notches = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => *y,
+                    mouse::ScrollDelta::Pixels { y, .. } => *y / 40.0,
+                };
+                if notches.abs() < 0.01 {
+                    return None;
+                }
+                let step = if self.modifiers.shift() { WHEEL_FINE } else { WHEEL_STEP };
+                let mut t = vol_to_t(self.shown) + notches * step;
+                if t <= 0.0 {
+                    t = 0.0;
+                }
+                Some(
+                    canvas::Action::publish((self.on_change)(t_to_vol(t.clamp(0.0, 1.0))))
+                        .and_capture(),
+                )
+            }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let pos = cursor.position_over(bounds)?;
                 let now = Instant::now();
@@ -186,7 +214,7 @@ impl<Message: Clone> canvas::Program<Message> for Crosspoint<Message> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let routed = self.interactive && self.routed && self.shown > f32::EPSILON;
+        let routed = self.interactive && self.routed;
         let well = if self.in_sel {
             theme::SURFACE_HI
         } else {
@@ -228,7 +256,12 @@ impl<Message: Clone> canvas::Program<Message> for Crosspoint<Message> {
             frame.stroke(&inset, Stroke::default().with_color(color).with_width(1.0));
         }
 
-        if let Some(label) = self.interactive.then(|| cell_text(self.shown)).flatten() {
+        // The manual's "dark grey field, no routing" carries no number: only
+        // a routed cell prints its gain.
+        if let Some(label) = (self.interactive && self.routed)
+            .then(|| cell_text(self.shown))
+            .flatten()
+        {
             frame.fill_text(canvas::Text {
                 content: label,
                 position: Point::new(bounds.width / 2.0, bounds.height / 2.0),
@@ -249,13 +282,17 @@ impl<Message: Clone> canvas::Program<Message> for Crosspoint<Message> {
     fn mouse_interaction(
         &self,
         state: &State,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         if !self.interactive {
             return mouse::Interaction::None;
         }
-        if state.pressed || cursor.is_over(bounds) {
+        // A matrix cell is clicked and dragged, but it is not a resize
+        // handle: the whole grid would show a drag cursor over every cell.
+        // Keep the ordinary pointer on hover and show the resize cursor
+        // only while a drag is in progress.
+        if state.pressed {
             mouse::Interaction::ResizingVertically
         } else {
             mouse::Interaction::None
@@ -277,6 +314,7 @@ pub fn crosspoint<'a, Message: Clone + 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced::widget::canvas::Program;
 
     #[test]
     fn cell_text_signs_gain_above_unity_and_blanks_unrouted() {
@@ -297,6 +335,86 @@ mod tests {
         assert_eq!(toggled(1.0), 0.0);
         assert_eq!(toggled(0.25), 0.0);
         assert_eq!(toggled(0.0), 1.0);
+    }
+
+    fn test_cell() -> Crosspoint<f32> {
+        Crosspoint {
+            value: 0.5,
+            shown: 0.5,
+            interactive: true,
+            routed: true,
+            muted: false,
+            phase: false,
+            in_sel: false,
+            hovered: false,
+            modifiers: Modifiers::default(),
+            scale: 1.0,
+            on_change: Box::new(|v| v),
+            on_release: 0.0,
+            on_hover: Box::new(|_| 0.0),
+        }
+    }
+
+    #[test]
+    fn a_press_and_vertical_move_publishes_a_new_cell_value() {
+        let cell = test_cell();
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(20.0, 20.0));
+        let mut state = State::default();
+
+        let press = cell.update(
+            &mut state,
+            &canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            bounds,
+            mouse::Cursor::Available(Point::new(10.0, 10.0)),
+        );
+        assert!(press.is_some(), "a press is captured to arm the drag");
+
+        let moved = cell.update(
+            &mut state,
+            &canvas::Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(10.0, 0.0),
+            }),
+            bounds,
+            mouse::Cursor::Available(Point::new(10.0, 0.0)),
+        );
+        let (message, _, status) = moved.expect("the move publishes").into_inner();
+        assert!(message.is_some(), "a moved drag publishes a new value");
+        assert_eq!(status, iced::event::Status::Captured);
+    }
+
+    #[test]
+    fn a_wheel_notch_publishes_a_new_cell_value() {
+        let cell = test_cell();
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(20.0, 20.0));
+        let mut state = State::default();
+        let wheel = cell.update(
+            &mut state,
+            &canvas::Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+            }),
+            bounds,
+            mouse::Cursor::Available(Point::new(10.0, 10.0)),
+        );
+        let (message, _, _) = wheel.expect("the wheel publishes").into_inner();
+        assert!(message.is_some(), "a wheel notch publishes a new value");
+    }
+
+    #[test]
+    fn a_wheel_event_away_from_the_cell_is_ignored() {
+        // Every canvas in the grid receives the wheel event; only the one
+        // under the pointer may edit its cell.
+        let cell = test_cell();
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(20.0, 20.0));
+        let mut state = State::default();
+        let wheel = cell.update(
+            &mut state,
+            &canvas::Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+            }),
+            bounds,
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+        );
+        assert!(wheel.is_none(), "a cell away from the pointer ignores the wheel");
     }
 
     #[test]

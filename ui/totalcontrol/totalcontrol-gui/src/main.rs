@@ -11,6 +11,7 @@
 //! cargo run -p totalcontrol-gui -- --view mixer  # open straight on the Mixer page
 //! cargo run -p totalcontrol-gui -- --fullscreen  # start fullscreen (F11 toggles)
 //! cargo run -p totalcontrol-gui -- --mock-ucx --flyouts settings:input:0  # open a panel
+//! cargo run -p totalcontrol-gui -- --build-id  # print the build identifier and exit
 //! ```
 
 mod about;
@@ -86,9 +87,15 @@ fn parse_view(args: &[String]) -> Option<app::View> {
 fn main() -> iced::Result {
     env_logger::init();
     let args: Vec<String> = std::env::args().collect();
-    // The UC latches its matrix when the audio engine starts.  Defer the
-    // input meter tap (which opens the capture PCM) until the startup scene
-    // has been written, so the scene is latched instead of ignored.
+    // `--build-id` answers "which build is this?" without opening a window or
+    // touching the single-instance lock, so it works while the app runs.
+    if args.iter().any(|a| a == "--build-id") {
+        println!("{}", about::BUILD_ID);
+        return Ok(());
+    }
+    // Defer the input meter tap (which opens the capture PCM) until the
+    // startup scene has been written, so the device holds the complete
+    // scene when audio starts.
     std::env::set_var("TOTALCONTROL_DEFER_METER_TAP", "1");
     // `--mock` simulates a Babyface Pro FS; `--mock-ucx` simulates a
     // Fireface UCX (EQ, dynamics, FX bus, Control Room), so the gated UI can

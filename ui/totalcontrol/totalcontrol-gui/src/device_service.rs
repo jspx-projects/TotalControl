@@ -340,6 +340,15 @@ fn scene_matrix_default(
         info.output_display_order.get(block / 2).copied()?
     };
     let side = block % 2;
+    let level = match channel {
+        ChannelId::Input(i) => *scene.inputs.get(i)?.volumes.get(pair)?,
+        ChannelId::Playback(i) => *scene.playbacks.get(i)?.volumes.get(pair)?,
+        ChannelId::Output(_) => return None,
+    };
+    if level <= 0.0 {
+        // A zero send is no routing, so no cell (GUI spec 8.1.1).
+        return None;
+    }
     match channel {
         ChannelId::Input(i) => {
             let ch = scene.inputs.get(i)?;
@@ -356,7 +365,7 @@ fn scene_matrix_default(
             } else if side == i % 2 {
                 Some(volume)
             } else {
-                Some(0.0)
+                None
             }
         }
         ChannelId::Playback(i) => {
@@ -378,7 +387,7 @@ fn scene_matrix_default(
             } else if side == i % 2 {
                 Some(volume)
             } else {
-                Some(0.0)
+                None
             }
         }
         ChannelId::Output(_) => None,
@@ -462,9 +471,12 @@ impl RmeDevice for Mirror {
             .iter()
             .find(|cell| cell.source == source && cell.block == block)
         {
-            return Some(cell.gain);
+            // A routing exists while it has a level (GUI spec 8.1.1), so a
+            // zero cell is no routing.
+            return (cell.gain > 0.0).then_some(cell.gain);
         }
         scene_matrix_default(&self.scene, &self.info, channel, block)
+            .filter(|gain| *gain > 0.0)
     }
 
     fn set_matrix_cell(
@@ -477,6 +489,16 @@ impl RmeDevice for Mirror {
             let _ = d.set_matrix_cell(channel, block, gain);
         });
         Ok(())
+    }
+
+    fn clear_all_routings(&mut self) {
+        self.run(|d| d.clear_all_routings());
+    }
+
+    fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
+        self.matrix_blocks_for_pair(pair)
+            .iter()
+            .any(|block| self.matrix_cell(channel, *block).is_some())
     }
 
     fn output_display_order(&self) -> Vec<usize> {
@@ -1744,6 +1766,43 @@ mod tests {
             "the meter snapshot is written"
         );
         assert!(service.meters().inputs.iter().any(|v| *v >= 0.0));
+        service.stop();
+    }
+
+    #[test]
+    fn the_mirror_derives_routing_from_the_scene_level() {
+        let mut service = DeviceService::spawn(mock());
+        let updates = service.take_updates().expect("the update receiver");
+        let mut mirror = super::Mirror::new(
+            service.snapshot(),
+            service.command_sender(),
+            service.meter_bus(),
+        );
+        assert!(
+            wait_for(|| {
+                while let Ok(snapshot) = updates.try_recv() {
+                    mirror.update(snapshot);
+                }
+                !mirror.inputs().is_empty()
+            }),
+            "the initial snapshot arrives"
+        );
+        // The mock starts with unity sends, so the cell is routed.
+        assert!(mirror.matrix_cell_routed(ChannelId::Input(0), 0));
+        assert!(mirror.matrix_cell(ChannelId::Input(0), 0).is_some());
+
+        assert!(mirror.set_volume(ChannelId::Input(0), 0, 0.0));
+        assert!(
+            wait_for(|| {
+                while let Ok(snapshot) = updates.try_recv() {
+                    mirror.update(snapshot);
+                }
+                mirror.matrix_cell(ChannelId::Input(0), 0).is_none()
+            }),
+            "a zero send removes the mirror's routing"
+        );
+        assert!(!mirror.matrix_cell_routed(ChannelId::Input(0), 0));
+
         service.stop();
     }
 
