@@ -435,7 +435,7 @@ Each meter has two indicators, following TotalMix FX:
   visible; it is held for a fixed two seconds and then decays. Its colour
   follows the same green/yellow/red bands;
 - **overload is the red OVR block** at the top of the meter channel. It
-  lights from -0.1 dBFS.
+  lights after three consecutive full-scale samples (the global default).
 
 Peak hold applies only to the peak line. The RMS bar is not held and keeps
 following the RMS signal. Falling levels use a 20 dB/s release.
@@ -462,10 +462,11 @@ The RMS bar is mathematically correct RMS: a full-scale sine reads about
 makes the RMS reading and the peak line both read 0 dB for a full-scale
 sine; TotalControl does not apply that shift.
 
-TotalControl uses a fixed two-second peak hold. TotalMix FX makes the hold
-time (0.1–9.9 s) and the number of consecutive full-scale samples that
-trigger OVR configurable; TotalControl uses the two-second hold and a
--0.1 dBFS OVR threshold instead.
+TotalControl uses a fixed two-second peak hold and a global OVR trigger of
+three consecutive full-scale samples. OVR is a sample count, not a dB
+threshold. TotalMix FX makes both the hold time (0.1–9.9 s) and the OVR
+sample count (1–15) configurable; TotalControl keeps the two-second hold and
+the three-sample default for now.
 
 The meters show the level as it arrives at the interface. If the host
 (PipeWire) volume is below 0 dB, a full-scale recording reaches the
@@ -475,8 +476,8 @@ to unity and use the interface's own faders for monitoring. A linked pair
 shows one meter bar per channel; each bar shows that channel's own signal,
 so linking controls does not copy a signal from one channel to the other.
 
-The meters are read from the interface stream independently of the rest of the
-window. Moving a fader, opening a panel or scrolling does not interrupt or
+The meters are read from the interface's own hardware meter pages
+independently of the rest of the window. Moving a fader, opening a panel or scrolling does not interrupt or
 freeze them. A short transient lights the peak line even when it falls
 between two screen frames. When every meter has been quiet for a moment they
 stop redrawing, so an idle mixer stays still; the next signal wakes them
@@ -587,8 +588,9 @@ Notes:
 - The **reference dropdown** sets the input or output reference level. For
   inputs 5–8 the four channels move together; inputs 3/4 can be linked.
 - `loopback` makes this output's signal available on its input channel, so
-  recording software can capture what the output plays. `no trim` and
-  `talkback` receive are host-side settings.
+  recording software can capture what the output plays. The input meter keeps
+  showing the physical input; the loopback signal is only in the record path.
+  `no trim` and `talkback` receive are host-side settings.
 
 On/off controls sit at the left of their row. Engaged switches light orange
 (`48V`, `stereo`, `autoset`, `inst`, and others) or green (phase).

@@ -455,6 +455,30 @@ fn pair_gap(scale: f32) -> Element<'static, Message> {
     iced::widget::Space::new().width(PAIR_GAP * scale).into()
 }
 
+/// The bus label for one display column pair.  The matrix columns follow
+/// `output_display_order`, while the output model stays in internal
+/// (Phones-first) order.
+fn output_pair_label(state: &TotalControl, display_pair: usize) -> String {
+    let internal_pair = if state.device.matrix_uses_display_order() {
+        state
+            .device
+            .output_display_order()
+            .get(display_pair)
+            .copied()
+            .unwrap_or(display_pair)
+    } else {
+        display_pair
+    };
+    crate::app::user_pair_label(state, ChannelId::Output(internal_pair * 2))
+        .unwrap_or_else(|| {
+            state
+                .pair_labels()
+                .get(internal_pair)
+                .cloned()
+                .unwrap_or_default()
+        })
+}
+
 fn hairline(width: f32) -> Element<'static, Message> {
     container(
         iced::widget::Space::new()
@@ -472,11 +496,25 @@ fn hairline(width: f32) -> Element<'static, Message> {
 /// "AN1 -> Out 3 (PH3/4 L): -6.0 dB". `None` when nothing is hovered.
 pub fn hover_readout(state: &TotalControl) -> Option<String> {
     let (cid, col) = state.matrix_hover?;
-    let pair = col / 2;
+    // `col` is a display column; the output model uses internal order.
+    let internal_col = if state.device.matrix_uses_display_order() {
+        let pair = col / 2;
+        state
+            .device
+            .output_display_order()
+            .get(pair)
+            .copied()
+            .unwrap_or(pair)
+            * 2
+            + col % 2
+    } else {
+        col
+    };
+    let pair = internal_col / 2;
     let bus = if state.device.output_linked(pair) {
         crate::app::user_pair_label(state, ChannelId::Output(pair * 2))
     } else {
-        crate::app::user_label(state, ChannelId::Output(col)).map(str::to_string)
+        crate::app::user_label(state, ChannelId::Output(internal_col)).map(str::to_string)
     }
     .unwrap_or_else(|| state.pair_labels().get(pair).cloned().unwrap_or_default());
     let side = if col % 2 == 0 { "L" } else { "R" };
@@ -625,8 +663,7 @@ fn grid_view(state: &TotalControl, size: iced::Size) -> Element<'_, Message> {
     ]
     .spacing(theme::SPACE_HAIRLINE);
     for pair in 0..(n_outputs / 2) {
-        let label = crate::app::user_pair_label(state, ChannelId::Output(pair * 2))
-            .unwrap_or_else(|| state.pair_labels().get(pair).cloned().unwrap_or_default());
+        let label = output_pair_label(state, pair);
         footer = footer.push(header_cell(
             label,
             pair == state.sel_out || hovered_col.is_some_and(|c| c / 2 == pair),
@@ -698,7 +735,54 @@ fn grid_view(state: &TotalControl, size: iced::Size) -> Element<'_, Message> {
 
 #[cfg(test)]
 mod tests {
-    use super::{mono_sides, shown_gain, RowSource};
+    use super::{mono_sides, output_pair_label, playback_row_groups, shown_gain, RowSource};
+
+    #[test]
+    fn uc_playback_row_labels_follow_the_playback_order() {
+        let mut state = crate::app::new(false, None, None);
+        state.device = crate::app::DeviceHandle::open_mock_uc();
+        let groups = playback_row_groups(&state);
+        assert_eq!(groups[0].label, "AN1/2");
+        assert_eq!(groups[3].label, "Phones 7/8");
+    }
+
+    #[test]
+    fn uc_output_footer_labels_follow_the_display_order() {
+        let mut state = crate::app::new(false, None, None);
+        state.device = crate::app::DeviceHandle::open_mock_uc();
+        assert_eq!(output_pair_label(&state, 0), "AN1/2");
+        assert_eq!(output_pair_label(&state, 2), "AN5/6");
+        assert_eq!(output_pair_label(&state, 3), "Phones 7/8");
+    }
+
+    #[test]
+    fn ucx_output_footer_labels_stay_in_internal_order() {
+        let mut state = crate::app::new(false, None, None);
+        state.device = crate::app::DeviceHandle::open_mock_ucx();
+        assert_eq!(output_pair_label(&state, 0), "Phones 7/8");
+        assert_eq!(output_pair_label(&state, 1), "AN1/2");
+        assert_eq!(output_pair_label(&state, 2), "AN3/4");
+    }
+
+    #[test]
+    fn ucx_playback_row_labels_follow_the_playback_order() {
+        let mut state = crate::app::new(false, None, None);
+        state.device = crate::app::DeviceHandle::open_mock_ucx();
+        let groups = playback_row_groups(&state);
+        assert_eq!(groups[0].label, "Phones 7/8");
+        assert_eq!(groups[1].label, "AN1/2");
+        assert_eq!(groups[3].label, "AN5/6");
+    }
+
+    #[test]
+    fn babyface_labels_use_the_identity_order() {
+        let mut state = crate::app::new(false, None, None);
+        state.device = crate::app::DeviceHandle::open_mock();
+        let groups = playback_row_groups(&state);
+        assert_eq!(groups[0].label, "AN1/2");
+        assert_eq!(output_pair_label(&state, 0), "AN1/2");
+        assert_eq!(output_pair_label(&state, 1), "PH3/4");
+    }
 
     #[test]
     fn a_stereo_source_reaches_only_its_own_side() {

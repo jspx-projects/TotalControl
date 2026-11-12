@@ -15,6 +15,7 @@ the UC control surface implemented by TotalControl.
 - [7. Sample rate and clock](#7-sample-rate-and-clock)
 - [8. State ownership](#8-state-ownership)
 - [9. Host-side mixer operations](#9-host-side-mixer-operations)
+- [10. Metering](#10-metering)
 
 ## 1. Device and control paths
 
@@ -41,7 +42,7 @@ live information:
 | Endpoint | Direction | Contents |
 |---|---|---|
 | `0x8b` | interrupt IN | Front-panel encoder events and status-ticker frames |
-| `0x85` | bulk IN | 324-byte transport and link state |
+| `0x85` | bulk IN | 324-byte hardware Peak/RMS meter pages |
 
 Mixer state is write-only.  The host model is the authoritative copy and is
 written to the device on connect and on each change.
@@ -138,6 +139,12 @@ The low code is `0x00` for input 1 and `0x24 + (input - 1)` for inputs 2–4,
 giving `0x25` for input 2 and `0x27` for input 4.  The value is a signed
 coefficient; phase is not a `0x17` bit on the UC.
 
+Hardware-output phase is carried in the `0x12` cells, not in `0x18`.  An
+inverted cell writes the bitwise complement of the normal `wValue`; the
+`wIndex` address is unchanged.  Toggling output phase rewrites every cell
+routed to that output block.  For example, normal `0x16a0` becomes inverted
+`0xe95f`, and normal `0x3fd9` becomes inverted `0xc026`.
+
 ## 4. Output level and balance
 
 Hardware output level uses request `0x1a` with the 1 dB code:
@@ -228,8 +235,11 @@ option on the UC and does not change this register.
 ## 6. Routing controls
 
 Loopback uses request `0x15`.  An index in `0..29` addresses one output
-channel; value `1` feeds that output into the same-numbered input channel.
-The loopback bank is live and changes the running stream.
+channel in matrix display order; value `1` feeds that output into the
+same-numbered input channel.  The unit ignores a single-index update:
+every change writes the complete 30-entry bank, with `0` for every disabled
+index.  AN5/6 therefore writes indices `4` and `5`.  The loopback bank is
+live and changes the running stream.
 
 The matrix applies live.  A `0x12` cell write takes effect on the running
 engine, so a route made while audio plays is audible immediately and a scene
@@ -315,3 +325,107 @@ resulting cross-feed coefficients as `0x12` cells.
 
 Talkback is a host-side operation.  The UC control stream carries the normal
 matrix and output state produced by the host mixer.
+
+## 10. Metering
+
+The `0x85` bulk stream carries 324-byte pages: 162 little-endian 16-bit
+words.  The stream alternates a data page and a flag page.
+
+| Page | Marker |
+|---|---|
+| Data | 32-bit word at byte 4 is `0x00001fff` |
+| Flag | 32-bit word at byte 4 is `0` or `1` |
+
+The data page carries the Peak and OVR words.  The flag page carries the
+software-playback RMS words.  A reader must not apply a flag page to the
+Peak bank.
+
+### Playback and output Peak/OVR words
+
+Each data-page stereo pair occupies four 16-bit words:
+
+| Pair words | Contents |
+|---|---|
+| `w` | first channel OVR |
+| `w + 1` | first channel Peak |
+| `w + 2` | second channel OVR |
+| `w + 3` | second channel Peak |
+
+Playback pair `p` starts at `w = 90 + 4p`.  Hardware-output pair `p` starts
+at `w = 126 + 4p`.  Output pair 3 (Main 7/8) is therefore words 138..141,
+bytes 276..283.
+
+A Peak word is a linear 16-bit value:
+
+```text
+Peak dBFS = 20 × log10(word / 32768)
+```
+
+The OVR word is two bytes:
+
+| Bits | Contents |
+|---|---|
+| 15..8 | `0xff` while OVR is active, otherwise not `0xff` |
+| 7..0 | RMS over amount in 0.5 dB steps |
+
+An OVR is active only when the high byte is `0xff` and the low byte is
+nonzero.  `0xff00` is the no-over filler and must not light the LED.  The
+low byte is the RMS over amount, not a sample count.  The high byte is the
+OVR event that the host counts.
+
+### Playback RMS words
+
+The flag page carries playback RMS for pair `p` at words `75 + 8p` (left)
+and `79 + 8p` (right).  The word is linear power relative to full-scale
+peak squared:
+
+```text
+RMS amplitude = sqrt(word / 32768)
+RMS dBFS      = 10 × log10(word / 32768)
+```
+
+A full-scale sine therefore has word 16384 and reads −3.01 dBFS RMS.
+Playback pair 1 uses bytes 150 and 158.  All nine playback pairs were
+verified with an 18-channel source: each pair's RMS appears only at
+`75 + 8p` and `79 + 8p`.
+
+Output RMS words have not been identified; output RMS is not decoded.
+
+### OVR trigger
+
+TotalMix FX reads the meter values and counts consecutive OVR events on the
+host.  The count is the global **Full scale samples for OVR** preference
+(`FSCntOVR`), default three, range 1..10 on the UC USB settings and 1..15 in
+TotalMix.  No USB control write carries this setting; it is stored in
+TotalMix's host preferences.  The device supplies the OVR marker; the host
+supplies the count and the LED.
+
+### Analog input records
+
+The analog inputs carry their level in the upper halfword of the data-page
+record on a coarser scale with 0 dBFS at 6800 and about 0.127 dB per unit:
+
+```text
+u == 0                  -> below range
+dBFS = (6800 - u) * 0.12745,  u = record >> 16
+```
+
+The law also covers the over zone: the record continues past 0 dBFS and its
+reach bottoms at +6.02 dBFS.  The analog meter settles slowly, so a reading
+is the detector's hold value, not an instantaneous level.
+
+### TotalControl behaviour
+
+- Playback Lower VU bar: flag-page RMS.
+- Playback and output peak line: data-page Peak word.
+- Playback and output OVR: data-page OVR high byte, counted by the host.
+- Analog inputs: data-page analog law.
+- Digital input records are mapped but held silent until their channel
+  identity is verified.
+- Ballistics are host side: 10 dB/s release and a 2 s peak hold.
+- The OVR LED uses the high byte; the low byte is available for a future
+  over-amount readout.
+
+Input meters measure the physical input before loopback.  A loopback-enabled
+output replaces the input's record signal, but does not change the input meter
+or the input bank in the `0x85` page.

@@ -499,11 +499,8 @@ impl RmeDevice for DeviceHandle {
     fn settings_mut(&mut self) -> &mut totalcontrol_core::DeviceSettings {
         delegate!(self, settings_mut)
     }
-    /// The UC defers its input meter tap until the startup scene has been
-    /// written (`TOTALCONTROL_DEFER_METER_TAP`).  The trait default is a
-    /// no-op, so without this forward the Fireface backend's tap is never
-    /// started and the AN5 meter stays flat even though the hardware capture
-    /// is live.
+    /// Forward the deferred meter start to the backend; it is a no-op for
+    /// backends whose meters arrive on the device stream.
     fn begin_metering(&mut self) {
         delegate!(self, begin_metering)
     }
@@ -1172,6 +1169,24 @@ impl DeviceHandle {
         None
     }
 
+    /// Instantaneous playback OVR flags from the device, when it exposes
+    /// them.  The meter service applies the consecutive count.
+    pub fn device_playback_ovr(&self) -> Option<Vec<bool>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.playback_ovr();
+        }
+        None
+    }
+
+    pub fn device_output_ovr(&self) -> Option<Vec<bool>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.output_ovr();
+        }
+        None
+    }
+
     pub fn device_output_peaks(&self) -> Option<Vec<f32>> {
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
@@ -1250,7 +1265,7 @@ impl DeviceHandle {
         if matches!(self, DeviceHandle::BabyfaceClassic(_)) {
             return true;
         }
-        if matches!(self, DeviceHandle::Fireface(d) if d.model() == FirefaceModel::Ucx) {
+        if matches!(self, DeviceHandle::Fireface(_)) {
             return true;
         }
         false
@@ -1296,7 +1311,7 @@ impl DeviceHandle {
             DeviceHandle::Mock(_) => true,
             DeviceHandle::Mirror(d) => d.info().device_playback_meters || d.info().is_mock,
             #[cfg(feature = "alsa")]
-            DeviceHandle::Fireface(d) => d.model() == FirefaceModel::Ucx,
+            DeviceHandle::Fireface(_) => true,
             _ => false,
         }
     }
@@ -3148,10 +3163,12 @@ const STRENGTH_READOUT_GUARD_MS: u64 = 200;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
-/// TotalMix's peak meter release is 20 dB/s.  Use a real dB/s fall rather
+/// TotalMix FX's peak meter release is 10 dB/s (measured on the UCX and
+/// documented for TotalMix; our previous value was 20 dB/s and read twice
+/// too fast against TotalMix's bars).  Use a real dB/s fall rather
 /// than a per-tick easing factor so the same ballistics hold when the UI
 /// tick or meter canvas frame rate changes.
-const METER_RELEASE_DB_S: f32 = 20.0;
+const METER_RELEASE_DB_S: f32 = 10.0;
 /// TotalMix's default peak-hold time.  The visible peak marker stays put
 /// for this long after the last peak, then falls with a short ease-out
 /// (the bar itself falls fast).  The 260 ms tail is deliberately a little
@@ -8853,7 +8870,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
     // The class-compliant personality drives routing, preamps and clock and
     // nothing else (see `RmeDevice::protocol_features`). The UI already
     // hides the controls; this is the other half of that, so nothing built
-    // by hand reaches a setter that can only fail.
+    // by hand reaches a setter that can only fail.  Reset Mix is deliberately
+    // not in the list: it is a host-side scene edit that applies to the UC
+    // as well, even though that model's coarse flag is false.
     if needs_protocol_features(&message) && !state.device.protocol_features() {
         // Phase is the one exception: the UC has no EQ/FX DSP, so the
         // coarse protocol_features flag is false there, but it does store
@@ -9113,11 +9132,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         }
                         restart_surround_bridge(state);
                         restore_engine(state);
-                        // `fresh` starts with the deferred meter tap (the
-                        // global TOTALCONTROL_DEFER_METER_TAP), exactly like the
-                        // first launch.  Start it now that the scene and the
-                        // remembered rate are in place; otherwise the input
-                        // meters stay dead after a reconnect.
+                        // Let the backend start any deferred metering after
+                        // the reconnect scene and rate are in place.
                         state.device.begin_metering();
                         // Force the next poll to treat the reopened card as
                         // a fresh stream: schedule the post-start reapply
@@ -19308,6 +19324,40 @@ mod tests {
     use totalcontrol_core::RmeDevice;
 
     #[test]
+    fn clear_all_submixes_clears_the_uc_matrix() {
+        let mut state = new(false, None, None);
+        state.device = DeviceHandle::open_mock_uc();
+        state
+            .device
+            .set_volume(ChannelId::Input(0), 0, 0.5)
+            .unwrap();
+        state
+            .device
+            .set_volume(ChannelId::Playback(0), 0, 0.5)
+            .unwrap();
+        super::apply_reset_mix(&mut state, ResetMix::ClearSubmixes);
+        assert_eq!(state.device.matrix_cell(ChannelId::Input(0), 0), None);
+        assert_eq!(state.device.matrix_cell(ChannelId::Playback(0), 0), None);
+    }
+
+    #[test]
+    fn clear_submixes_menu_message_clears_the_uc_matrix() {
+        let mut state = new(false, None, None);
+        state.device = DeviceHandle::open_mock_uc();
+        state
+            .device
+            .set_volume(ChannelId::Input(0), 0, 0.5)
+            .unwrap();
+        state
+            .device
+            .set_volume(ChannelId::Playback(0), 0, 0.5)
+            .unwrap();
+        let _ = update(&mut state, Message::ResetMix(ResetMix::ClearSubmixes));
+        assert_eq!(state.device.matrix_cell(ChannelId::Input(0), 0), None);
+        assert_eq!(state.device.matrix_cell(ChannelId::Playback(0), 0), None);
+    }
+
+    #[test]
     fn page_feedback_uses_classic_addresses_and_val_companions() {
         let mut state = new(true, None, None);
         state.device.settings_mut().main_out = Some(0);
@@ -20150,8 +20200,8 @@ mod tests {
             "peak marker should glide down, not snap: {peak_drop} of {before_peak}"
         );
         assert!(
-            m.frame().value > 0.0 && m.frame().value < 0.05,
-            "the bar should be falling at 20 dB/s, not frozen or snapped: {}",
+            m.frame().value > 0.0 && m.frame().value < 0.12,
+            "the bar should be falling at the 10 dB/s TotalMix rate, not frozen or snapped: {}",
             m.frame().value
         );
     }

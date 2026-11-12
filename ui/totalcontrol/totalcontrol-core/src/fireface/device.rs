@@ -34,7 +34,7 @@ use crate::scene::{MatrixOverride, Scene};
 use super::abi::*;
 use super::hwdep::{self, Direction, Event, Hwdep};
 use super::models::Personality;
-use super::protocol::{self, uc, ucx, MeterKind, MeterPacket, Source};
+use super::protocol::{self, uc, ucx, MeterKind, MeterPacket, Source, UcMeterPacket, UcRmsPacket};
 use super::settings::ChannelSettings;
 
 const PAIRS: usize = 9;
@@ -328,6 +328,138 @@ impl MeterBank {
     }
 }
 
+/// Latest UC meter levels.  The `0x85` stream fills a channel's level only
+/// when the detector publishes a new value and fills other pages with the
+/// bottom code, so every page merges its records into the held maximum.
+#[derive(Clone, Debug)]
+struct UcMeterBank {
+    /// Display order: 0..8 analog, 8..18 S/PDIF and ADAT.
+    input: [f32; 18],
+    playback: [f32; 18],
+    playback_rms: [f32; 18],
+    output: [f32; 18],
+    playback_ovr: [bool; 18],
+    output_ovr: [bool; 18],
+}
+
+impl Default for UcMeterBank {
+    fn default() -> Self {
+        Self {
+            input: [f32::NEG_INFINITY; 18],
+            playback: [f32::NEG_INFINITY; 18],
+            playback_rms: [0.0; 18],
+            output: [f32::NEG_INFINITY; 18],
+            playback_ovr: [false; 18],
+            output_ovr: [false; 18],
+        }
+    }
+}
+
+impl UcMeterBank {
+    fn merge(slot: &mut [f32], channel: usize, record: u32, analog: bool) {
+        // A zero record is a real silence reading; release the channel.
+        // A no-data record (the 0x1fff filler, packet noise outside the
+        // meter's own range) means the detector did not refresh this
+        // channel, so the held value stays.
+        if record == 0 {
+            slot[channel] = f32::NEG_INFINITY;
+            return;
+        }
+        let db = if analog {
+            protocol::uc_analog_input_dbfs(record)
+        } else {
+            protocol::uc_digital_dbfs(record)
+        };
+        if let Some(db) = db {
+            if db > slot[channel] {
+                slot[channel] = db;
+            }
+        }
+    }
+
+    fn merge_playback(slot: &mut [f32], channel: usize, record: u32) {
+        if record == 0 {
+            slot[channel] = f32::NEG_INFINITY;
+            return;
+        }
+        if let Some(db) = protocol::uc_playback_dbfs(record) {
+            if db > slot[channel] {
+                slot[channel] = db;
+            }
+        }
+    }
+
+    fn apply(&mut self, packet: &UcMeterPacket) {
+        // The eight analog input records carry the analog level scale; the
+        // digital input records are undecoded, so keep them silent until
+        // their own channel map is verified against a loopback capture.
+        for channel in 0..8 {
+            let record = packet.analog_input(channel);
+            Self::merge(&mut self.input, channel, record, true);
+        }
+        for channel in 0..18 {
+            let record = packet.playback(channel);
+            Self::merge_playback(&mut self.playback, channel, record);
+            self.playback_ovr[channel] = packet.playback_ovr(channel);
+            let record = packet.output(channel);
+            Self::merge(&mut self.output, channel, record, false);
+            self.output_ovr[channel] = packet.output_ovr(channel);
+        }
+    }
+
+    fn apply_rms(&mut self, packet: &UcRmsPacket) {
+        for channel in 0..18 {
+            self.playback_rms[channel] =
+                protocol::uc_playback_rms_linear(packet.playback(channel));
+        }
+    }
+
+    /// Linear amplitude of a held dBFS value.  The page's over region tops
+    /// at +6.02 dB; garbage records below that cannot exceed the meter's
+    /// own over range.
+    fn level(&self, db: f32) -> f32 {
+        db_to_linear(db.min(6.0206))
+    }
+
+    fn input(&self, channel: usize) -> f32 {
+        self.level(self.input[channel])
+    }
+
+    fn playback(&self, channel: usize) -> f32 {
+        self.level(self.playback[channel])
+    }
+
+    fn playback_rms(&self, channel: usize) -> f32 {
+        self.playback_rms[channel]
+    }
+
+    fn output(&self, channel: usize) -> f32 {
+        self.level(self.output[channel])
+    }
+
+    /// The record is the detector's held level per channel, so the peak
+    /// lines mirror the level until the page's own peak word is decoded.
+    fn input_peak(&self, channel: usize) -> f32 {
+        self.input(channel)
+    }
+
+    fn playback_peak(&self, channel: usize) -> f32 {
+        self.playback(channel)
+    }
+
+    fn playback_ovr(&self, channel: usize) -> bool {
+        self.playback_ovr[channel]
+    }
+
+    fn output_peak(&self, channel: usize) -> f32 {
+        self.output(channel)
+    }
+
+    fn output_ovr(&self, channel: usize) -> bool {
+        self.output_ovr[channel]
+    }
+}
+
 fn db_to_linear(db: f32) -> f32 {
     if db == f32::NEG_INFINITY {
         0.0
@@ -609,6 +741,8 @@ pub struct Fireface {
     playback_width: Vec<i16>,
     /// Latest decoded UCX meters.
     meters: MeterBank,
+    /// Latest decoded UC meter page.
+    uc_meters: UcMeterBank,
     /// First four UC/UCX preamps: gain is in `inputs[i].gain`, Hi-Z in
     /// `inputs[i].instrument`, AutoSet has no UI yet.
     #[allow(dead_code)]
@@ -644,9 +778,11 @@ pub struct Fireface {
     /// Mono matrix cells that the per-pair model cannot express. Key is
     /// `(source 0..35, output block 0..17)`; 18..35 are software playbacks.
     matrix_overrides: HashMap<(usize, usize), f32>,
-    /// UC input metering through the PipeWire source tap.  The PCM device
-    /// stays with PipeWire and the DAW.  The UCX uses its 0x85 input pages.
-    input_tap: Option<crate::pw_input::InputTap>,
+    /// Pairs a source is actively routed to: `(source 0..35, pair)`.
+    /// A matrix cell reports a level only for an active send; a source
+    /// fader value in a submix the source is not routed into must not
+    /// appear in that submix's column.
+    routed_pairs: HashSet<(usize, usize)>,
     /// UCX IF1 words collected during one scene apply.  `Some` while a
     /// batch is open; `write_word`/`write_words` then append instead of
     /// sending one USB transfer per register.  `vendor_out`/`vendor_in`
@@ -1076,26 +1212,6 @@ impl Fireface {
         let playback_phase = vec![[false, false]; playbacks.len()];
         let playback_width = vec![100; playbacks.len()];
 
-        // Control-only: PipeWire and the DAW own the PCM device.  UC input
-        // meters come from the PipeWire source tap; the UCX uses its own
-        // 0x85 meter pages.  Unit tests must not spawn a real `pw-record`
-        // child: it makes the tests depend on the host sound server (and
-        // can hang its Drop/join if PipeWire is mid-reconfigure).
-        let input_tap = match model {
-            Model::Uc
-                if !cfg!(test)
-                    && std::env::var_os("TOTALCONTROL_DEFER_METER_TAP").is_none() =>
-            {
-                let selector = if info.serial.is_empty() {
-                    info.name.clone()
-                } else {
-                    info.serial.clone()
-                };
-                Some(crate::pw_input::InputTap::start(&selector))
-            }
-            _ => None,
-        };
-
         let mut dev = Self {
             transport: Arc::new(Mutex::new(transport)),
             info,
@@ -1128,6 +1244,7 @@ impl Fireface {
             playback_phase,
             playback_width,
             meters: MeterBank::default(),
+            uc_meters: UcMeterBank::default(),
             autoset: [false; 4],
             device_input_gain: HashMap::new(),
             device_output_volume: HashMap::new(),
@@ -1142,7 +1259,7 @@ impl Fireface {
             ucx_heartbeat_due: Instant::now(),
             ignore_output_until: None,
             matrix_overrides: HashMap::new(),
-            input_tap,
+            routed_pairs: HashSet::new(),
             write_batch: Arc::new(Mutex::new(None)),
             async_writer: None,
         };
@@ -1526,10 +1643,69 @@ impl Fireface {
         });
     }
 
+    fn uc_output_phase(&self, block: usize) -> bool {
+        let display_pair = block / 2;
+        let side = block % 2;
+        let internal_pair = self
+            .output_order()
+            .get(display_pair)
+            .copied()
+            .unwrap_or(display_pair);
+        self.outputs
+            .get(internal_pair * 2 + side)
+            .is_some_and(|output| {
+                if side == 0 {
+                    output.phase_l
+                } else {
+                    output.phase_r
+                }
+            })
+    }
+
     fn uc_write_matrix(&self, block: usize, source: usize, linear: f32) -> Result<(), Error> {
         let address = (block as u16) * uc::MIX_STRIDE + source as u16;
-        let (value, index) = uc::matrix_word(linear, address);
+        let (mut value, index) = uc::matrix_word(linear, address);
+        if linear > 0.0 && self.uc_output_phase(block) {
+            value = !value;
+        }
         self.vendor_out(protocol::req::MIXER, value, index)
+    }
+
+    /// Rewrite every cell routed to one output after its phase changes.
+    fn uc_rewrite_output_block(&self, internal_idx: usize) -> Result<(), Error> {
+        let block = uc::matrix_block(internal_idx, self.output_order());
+        for source in 0..self.inputs.len() + self.playbacks.len() {
+            let Some(channel) = Self::matrix_source_channel(source) else {
+                continue;
+            };
+            // The phase rewrite re-sends the device's existing cells, so take
+            // the raw per-pair gain rather than the routed-cell view.
+            let gain = self
+                .matrix_overrides
+                .get(&(source, block))
+                .copied()
+                .or_else(|| self.matrix_default(channel, block))
+                .unwrap_or(0.0)
+                * self.trim_gain(channel);
+            self.uc_write_matrix(block, source, gain)?;
+        }
+        Ok(())
+    }
+
+    /// Write the complete 30-entry UC loopback bank.  The unit ignores a
+    /// single-index update; TotalMix writes all 30 entries on every toggle.
+    fn uc_write_loopback_bank(&self) -> Result<(), Error> {
+        let mut values = [0u16; 30];
+        for (internal, output) in self.outputs.iter().enumerate().take(18) {
+            let block = uc::matrix_block(internal, self.output_order());
+            if let Some(slot) = values.get_mut(block) {
+                *slot = output.loopback as u16;
+            }
+        }
+        for (index, value) in values.iter().enumerate() {
+            self.vendor_out(protocol::req::LOOPBACK, *value, index as u16)?;
+        }
+        Ok(())
     }
 
     /// UC input phase is a separate `0x18` write.  The low code is
@@ -1577,10 +1753,9 @@ impl Fireface {
     /// fixed prefix; this function owns the 30 × `0x15`, 18 × `0x1a` and
     /// 666 × `0x12` mixer push.
     fn apply_uc_full_matrix(&mut self) -> Result<(), Error> {
-        // TotalMix resets the 30-entry mute/dim bank before the mixer push.
-        for idx in 0..30u16 {
-            self.vendor_out(protocol::req::LOOPBACK, 0, idx)?;
-        }
+        // TotalMix writes the complete 30-entry loopback bank before the
+        // mixer push.  A single-index update is ignored by the unit.
+        self.uc_write_loopback_bank()?;
 
         // The UC's outputs are numeric ascending (AN1/2 .. ADAT 7/8), so
         // the scene push walks the pairs in reverse hardware order with no
@@ -1626,7 +1801,7 @@ impl Fireface {
         Ok(())
     }
 
-    fn uc_write_input(&self, idx: usize, pair: usize, _volume: f32) -> Result<(), Error> {
+    fn uc_write_input(&mut self, idx: usize, pair: usize, _volume: f32) -> Result<(), Error> {
         let pan = self.inputs[idx].pans.get(pair).copied().unwrap_or(0);
         // Any input can be mono or a linked stereo pair.  Only an unlinked
         // one is panned into both sides; a linked pair keeps left on the
@@ -1644,6 +1819,7 @@ impl Fireface {
             // already the raw UC matrix block order.  Do not run it through
             // matrix_block(): that maps the internal Phones-first order and
             // would shift every crosspoint.
+            self.record_routing(idx, pair, l.max(r));
             self.uc_write_matrix(pair * 2, idx, l)?;
             return self.uc_write_matrix(pair * 2 + 1, idx, r);
         }
@@ -1657,17 +1833,20 @@ impl Fireface {
         let balance = pan.clamp(-100, 100) as f32 / 100.0;
         let gl = left * (1.0 - balance.max(0.0));
         let gr = right * (1.0 + balance.min(0.0));
+        self.record_routing(base, pair, gl);
+        self.record_routing(other, pair, gr);
         self.uc_write_matrix(pair * 2, base, gl)?;
         self.uc_write_matrix(pair * 2 + 1, other, gr)
     }
 
-    fn uc_write_playback(&self, idx: usize, pair: usize, volume: f32) -> Result<(), Error> {
+    fn uc_write_playback(&mut self, idx: usize, pair: usize, volume: f32) -> Result<(), Error> {
         let dev = self.playbacks[idx].id;
         let block = pair * 2 + (dev % 2);
         let pan = self.playbacks[idx].pans.get(pair).copied().unwrap_or(0);
         let volume = volume * self.trim_gain(ChannelId::Playback(idx));
         let (left, right) = pan_split(volume, pan);
         let gain = if dev % 2 == 0 { left } else { right };
+        self.record_routing(18 + dev, pair, gain);
         // `pair` is the display column; the raw UC block order is the same.
         self.uc_write_matrix(block, 18 + dev, gain)
     }
@@ -3022,7 +3201,11 @@ impl Fireface {
                     .map(|i| self.meters.playback(i))
                     .collect(),
             ),
-            Model::Uc => None,
+            Model::Uc => Some(
+                (0..self.playbacks.len())
+                    .map(|i| self.uc_meters.playback_rms(i))
+                    .collect(),
+            ),
         }
     }
 
@@ -3033,7 +3216,11 @@ impl Fireface {
                     .map(|i| self.meters.output(i, post))
                     .collect(),
             ),
-            Model::Uc => None,
+            Model::Uc => Some(
+                (0..self.outputs.len())
+                    .map(|i| self.uc_meters.output(i))
+                    .collect(),
+            ),
         }
     }
 
@@ -3047,7 +3234,11 @@ impl Fireface {
                     .map(|i| self.meters.input_peak(i))
                     .collect(),
             ),
-            Model::Uc => None,
+            Model::Uc => Some(
+                (0..self.inputs.len())
+                    .map(|i| self.uc_meters.input_peak(i))
+                    .collect(),
+            ),
         }
     }
 
@@ -3058,7 +3249,35 @@ impl Fireface {
                     .map(|i| self.meters.playback_peak(i))
                     .collect(),
             ),
-            Model::Uc => None,
+            Model::Uc => Some(
+                (0..self.playbacks.len())
+                    .map(|i| self.uc_meters.playback_peak(i))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Per-playback OVR flags from the UC meter page.
+    pub fn playback_ovr(&self) -> Option<Vec<bool>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.playbacks.len())
+                    .map(|i| self.uc_meters.playback_ovr(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
+        }
+    }
+
+    /// Per-output OVR flags from the UC meter page.
+    pub fn output_ovr(&self) -> Option<Vec<bool>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.outputs.len())
+                    .map(|i| self.uc_meters.output_ovr(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
         }
     }
 
@@ -3069,7 +3288,11 @@ impl Fireface {
                     .map(|i| self.meters.output_peak(i, post))
                     .collect(),
             ),
-            Model::Uc => None,
+            Model::Uc => Some(
+                (0..self.outputs.len())
+                    .map(|i| self.uc_meters.output_peak(i))
+                    .collect(),
+            ),
         }
     }
 
@@ -3287,7 +3510,13 @@ impl Fireface {
             for event in events {
                 match event.kind {
                     EV_METER => {
-                        if let Ok(p) = MeterPacket::parse(&event.data) {
+                        if self.is_uc() {
+                            if let Some(packet) = UcMeterPacket::parse(&event.data) {
+                                self.uc_meters.apply(&packet);
+                            } else if let Some(rms) = UcRmsPacket::parse(&event.data) {
+                                self.uc_meters.apply_rms(&rms);
+                            }
+                        } else if let Ok(p) = MeterPacket::parse(&event.data) {
                             self.meters.apply(&p);
                         }
                     }
@@ -3780,6 +4009,18 @@ impl Fireface {
 
 }
 
+impl Fireface {
+    /// Track whether a crosspoint write leaves an active send.  A cell at
+    /// or below zero gain is not a send; every other write is.
+    fn record_routing(&mut self, source: usize, pair: usize, gain: f32) {
+        if gain > 0.0 {
+            self.routed_pairs.insert((source, pair));
+        } else {
+            self.routed_pairs.remove(&(source, pair));
+        }
+    }
+}
+
 impl RmeDevice for Fireface {
     fn model_name(&self) -> &str {
         self.model.name()
@@ -3976,14 +4217,8 @@ impl RmeDevice for Fireface {
     }
 
     fn begin_metering(&mut self) {
-        if self.is_uc() && self.input_tap.is_none() {
-            let selector = if self.info.serial.is_empty() {
-                self.info.name.clone()
-            } else {
-                self.info.serial.clone()
-            };
-            self.input_tap = Some(crate::pw_input::InputTap::start(&selector));
-        }
+        // Both models receive their meters from the device; there is no
+        // host-side capture tap to start.
     }
 
     fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
@@ -4106,6 +4341,7 @@ impl RmeDevice for Fireface {
                     ))
                 }
             };
+            self.record_routing(source, block / 2, gain);
             return self.ucx_write_matrix(
                 block as u8,
                 source_kind,
@@ -4764,15 +5000,9 @@ impl RmeDevice for Fireface {
             return Err(Error::InvalidChannel(format!("output pair {out}")));
         }
         if self.is_uc() {
-            for side in 0..2 {
-                let block =
-                    uc::matrix_block(out * 2 + side, self.output_order());
-                self.vendor_out(
-                    protocol::req::LOOPBACK,
-                    on as u16,
-                    block as u16,
-                )?;
-            }
+            self.outputs[out * 2].loopback = on;
+            self.outputs[out * 2 + 1].loopback = on;
+            return self.uc_write_loopback_bank();
         } else {
             let dsp = ucx::output_pair_dsp(out)
                 .ok_or_else(|| Error::InvalidChannel(format!("output pair {out}")))?;
@@ -4800,10 +5030,8 @@ impl RmeDevice for Fireface {
             if self.output_linked(pair) {
                 return self.set_loopback(pair, on);
             }
-            let block = uc::matrix_block(channel, self.output_order());
-            self.vendor_out(protocol::req::LOOPBACK, on as u16, block as u16)?;
             self.outputs[channel].loopback = on;
-            return Ok(());
+            return self.uc_write_loopback_bank();
         }
         // UCX loopback is per DSP output.  A linked pair has one
         // authoritative value taken from its left side.
@@ -5590,13 +5818,18 @@ impl RmeDevice for Fireface {
     fn set_output_phase(&mut self, idx: usize, invert: bool) -> Result<(), Error> {
         // `base + 0x07` / `base + 0x107`: one word per side, no send
         // recompute (measured Q103).
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Output phase is not mapped on the UC".into(),
-            ));
-        }
         if idx >= self.outputs.len() {
             return Err(Error::InvalidChannel(format!("output {idx}")));
+        }
+        if self.is_uc() {
+            let out = &mut self.outputs[idx];
+            if idx % 2 == 0 {
+                out.phase_l = invert;
+            } else {
+                out.phase_r = invert;
+            }
+            self.uc_rewrite_output_block(idx)?;
+            return Ok(());
         }
         let dsp = ucx::output_pair_dsp(idx / 2)
             .ok_or_else(|| Error::InvalidChannel(format!("output {idx}")))?;
@@ -6352,32 +6585,13 @@ impl RmeDevice for Fireface {
 
         if self.is_uc() {
             // Exact TotalMix app-level connect order: 0x15 bank reset,
-            // then each output pair's 0x1a level, 0x12 master and
-            // crosspoints.  The matrix applies live; writing it before the
-            // meter tap opens the PCM means the device holds the complete
-            // scene when audio starts.
+            // then each output pair's 0x1a + 0x12 master + crosspoints,
+            // Phones last.  This must happen before the meter tap opens
+            // the PCM, because the UC latches routing at engine start.
+            // The full matrix pass also writes the complete loopback bank
+            // from the scene, so it must not be followed by per-pair
+            // loopback writes.
             self.apply_uc_full_matrix()?;
-            // Loopback is per stereo hardware output when the pair is
-            // linked (both sides move together), and per channel only
-            // when the pair has been split.  TotalMix sends these after
-            // the matrix, not before it.
-            for pair in 0..PAIRS {
-                if self.output_linked(pair) {
-                    let loopback = self.outputs[pair * 2].loopback;
-                    // The 30-entry reset above already cleared every
-                    // loopback, so only write the enabled ones.
-                    if loopback {
-                        self.set_loopback(pair, true)?;
-                    }
-                } else {
-                    for side in 0..2 {
-                        let idx = pair * 2 + side;
-                        if self.outputs[idx].loopback {
-                            self.set_loopback_channel(idx, true)?;
-                        }
-                    }
-                }
-            }
         }
         for idx in 0..self.inputs.len() {
             if !self.is_uc() {
@@ -6701,14 +6915,11 @@ impl RmeDevice for Fireface {
                     .map(|i| self.meters.input(i))
                     .collect(),
             ),
-            Model::Uc => {
-                let tap = self.input_tap.as_ref()?;
-                let (levels, channels) = tap.drain();
-                if channels == 0 {
-                    return None;
-                }
-                Some(levels[..self.inputs.len().min(levels.len())].to_vec())
-            }
+            Model::Uc => Some(
+                (0..self.inputs.len())
+                    .map(|i| self.uc_meters.input(i))
+                    .collect(),
+            ),
         }
     }
 }
@@ -8745,6 +8956,73 @@ mod tests {
     }
 
     #[test]
+    fn uc_meter_page_drives_input_playback_and_output_levels() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut bytes = [0u8; UcMeterPacket::LEN];
+        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // AN1 at -30 dBFS: u = 6800 + 30/0.12745 = 7035 in the input scale.
+        bytes[108..112].copy_from_slice(&(7035u32 << 16).to_le_bytes());
+        // Playback 1 record at -6.0 dBFS: level 0x420000 + 0x8000*6/6.0206.
+        let level = (protocol::UC_LEVEL_ZERO_DBFS as f32 + 6.0 / 0.00018374) as u32;
+        bytes[180 + 4] = level as u8;
+        bytes[180] = 0x00;
+        bytes[181] = 0x00;
+        bytes[183] = 0x42; // crude write of the low half; the high half below
+        let full = (level << 8) | 0x00; bytes[180..184].copy_from_slice(&full.to_le_bytes());
+        // Output AN1 record at exactly 0 dBFS with the over tag saturated.
+        bytes[252..256].copy_from_slice(&0x7fffff0fu32.to_le_bytes());
+        let packet = UcMeterPacket::parse(&bytes).expect("meter page");
+        dev.uc_meters.apply(&packet);
+
+        // Playback RMS is on the flag page; 0.5012^2 * 32768 ~= 8233.
+        let mut rms_bytes = [0u8; UcMeterPacket::LEN];
+        rms_bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        rms_bytes[150..152].copy_from_slice(&8233u16.to_le_bytes());
+        let rms = UcRmsPacket::parse(&rms_bytes).expect("rms page");
+        dev.uc_meters.apply_rms(&rms);
+
+        let inputs = dev.meters().expect("UC input meters");
+        assert!((inputs[0] - 0.0316).abs() < 0.003, "AN1 at -30 dBFS");
+        assert_eq!(inputs[8], 0.0, "digital inputs stay silent until decoded");
+        let playback = dev.playback_meters().expect("UC playback meters");
+        assert!((playback[0] - 0.5012).abs() < 0.02, "playback 1 RMS at -6.0 dBFS");
+        let outputs = dev
+            .output_meters_internal(true)
+            .expect("UC output meters");
+        assert!((outputs[0] - 1.0).abs() < 1e-6, "AN1 out at 0 dBFS");
+        // Over 0 dBFS the record saturates with the over tag; apply again.
+        let mut bytes2 = bytes;
+        bytes2[256..260].copy_from_slice(&0x7fffff2fu32.to_le_bytes());
+        let packet2 = UcMeterPacket::parse(&bytes2).expect("meter page");
+        dev.uc_meters.apply(&packet2);
+        let over = dev.output_meters_internal(true).expect("UC over meters");
+        // Over tag 2 counts two over steps: 2 * 6.0206/15 dB above full scale.
+        assert!((over[1] - 10f32.powf(2.0 * 6.0206 / 15.0 / 20.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn uc_playback_peak_and_rms_are_separate_pages() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut bytes = [0u8; UcMeterPacket::LEN];
+        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // Half-scale playback peak; the lower halfword is the separate OVR.
+        bytes[180..184].copy_from_slice(&0x3fff0000u32.to_le_bytes());
+        let packet = UcMeterPacket::parse(&bytes).expect("data page");
+        dev.uc_meters.apply(&packet);
+        let peaks = dev.playback_peaks().expect("UC playback peaks");
+        assert!((peaks[0] - 0.5).abs() < 1e-3);
+
+        // The flag page carries RMS, not peak.  8192 is half-scale RMS power.
+        let mut flag = [0u8; UcMeterPacket::LEN];
+        flag[4..8].copy_from_slice(&1u32.to_le_bytes());
+        flag[150..152].copy_from_slice(&8192u16.to_le_bytes());
+        let rms = UcRmsPacket::parse(&flag).expect("flag page");
+        dev.uc_meters.apply_rms(&rms);
+        assert!((dev.playback_meters().expect("UC playback RMS")[0] - 0.5).abs() < 1e-3);
+        assert!((dev.playback_peaks().expect("held peak")[0] - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
     fn uc_playback_matrix_uses_display_columns() {
         let (mut dev, writes) = open(Model::Uc);
         // Matrix column 1 is AN3/4; playback 1 left = source 18, raw block 2.
@@ -9007,6 +9285,30 @@ mod tests {
             )));
             assert!(!dev.inputs()[idx].phase);
         }
+    }
+
+    #[test]
+    fn uc_output_phase_complements_the_output_block_cells() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_pan(ChannelId::Input(0), 3, -100).unwrap();
+        dev.set_volume(ChannelId::Input(0), 3, 1.0).unwrap();
+        writes.lock().unwrap().clear();
+
+        dev.set_output_phase(6, true).unwrap();
+        let (value, index) = uc::matrix_word(1.0, 6 * 36);
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Vendor(protocol::req::MIXER, !value, index)));
+        assert!(dev.outputs()[6].phase_l);
+
+        writes.lock().unwrap().clear();
+        dev.set_output_phase(6, false).unwrap();
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+        assert!(!dev.outputs()[6].phase_l);
     }
 
     #[test]

@@ -70,7 +70,7 @@ pub const UC: ModelSpec = ModelSpec {
         talkback: false,
         phase: true,
         phase_without_eq: true,
-        output_phase: false,
+        output_phase: true,
         output_balance: true,
         stereo_split: true,
         matrix_cells: true,
