@@ -1,6 +1,6 @@
 [package]
 name = "totalcontrol-tui"
-version = "0.3.1"
+version = "0.1.0"
 edition = "2021"
 description = "TUI for TotalControl — control your RME interface from the terminal"
 license = "GPL-3.0-only"

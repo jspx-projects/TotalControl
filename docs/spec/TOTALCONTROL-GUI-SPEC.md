@@ -1376,6 +1376,11 @@ pan to that bus. The input/playback fader is the send level to the current
 submix, not a single channel fader. The output strip's fader is the bus
 master.
 
+An unlinked input strip is mono: its fader writes only that channel's source.
+A linked input pair is stereo: its fader writes both sources of the pair. The
+UC front-panel command follows the same rule, using the mono/stereo flag in
+the event.
+
 A split output pair has two independent mono buses. Selecting one channel
 selects only that channel's bus: only its strip takes the active surface, and
 the input/playback send faders read and write that mono matrix column. A
