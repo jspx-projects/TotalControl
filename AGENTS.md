@@ -110,6 +110,10 @@ request; do not commit or push directly to `main`.
   acknowledgements. Linux owns `LINUX-STATUS.md`, `LINUX-REQUESTS.md`,
   `DECISIONS.md`, `analysis/*` and `coordination/inbox/windows/*`.
 - Push only to our own repository, `jspx-projects/TotalControl`.
+- Open or update pull requests only in our own repository,
+  `jspx-projects/TotalControl`. Never open, update, or comment on a pull
+  request in any other repository without explicit permission for that
+  specific action each time.
 - The UI is part of this repository. Do not add an external TotalControl development
   remote; the imported upstream history is on `archive/tuxmix-upstream`.
 - Preserve the user scene and `~/.config/totalcontrol/gui.json`. Leave the device on
