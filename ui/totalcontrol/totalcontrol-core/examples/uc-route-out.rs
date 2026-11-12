@@ -1,8 +1,11 @@
 //! Route one stereo playback source pair to one Matrix output pair on the UC.
-//! Usage: uc-route-out <source> <matrix_channel> [gain_db]
+//! Usage:
+//!   uc-route-out <source> <matrix_channel> [gain_db] [level_db]
+//!   uc-route-out --clear-all
 //!   matrix channels: AN1..8 = 0..7, SPDIF = 8, ADAT 1..8 = 10..17.
-//! Example: uc-route-out 18 8   (playback 1/2 -> SPDIF at 0 dB)
-//! Example: uc-route-out 18 4 -6 (AN5/6, cells and masters at -6 dB)
+//! Example: uc-route-out 18 8        (playback 1/2 -> SPDIF at 0 dB)
+//! Example: uc-route-out 18 4 -6 3   (AN5/6 cells at -6 dB, 0x1a level +3)
+//! Example: uc-route-out --clear-all (every crosspoint zero, for lab sweeps)
 #[cfg(feature = "alsa")]
 fn main() {
     use totalcontrol_core::fireface::protocol;
@@ -11,15 +14,32 @@ fn main() {
     use totalcontrol_core::{ChannelId, Fireface, RmeDevice};
 
     let mut args = std::env::args().skip(1);
-    let source: u16 = args.next().and_then(|s| s.parse().ok()).unwrap_or(18);
+    let first = args.next().unwrap_or_else(|| "18".into());
+
+    if first == "--clear-all" {
+        let hw = Hwdep::open(2).expect("hwdep");
+        for block in 0..18u16 {
+            for src in 0..uc::MIX_STRIDE {
+                let (value, index) = uc::matrix_word(0.0, block * uc::MIX_STRIDE + src);
+                hw.vendor(protocol::req::MIXER, Direction::Out, value, index, &[])
+                    .expect("clear matrix");
+            }
+        }
+        println!("cleared all 18 output blocks");
+        return;
+    }
+
+    let source: u16 = first.parse().unwrap_or(18);
     let out: u16 = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
     let gain_db: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
     let linear = 10f64.powf(gain_db / 20.0) as f32;
-    // Output-channel `0x1a` level above unity; codes 0..63 are +6..-57 dB.
+    // Output-channel `0x1a` level; codes 0..63 are +6..-57 dB.
     let level_db: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
     let level_code = (6.0 - level_db).round().clamp(0.0, 63.0) as u16;
 
     let hw = Hwdep::open(2).expect("hwdep");
+    // Only the addressed pair is written; callers that need a clean slate use
+    // `--clear-all` first.
     for o in [out, out + 1] {
         for src in 0..uc::MIX_STRIDE {
             let (value, index) = uc::matrix_word(0.0, o * uc::MIX_STRIDE + src);
@@ -65,18 +85,18 @@ fn main() {
                 level_code,
                 &[],
             )
-                .expect("output channel level");
+            .expect("output channel level");
         }
     }
 
-        println!(
-            "routed playback {}/{} to matrix {} / {} at {} dB",
-            source,
-            source + 1,
-            out,
-            out + 1,
-            gain_db
-        );
+    println!(
+        "routed playback {}/{} to matrix {} / {} at {} dB",
+        source,
+        source + 1,
+        out,
+        out + 1,
+        gain_db
+    );
 }
 #[cfg(not(feature = "alsa"))]
 fn main() {}
