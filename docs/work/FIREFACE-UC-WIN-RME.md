@@ -3,6 +3,17 @@
 Working notes for the PC personality matched as `FFUC_PRODUCT_UC_WIN_RME`
 (firmware 138 on the test unit).  Not part of the specification.
 
+## Period signalling on the isochronous transport
+
+PipeWire drops out at quanta of 512 and above when capture drives the graph
+and playback follows on the same card: it reads the follower with
+`snd_pcm_avail_update()`, which returns the follower's hw_ptr as of its last
+period, and the two directions' periods end within one URB of each other.
+The interrupt transport now updates the other direction's hw_ptr before it
+signals a period (`ffuc_period_elapsed()`).  The isochronous transport
+(UCX, AP personalities) still signals only its own direction; whether it shows
+the same dropouts has not been tested.
+
 ## Endpoints that differ from the original UC
 
 The descriptor is copied from the original UC.  On the test unit interface 1
