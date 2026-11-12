@@ -379,8 +379,13 @@ dBFS = (6800 - u) * 0.12745,  u = record >> 16
 
 Verified against a −90 … 0 dBFS staircase looped from an output into AN1/2:
 7451 measured values across the sweep with 706 halfword units over 90.03 dB.
-The analog meter settles slowly (seconds on a fresh level), so a reading is
-the detector's hold value, not an instantaneous level.
+The law also covers the over zone: the record continues past 0 dBFS and its
+reach bottoms at +6.02 dBFS (the OVR band the TotalMix FX fader meters
+show), measured with the AN5 channel level pushed +6.02 dB at the `0x1a`
+code and a 1-dB over staircase looped into AN1.  The analog meter settles
+slowly (seconds on a fresh level), so a reading is the detector's hold
+value, not an instantaneous level; the over zone is comfortable within a
+couple of dB with the same rule.
 
 ### TotalControl behaviour
 

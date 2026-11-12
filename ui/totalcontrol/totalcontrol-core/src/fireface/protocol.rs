@@ -164,6 +164,8 @@ pub const UC_LEVEL_MAX: u32 = 0x7fffff;
 const UC_DB_PER_LEVEL_LSB: f32 = 6.0206 / 0x8000 as f32;
 /// Analog input levels sit on their own scale: 0 dBFS at 6800 in the
 /// upper halfword and 7.846 halfword units per dB (0.12745 dB per unit).
+/// The law runs from -120 dBFS up through 0 dBFS into the OVR zone and its
+/// reach bottoms at +6.02 dBFS, the over band the fader meters show.
 const UC_ANALOG_INPUT_ZERO_DBFS: i32 = 6800;
 const UC_ANALOG_INPUT_DB_PER_UNIT: f32 = 0.12745;
 /// The saturation over field: the low byte's tag nibble is `0xf` and the
@@ -338,12 +340,12 @@ pub mod uc {
 
     /// Linear 0..2 (+6 dB) -> (`wValue`, matrix address) for one crosspoint.
     pub fn matrix_word(linear: f32, address: u16) -> (u16, u16) {
+        // The two level LSBs that would be encoded in the address's top bits
+        // overlap the four submix banks; keep them clear and stay within
+        // 0.0002 dB of the requested gain.
         let level14 = (linear.clamp(0.0, 2.0) * UC_UNITY_LEVEL14 as f32)
             .round()
             .clamp(0.0, 65532.0) as u32;
-        // The two level LSBs would share wIndex bits 14:15 with the UC's
-        // submix banks.  Keep the cell address plain; the gain error from
-        // dropping the LSBs is below 0.0002 dB.
         let level14 = level14 & !3;
         let value = (level14 >> 2) as u16;
         let index = address & 0x3fff;
@@ -800,6 +802,10 @@ mod tests {
         assert!((uc_analog_input_dbfs(record) + 90.0).abs() < 0.2);
         assert!((uc_analog_input_dbfs((6800u32 << 16) as u32)).abs() < 1e-5);
         assert_eq!(uc_analog_input_dbfs(0), f32::NEG_INFINITY);
+        // The law continues into the OVR zone and bottoms at +6.02 dBFS:
+        // u(0 dBFS) = 6800, one unit is 0.12745 dB, so u(6.02) ~= 6752.
+        let record = (6752u32 << 16) as u32;
+        assert!((uc_analog_input_dbfs(record) - 6.0).abs() < 0.2);
     }
 
     #[test]

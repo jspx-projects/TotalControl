@@ -15,6 +15,9 @@ fn main() {
     let out: u16 = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
     let gain_db: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
     let linear = 10f64.powf(gain_db / 20.0) as f32;
+    // Output-channel `0x1a` level above unity; codes 0..63 are +6..-57 dB.
+    let level_db: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let level_code = (6.0 - level_db).round().clamp(0.0, 63.0) as u16;
 
     let hw = Hwdep::open(2).expect("hwdep");
     for o in [out, out + 1] {
@@ -50,6 +53,20 @@ fn main() {
         let idx = internal_pair * 2 + side;
         dev.set_volume(ChannelId::Output(idx), idx, 1.0)
             .expect("output volume");
+    }
+    if level_db != 0.0 {
+        for side in 0..2 {
+            let idx = internal_pair * 2 + side;
+            let channel = uc::encoder_channel(idx, order).expect("encoder channel");
+            hw.vendor(
+                protocol::req::PGA,
+                Direction::Out,
+                channel as u16,
+                level_code,
+                &[],
+            )
+                .expect("output channel level");
+        }
     }
 
         println!(
