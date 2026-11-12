@@ -7,7 +7,7 @@
 
 %global kmod_name     snd-fireface-uc
 %global kmod_version  0.1
-%{!?app_version:%global app_version 0.3.1}
+%{!?app_version:%global app_version 0.1.0}
 
 Name:           totalcontrol-kmod
 Version:        %{kmod_version}

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0 (2026-11-12)
+
+### Changed
+- Version numbering moves off the imported TuxMix 0.3.x line to 0.1.0.
+
+### Fixed
+- UC matrix cells and output masters keep the two level LSBs out of
+  `wIndex` bits 14:15, so fractional sends no longer collide with the
+  submix-bank selector.
+- UC front-panel `0x8b` input and output events are decoded when byte 3
+  bit 7 is set; linked input pairs move both preamps.
+
 ## 0.3.1 (2026-10-23)
 
 ### Fixed

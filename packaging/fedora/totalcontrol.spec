@@ -3,7 +3,7 @@
 # These are convenience packages hosted as GitHub release assets, not an
 # official Fedora package.  Build with packaging/fedora/build-rpms.sh.
 
-%{!?app_version:%global app_version 0.3.1}
+%{!?app_version:%global app_version 0.1.0}
 
 Name:           totalcontrol
 Version:        %{app_version}
@@ -87,5 +87,9 @@ touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
 %doc %{_docdir}/totalcontrol/README.md
 
 %changelog
+* Thu Nov 12 2026 TotalControl contributors <noreply@localhost> - 0.1.0-1
+- TotalControl 0.1.0: UC front-panel input/output events and matrix cell
+  encoding fixes.
+
 * Sun Nov 08 2026 TotalControl contributors <noreply@localhost> - 0.3.1-1
 - Initial Fedora convenience package.
