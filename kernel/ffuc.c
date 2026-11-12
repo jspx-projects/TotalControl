@@ -1024,6 +1024,35 @@ static bool ffuc_stream_advance(struct ffuc *chip, struct ffuc_stream *s,
 	return true;
 }
 
+/*
+ * Signal a period on @dir, after bringing the other running direction's ALSA
+ * hw_ptr up to date.  PipeWire in IRQ mode wakes on one direction's period
+ * and reads the other direction of the same card with snd_pcm_avail_update(),
+ * which returns the hw_ptr as of that direction's last period.  Both
+ * directions' periods end within one URB of each other, so whether the other
+ * side has already been updated depends on URB completion order: the reader
+ * sees the other side's fill jump by a whole period from cycle to cycle and
+ * resyncs (inserts silence or drops a period).  Below a quantum of ~256 the
+ * jump stays under PipeWire's resync threshold.
+ */
+static void ffuc_period_elapsed(struct ffuc *chip, int dir)
+{
+	struct ffuc_stream *other = &chip->streams[!dir];
+	struct ffuc_stream *s = &chip->streams[dir];
+	unsigned long flags;
+
+	if (other->substream) {
+		snd_pcm_stream_lock_irqsave(other->substream, flags);
+		if (other->running)
+			snd_pcm_period_elapsed_under_stream_lock(other->substream);
+		snd_pcm_stream_unlock_irqrestore(other->substream, flags);
+	}
+	snd_pcm_stream_lock_irqsave(s->substream, flags);
+	if (s->running)
+		snd_pcm_period_elapsed_under_stream_lock(s->substream);
+	snd_pcm_stream_unlock_irqrestore(s->substream, flags);
+}
+
 /* Interrupt transport: one URB of interleaved frames. */
 static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 {
@@ -1034,6 +1063,7 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 	const unsigned int total = chip->mode->neps * words;
 	unsigned int frames = urb->actual_length / (words * FFUC_SAMPLE_BYTES);
 	unsigned long flags;
+	bool elapsed = false;
 
 	if (!frames)
 		return;
@@ -1048,10 +1078,12 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 			ffuc_capture_copy(subs->runtime, s->pos[ep->index],
 					  urb->transfer_buffer, frames, words,
 					  ep->index * words, words, 1, total);
-		if (ffuc_stream_advance(chip, s, subs->runtime, ep->index, frames))
-			snd_pcm_period_elapsed_under_stream_lock(subs);
+		elapsed = ffuc_stream_advance(chip, s, subs->runtime,
+					      ep->index, frames);
 	}
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	if (elapsed)
+		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_CAPTURE);
 }
 
 static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
@@ -1062,6 +1094,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	const unsigned int words = ffuc_mode_out_words(chip->mode);
 	const unsigned int frames = chip->urb_frames;
 	unsigned long flags;
+	bool elapsed = false;
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
@@ -1074,12 +1107,14 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 			ffuc_playback_copy(subs->runtime, s->pos[ep->index],
 					   urb->transfer_buffer, frames, words,
 					   ep->index * words, words);
-		if (ffuc_stream_advance(chip, s, subs->runtime, ep->index, frames))
-			snd_pcm_period_elapsed_under_stream_lock(subs);
+		elapsed = ffuc_stream_advance(chip, s, subs->runtime,
+					      ep->index, frames);
 	} else {
 		memset(urb->transfer_buffer, 0, urb->transfer_buffer_length);
 	}
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	if (elapsed)
+		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_PLAYBACK);
 }
 
 /* ISO implicit feedback: remember every IN packet's position and frame
