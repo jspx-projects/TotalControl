@@ -28,6 +28,7 @@ detail.
 | `TOTALCONTROL-ARCHITECTURE.md` | runtime structure, threads, data flow, state ownership, control-surface boundary, driver and latency model |
 | `spec/TOTALCONTROL-GUI-SPEC.md` | layout, controls, panels, gestures, motion and visible state |
 | `spec/TOTALCONTROL-STATE-SPEC.md` | state ownership, current workspace, autosave, restore, host settings and layout files |
+| `spec/TOTALCONTROL-DEVICE-PROFILE-SPEC.md` | profile table, selection, host operations, capabilities and scene compatibility |
 | `spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` | Fireface UCX transport, registers, writes and readback |
 | `spec/FIREFFACE-UC-PROTOCOL-SPEC.md` | Fireface UC transport, registers, writes and readback |
 | `spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md` | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI |

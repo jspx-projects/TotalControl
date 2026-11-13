@@ -11,6 +11,7 @@ specification per device, an OSC specification and a user manual.
 | [`TOTALCONTROL-ARCHITECTURE.md`](TOTALCONTROL-ARCHITECTURE.md) | runtime layers, device service, data flow, state ownership, driver and latency model |
 | [`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) | layout, controls, panels, gestures and motion |
 | [`spec/TOTALCONTROL-STATE-SPEC.md`](spec/TOTALCONTROL-STATE-SPEC.md) | state ownership, current workspace, autosave, restore, host settings and layout files |
+| [`spec/TOTALCONTROL-DEVICE-PROFILE-SPEC.md`](spec/TOTALCONTROL-DEVICE-PROFILE-SPEC.md) | profile table, selection, host operations, capabilities and scene compatibility |
 | [`spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) | shared channel-template schema, layout configuration, per-device overrides, invariants and preview |
 | [`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md) | OSC 1.96 and Global OSC transport, address spaces, scales and feedback |
 | [`TOTALCONTROL-Manual.md`](TOTALCONTROL-Manual.md) | installation, setup, use and troubleshooting |

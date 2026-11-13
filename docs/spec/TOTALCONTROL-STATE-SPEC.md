@@ -5,7 +5,10 @@ authoritative, how the state is written and restored, and the boundary
 between workspace state, host settings and the GUI layout document.
 
 Visible behaviour is in
-[`TOTALCONTROL-GUI-SPEC.md`](TOTALCONTROL-GUI-SPEC.md); the mixer model is in
+[`TOTALCONTROL-GUI-SPEC.md`](TOTALCONTROL-GUI-SPEC.md); device profiles and
+host operations are in
+[`TOTALCONTROL-DEVICE-PROFILE-SPEC.md`](TOTALCONTROL-DEVICE-PROFILE-SPEC.md);
+the mixer model is in
 [`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §9.
 
 ## 1. Terms
