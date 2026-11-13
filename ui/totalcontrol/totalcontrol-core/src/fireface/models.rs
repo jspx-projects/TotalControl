@@ -5,7 +5,6 @@
 //! the model identity and capability surface.  Generic device code must
 //! consult a `ModelSpec` rather than switch on `Model` for configuration.
 
-use crate::capabilities::DeviceCapabilities;
 use crate::profile::DeviceProfile;
 
 use super::device::Model;
@@ -51,7 +50,6 @@ pub struct ModelSpec {
     pub name: &'static str,
     pub card_id: &'static str,
     pub profile: &'static DeviceProfile,
-    pub capabilities: DeviceCapabilities,
     /// The clock sources the unit's Settings dialog offers, in order.
     pub clock_sources: &'static [&'static str],
 }
@@ -60,36 +58,7 @@ pub const UC: ModelSpec = ModelSpec {
     model: Model::Uc,
     name: "Fireface UC",
     card_id: "FirefaceUC",
-    profile: &crate::profiles::uc::PROFILE,
-    capabilities: DeviceCapabilities {
-        protocol_features: false,
-        eq: false,
-        low_cut: false,
-        loopback: true,
-        no_trim: true,
-        talkback: false,
-        phase: true,
-        phase_without_eq: true,
-        output_phase: true,
-        output_balance: true,
-        stereo_split: true,
-        matrix_cells: true,
-        class_compliant: false,
-        input_phantom: true,
-        input_pad: true,
-        input_level: false,
-        input_autoset: false,
-        dynamics: false,
-        fx: false,
-        pitch: false,
-        width: true,
-        channel_width: false,
-        ms_proc: true,
-        an12: true,
-        input_link: true,
-        eq_for_record: false,
-        optical_out: true,
-    },
+    profile: &crate::profiles::uc::PC,
     clock_sources: &["Internal", "SPDIF Coaxial", "Optical", "Word Clock", "LTC"],
 };
 
@@ -97,39 +66,7 @@ pub const UCX: ModelSpec = ModelSpec {
     model: Model::Ucx,
     name: "Fireface UCX",
     card_id: "FirefaceUCX",
-    profile: &crate::profiles::ucx::PROFILE,
-    capabilities: DeviceCapabilities {
-        protocol_features: true,
-        eq: true,
-        low_cut: true,
-        loopback: true,
-        no_trim: true,
-        talkback: true,
-        phase: true,
-        phase_without_eq: false,
-        output_phase: true,
-        output_balance: true,
-        stereo_split: true,
-        matrix_cells: true,
-        class_compliant: false,
-        // The UCX phantom register is measured on inputs 1/2 (`NN08`).
-        // There is no PAD; Level is the pad-equivalent.
-        input_phantom: true,
-        input_pad: false,
-        input_level: true,
-        input_autoset: true,
-        dynamics: true,
-        fx: true,
-        // These globals currently have no UCX write path in this backend.
-        pitch: false,
-        width: false,
-        channel_width: true,
-        ms_proc: false,
-        an12: false,
-        input_link: true,
-        eq_for_record: true,
-        optical_out: true,
-    },
+    profile: &crate::profiles::ucx::ISO,
     // The UCX has no LTC clock source (manual 7.1): Internal, Word,
     // SPDIF coax. and Optical In.  Its clock field is two bits.
     clock_sources: &["Internal", "SPDIF Coaxial", "Optical", "Word Clock"],
@@ -145,6 +82,15 @@ pub fn for_model(model: Model) -> &'static ModelSpec {
 /// Select the model table from the reported personality.
 pub fn for_personality(personality: Personality) -> &'static ModelSpec {
     for_model(personality.model())
+}
+
+pub fn profile_for_personality(personality: Personality) -> &'static DeviceProfile {
+    match personality {
+        Personality::UcPc => &crate::profiles::uc::PC,
+        Personality::UcAp => &crate::profiles::uc::AP,
+        Personality::UcxIso => &crate::profiles::ucx::ISO,
+        Personality::UcxIf5 => &crate::profiles::ucx::IF5,
+    }
 }
 
 #[cfg(test)]
@@ -181,7 +127,7 @@ mod tests {
 
     #[test]
     fn uc_exposes_routing_phase_and_balance_without_dsp() {
-        let caps = UC.capabilities;
+        let caps = UC.profile.capabilities();
         assert!(caps.matrix_cells);
         assert!(caps.loopback);
         assert!(caps.phase);
@@ -193,7 +139,7 @@ mod tests {
 
     #[test]
     fn ucx_exposes_measured_strip_and_dsp_controls() {
-        let caps = UCX.capabilities;
+        let caps = UCX.profile.capabilities();
         assert!(caps.protocol_features);
         assert!(caps.eq);
         assert!(caps.phase);
