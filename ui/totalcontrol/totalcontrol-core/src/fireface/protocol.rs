@@ -274,14 +274,14 @@ impl UcMeterPacket {
     }
 
     /// Full-scale-sample count from a digital input record.  The 24-bit
-    /// level saturates at `0x7fffff`; when it does, the low byte carries
-    /// the count.  The byte is a count, not a nibble tag or a half-dB
-    /// over value: values such as `0x05`, `0x67` and `0x6f` are all valid
-    /// counts.
+    /// level saturates at `0x7fffff`; the low nibble then carries the
+    /// count (0..15), not a half-dB over value or a fixed tag.  The upper
+    /// nibble is a separate status/overflow field whose packing is still
+    /// being mapped; it is not part of this count.
     pub fn digital_input_over_run(&self, channel: usize) -> u8 {
         let record = self.digital_input(channel);
         if ((record >> 8) & 0xffffff) == 0x7fffff {
-            record as u8
+            record as u8 & 0x0f
         } else {
             0
         }
@@ -289,7 +289,7 @@ impl UcMeterPacket {
 
     /// Whether a digital input record reaches the global OVR sample gate.
     /// The digital record has no separate `0xff` event byte; saturation of
-    /// the 24-bit level is the event, and the low byte is the count.
+    /// the 24-bit level is the event, and the low nibble is the count.
     pub fn digital_input_ovr(&self, channel: usize) -> bool {
         self.digital_input_over_run(channel) >= UC_OVR_RUN_GATE
     }
@@ -1159,16 +1159,17 @@ mod tests {
         assert!(!p.analog_input_ovr(0));
         p.records[0] = 0x7fff_1234;
         assert_eq!(p.analog_input_over_run(0), 0);
-        // Digital S/PDIF L: the low byte is a full-scale-sample count when
-        // the 24-bit level saturates.  The low nibble is not a fixed tag.
+        // Digital S/PDIF L: the low nibble is the full-scale-sample count
+        // when the 24-bit level saturates.  The upper nibble is not part
+        // of the count and must not inflate the gate.
         p.records[8] = 0x7fffffcf;
-        assert_eq!(p.digital_input_over_run(0), 0xcf);
+        assert_eq!(p.digital_input_over_run(0), 0x0f);
         assert!(p.digital_input_ovr(0));
         p.records[8] = 0x7fffff05;
         assert_eq!(p.digital_input_over_run(0), 5);
         assert!(p.digital_input_ovr(0));
         p.records[8] = 0x7fffff67;
-        assert_eq!(p.digital_input_over_run(0), 0x67);
+        assert_eq!(p.digital_input_over_run(0), 7);
         assert!(p.digital_input_ovr(0));
         p.records[8] = 0x7fffff02;
         assert!(!p.digital_input_ovr(0), "count 2 is under the gate");

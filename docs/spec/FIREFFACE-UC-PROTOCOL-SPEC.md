@@ -503,7 +503,7 @@ not by the RMS word.
 The device supplies the over event and its own full-scale-sample count.
 Analog inputs, playback and hardware outputs carry the count in the OVR
 word's low byte with a `0xff` event byte; digital inputs carry the count
-in the record's low byte when the 24-bit level saturates.  The host gates
+in the low nibble when the 24-bit level saturates.  The host gates
 the OVR LED on that count against the **Full scale samples for OVR**
 sample preference (`FSCntOVR`), default three, range 1..10 on the UC USB
 settings.  No USB control write carries this setting; it is a host
@@ -542,16 +542,17 @@ dBFS  = 20 × log10(level / 0x800000)
 over  = record & 0xff
 ```
 
-The over byte is a full-scale-sample count/ratio, not a half-dB value and
-not a fixed nibble tag.  A controlled S/PDIF loop with 1, 2, 4, 8 and 12
-full-scale samples per 48-sample period read `0x01`, `0x02`, `0x04`,
-`0x08` and `0x0c`; the low nibble tracks the run length up to 15 and the
-field saturates at higher densities.  The high-nibble packing beyond that
-point is still being mapped; it is not a 0..6 dB / 12-step field.  The
-24-bit level saturates at `0x7fffff`, and the over LED uses the count
-against the global **Full scale samples for OVR** preference.  The
-`0x00001fff` filler has a level below the meter's floor and is no data,
-not a level.
+The over byte is not a half-dB value and not a fixed nibble tag.  Its low
+nibble is a full-scale-sample count (0..15).  A controlled S/PDIF loop
+with 1, 2, 4, 8 and 12 full-scale samples per 48-sample period read
+`0x01`, `0x02`, `0x04`, `0x08` and `0x0c`; repeating the widths at a
+96-sample period gave the same low nibbles.  The low nibble saturates at
+15.  The upper nibble is a separate status/overflow field whose packing is
+still being mapped; it is not a simple count carry, a polarity field or a
+0..6 dB / 12-step value.  The 24-bit level saturates at `0x7fffff`, and
+the over LED uses the low-nibble count against the global **Full scale
+samples for OVR** preference.  The `0x00001fff` filler has a level below
+the meter's floor and is no data, not a level.
 
 ### Input RMS words
 
