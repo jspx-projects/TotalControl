@@ -1521,8 +1521,10 @@ Room is always linked and never splits.
 
 ## 12. Control Room
 
-The Control Room panel is flush with the mixer's right edge beside the FX
-column. Its button stack is one channel wide; every button in the stack has
+The Control Room is present for every supported model, including the UC and
+Babyface-classic. The model's capabilities determine which buttons and
+destinations are active; they do not remove the section. The panel is flush
+with the mixer's right edge beside the FX column. Its button stack is one channel wide; every button in the stack has
 the same width and height, and its label is centred. Long labels use the next
 smaller type tier. The stack runs, top to bottom:
 

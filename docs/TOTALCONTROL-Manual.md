@@ -697,7 +697,9 @@ views of one value. The echo block also shows the FX bus level meters.
 
 ## 10. Control Room
 
-The Control Room section sits at the right of the Hardware Outputs row. It
+The Control Room section is present on every supported device; a model without
+a particular monitoring control shows that control unavailable rather than
+removing the section. It sits at the right of the Hardware Outputs row and
 turns ordinary hardware outputs into monitoring destinations with fixed
 names: `Main`, `Speaker B` and `Phones 1–4`. Every hardware output is either
 assigned in the Control Room or remains an ordinary output in the Hardware

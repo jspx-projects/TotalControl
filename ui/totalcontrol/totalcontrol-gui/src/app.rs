@@ -17833,6 +17833,19 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
         .into()
 }
 
+/// The Control Room is part of the mixer for every supported model. The
+/// `protocol_features` capability describes the DSP/FX surface, not the
+/// Control Room; the UC has no DSP but still has Main/Speaker/Phones
+/// monitoring, and the Babyface-classic has the monitoring controls it
+/// supports.
+fn shows_control_room(state: &TotalControl) -> bool {
+    state.device.is_uc_family()
+        || matches!(
+            state.device.kind(),
+            DeviceKind::BabyfaceClassic | DeviceKind::MockBabyfaceClassic
+        )
+}
+
 /// Width of the Control Room section: its button column plus one strip per
 /// assigned monitoring output.
 fn control_room_width(state: &TotalControl, scale: f32) -> f32 {
@@ -19074,7 +19087,8 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     // at the last channel instead of running into the Control Room.
     let mut strips_width = 0.0f32;
     let cr_w = control_room_visual_width(state, scale, anim_now);
-    let natural_out = if state.device.capabilities().protocol_features {
+    let show_control_room = shows_control_room(state);
+    let natural_out = if show_control_room {
         out_width + theme::SPACE_MD + cr_w
     } else {
         out_width
@@ -19096,7 +19110,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     };
     let available = main_space - reserve;
     let fx_overlay = fx_open && reserve < fx_extent;
-    let out_row: Element<'_, Message> = if state.device.capabilities().protocol_features {
+    let out_row: Element<'_, Message> = if show_control_room {
         strips_width = out_width;
         out_width = natural_out.max(available);
         // The strips are the row; the Control Room rides above them, pinned
@@ -19693,8 +19707,9 @@ mod tests {
         is_undoable, mute_armed, new, new_with_device, power_sum_output_meters, rate_choices,
         reorder_pair_volumes, save_workspace_to, solo_armed, strength_snapshot, strip_params,
         strip_target_pair, sync_control_room_runtime, temporary_group_exists, trim_factor,
-        trim_meter_levels, uc_live_queue_frames, uc_min_buffer_frames, uc_measured_rtl, uc_rtl_frames,
-        uc_usb_frames, ucx_min_buffer_frames, UC_AP_MEASUREMENTS, UC_PC_MEASUREMENTS,
+        shows_control_room, trim_meter_levels, uc_live_queue_frames, uc_min_buffer_frames,
+        uc_measured_rtl, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames, UC_AP_MEASUREMENTS,
+        UC_PC_MEASUREMENTS,
         ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         PwClock, RateChoice, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
@@ -20306,6 +20321,21 @@ mod tests {
             !state.assigned_pairs().any(|p| p == 3),
             "the pair must return to the Hardware Outputs row"
         );
+    }
+
+    #[test]
+    fn control_room_is_visible_for_uc_and_babyface_models() {
+        let ucx = new(true, None, None);
+        assert!(shows_control_room(&ucx));
+        let uc = new_with_device(true, None, Some(DeviceKind::MockUc), None);
+        assert!(shows_control_room(&uc));
+        let babyface = new_with_device(
+            true,
+            None,
+            Some(DeviceKind::MockBabyfaceClassic),
+            None,
+        );
+        assert!(shows_control_room(&babyface));
     }
 
     #[test]
