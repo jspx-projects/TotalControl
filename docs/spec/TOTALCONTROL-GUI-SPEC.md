@@ -123,7 +123,7 @@ that same height. The standard height is 350 px at scale 1.0.
 
 The top bar carries `OPTIONS` beside the view tabs. It opens a menu with
 `Audio Config`, `TotalControl`, `Control Room` and `Reset Mix`. `Audio Config`
-opens the device Audio Configuration panel to the right of the sidebar and is
+opens the device Audio Configuration panel immediately left of the CONTROLS sidebar and is
 disabled without a connected device. `TotalControl` opens the centered
 application settings dialog. `Control Room` opens the Control Room settings
 panel above the Control Room and is always available, including without a
@@ -980,7 +980,7 @@ higher of the two gains.
 ### 3.3 Audio Configuration panel
 
 The device card at the top of the sidebar (or the gear on the folded rail)
-opens the Audio Configuration panel, anchored to the right of the sidebar.
+opens the Audio Configuration panel, anchored immediately left of the CONTROLS sidebar.
 Its title is `Audio Configuration settings`. It is a scrollable inspector, not
 a modal and not dimmed; a click outside or `Escape` closes it. It starts with
 the group the unit itself owns. Where
