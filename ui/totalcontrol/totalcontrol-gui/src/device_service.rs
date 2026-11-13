@@ -103,7 +103,7 @@ pub struct DeviceInfo {
     pub is_mock: bool,
     pub kind: crate::app::DeviceKind,
     pub target: crate::app::DeviceTarget,
-    pub card_id: &'static str,
+    pub card_id: String,
     pub firmware: Option<u32>,
     pub serial: Option<String>,
     pub rate_follows: bool,

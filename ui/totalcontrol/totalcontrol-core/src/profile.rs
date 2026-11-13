@@ -383,6 +383,8 @@ pub struct DeviceProfile {
     pub playback_ops: OperationSet,
     pub output_ops: OperationSet,
     pub globals: GlobalSet,
+    /// Clock sources offered by the Settings dialog, in order.
+    pub clock_sources: &'static [&'static str],
     pub preamps: &'static [PreampSpec],
     pub meters: MeterSpec,
     pub layout: LayoutSpec,

@@ -164,19 +164,11 @@ impl MockDevice {
                 // Matches the model's own Settings dialog: the Babyface
                 // Pro FS reports its enum items, the Fireface models use
                 // their fixed source list (the UCX has no LTC).
-                clock_sources: match model_name {
-                    "Fireface UC" => crate::fireface::models::UC
-                        .clock_sources
-                        .iter()
-                        .map(|s| (*s).to_string())
-                        .collect(),
-                    "Fireface UCX" => crate::fireface::models::UCX
-                        .clock_sources
-                        .iter()
-                        .map(|s| (*s).to_string())
-                        .collect(),
-                    _ => vec!["Internal".into(), "AutoSync".into()],
-                },
+                clock_sources: profile
+                    .clock_sources
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
                 spdif_optical: false,
                 spdif_emphasis: false,
                 spdif_professional: false,

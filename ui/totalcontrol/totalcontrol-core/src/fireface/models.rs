@@ -1,9 +1,7 @@
-//! Per-model configuration for the hwdep Fireface backend.
+//! Personality identity and profile selection for the hwdep backend.
 //!
-//! Wire encoding lives in `protocol.rs`; channel topology lives in
-//! `crate::profiles`.  This file is the one place that combines those with
-//! the model identity and capability surface.  Generic device code must
-//! consult a `ModelSpec` rather than switch on `Model` for configuration.
+//! Wire encoding lives in `protocol.rs`; channel topology and host
+//! operations live in the profile table under `crate::profiles`.
 
 use crate::profile::DeviceProfile;
 
@@ -45,45 +43,7 @@ impl Personality {
     }
 }
 
-pub struct ModelSpec {
-    pub model: Model,
-    pub name: &'static str,
-    pub card_id: &'static str,
-    pub profile: &'static DeviceProfile,
-    /// The clock sources the unit's Settings dialog offers, in order.
-    pub clock_sources: &'static [&'static str],
-}
-
-pub const UC: ModelSpec = ModelSpec {
-    model: Model::Uc,
-    name: "Fireface UC",
-    card_id: "FirefaceUC",
-    profile: &crate::profiles::uc::PC,
-    clock_sources: &["Internal", "SPDIF Coaxial", "Optical", "Word Clock", "LTC"],
-};
-
-pub const UCX: ModelSpec = ModelSpec {
-    model: Model::Ucx,
-    name: "Fireface UCX",
-    card_id: "FirefaceUCX",
-    profile: &crate::profiles::ucx::ISO,
-    // The UCX has no LTC clock source (manual 7.1): Internal, Word,
-    // SPDIF coax. and Optical In.  Its clock field is two bits.
-    clock_sources: &["Internal", "SPDIF Coaxial", "Optical", "Word Clock"],
-};
-
-pub fn for_model(model: Model) -> &'static ModelSpec {
-    match model {
-        Model::Uc => &UC,
-        Model::Ucx => &UCX,
-    }
-}
-
-/// Select the model table from the reported personality.
-pub fn for_personality(personality: Personality) -> &'static ModelSpec {
-    for_model(personality.model())
-}
-
+/// Select the profile for one reported personality.
 pub fn profile_for_personality(personality: Personality) -> &'static DeviceProfile {
     match personality {
         Personality::UcPc => &crate::profiles::uc::PC,
@@ -96,6 +56,7 @@ pub fn profile_for_personality(personality: Personality) -> &'static DeviceProfi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile::ProfileId;
 
     #[test]
     fn personality_is_derived_from_model_and_transport() {
@@ -118,48 +79,22 @@ mod tests {
     }
 
     #[test]
-    fn personality_selects_its_model_table() {
-        assert_eq!(for_personality(Personality::UcPc).name, "Fireface UC");
-        assert_eq!(for_personality(Personality::UcAp).name, "Fireface UC");
-        assert_eq!(for_personality(Personality::UcxIso).name, "Fireface UCX");
-        assert_eq!(for_personality(Personality::UcxIf5).name, "Fireface UCX");
-    }
-
-    #[test]
-    fn uc_exposes_routing_phase_and_balance_without_dsp() {
-        let caps = UC.profile.capabilities();
-        assert!(caps.matrix_cells);
-        assert!(caps.loopback);
-        assert!(caps.phase);
-        assert!(caps.phase_without_eq);
-        assert!(caps.output_balance);
-        assert!(!caps.protocol_features);
-        assert!(!caps.eq);
-    }
-
-    #[test]
-    fn ucx_exposes_measured_strip_and_dsp_controls() {
-        let caps = UCX.profile.capabilities();
-        assert!(caps.protocol_features);
-        assert!(caps.eq);
-        assert!(caps.phase);
-        assert!(caps.loopback);
-        assert!(!caps.phase_without_eq);
-        assert!(caps.output_balance);
-        assert!(caps.matrix_cells);
-        assert!(caps.input_phantom);
-        assert!(!caps.input_pad);
-        assert!(caps.input_level);
-        assert!(caps.input_autoset);
-        assert!(caps.dynamics);
-        assert!(caps.fx);
-        assert!(caps.matrix_cells);
-        assert!(!caps.pitch);
-        assert!(!caps.width);
-        assert!(!caps.ms_proc);
-        assert!(!caps.an12);
-        assert!(caps.input_link);
-        assert!(caps.eq_for_record);
-        assert!(caps.optical_out);
+    fn personality_selects_its_profile() {
+        assert_eq!(
+            profile_for_personality(Personality::UcPc).id,
+            ProfileId::UcPc
+        );
+        assert_eq!(
+            profile_for_personality(Personality::UcAp).id,
+            ProfileId::UcAp
+        );
+        assert_eq!(
+            profile_for_personality(Personality::UcxIso).id,
+            ProfileId::UcxIso
+        );
+        assert_eq!(
+            profile_for_personality(Personality::UcxIf5).id,
+            ProfileId::UcxIf5
+        );
     }
 }
