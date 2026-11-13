@@ -1171,18 +1171,45 @@ groups with the stored ones.
 
 ## 14. Latency
 
-The sidebar shows the round-trip latency estimate for the current sample
+The Settings drawer shows the round-trip latency for the current sample
 rate and buffer size, and the **Quantum** picker sets the PipeWire graph
-period in samples. The driver and the unit add a fixed amount of
-device-side latency on top of the buffer; the readout lists the estimate
-and its parts (USB queue, device lead, converters and graph period) so you
-can budget monitoring and recording latency.
+period in samples. The UCX and UC paths without a loopback calibration use
+the model estimate: USB queue, device lead, converter and one graph period;
+the UC estimate is labelled ±1.5 ms and the UCX ±1.2 ms.
 
-The **Errors** section lists driver transport faults since the device sheet
-opened or the last **reset**, one row per type. `usb`, `gaps` and `short`
-show input and output as `in / out`; `urb`, `recover` and `events` are single
-values. A non-zero row means the USB transport is dropping or mis-timing
-packets; reset only clears the display baseline.
+On the UC the device part is a loopback calibration taken at 32, 44.1, 48,
+96 and 192 kHz in both PC and AP modes. The display says **measured PC** or
+**measured AP** and applies the live USB queue and the current graph
+period. If a driver change alters the USB queue, the calibration is
+adjusted by the queue difference without another cable measurement. Rates
+outside the calibrated set use the model estimate. A different firmware or
+device path needs a new calibration.
+
+Below the latency line, **Xruns (PipeWire)** counts the PipeWire graph
+xruns for the RME output node. This is an audio-graph counter, not a USB
+transport counter. It is sampled once a second and reset with the same
+button as the driver counters.
+
+**Driver errors** lists the kernel USB transport counters. `in` is
+device-to-host (capture) and `out` is host-to-device (playback); the host
+is the computer running TotalControl. The **Driver errors** tooltip spells
+this out as `device → computer` and `computer → device`. `usb`, `gaps` and
+`short` show `in / out`; `urb` and `recover` are totals. `usb`
+counts USB status-stage errors, `urb` submission/completion errors, `gaps`
+missing packets, and `recover` recovery or reset events. A non-zero real
+error row means the transport is dropping or mis-timing packets.
+
+A sample-rate change normally produces a burst of short packets. Those are
+shown separately as **short — rate switch** and are expected; the row
+accumulates the expected bursts since reset, while the normal **short**
+row restarts after each switch, so only later short packets count as a real
+problem. **Host event drops** is separate from the USB rows: the
+kernel's hwdep event queue was full and the application reader fell behind,
+so an event was discarded. It is not a USB fault.
+
+The tooltips in the drawer are deliberately short. This section is the
+longer reference; **reset** clears the display baselines without changing
+the device or the audio graph.
 
 ## 15. Where TotalControl keeps its data
 

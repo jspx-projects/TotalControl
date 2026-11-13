@@ -28,6 +28,7 @@ pub mod profiles;
 pub mod pw_clock;
 pub mod pw_follow;
 pub mod pw_meter;
+pub mod pw_xrun;
 pub mod scene;
 pub mod workspace;
 

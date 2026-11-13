@@ -2389,6 +2389,8 @@ pub enum Message {
     EngineQuantum(u32),
     /// Zero the transport-error display against the driver's current counters.
     ResetTransportErrors,
+    /// A fresh PipeWire graph xrun count for the RME output node.
+    GraphXruns(Option<u64>),
     /// Periodic re-read of the PipeWire clock (another app may change it).
     EnginePoll,
     /// The graph clock, the card's own open stream (`None` = idle), whether
@@ -2948,6 +2950,16 @@ pub struct TotalControl {
     /// shown relative to (set on connect or by the reset button).
     pub transport_counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
     pub transport_baseline: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
+    /// Cumulative PipeWire graph xrun count and its reset baseline.
+    pub graph_xruns: Option<u64>,
+    pub graph_xruns_baseline: Option<u64>,
+    /// In/out short packets attributed to completed and current rate-switch
+    /// settling windows.  `rate_switch_shorts` is cumulative since reset;
+    /// `rate_switch_burst` is the current window not yet committed.
+    pub rate_switch_shorts: (u32, u32),
+    pub rate_switch_burst: (u32, u32),
+    rate_switch_base: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
+    rate_switch_until: Option<Instant>,
     /// The Fireface PipeWire sink's volume (percent, dB), polled with the
     /// engine.  It is an attenuation *before* the device, so a sink below
     /// 0 dB makes the playback meters read low even for a full-scale file.
@@ -3493,6 +3505,12 @@ pub fn new_with_device(
         card_stream: None,
         transport_counters: None,
         transport_baseline: None,
+        graph_xruns: None,
+        graph_xruns_baseline: None,
+        rate_switch_shorts: (0, 0),
+        rate_switch_burst: (0, 0),
+        rate_switch_base: None,
+        rate_switch_until: None,
         host_volume: None,
         device_service: None,
         device_updates: None,
@@ -8573,6 +8591,20 @@ fn follow_graph_stream(
     })
 }
 
+/// Poll the PipeWire graph xrun counter once a second while the device
+/// settings drawer is open.  `pw-top` is a separate process, so keep it off
+/// the UI thread.
+fn graph_xruns_stream() -> impl iced::futures::Stream<Item = Option<u64>> {
+    iced::futures::stream::unfold((), |_| async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let count = tokio::task::spawn_blocking(totalcontrol_core::pw_xrun::read)
+            .await
+            .ok()
+            .flatten();
+        Some((count, ()))
+    })
+}
+
 /// Apply one source cell edit.  A pair is 1/2, 3/4: an odd and an even
 /// channel, linked or unlinked.  Every rule keeps the source channel's
 /// parity (GUI spec 8.1.2).
@@ -8888,8 +8920,25 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             if counters.is_none() {
                 state.transport_baseline = None;
+                state.rate_switch_shorts = (0, 0);
+                state.rate_switch_burst = (0, 0);
+                state.rate_switch_base = None;
+                state.rate_switch_until = None;
             }
             state.transport_counters = counters;
+            if let Some(until) = state.rate_switch_until {
+                if Instant::now() < until {
+                    if state.rate_switch_base.is_none() {
+                        state.rate_switch_base = counters;
+                    }
+                    if let (Some(base), Some(now)) = (state.rate_switch_base, counters) {
+                        let delta = transport_delta(&now, &base);
+                        state.rate_switch_burst = (delta.in_shorts, delta.out_shorts);
+                    }
+                } else {
+                    commit_rate_switch_window(state);
+                }
+            }
             if state
                 .notice
                 .as_ref()
@@ -10926,6 +10975,17 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::SetShowOriginalNames(on) => state.show_original_names = on,
         Message::ResetTransportErrors => {
             state.transport_baseline = state.transport_counters;
+            state.graph_xruns_baseline = state.graph_xruns;
+            state.rate_switch_shorts = (0, 0);
+            state.rate_switch_burst = (0, 0);
+            state.rate_switch_base = None;
+            state.rate_switch_until = None;
+        }
+        Message::GraphXruns(count) => {
+            state.graph_xruns = count;
+            if state.graph_xruns_baseline.is_none() {
+                state.graph_xruns_baseline = count;
+            }
         }
         Message::EngineRate(rate) => {
             state.engine_rate_mode = if rate == 0 {
@@ -10934,6 +10994,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 EngineRateMode::Fixed
             };
             state.rate_follow.clear_owner();
+            if state.transport_counters.is_some() {
+                begin_rate_switch_window(state);
+            }
             apply_graph_rate(state, rate, true);
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(rate as i32)]);
         }
@@ -11004,27 +11067,34 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::EnginePoll => {
-            // Off the UI thread: both the graph read and the `pactl`
-            // probe spawn processes (~10 ms).  Capture what the async
-            // block needs before it; the device handle itself cannot
-            // cross the task boundary.
+            // Off the UI thread: the graph read and the `pactl` probes
+            // spawn processes (~10 ms).  Capture what the task needs before
+            // it; the device handle itself cannot cross the task boundary.
+            // `spawn_blocking` keeps the subprocess waits off the async
+            // executor, so a slow PipeWire or PulseAudio query cannot stall
+            // the UI task.
             let card_id = state.device.card_id();
             let follows = state.device.rate_follows_sound_server();
             let is_mock = state.device.is_mock();
             return Task::perform(
                 async move {
-                    let sink_running = follows && !is_mock && pw_clock::fireface_sink_running();
-                    let host_volume = if follows && !is_mock {
-                        pw_clock::fireface_sink_volume()
-                    } else {
-                        None
-                    };
-                    (
-                        pw_clock::read(),
-                        pw_clock::card_stream(&card_id),
-                        sink_running,
-                        host_volume,
-                    )
+                    tokio::task::spawn_blocking(move || {
+                        let sink_running =
+                            follows && !is_mock && pw_clock::fireface_sink_running();
+                        let host_volume = if follows && !is_mock {
+                            pw_clock::fireface_sink_volume()
+                        } else {
+                            None
+                        };
+                        (
+                            pw_clock::read(),
+                            pw_clock::card_stream(&card_id),
+                            sink_running,
+                            host_volume,
+                        )
+                    })
+                    .await
+                    .unwrap_or((None, None, false, None))
                 },
                 |(clock, stream, sink_running, host_volume)| {
                     Message::EngineRead(clock, stream, sink_running, host_volume)
@@ -11032,6 +11102,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             );
         }
         Message::EngineRead(clock, stream, sink_running, host_volume) => {
+            if !state.device.is_mock() {
+                state.driver_queue = pw_clock::driver_urb_queue();
+            }
             if host_volume.is_some() {
                 state.host_volume = host_volume;
             }
@@ -11051,6 +11124,19 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         let _ = state.device.set_sample_rate(rate);
                     }
                     state.last_card_rate = Some(rate);
+                }
+                if rate_changed
+                    && state.last_card_rate.is_some()
+                    && !state
+                        .rate_switch_until
+                        .is_some_and(|until| Instant::now() < until)
+                {
+                    // A rate switch produces a short-packet burst in the
+                    // driver.  Attribute it to the switch instead of the
+                    // real-problem short counter.  A user-initiated
+                    // EngineRate already opened this window before the
+                    // switch, so keep that earlier baseline.
+                    begin_rate_switch_window(state);
                 }
                 if sink_started || rate_changed {
                     // The UC reloads its stored mixer when a playback stream
@@ -11695,6 +11781,13 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
         // this edge is what starts them again on the next transient.
         subs.push(
             Subscription::run(crate::device_service::meter_stream).map(|_| Message::MeterWake),
+        );
+    }
+    // Graph xruns belong to PipeWire, not the USB transport.  Only the
+    // device settings drawer shows them, so poll only while it is open.
+    if state.show_device_panel {
+        subs.push(
+            Subscription::run(graph_xruns_stream).map(Message::GraphXruns),
         );
     }
     // Another app (or `pw-metadata` by hand) can change the graph clock;
@@ -13250,58 +13343,112 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
+    // PipeWire graph xruns belong to the audio graph, not the USB
+    // transport.  They sit above the driver rows, next to Graph/Quantum.
+    let xruns = state.graph_xruns.map(|now| {
+        now.saturating_sub(state.graph_xruns_baseline.unwrap_or(now))
+    });
+    body = body.push(
+        row![
+            strip::hint(
+                caption("Xruns (PipeWire)"),
+                "PipeWire graph xruns.",
+                scale
+            ),
+            iced::widget::Space::new().width(Length::Fill),
+            text(xruns.map(|n| n.to_string()).unwrap_or_else(|| "—".into()))
+                .size(text_size)
+                .color(if xruns.unwrap_or(0) == 0 {
+                    theme::text_sec()
+                } else {
+                    Color::from_rgb8(0xe0, 0x5a, 0x5a)
+                }),
+            button(strip::centered_label_auto(
+                "reset",
+                theme::TEXT_DIALOG * scale
+            ))
+            .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+            .style(theme::ghost_button)
+            .on_press(Message::ResetTransportErrors),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
+    );
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
         body = body.push(
             row![
-                caption("Errors"),
+                strip::hint(
+                    caption("Driver errors"),
+                    "USB driver counters. in = device → computer, out = computer → device.",
+                    scale
+                ),
                 iced::widget::Space::new().width(Length::Fill),
-                button(strip::centered_label_auto(
-                    "reset",
-                    theme::TEXT_DIALOG * scale
-                ))
-                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                .style(theme::ghost_button)
-                .on_press(Message::ResetTransportErrors),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
-        // One row per fault type, named for the transport stage.  "xruns"
-        // is the host/PipeWire side and needs its own driver counter before
-        // it can be shown here; it is not inferred from these.
-        for (label, value, bad) in [
+        // A rate-switch short burst is expected and is shown separately;
+        // only the remainder is a real short-packet problem.
+        let switch_in = state
+            .rate_switch_shorts
+            .0
+            .saturating_add(state.rate_switch_burst.0)
+            .min(delta.in_shorts);
+        let switch_out = state
+            .rate_switch_shorts
+            .1
+            .saturating_add(state.rate_switch_burst.1)
+            .min(delta.out_shorts);
+        let short_in = delta.in_shorts.saturating_sub(switch_in);
+        let short_out = delta.out_shorts.saturating_sub(switch_out);
+        let rows: [(&'static str, String, u32, bool, &'static str); 6] = [
             (
                 "usb",
                 format!("{} / {}", delta.in_status_errors, delta.out_status_errors),
                 delta.in_status_errors + delta.out_status_errors,
+                false,
+                "USB status errors (in/out).",
             ),
-            ("urb", delta.urb_errors.to_string(), delta.urb_errors),
+            ("urb", delta.urb_errors.to_string(), delta.urb_errors, false, "URB errors."),
             (
                 "gaps",
                 format!("{} / {}", delta.in_gaps, delta.out_gaps),
                 delta.in_gaps + delta.out_gaps,
+                false,
+                "Missing packets (in/out).",
             ),
             (
                 "short",
-                format!("{} / {}", delta.in_shorts, delta.out_shorts),
-                delta.in_shorts + delta.out_shorts,
+                format!("{} / {}", short_in, short_out),
+                short_in + short_out,
+                false,
+                "Short packets (in/out).",
             ),
-            ("recover", delta.recoveries.to_string(), delta.recoveries),
             (
-                "events",
-                delta.events_dropped.to_string(),
-                delta.events_dropped,
+                "short — rate switch",
+                format!("{} / {}", switch_in, switch_out),
+                switch_in + switch_out,
+                true,
+                "Expected during rate changes.",
             ),
-        ] {
+            ("recover", delta.recoveries.to_string(), delta.recoveries, false, "Driver recoveries."),
+        ];
+        for (label, value, bad, expected, tip) in rows {
             let colour = if bad == 0 {
                 theme::text_sec()
+            } else if expected {
+                theme::ysim()
             } else {
                 Color::from_rgb8(0xe0, 0x5a, 0x5a)
             };
             body = body.push(
                 row![
-                    text(label).size(text_size).color(theme::text_sec()),
+                    strip::hint(
+                        text(label).size(text_size).color(theme::text_sec()),
+                        tip,
+                        scale
+                    ),
                     iced::widget::Space::new().width(Length::Fill),
                     text(value).size(text_size).color(colour),
                 ]
@@ -13309,6 +13456,27 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 .align_y(iced::Alignment::Center),
             );
         }
+        body = body.push(
+            row![
+                strip::hint(
+                    text("Host event drops")
+                        .size(text_size)
+                        .color(theme::text_sec()),
+                    "Host reader fell behind; event discarded.",
+                    scale
+                ),
+                iced::widget::Space::new().width(Length::Fill),
+                text(delta.events_dropped.to_string())
+                    .size(text_size)
+                    .color(if delta.events_dropped == 0 {
+                        theme::text_sec()
+                    } else {
+                        theme::ysim()
+                    }),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
     }
     if let Some((percent, db)) = state.host_volume {
         let colour = if db < -0.5 {
@@ -13340,6 +13508,35 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .into()
 }
 
+/// Commit the current rate-switch settling window into the cumulative
+/// expected-short total.  The driver's counters are cumulative, so keeping
+/// every window prevents an earlier expected burst from reappearing in the
+/// real `short` row after a later switch.
+fn commit_rate_switch_window(state: &mut TotalControl) {
+    state.rate_switch_shorts.0 = state
+        .rate_switch_shorts
+        .0
+        .saturating_add(state.rate_switch_burst.0);
+    state.rate_switch_shorts.1 = state
+        .rate_switch_shorts
+        .1
+        .saturating_add(state.rate_switch_burst.1);
+    state.rate_switch_burst = (0, 0);
+    state.rate_switch_base = None;
+    state.rate_switch_until = None;
+}
+
+/// Open a 1.5 s settling window at the current counters.  A previous window
+/// is committed first, so overlapping switches are not lost.
+fn begin_rate_switch_window(state: &mut TotalControl) {
+    if state.rate_switch_until.is_some() {
+        commit_rate_switch_window(state);
+    }
+    state.rate_switch_burst = (0, 0);
+    state.rate_switch_base = state.transport_counters;
+    state.rate_switch_until = Some(Instant::now() + Duration::from_millis(1500));
+}
+
 /// Per-field difference of two cumulative driver counter readings.
 fn transport_delta(
     now: &totalcontrol_core::fireface::abi::HwdepCounters,
@@ -13365,8 +13562,8 @@ fn transport_delta(
 }
 
 /// The latency line.  While the card plays, it uses the card's actual period
-/// and the USB queue from the module parameters.  The UCX line is a
-/// round-trip estimate; the UC line is a one-way output budget.
+/// and the live USB queue.  The UC in PC mode uses its loopback calibration;
+/// the UCX, UC AP mode and uncalibrated UC rates use the model estimate.
 fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let line = |s: String, c: Color| text(s).color(c).size(theme::TEXT_DIALOG * scale);
@@ -13374,19 +13571,30 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
         Some(card) => {
             let mut col = column![].spacing(theme::SPACE_TIGHT * scale);
             if state.device.is_uc_model() {
-                if let Some(queue) = state.driver_queue {
-                    let (usb, endpoint) = uc_usb_frames(card.rate, queue);
-                    let chain = LatencyChain {
-                        ring: card.buffer,
-                        period: card.period,
+                let measured = match state.device.personality_label() {
+                    Some("PC") => state.driver_queue.and_then(|queue| {
+                        uc_measured_rtl(card.rate, queue, card.period, false)
+                    }),
+                    Some("AP") => state.driver_queue.and_then(|queue| {
+                        uc_measured_rtl(card.rate, queue, card.period, true)
+                    }),
+                    _ => None,
+                };
+                if let Some(rtl) = measured {
+                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.breakdown(), theme::text_sec()));
+                } else if let Some(queue) = state.driver_queue {
+                    let (usb, lead) = uc_rtl_frames(card.rate, queue);
+                    let rtl = RtlEstimate {
                         usb,
-                        device: endpoint,
+                        lead,
                         converter: converter_frames(card.rate),
+                        graph: card.period,
                         rate: card.rate,
-                        device_label: "endpoint",
+                        tolerance_ms: 1.5,
                     };
-                    col = col.push(line(chain.summary(), theme::text_primary()));
-                    col = col.push(line(chain.breakdown(), theme::text_sec()));
+                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
@@ -13402,6 +13610,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         converter: converter_frames(card.rate),
                         graph: card.period,
                         rate: card.rate,
+                        tolerance_ms: 1.2,
                     };
                     col = col.push(line(rtl.summary(), theme::text_primary()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
@@ -13449,20 +13658,36 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             };
             let buffer = quantum.saturating_mul(periods);
             if state.device.is_uc_model() {
+                let measured = match state.device.personality_label() {
+                    Some("PC") => state.driver_queue.and_then(|queue| {
+                        uc_measured_rtl(rate, queue, quantum, false)
+                    }),
+                    Some("AP") => state.driver_queue.and_then(|queue| {
+                        uc_measured_rtl(rate, queue, quantum, true)
+                    }),
+                    _ => None,
+                };
+                if let Some(rtl) = measured {
+                    return column![
+                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.breakdown(), theme::text_sec()),
+                    ]
+                    .spacing(theme::SPACE_TIGHT * scale)
+                    .into();
+                }
                 if let Some(queue) = state.driver_queue {
-                    let (usb, endpoint) = uc_usb_frames(rate, queue);
-                    let chain = LatencyChain {
-                        ring: buffer,
-                        period: quantum,
+                    let (usb, lead) = uc_rtl_frames(rate, queue);
+                    let rtl = RtlEstimate {
                         usb,
-                        device: endpoint,
+                        lead,
                         converter: converter_frames(rate),
+                        graph: quantum,
                         rate,
-                        device_label: "endpoint",
+                        tolerance_ms: 1.5,
                     };
                     return column![
-                        line(chain.summary(), theme::text_primary()),
-                        line(chain.breakdown(), theme::text_sec()),
+                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)
                     .into();
@@ -13478,6 +13703,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         converter: converter_frames(rate),
                         graph: quantum,
                         rate,
+                        tolerance_ms: 1.2,
                     };
                     return column![
                         line(rtl.summary(), theme::text_primary()),
@@ -13497,52 +13723,17 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
     }
 }
 
-/// One-way output latency: ALSA ring, USB queue, device stage and output
-/// converter.  The ring total is the period count times the selected
-/// quantum, so a 128-sample quantum is a 256-frame ring at two periods.
-struct LatencyChain {
-    ring: u32,
-    period: u32,
-    usb: u32,
-    device: u32,
-    converter: u32,
-    rate: u32,
-    device_label: &'static str,
-}
-
-impl LatencyChain {
-    fn total(&self) -> u32 {
-        self.ring + self.usb + self.device + self.converter
-    }
-
-    fn summary(&self) -> String {
-        format!(
-            "{:.1} ms one-way output latency",
-            frames_ms(self.total(), self.rate)
-        )
-    }
-
-    fn breakdown(&self) -> String {
-        format!(
-            "{} + {:.1} ms USB + {:.1} ms {} + {:.1} ms converter",
-            ring_text(self.ring, self.period, self.rate),
-            frames_ms(self.usb, self.rate),
-            frames_ms(self.device, self.rate),
-            self.device_label,
-            frames_ms(self.converter, self.rate)
-        )
-    }
-}
-
-/// Round-trip estimate for the UCX: USB queue, device lead, converter and one
-/// graph period.  The measured values are in the latency work note; this
-/// estimate is conservative by about 1.2 ms.
+/// Model-based round-trip estimate: USB queue, device lead, converter and
+/// one graph period.  Used for the UCX and for UC paths without a PC-mode
+/// loopback calibration.  The tolerance is the stated uncertainty of the
+/// model (UC 1.5 ms, UCX 1.2 ms).
 struct RtlEstimate {
     usb: u32,
     lead: u32,
     converter: u32,
     graph: u32,
     rate: u32,
+    tolerance_ms: f32,
 }
 
 impl RtlEstimate {
@@ -13552,8 +13743,9 @@ impl RtlEstimate {
 
     fn summary(&self) -> String {
         format!(
-            "{:.1} ms RTL estimate (±1.2 ms)",
-            frames_ms(self.total(), self.rate)
+            "{:.1} ms RTL estimate (±{:.1} ms)",
+            frames_ms(self.total(), self.rate),
+            self.tolerance_ms
         )
     }
 
@@ -13566,6 +13758,146 @@ impl RtlEstimate {
             frames_ms(self.graph, self.rate)
         )
     }
+}
+
+/// One loopback measurement of the UC device round trip.  The measurement
+/// excludes the graph period; `queue_frames` is the nominal host queue at
+/// which it was taken, so a driver queue change can be applied without
+/// re-measuring.  Sources: `docs/work/UC-RTL-LOOPBACK.md`.
+struct UcMeasurement {
+    rate: u32,
+    device_frames: u32,
+    queue_frames: u32,
+}
+
+const UC_PC_MEASUREMENTS: &[UcMeasurement] = &[
+    UcMeasurement {
+        rate: 32_000,
+        device_frames: 215,
+        queue_frames: 144,
+    },
+    UcMeasurement {
+        rate: 44_100,
+        device_frames: 215,
+        queue_frames: 144,
+    },
+    UcMeasurement {
+        rate: 48_000,
+        device_frames: 215,
+        queue_frames: 144,
+    },
+    UcMeasurement {
+        rate: 96_000,
+        device_frames: 351,
+        queue_frames: 288,
+    },
+    UcMeasurement {
+        rate: 192_000,
+        device_frames: 617,
+        queue_frames: 576,
+    },
+];
+
+const UC_AP_MEASUREMENTS: &[UcMeasurement] = &[
+    UcMeasurement {
+        rate: 32_000,
+        device_frames: 155,
+        queue_frames: 96,
+    },
+    UcMeasurement {
+        rate: 44_100,
+        device_frames: 179,
+        queue_frames: 144,
+    },
+    UcMeasurement {
+        rate: 48_000,
+        device_frames: 187,
+        queue_frames: 144,
+    },
+    UcMeasurement {
+        rate: 96_000,
+        device_frames: 295,
+        queue_frames: 288,
+    },
+    UcMeasurement {
+        rate: 192_000,
+        device_frames: 505,
+        queue_frames: 576,
+    },
+];
+
+/// A loopback-calibrated UC estimate.  The measured device total includes
+/// the USB queue; the current queue is applied as a delta from the
+/// calibration queue, and one live graph period is added.
+struct MeasuredRtl {
+    device: u32,
+    live_queue: u32,
+    graph: u32,
+    rate: u32,
+    mode: &'static str,
+}
+
+impl MeasuredRtl {
+    fn total(&self) -> u32 {
+        self.device + self.graph
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "{:.1} ms RTL (measured {})",
+            frames_ms(self.total(), self.rate),
+            self.mode
+        )
+    }
+
+    fn breakdown(&self) -> String {
+        format!(
+            "{:.1} ms measured device (including {:.1} ms live USB queue) + {:.1} ms graph",
+            frames_ms(self.device, self.rate),
+            frames_ms(self.live_queue, self.rate),
+            frames_ms(self.graph, self.rate)
+        )
+    }
+}
+
+/// The nominal host queue for the active personality.  PC uses the
+/// interrupt URB frame count; AP uses the ISO packet count.
+fn uc_live_queue_frames(rate: u32, queue: (u32, u32), ap: bool) -> u32 {
+    if ap {
+        ucx_usb_frames(rate, queue).0
+    } else {
+        let (usb, endpoint) = uc_usb_frames(rate, queue);
+        usb + endpoint
+    }
+}
+
+/// Return the measured estimate for a rate covered by the loopback
+/// calibration.  If the driver queue differs from the calibration, its delta
+/// is applied to the device total; the graph period is always live.
+fn uc_measured_rtl(
+    rate: u32,
+    queue: (u32, u32),
+    graph: u32,
+    ap: bool,
+) -> Option<MeasuredRtl> {
+    let measurements = if ap {
+        UC_AP_MEASUREMENTS
+    } else {
+        UC_PC_MEASUREMENTS
+    };
+    let measurement = measurements
+        .iter()
+        .find(|measurement| measurement.rate == rate)?;
+    let live_queue = uc_live_queue_frames(rate, queue, ap);
+    let device = measurement.device_frames as i64 + live_queue as i64
+        - measurement.queue_frames as i64;
+    Some(MeasuredRtl {
+        device: device.max(0) as u32,
+        live_queue,
+        graph: graph.max(1),
+        rate,
+        mode: if ap { "AP" } else { "PC" },
+    })
 }
 
 /// The ALSA ring as time and frames, with the period composition that
@@ -13609,6 +13941,14 @@ fn uc_min_buffer_frames(rate: u32, queue: (u32, u32)) -> u32 {
 fn ucx_urb_frames(rate: u32, urb_frames: u32) -> u32 {
     let iso_packets = 8.min(urb_frames.max(1).div_ceil(6));
     iso_packets * rate.max(1).div_ceil(8000)
+}
+
+/// Frames covered by the UC's host queue and device lead at the current
+/// rate.  The queued depth is `nurbs + 1` URBs, and the unit adds the same
+/// 60-frame output lead measured on the UCX.
+fn uc_rtl_frames(rate: u32, queue: (u32, u32)) -> (u32, u32) {
+    let (usb, endpoint) = uc_usb_frames(rate, queue);
+    (usb + endpoint, 60)
 }
 
 /// Frames covered by the UCX's host queue and device lead at the current
@@ -19257,7 +19597,8 @@ mod tests {
         is_undoable, mute_armed, new, new_with_device, power_sum_output_meters, rate_choices,
         reorder_pair_volumes, save_workspace_to, solo_armed, strength_snapshot, strip_params,
         strip_target_pair, sync_control_room_runtime, temporary_group_exists, trim_factor,
-        trim_meter_levels, uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
+        trim_meter_levels, uc_live_queue_frames, uc_min_buffer_frames, uc_measured_rtl, uc_rtl_frames,
+        uc_usb_frames, ucx_min_buffer_frames, UC_AP_MEASUREMENTS, UC_PC_MEASUREMENTS,
         ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         PwClock, RateChoice, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
@@ -19520,6 +19861,81 @@ mod tests {
     }
 
     #[test]
+    fn uc_latency_line_uses_the_ucx_rtl_structure() {
+        // Full-duplex out5-in5 measurement: 217-frame device formula
+        // (3 x 48 USB + 60 lead + 13 converter) at 32-48 kHz, plus one
+        // 1024 graph period.  Higher rates scale the URB frames.
+        assert_eq!(uc_rtl_frames(32_000, (48, 2)), (144, 60));
+        assert_eq!(uc_rtl_frames(44_100, (48, 2)), (144, 60));
+        assert_eq!(uc_rtl_frames(48_000, (48, 2)), (144, 60));
+        assert_eq!(uc_rtl_frames(96_000, (48, 2)), (288, 60));
+        assert_eq!(uc_rtl_frames(192_000, (48, 2)), (576, 60));
+        let rtl = RtlEstimate {
+            usb: 144,
+            lead: 60,
+            converter: 13,
+            graph: 1024,
+            rate: 44_100,
+            tolerance_ms: 1.5,
+        };
+        assert_eq!(rtl.total(), 1241);
+        assert_eq!(rtl.summary(), "28.1 ms RTL estimate (±1.5 ms)");
+        assert!(rtl.breakdown().contains("23.2 ms graph"));
+    }
+
+    #[test]
+    fn uc_measured_rtl_uses_the_mode_calibration_and_live_inputs() {
+        for measurement in UC_PC_MEASUREMENTS {
+            let (usb, endpoint) = uc_usb_frames(measurement.rate, (48, 2));
+            assert_eq!(
+                usb + endpoint,
+                measurement.queue_frames,
+                "PC calibration queue drifted at {} Hz",
+                measurement.rate
+            );
+        }
+        for measurement in UC_AP_MEASUREMENTS {
+            let live = uc_live_queue_frames(measurement.rate, (48, 2), true);
+            assert_eq!(
+                live, measurement.queue_frames,
+                "AP calibration queue drifted at {} Hz",
+                measurement.rate
+            );
+        }
+
+        let rtl = uc_measured_rtl(44_100, (48, 2), 1024, false).expect("PC 44.1 calibrated");
+        assert_eq!(rtl.device, 215);
+        assert_eq!(rtl.live_queue, 144);
+        assert_eq!(rtl.total(), 1239);
+        assert_eq!(rtl.summary(), "28.1 ms RTL (measured PC)");
+        assert!(rtl.breakdown().contains("3.3 ms live USB queue"));
+        assert!(rtl.breakdown().contains("23.2 ms graph"));
+
+        let rtl = uc_measured_rtl(44_100, (48, 2), 128, true).expect("AP 44.1 calibrated");
+        assert_eq!(rtl.device, 179);
+        assert_eq!(rtl.live_queue, 144);
+        assert_eq!(rtl.total(), 307);
+        assert_eq!(rtl.summary(), "7.0 ms RTL (measured AP)");
+        assert!(rtl.breakdown().contains("3.3 ms live USB queue"));
+
+        let rtl = uc_measured_rtl(192_000, (48, 2), 128, true).expect("AP 192 calibrated");
+        assert_eq!(rtl.device, 505);
+        assert_eq!(rtl.live_queue, 576);
+        assert_eq!(rtl.total(), 633);
+        assert_eq!(rtl.summary(), "3.3 ms RTL (measured AP)");
+
+        // A driver queue change is applied as a delta from the calibration,
+        // without a new loopback measurement.
+        let adjusted = uc_measured_rtl(44_100, (48, 3), 128, false).expect("calibrated rate");
+        assert_eq!(adjusted.live_queue, 192);
+        assert_eq!(adjusted.device, 263);
+        assert_eq!(adjusted.total(), 391);
+
+        assert!(uc_measured_rtl(64_000, (48, 2), 128, false).is_none());
+        assert!(uc_measured_rtl(64_000, (48, 2), 128, true).is_none());
+    }
+
+    #[test]
     fn ucx_latency_line_is_an_rtl_estimate() {
         let rtl = RtlEstimate {
             usb: 144,
@@ -19527,6 +19943,7 @@ mod tests {
             converter: 13,
             graph: 128,
             rate: 44_100,
+            tolerance_ms: 1.2,
         };
         assert_eq!(rtl.total(), 345);
         assert_eq!(rtl.summary(), "7.8 ms RTL estimate (±1.2 ms)");
