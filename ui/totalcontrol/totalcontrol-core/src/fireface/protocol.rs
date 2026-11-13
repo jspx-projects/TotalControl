@@ -201,13 +201,13 @@ const UC_DB_PER_LEVEL_LSB: f32 = 6.0206 / 0x8000 as f32;
 ///
 /// The two personalities encode input levels differently.  The PC
 /// (interrupt) personality uses the octave/log words measured on 2026-11-12;
-/// the AP (ISO) personality publishes linear RMS words.  Playback and
+/// the AP (ISO) personality publishes linear peak words.  Playback and
 /// hardware-output records use the linear 16-bit word in both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UcInputLaw {
     /// UC PC: analog 6800 log scale, digital 0x420000 octave scale.
     Octave,
-    /// UC AP: analog linear 16-bit RMS, digital linear 24-bit RMS.
+    /// UC AP: analog linear 16-bit peak, digital linear 24-bit peak.
     Linear,
 }
 /// The saturation over field: the low byte's tag nibble is `0xf` and the
@@ -252,6 +252,42 @@ impl UcMeterPacket {
             .get(Self::ANALOG_INPUT_COUNT + channel)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// Consecutive-over count from an analog input record's low halfword.
+    /// The high byte is `0xff` while over; `0xff00` is a no-over filler.
+    pub fn analog_input_over_run(&self, channel: usize) -> u8 {
+        let ovr = self.analog_input(channel) as u16;
+        if (ovr >> 8) as u8 == 0xff {
+            (ovr & 0xff) as u8
+        } else {
+            0
+        }
+    }
+
+    /// Whether an analog input record carries the over event past the
+    /// global OVR sample gate.
+    pub fn analog_input_ovr(&self, channel: usize) -> bool {
+        self.analog_input_over_run(channel) >= UC_OVR_RUN_GATE
+    }
+
+    /// Overload ratio from a digital input record.  The 24-bit level
+    /// saturates at `0x7fffff`; the low byte then carries the ratio.
+    pub fn digital_input_over_run(&self, channel: usize) -> u8 {
+        let record = self.digital_input(channel);
+        if ((record >> 8) & 0xffffff) == 0x7fffff {
+            record as u8
+        } else {
+            0
+        }
+    }
+
+    /// Whether a digital input record carries the over tag.
+    pub fn digital_input_ovr(&self, channel: usize) -> bool {
+        let record = self.digital_input(channel);
+        ((record >> 8) & 0xffffff) == 0x7fffff
+            && (record as u8) & 0x0f == UC_OVER_TAG
+            && (record as u8) > 0
     }
 
     /// Raw record of a playback channel.
@@ -315,12 +351,16 @@ impl UcMeterPacket {
 /// The alternate UC `0x85` flag page, carrying RMS power words.
 ///
 /// The page carries one 4-word slot per channel with the RMS power word at
-/// slot offset 3.  The playback bank occupies words 72..143 (channels
-/// 0..17); the output bank follows at words 144..161 but is truncated after
-/// output channels 0..3 (AN1..AN4), so their RMS words sit at 147, 151,
-/// 155 and 159.  The page's word 1 is 0 or 1; word 6 stays zero.
+/// slot offset 3.  The input bank occupies words 0..71, the playback bank
+/// words 72..143 (channels 0..17); the output bank follows at words 144..161
+/// but is truncated after output channels 0..3 (AN1..AN4), so their RMS
+/// words sit at 147, 151, 155 and 159.  The page's word 1 is 0 or 1; word 6
+/// stays zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UcRmsPacket {
+    /// Input RMS bank: one power word per input at `3 + 4c` for input
+    /// channels `0..17` (AN1..8, S/PDIF L/R, ADAT 1..8).
+    pub input: [u16; 18],
     pub playback: [u16; 18],
     /// RMS bank for hardware output channels 0..3 (AN1..AN4); the page's
     /// word budget ends before output channel 4's own slot.
@@ -339,10 +379,18 @@ impl UcRmsPacket {
             return None;
         }
         // A quiet flag page can be all zero; there is simply no RMS update
-        // to apply.  The playback RMS bank occupies words 72..143 and the
-        // output bank words 144..161.
-        if (72..=161).all(|word| uc_word(b, word) == 0) {
+        // to apply.  The input bank occupies words 0..71, the playback bank
+        // words 72..143 and the output bank words 144..161.
+        let any_input = (0..18).any(|channel| uc_word(b, 3 + channel * 4) != 0);
+        if !any_input && (72..=161).all(|word| uc_word(b, word) == 0) {
             return None;
+        }
+        let mut input = [0u16; 18];
+        for channel in 0..18 {
+            let word = 3 + channel * 4;
+            input[channel] = u16::from_le_bytes(
+                b[word * 2..word * 2 + 2].try_into().unwrap(),
+            );
         }
         let mut playback = [0u16; 18];
         for pair in 0..9 {
@@ -362,7 +410,16 @@ impl UcRmsPacket {
                 b[word * 2..word * 2 + 2].try_into().unwrap(),
             );
         }
-        Some(Self { playback, output })
+        Some(Self {
+            input,
+            playback,
+            output,
+        })
+    }
+
+    /// RMS power word of an input channel.
+    pub fn input(&self, channel: usize) -> u16 {
+        self.input.get(channel).copied().unwrap_or(0)
     }
 
     pub fn playback(&self, channel: usize) -> u16 {
@@ -388,7 +445,7 @@ pub fn uc_over_dbfs(record: u32) -> f32 {
 
 /// dBFS of a UC digital input meter record (S/PDIF, ADAT).
 ///
-/// The level is a linear 24-bit RMS value in bits 8..31; `0x800000` is
+/// The level is a linear 24-bit peak value in bits 8..31; `0x800000` is
 /// full scale.  The low byte is the overload field and is not part of the
 /// level.  A level below the meter's own floor is page filler (`0x1fff`)
 /// and returns `None` so the meter bank holds the previous value.
@@ -492,7 +549,7 @@ pub const UC_OVR_RUN_GATE: u8 = 3;
 
 /// dBFS of a UC analog input record.
 ///
-/// The level is a linear 16-bit RMS word in the upper halfword; `0x8000`
+/// The level is a linear 16-bit peak word in the upper halfword; `0x8000`
 /// is full scale and the lower halfword is packet noise.  A captured AP
 /// loopback of a -20 dBFS tone read `0x21d9` on AN5, the same linear scale
 /// as playback and output, with the input reference (`-10 dBV`) adding its
@@ -1092,6 +1149,51 @@ mod tests {
     }
 
     #[test]
+    fn uc_flag_page_carries_input_rms_power() {
+        let mut b = [0u8; UcMeterPacket::LEN];
+        b[4..8].copy_from_slice(&1u32.to_le_bytes());
+        // AN5 (c=4) and S/PDIF L (c=8) live at 3 + 4c.
+        b[(3 + 4 * 4) * 2..(3 + 4 * 4) * 2 + 2]
+            .copy_from_slice(&1098u16.to_le_bytes());
+        b[(3 + 4 * 8) * 2..(3 + 4 * 8) * 2 + 2]
+            .copy_from_slice(&159u16.to_le_bytes());
+        let p = UcRmsPacket::parse(&b).expect("flag page");
+        assert_eq!(p.input(4), 1098);
+        assert_eq!(p.input(8), 159);
+        assert_eq!(p.input(5), 0);
+        assert!((uc_playback_rms_linear(p.input(4)) - 0.1831).abs() < 0.001);
+
+        // A page with only an input RMS word still parses.
+        let mut only = [0u8; UcMeterPacket::LEN];
+        only[4..8].copy_from_slice(&1u32.to_le_bytes());
+        only[(3 + 4 * 0) * 2..(3 + 4 * 0) * 2 + 2]
+            .copy_from_slice(&1u16.to_le_bytes());
+        assert!(UcRmsPacket::parse(&only).is_some());
+    }
+
+    #[test]
+    fn uc_input_ovr_records() {
+        let mut p = UcMeterPacket::default();
+        // Analog AN1: low halfword is the OVR word, high halfword 0x7fff.
+        p.records[0] = 0x7fff_ff04;
+        assert_eq!(p.analog_input_over_run(0), 4);
+        assert!(p.analog_input_ovr(0));
+        p.records[0] = 0x7fff_ff00;
+        assert_eq!(p.analog_input_over_run(0), 0);
+        assert!(!p.analog_input_ovr(0));
+        p.records[0] = 0x7fff_1234;
+        assert_eq!(p.analog_input_over_run(0), 0);
+        // Digital S/PDIF L: low byte is the overload ratio at saturation.
+        p.records[8] = 0x7fffffcf;
+        assert_eq!(p.digital_input_over_run(0), 0xcf);
+        assert!(p.digital_input_ovr(0));
+        p.records[8] = 0x0ccd0000;
+        assert!(!p.digital_input_ovr(0));
+        p.records[8] = 0x7fffff00;
+        assert!(!p.digital_input_ovr(0));
+    }
+
+    #[test]
     fn uc_win_rme_data_page_uses_word_six_and_is_not_rms() {
         // UC_WIN_RME marks neither page with 0x1fff.  Its data page sets
         // word 6 and carries the Peak/OVR records; its flag page leaves
@@ -1156,7 +1258,7 @@ mod tests {
 
     #[test]
     fn uc_analog_input_records_decode_the_linear_scale() {
-        // The upper halfword is a linear 16-bit RMS word: 0x8000 is full
+        // The upper halfword is a linear 16-bit peak word: 0x8000 is full
         // scale.  AP capture: a looped -20 dBFS tone read 0x21d9 on AN5
         // at the -10 dBV input reference.
         assert!((uc_analog_input_dbfs(0x21d90000).unwrap() + 11.56).abs() < 0.05);
@@ -1167,7 +1269,7 @@ mod tests {
 
     #[test]
     fn uc_digital_input_records_decode_the_linear_scale() {
-        // Bits 8..31 are a linear 24-bit RMS word: 0x800000 is full scale.
+        // Bits 8..31 are a linear 24-bit peak word: 0x800000 is full scale.
         // AP capture: the physical S/PDIF loop at -20 dBFS read 0x0ccd0000.
         assert!((uc_digital_dbfs(0x0ccd0000).unwrap() + 20.0).abs() < 0.05);
         let level = (UC_LINEAR_24_FULL_SCALE * 10f32.powf(-6.0 / 20.0)) as u32;

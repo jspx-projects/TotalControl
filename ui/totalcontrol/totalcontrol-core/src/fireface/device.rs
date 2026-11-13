@@ -336,8 +336,13 @@ impl MeterBank {
 /// bottom code, so every page merges its records into the held maximum.
 #[derive(Clone, Debug)]
 struct UcMeterBank {
-    /// Display order: 0..8 analog, 8..18 S/PDIF and ADAT.
+    /// Display order: 0..8 analog, 8..18 S/PDIF and ADAT.  This is the
+    /// data-page peak word.
     input: [f32; 18],
+    /// Device input RMS from the flag-page input bank.
+    input_rms: [f32; 18],
+    /// Device input OVR flags from the data-page low halfword/byte.
+    input_ovr: [bool; 18],
     playback: [f32; 18],
     playback_rms: [f32; 18],
     output: [f32; 18],
@@ -356,6 +361,8 @@ impl Default for UcMeterBank {
     fn default() -> Self {
         Self {
             input: [f32::NEG_INFINITY; 18],
+            input_rms: [0.0; 18],
+            input_ovr: [false; 18],
             playback: [f32::NEG_INFINITY; 18],
             playback_rms: [0.0; 18],
             output: [f32::NEG_INFINITY; 18],
@@ -401,7 +408,7 @@ impl UcMeterBank {
 
     fn apply(&mut self, packet: &UcMeterPacket, law: protocol::UcInputLaw) {
         // Analog input records and digital input records share the data
-        // page.  The AP personality publishes linear RMS words; the PC
+        // page.  The AP personality publishes linear peak words; the PC
         // personality publishes the octave/log words.  Playback and output
         // records are linear in both.
         let analog_db: fn(u32) -> Option<f32> = match law {
@@ -415,6 +422,8 @@ impl UcMeterBank {
         for channel in 0..UcMeterPacket::ANALOG_INPUT_COUNT {
             let record = packet.analog_input(channel);
             Self::set_level(&mut self.input, channel, record, analog_db(record));
+            self.input_ovr[channel] =
+                law == protocol::UcInputLaw::Linear && packet.analog_input_ovr(channel);
         }
         for channel in 0..UcMeterPacket::DIGITAL_INPUT_COUNT {
             let record = packet.digital_input(channel);
@@ -424,6 +433,8 @@ impl UcMeterBank {
                 record,
                 digital_db(record),
             );
+            self.input_ovr[UcMeterPacket::ANALOG_INPUT_COUNT + channel] =
+                packet.digital_input_ovr(channel);
         }
         for channel in 0..18 {
             let record = packet.playback(channel);
@@ -438,6 +449,10 @@ impl UcMeterBank {
     }
 
     fn apply_rms(&mut self, packet: &UcRmsPacket) {
+        for channel in 0..18 {
+            self.input_rms[channel] =
+                protocol::uc_playback_rms_linear(packet.input(channel));
+        }
         for channel in 0..18 {
             self.playback_rms[channel] =
                 protocol::uc_playback_rms_linear(packet.playback(channel));
@@ -457,6 +472,14 @@ impl UcMeterBank {
 
     fn input(&self, channel: usize) -> f32 {
         self.level(self.input[channel])
+    }
+
+    fn input_rms(&self, channel: usize) -> f32 {
+        self.input_rms[channel]
+    }
+
+    fn input_ovr(&self, channel: usize) -> bool {
+        self.input_ovr[channel]
     }
 
     fn playback(&self, channel: usize) -> f32 {
@@ -486,8 +509,8 @@ impl UcMeterBank {
         self.output_over[channel]
     }
 
-    /// The record is the detector's held level per channel, so the peak
-    /// lines mirror the level until the page's own peak word is decoded.
+    /// The data-page input record is the device's peak word, so the peak
+    /// line uses it directly.  The bar is the separate flag-page RMS.
     fn input_peak(&self, channel: usize) -> f32 {
         self.input(channel)
     }
@@ -3312,6 +3335,33 @@ impl Fireface {
                     .map(|i| self.uc_meters.input_peak(i))
                     .collect(),
             ),
+        }
+    }
+
+    /// Device input RMS bars from the flag-page input bank.  `None` when the
+    /// backend has no separate RMS feed; the caller falls back to the peak
+    /// word.
+    pub fn input_rms_meters(&self) -> Option<Vec<f32>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.inputs.len())
+                    .map(|i| self.uc_meters.input_rms(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
+        }
+    }
+
+    /// Per-input OVR flags from the UC data page: the analog low-word event
+    /// (gated by the global sample preference) and the digital over tag.
+    pub fn input_ovr(&self) -> Option<Vec<bool>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.inputs.len())
+                    .map(|i| self.uc_meters.input_ovr(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
         }
     }
 
@@ -9159,10 +9209,10 @@ mod tests {
         let (mut dev, _writes) = open(Model::Uc);
         let mut bytes = [0u8; UcMeterPacket::LEN];
         bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
-        // AN1 at -30 dBFS: linear 16-bit RMS, level = 32768 * 10^(-30/20).
+        // AN1 at -30 dBFS: linear 16-bit peak, level = 32768 * 10^(-30/20).
         let an = (protocol::UC_LINEAR_16_FULL_SCALE * 10f32.powf(-30.0 / 20.0)) as u32;
         bytes[108..112].copy_from_slice(&(an << 16).to_le_bytes());
-        // S/PDIF left at -20 dBFS: linear 24-bit RMS in bits 8..31.
+        // S/PDIF left at -20 dBFS: linear 24-bit peak in bits 8..31.
         let dig = (protocol::UC_LINEAR_24_FULL_SCALE * 10f32.powf(-20.0 / 20.0)) as u32;
         bytes[140..144].copy_from_slice(&(dig << 8).to_le_bytes());
         // Playback 1 peak at -6.02 dBFS: half scale in the upper halfword.
@@ -9322,6 +9372,40 @@ mod tests {
     }
 
     #[test]
+    fn uc_input_rms_bank_reads_the_flag_page() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut flag = [0u8; UcMeterPacket::LEN];
+        flag[4..8].copy_from_slice(&1u32.to_le_bytes());
+        flag[(3 + 4 * 4) * 2..(3 + 4 * 4) * 2 + 2]
+            .copy_from_slice(&1098u16.to_le_bytes());
+        flag[(3 + 4 * 8) * 2..(3 + 4 * 8) * 2 + 2]
+            .copy_from_slice(&159u16.to_le_bytes());
+        let rms = UcRmsPacket::parse(&flag).expect("flag page");
+        dev.uc_meters.apply_rms(&rms);
+        let inputs = dev.input_rms_meters().expect("UC input RMS");
+        assert!((inputs[4] - 0.1831).abs() < 0.001, "AN5 RMS");
+        assert!((inputs[8] - 0.0696).abs() < 0.001, "S/PDIF L RMS");
+        assert_eq!(inputs[5], 0.0);
+    }
+
+    #[test]
+    fn uc_input_ovr_reads_the_data_page_fields() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut bytes = [0u8; UcMeterPacket::LEN];
+        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // AN1 analog: high halfword 0x7fff, low halfword 0xff04.
+        bytes[108..112].copy_from_slice(&0x7fffff04u32.to_le_bytes());
+        // S/PDIF L: saturated 24-bit level and over ratio 0xcf.
+        bytes[140..144].copy_from_slice(&0x7fffffcfu32.to_le_bytes());
+        let packet = UcMeterPacket::parse(&bytes).expect("data page");
+        dev.uc_meters.apply(&packet, protocol::UcInputLaw::Linear);
+        let ovr = dev.input_ovr().expect("UC input OVR");
+        assert!(ovr[0], "AN1 analog over event");
+        assert!(ovr[8], "S/PDIF L digital over tag");
+        assert!(!ovr[1], "AN2 silent");
+    }
+
+    #[test]
     fn uc_flag_page_rms_carries_first_four_outputs() {
         let (mut dev, _writes) = open(Model::Uc);
         // Bank words 147/151/155/159 are the RMS power words of output
@@ -9373,7 +9457,7 @@ mod tests {
         let (mut dev, _writes) = open(Model::Uc);
         let mut data = [0u8; UcMeterPacket::LEN];
         data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
-        // Output Phones 7 (record 42): linear 16-bit RMS, -20 dBFS.
+        // Output Phones 7 (record 42): linear 16-bit peak, -20 dBFS.
         data[276..280].copy_from_slice(&0x0ccd0000u32.to_le_bytes());
         dev.uc_meters
             .apply(
@@ -9442,7 +9526,7 @@ mod tests {
         let (mut dev, _writes) = open(Model::Uc);
         let mut data = [0u8; UcMeterPacket::LEN];
         data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
-        // S/PDIF L at -20 dBFS: linear 24-bit RMS in bits 8..31.
+        // S/PDIF L at -20 dBFS: linear 24-bit peak in bits 8..31.
         data[140..144].copy_from_slice(&0x0ccd0000u32.to_le_bytes());
         dev.uc_meters
             .apply(

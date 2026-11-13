@@ -1050,6 +1050,17 @@ impl DeviceHandle {
         }
     }
 
+    /// Device-side input RMS bars from the flag-page input bank.  `None`
+    /// falls back to the data-page peak/level feed.
+    pub fn device_input_meters(&self) -> Option<Vec<f32>> {
+        match self {
+            DeviceHandle::Mirror(d) => Some(d.meters().inputs.to_vec()),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => d.input_rms_meters(),
+            _ => None,
+        }
+    }
+
     /// Device-side SW-playback meters (UCX IF1 0x85), if available.
     pub fn device_playback_meters(&self) -> Option<Vec<f32>> {
         match self {
@@ -1091,6 +1102,16 @@ impl DeviceHandle {
             return d.playback_ovr();
         }
         None
+    }
+
+    /// Device input OVR flags (analog low-word event, digital over tag).
+    pub fn device_input_ovr(&self) -> Option<Vec<bool>> {
+        match self {
+            DeviceHandle::Mirror(d) => d.meters().input_ovr.map(|flags| flags.to_vec()),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => d.input_ovr(),
+            _ => None,
+        }
     }
 
     pub fn device_output_ovr(&self) -> Option<Vec<bool>> {
@@ -9090,7 +9111,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             let raw_input = if state.connected {
                 state
                     .device
-                    .input_peaks()
+                    .device_input_meters()
                     .unwrap_or_else(|| state.device.input_meters())
             } else {
                 vec![0.0; state.device.inputs().len()]

@@ -468,6 +468,11 @@ that bar as an approximation while the device's own meter word for those
 rows is still unknown; the peak line and the OVR block use the device's
 peak record for every output row.
 
+On the same unit every input row takes the device input RMS word for the
+bar and the input peak record for the peak line; the input RMS and peak
+banks cover all eighteen inputs. The input OVR block follows the device's
+input over word.
+
 The RMS bar is mathematically correct RMS: a full-scale sine reads about
 -3 dB on it. TotalMix FX offers an optional **RMS +3 dB** display shift that
 makes the RMS reading and the peak line both read 0 dB for a full-scale

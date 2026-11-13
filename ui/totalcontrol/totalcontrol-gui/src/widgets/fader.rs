@@ -449,7 +449,12 @@ fn bus_levels(
     stereo: bool,
 ) -> (f32, f32, Option<bool>, Option<(f32, f32, Option<bool>)>) {
     let (levels, peaks, ovr, index) = match slot {
-        BusSlot::Input(i) => (&snapshot.inputs, &snapshot.input_peaks, None, i),
+        BusSlot::Input(i) => (
+            &snapshot.inputs,
+            &snapshot.input_peaks,
+            snapshot.input_ovr.as_ref(),
+            i,
+        ),
         BusSlot::Playback(i) => (
             &snapshot.playbacks,
             &snapshot.playback_peaks,
