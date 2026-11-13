@@ -43,6 +43,8 @@ WirePlumber.
   panels, gestures and motion.
 - [Channel template schema](docs/spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) —
   shared channel templates, layout configuration, invariants and preview.
+- [Device profile specification](docs/spec/TOTALCONTROL-DEVICE-PROFILE-SPEC.md) —
+  profile table, selection, host operations and scene compatibility.
 - [UC protocol specification](docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md).
 - [UCX protocol specification](docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md).
 - [Babyface-classic protocol specification](docs/spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md).

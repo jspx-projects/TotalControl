@@ -8,6 +8,7 @@ these documents extend it with device-specific and visible detail.
 |---|---|
 | [TOTALCONTROL-GUI-SPEC.md](TOTALCONTROL-GUI-SPEC.md) | layout, strip controls, panels, gestures, motion and Control Room |
 | [TOTALCONTROL-STATE-SPEC.md](TOTALCONTROL-STATE-SPEC.md) | state ownership, current workspace, autosave, restore, host settings and layout files |
+| [TOTALCONTROL-DEVICE-PROFILE-SPEC.md](TOTALCONTROL-DEVICE-PROFILE-SPEC.md) | profile table, selection, host operations, capabilities and scene compatibility |
 | [TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md](TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) | channel-template schema, layout document, per-device overrides, invariants and preview |
 | [TOTALCONTROL-OSC-SPEC.md](TOTALCONTROL-OSC-SPEC.md) | OSC 1.96 and Global OSC transport, address spaces, scales, feedback and mapping |
 | [FIREFFACE-UCX-PROTOCOL-SPEC.md](FIREFFACE-UCX-PROTOCOL-SPEC.md) | Fireface UCX transport, registers, writes and readback |

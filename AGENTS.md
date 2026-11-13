@@ -59,6 +59,8 @@ Authoritative files:
   visible state.
 - `docs/spec/TOTALCONTROL-STATE-SPEC.md` — state ownership, current
   workspace, autosave, restore, host settings and layout files.
+- `docs/spec/TOTALCONTROL-DEVICE-PROFILE-SPEC.md` — profile table, selection,
+  host operations, capabilities and scene compatibility.
 - `docs/spec/TOTALCONTROL-OSC-SPEC.md` — OSC 1.96 and Global OSC transport,
   address spaces, scales, feedback and mapping.
 - `docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` — UCX transport, registers,
