@@ -12,8 +12,7 @@ these documents extend it with device-specific and visible detail.
 | [TOTALCONTROL-OSC-SPEC.md](TOTALCONTROL-OSC-SPEC.md) | OSC 1.96 and Global OSC transport, address spaces, scales, feedback and mapping |
 | [FIREFFACE-UCX-PROTOCOL-SPEC.md](FIREFFACE-UCX-PROTOCOL-SPEC.md) | Fireface UCX transport, registers, writes and readback |
 | [FIREFFACE-UC-PROTOCOL-SPEC.md](FIREFFACE-UC-PROTOCOL-SPEC.md) | Fireface UC transport and controls |
-| [BABYFACE-PRO-PROTOCOL-SPEC.md](BABYFACE-PRO-PROTOCOL-SPEC.md) | Babyface Pro FS channel model, ALSA surface, USB protocol and DSP blocks |
-| [BABYFACE-CLASSIC-PROTOCOL-SPEC.md](BABYFACE-CLASSIC-PROTOCOL-SPEC.md) | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI |
+| [BABYFACE-CLASSIC-PROTOCOL-SPEC.md](BABYFACE-CLASSIC-PROTOCOL-SPEC.md) | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI (experimental) |
 
 The end-user manual is
 [`../TOTALCONTROL-Manual.md`](../TOTALCONTROL-Manual.md). Development-only

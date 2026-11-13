@@ -15,10 +15,10 @@ use std::time::{Duration, Instant};
 use totalcontrol_core::channel::EqBandType;
 use totalcontrol_core::fireface::UcxDump;
 #[cfg(feature = "alsa")]
-use totalcontrol_core::{BabyfaceClassic, BabyfacePro, Fireface, FirefaceModel};
+use totalcontrol_core::{BabyfaceClassic, Fireface, FirefaceModel};
 use totalcontrol_core::{
-    BabyfaceProUsb, ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockBabyfacePro, Reverb,
-    RmeDevice, Scene, Sensitivity, TalkbackConfig,
+    ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockDevice, Reverb, RmeDevice, Scene,
+    Sensitivity, TalkbackConfig,
 };
 
 use crate::about;
@@ -51,10 +51,8 @@ pub fn short_label(name: &str) -> &str {
 }
 
 /// Combines a linked output pair's two per-channel names ("AN1"/"AN2",
-/// "PH3"/"PH4", "ADAT7"/"ADAT8") into the historical combined bus label
-/// ("AN1/2", "PH3/4", "ADAT7/8") — matches what `totalcontrol-usb`'s output
-/// list used before it became per-channel (see `usb.rs`'s `open()`),
-/// and what TotalMix itself shows for a linked stereo bus. Falls back to
+/// "PH3"/"PH4", "ADAT7"/"ADAT8") into the combined bus label TotalMix
+/// shows for a linked stereo bus ("AN1/2", "PH3/4", "ADAT7/8"). Falls back to
 /// `"{left}/{right}"` unmodified if `right` doesn't end in digits (not
 /// expected for this device's own channel names, but harmless).
 pub(crate) fn pair_bus_label(left: &str, right: &str) -> String {
@@ -126,11 +124,8 @@ pub enum DeviceKind {
     Fireface,
     Ucx,
     Uc,
-    Babyface,
     /// The Babyface-classic through the kernel hwdep transport.
     BabyfaceClassic,
-    /// The in-memory device, as a Babyface Pro FS.
-    Mock,
     /// The in-memory device, as a Fireface UCX: EQ, dynamics, FX and the
     /// Control Room, all without hardware.
     MockUcx,
@@ -155,14 +150,13 @@ fn choose_startup_kind(
     // A saved simulation is only used while nothing real is attached.
     if matches!(
         preferred,
-        Some(DeviceKind::Mock) | Some(DeviceKind::MockUcx) | Some(DeviceKind::MockUc)
+        Some(DeviceKind::MockUcx) | Some(DeviceKind::MockUc)
     ) {
-        if let Some(real) = available.iter().copied().find(|k| {
-            !matches!(
-                k,
-                DeviceKind::Mock | DeviceKind::MockUcx | DeviceKind::MockUc
-            )
-        }) {
+        if let Some(real) = available
+            .iter()
+            .copied()
+            .find(|k| !matches!(k, DeviceKind::MockUcx | DeviceKind::MockUc))
+        {
             return Some(real);
         }
         return preferred;
@@ -182,12 +176,9 @@ fn choose_startup_kind(
     // the reference layout (three rows, EQ/dynamics, FX) and the device the
     // control sections are specified against.
     let only_simulations = !available.is_empty()
-        && available.iter().all(|k| {
-            matches!(
-                k,
-                DeviceKind::Mock | DeviceKind::MockUcx | DeviceKind::MockUc
-            )
-        });
+        && available
+            .iter()
+            .all(|k| matches!(k, DeviceKind::MockUcx | DeviceKind::MockUc));
     if preferred.is_none() && only_simulations && available.contains(&DeviceKind::MockUcx) {
         return Some(DeviceKind::MockUcx);
     }
@@ -243,10 +234,7 @@ fn choose_startup_target(
         }
     }
     if let Some(kind) = preferred {
-        if !matches!(
-            kind,
-            DeviceKind::Mock | DeviceKind::MockUcx | DeviceKind::MockUc
-        ) {
+        if !matches!(kind, DeviceKind::MockUcx | DeviceKind::MockUc) {
             if let Some(target) = available.iter().find(|t| t.kind == kind) {
                 return Some(target.clone());
             }
@@ -269,13 +257,11 @@ fn choose_startup_target(
 }
 
 impl DeviceKind {
-    pub const ALL: [DeviceKind; 8] = [
+    pub const ALL: [DeviceKind; 6] = [
         DeviceKind::Fireface,
         DeviceKind::Ucx,
         DeviceKind::Uc,
-        DeviceKind::Babyface,
         DeviceKind::BabyfaceClassic,
-        DeviceKind::Mock,
         DeviceKind::MockUcx,
         DeviceKind::MockUc,
     ];
@@ -285,9 +271,7 @@ impl DeviceKind {
             DeviceKind::Fireface => "Fireface (auto)",
             DeviceKind::Ucx => "Fireface UCX",
             DeviceKind::Uc => "Fireface UC",
-            DeviceKind::Babyface => "Babyface Pro FS",
-            DeviceKind::BabyfaceClassic => "Babyface-classic",
-            DeviceKind::Mock => "Babyface Pro FS (simulated)",
+            DeviceKind::BabyfaceClassic => "Babyface-classic (experimental)",
             DeviceKind::MockUcx => "Fireface UCX (simulated)",
             DeviceKind::MockUc => "Fireface UC (simulated)",
         }
@@ -303,7 +287,6 @@ impl DeviceKind {
         match model {
             "Fireface UCX" => Some(Self::Ucx),
             "Fireface UC" => Some(Self::Uc),
-            "Babyface Pro FS" => Some(Self::Babyface),
             "Babyface-classic" => Some(Self::BabyfaceClassic),
             _ => None,
         }
@@ -311,8 +294,6 @@ impl DeviceKind {
 }
 
 pub enum DeviceHandle {
-    #[cfg(feature = "alsa")]
-    Real(BabyfacePro),
     /// Fireface UC/UCX through the kernel hwdep transport.  The kernel owns
     /// USB/PCM, TotalControl owns the model.
     #[cfg(feature = "alsa")]
@@ -320,11 +301,7 @@ pub enum DeviceHandle {
     /// First-generation Babyface through the kernel hwdep transport.
     #[cfg(feature = "alsa")]
     BabyfaceClassic(BabyfaceClassic),
-    Mock(MockBabyfacePro),
-    /// The proprietary USB backend (the TotalMix protocol). On Linux
-    /// with the device in proprietary mode this is the path that
-    /// actually works.
-    Usb(BabyfaceProUsb),
+    Mock(MockDevice),
     /// A UI-side copy of a device owned by the device service.
     Mirror(crate::device_service::Mirror),
 }
@@ -384,10 +361,7 @@ impl DeviceHandle {
 macro_rules! delegate {
     ($self:expr, $method:ident($($arg:expr),*)) => { match $self {
         DeviceHandle::Mock(d) => d.$method($($arg),*),
-        DeviceHandle::Usb(d) => d.$method($($arg),*),
         DeviceHandle::Mirror(d) => d.$method($($arg),*),
-        #[cfg(feature = "alsa")]
-        DeviceHandle::Real(d) => d.$method($($arg),*),
         #[cfg(feature = "alsa")]
         DeviceHandle::Fireface(d) => d.$method($($arg),*),
         #[cfg(feature = "alsa")]
@@ -395,10 +369,7 @@ macro_rules! delegate {
     } };
     ($self:expr, $method:ident) => { match $self {
         DeviceHandle::Mock(d) => d.$method(),
-        DeviceHandle::Usb(d) => d.$method(),
         DeviceHandle::Mirror(d) => d.$method(),
-        #[cfg(feature = "alsa")]
-        DeviceHandle::Real(d) => d.$method(),
         #[cfg(feature = "alsa")]
         DeviceHandle::Fireface(d) => d.$method(),
         #[cfg(feature = "alsa")]
@@ -554,11 +525,7 @@ impl RmeDevice for DeviceHandle {
     ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_playback_balance(pair, output, balance))
     }
-    fn pair_block_balance(
-        &self,
-        channel: ChannelId,
-        block: usize,
-    ) -> Option<i8> {
+    fn pair_block_balance(&self, channel: ChannelId, block: usize) -> Option<i8> {
         delegate!(self, pair_block_balance(channel, block))
     }
     fn set_pair_block_balance(
@@ -852,20 +819,9 @@ impl RmeDevice for DeviceHandle {
 }
 
 impl DeviceHandle {
-    /// Opens the real hardware. `backend` forces a specific path
-    /// (`"alsa"` or `"usb"`) — anything else (including `None`) auto-
-    /// detects: ALSA (the kernel driver) first, falling back to the
-    /// direct USB backend if the kernel driver isn't loaded. The USB
-    /// backend refuses to open while the kernel driver owns the device
-    /// (see `totalcontrol-usb`), so the two paths are mutually exclusive —
-    /// auto-detect never double-opens, it just wasn't ever *said* which
-    /// one won. Every path now logs that at `info` level so a failure
-    /// to find the device isn't a silent "which one did it even try?".
-    pub fn open_real(backend: Option<&str>) -> Option<Self> {
-        #[cfg_attr(not(feature = "alsa"), allow(unused_variables))]
-        let want_alsa = !matches!(backend, Some("usb"));
-        let want_usb = !matches!(backend, Some("alsa"));
-
+    /// Opens the first real hwdep device: a Fireface UC/UCX or a
+    /// Babyface-classic.
+    pub fn open_real() -> Option<Self> {
         #[cfg(feature = "alsa")]
         for c in totalcontrol_core::fireface::class_compliant_cards() {
             log::warn!(
@@ -878,12 +834,11 @@ impl DeviceHandle {
         }
 
         #[cfg(feature = "alsa")]
-        if want_alsa {
-            // Refactored path first: the kernel module exposes one hwdep
-            // control node per card and PCM only.  This works for UC and
-            // UCX and for several units at once; `open()` picks the first.
-            // Keep the UC/UCX auto path ahead of the Babyface-classic so a
-            // multi-device setup keeps its previous selection.
+        {
+            // The kernel module exposes one hwdep control node per card and
+            // PCM only.  The UC/UCX auto path stays ahead of the
+            // Babyface-classic so a multi-device setup keeps its previous
+            // selection.
             match Fireface::open() {
                 Ok(d) => {
                     log::info!(
@@ -902,61 +857,25 @@ impl DeviceHandle {
                 }
                 Err(e) => log::debug!("Babyface-classic hwdep open not available: {e:?}"),
             }
-            match BabyfacePro::open() {
-                Ok(d) => {
-                    log::info!("Device backend: ALSA (kernel driver)");
-                    return Some(DeviceHandle::Real(d));
-                }
-                Err(e) if backend == Some("alsa") => {
-                    log::warn!("--backend alsa requested but ALSA open failed: {e:?}");
-                    return None;
-                }
-                // The card was found, it's just in a mode this backend
-                // can't drive — user-actionable, so say it on stderr
-                // instead of falling through to the generic (and here
-                // simply wrong) "No device found".
-                Err(e @ totalcontrol_core::Error::UnsupportedDeviceMode { .. }) => {
-                    eprintln!("{e}");
-                }
-                Err(_) => {}
-            }
-        }
-        #[cfg(not(feature = "alsa"))]
-        if backend == Some("alsa") {
-            log::warn!("--backend alsa requested but this build has no `alsa` feature");
-            return None;
-        }
-
-        if want_usb {
-            match BabyfaceProUsb::open() {
-                Ok(d) => {
-                    log::info!("Device backend: USB (libusb)");
-                    return Some(DeviceHandle::Usb(d));
-                }
-                Err(e) if backend == Some("usb") => {
-                    log::warn!("--backend usb requested but USB open failed: {e:?}");
-                }
-                Err(_) => {}
-            }
         }
         None
     }
     /// The UCX simulation, same in-memory device with the UCX's topology and
     /// capability set.
     pub fn open_mock_ucx() -> Self {
-        DeviceHandle::Mock(MockBabyfacePro::open_ucx().expect("mock opens"))
+        DeviceHandle::Mock(MockDevice::open_ucx().expect("mock opens"))
     }
 
     /// The UC simulation: the UC's topology and gated feature set.
     pub fn open_mock_uc() -> Self {
-        DeviceHandle::Mock(MockBabyfacePro::open_uc().expect("mock opens"))
+        DeviceHandle::Mock(MockDevice::open_uc().expect("mock opens"))
     }
 
     pub fn open_mock() -> Self {
         let device = match std::env::var("TOTALCONTROL_MOCK_MODEL").ok().as_deref() {
-            Some("ucx") => MockBabyfacePro::open_ucx(),
-            Some("uc") => MockBabyfacePro::open_uc(),
-            _ => MockBabyfacePro::open(),
+            Some("uc") => MockDevice::open_uc(),
+            Some("ucx") | None => MockDevice::open_ucx(),
+            Some(_) => MockDevice::open_ucx(),
         };
         DeviceHandle::Mock(device.expect("mock opens"))
     }
@@ -964,18 +883,13 @@ impl DeviceHandle {
     pub fn kind(&self) -> DeviceKind {
         match self {
             DeviceHandle::Mock(d) => {
-                if d.is_ucx() {
-                    DeviceKind::MockUcx
-                } else if d.is_uc() {
+                if d.is_uc() {
                     DeviceKind::MockUc
                 } else {
-                    DeviceKind::Mock
+                    DeviceKind::MockUcx
                 }
             }
-            DeviceHandle::Usb(_) => DeviceKind::Babyface,
             DeviceHandle::Mirror(d) => d.info().kind,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Real(_) => DeviceKind::Babyface,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => match d.model() {
                 FirefaceModel::Ucx => DeviceKind::Ucx,
@@ -990,10 +904,14 @@ impl DeviceHandle {
     /// kernel driver's `snd_card_set_id`, not the display name.
     pub fn card_id(&self) -> &'static str {
         match self {
-            DeviceHandle::Mock(_) | DeviceHandle::Usb(_) => "BabyfacePro",
+            DeviceHandle::Mock(d) => {
+                if d.is_uc() {
+                    "FirefaceUC"
+                } else {
+                    "FirefaceUCX"
+                }
+            }
             DeviceHandle::Mirror(d) => d.info().card_id,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Real(_) => "BabyfacePro",
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.spec().card_id,
             #[cfg(feature = "alsa")]
@@ -1003,15 +921,14 @@ impl DeviceHandle {
 
     pub fn open_kind(kind: DeviceKind) -> Option<Self> {
         match kind {
-            DeviceKind::Mock => Some(Self::open_mock()),
             DeviceKind::MockUcx => Some(Self::open_mock_ucx()),
             DeviceKind::MockUc => Some(Self::open_mock_uc()),
             #[cfg(feature = "alsa")]
             DeviceKind::Fireface => Fireface::open().ok().map(DeviceHandle::Fireface),
             #[cfg(feature = "alsa")]
-            DeviceKind::BabyfaceClassic => {
-                BabyfaceClassic::open_first().ok().map(DeviceHandle::BabyfaceClassic)
-            }
+            DeviceKind::BabyfaceClassic => BabyfaceClassic::open_first()
+                .ok()
+                .map(DeviceHandle::BabyfaceClassic),
             #[cfg(not(feature = "alsa"))]
             DeviceKind::BabyfaceClassic => None,
             #[cfg(not(feature = "alsa"))]
@@ -1020,13 +937,6 @@ impl DeviceHandle {
             DeviceKind::Ucx => Fireface::open_ucx().ok().map(DeviceHandle::Fireface),
             #[cfg(feature = "alsa")]
             DeviceKind::Uc => Fireface::open_uc().ok().map(DeviceHandle::Fireface),
-            #[cfg(feature = "alsa")]
-            DeviceKind::Babyface => BabyfacePro::open()
-                .ok()
-                .map(DeviceHandle::Real)
-                .or_else(|| BabyfaceProUsb::open().ok().map(DeviceHandle::Usb)),
-            #[cfg(not(feature = "alsa"))]
-            DeviceKind::Babyface => BabyfaceProUsb::open().ok().map(DeviceHandle::Usb),
             #[cfg(not(feature = "alsa"))]
             _ => None,
         }
@@ -1045,9 +955,9 @@ impl DeviceHandle {
             if BabyfaceClassic::present() {
                 out.push(DeviceTarget::kind_only(DeviceKind::BabyfaceClassic));
             }
-            // Both simulations are always offered, so the interface can be
-            // explored (or a GUI change checked) without the hardware.
-            out.push(DeviceTarget::kind_only(DeviceKind::Mock));
+            // Both supported simulations are always offered, so the
+            // interface can be explored (or a GUI change checked) without
+            // the hardware.
             out.push(DeviceTarget::kind_only(DeviceKind::MockUcx));
             out.push(DeviceTarget::kind_only(DeviceKind::MockUc));
             out
@@ -1061,16 +971,11 @@ impl DeviceHandle {
     /// Stable target for the currently open device.
     pub fn target(&self) -> DeviceTarget {
         match self {
-            DeviceHandle::Mock(d) => DeviceTarget::kind_only(if d.is_ucx() {
-                DeviceKind::MockUcx
-            } else if d.is_uc() {
+            DeviceHandle::Mock(d) => DeviceTarget::kind_only(if d.is_uc() {
                 DeviceKind::MockUc
             } else {
-                DeviceKind::Mock
+                DeviceKind::MockUcx
             }),
-            DeviceHandle::Usb(_) | DeviceHandle::Real(_) => {
-                DeviceTarget::kind_only(DeviceKind::Babyface)
-            }
             DeviceHandle::Mirror(d) => d.info().target.clone(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => DeviceTarget::from_identity(d.identity()),
@@ -1102,16 +1007,13 @@ impl DeviceHandle {
         Self::open_kind(target.kind)
     }
 
-    /// All input meter levels in one call (the USB backend's
-    /// `meters()` is draining — call once per tick, not per channel).
+    /// All input meter levels in one call (a device backend's `meters()`
+    /// is draining — call once per tick, not per channel).
     pub fn input_meters(&self) -> Vec<f32> {
         let n = self.inputs().len();
         match self {
             DeviceHandle::Mock(d) => (0..n).map(|i| d.input_meter(i)).collect(),
             DeviceHandle::Mirror(d) => d.meters().inputs.to_vec(),
-            DeviceHandle::Usb(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Real(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
@@ -1123,16 +1025,10 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(d) => (0..n).map(|i| d.playback_meter(i)).collect(),
             DeviceHandle::Mirror(d) => d.meters().playbacks.to_vec(),
-            // Playback meters come from the OUT stream — not wired yet.
             #[cfg(feature = "alsa")]
-            DeviceHandle::Real(_) => vec![0.0; n],
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Fireface(d) => d
-                .playback_meters()
-                .unwrap_or_else(|| vec![0.0; n]),
+            DeviceHandle::Fireface(d) => d.playback_meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
             DeviceHandle::BabyfaceClassic(_) => vec![0.0; n],
-            DeviceHandle::Usb(_) => vec![0.0; n],
         }
     }
 
@@ -1310,41 +1206,22 @@ impl DeviceHandle {
         false
     }
 
-    /// Per-channel availability for the input strips. Mock is real
-    /// everywhere; the USB backend's ISO IN stream meters AN1-4 only
-    /// (`totalcontrol-usb`'s `input_peaks()` returns four channels); the
-    /// ALSA/kernel-driver backend meters all twelve inputs in the
-    /// device's own order (AN1-4, AS1/2, ADAT3-8) with the v7 driver,
-    /// see `capture_meter`'s module doc comment), provided the PCM
-    /// opened (`BabyfacePro::meters_available`). An older driver puts
-    /// AS1/2 at 10/11 instead, so TotalControl expects the updated driver.
-    /// Each capture pair is also the matching
-    /// output pair's record bus, so enabling that output's loopback
-    /// makes the input meter read the output bus too.
-    ///
-    /// The UCX backend uses the same capture-meter path with all 18
-    /// inputs (AN1-8, SPDIF, ADAT) and an identity channel map. These
-    /// are the raw pre-fader input words, so the meter stays live while
-    /// the channel is faded down or muted.
+    /// Per-channel availability for the input strips. The simulation
+    /// generates every level; the hwdep backends publish the inputs they
+    /// expose as raw pre-fader words, so the meter stays live while the
+    /// channel is faded down or muted.
     pub fn has_input_meter(&self, idx: usize) -> bool {
         match self {
             DeviceHandle::Mock(_) => true,
             DeviceHandle::Mirror(d) => d.info().input_meters.get(idx).copied().unwrap_or(false),
-            DeviceHandle::Usb(_) => idx < 4,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Real(d) => idx < d.inputs().len() && d.meters_available(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => idx < d.inputs().len(),
             #[cfg(feature = "alsa")]
             DeviceHandle::BabyfaceClassic(d) => idx < d.inputs().len() && d.meters_available(),
         }
     }
-    /// Whether `playback_meters()` is real — true only for Mock. The USB
-    /// backend runs its ISO OUT stream in meter-only (silence) mode, so it
-    /// never sees real playback audio to compute a level from even though
-    /// it technically owns the stream — and only one process can hold that
-    /// stream at a time (see `tools/alsa/README.md`'s "Known limits"), so
-    /// real playback audio from another app never reaches it either.
+    /// Whether `playback_meters()` is real. The hwdep Fireface backend
+    /// publishes device playback meters; the simulation generates them.
     pub fn has_playback_meters(&self) -> bool {
         match self {
             DeviceHandle::Mock(_) => true,
@@ -1697,11 +1574,8 @@ impl DeviceHandle {
     /// The hwdep Fireface path has no on-demand mixer readback.  Like
     /// TotalMix, TotalControl restores its saved model at startup and writes it
     /// to the unit, so the unit and the displayed state start identical.
-    /// The older ALSA/USB backends read the live matrix on open and do not
-    /// need this.
     pub fn needs_scene_restore(&self) -> bool {
         match self {
-            DeviceHandle::Usb(_) => true,
             DeviceHandle::Mirror(_) => true,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => true,
@@ -1719,8 +1593,7 @@ impl DeviceHandle {
         false
     }
     /// Whether the sound server, not this app, sets the card's sample rate
-    /// and buffer size: true for the kernel driver (PipeWire opens the
-    /// card), false for the USB backend, which streams the device itself.
+    /// and buffer size. True for the kernel driver, which owns the PCM card.
     pub fn rate_follows_sound_server(&self) -> bool {
         if let DeviceHandle::Mirror(d) = self {
             return d.info().rate_follows;
@@ -1728,27 +1601,17 @@ impl DeviceHandle {
         #[cfg(feature = "alsa")]
         if matches!(
             self,
-            DeviceHandle::Real(_)
-                | DeviceHandle::Fireface(_)
-                | DeviceHandle::BabyfaceClassic(_)
+            DeviceHandle::Fireface(_) | DeviceHandle::BabyfaceClassic(_)
         ) {
             return true;
         }
         false
     }
-    /// Whether this backend actually implements `set_sensitivity` —
-    /// real for Mock and the USB/libusb backend (wired to the same
-    /// hardware-verified ref-level mechanism `set_ref_level` already
-    /// used for Instr 3/4's +4dBu/-10dBV/Boost switch). **2026-09-06**:
-    /// now real for the ALSA/kernel-driver backend too, once
-    /// `babyface-pro-linux` gained its own "Instrument Ref Level"
-    /// control — previously this backend had no such control at all.
+    /// Whether this backend implements `set_sensitivity`.
     pub fn has_sensitivity_control(&self) -> bool {
         match self {
-            DeviceHandle::Mock(_) | DeviceHandle::Usb(_) => true,
+            DeviceHandle::Mock(_) => true,
             DeviceHandle::Mirror(d) => d.info().has_sensitivity,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Real(_) => true,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => false,
             #[cfg(feature = "alsa")]
@@ -1763,15 +1626,12 @@ impl DeviceHandle {
     pub fn outputs_one_per_pair(&self) -> bool {
         self.outputs().len() == self.output_pair_count()
     }
-    /// The current front-panel state (MIX engaged, IN sel, OUT sel) —
-    /// only the proprietary USB backend has a panel.
+    /// The current front-panel state (MIX engaged, IN sel, OUT sel), when
+    /// the backend exposes one.
     pub fn panel_selection(&self) -> Option<(bool, usize, usize)> {
         match self {
             DeviceHandle::Mock(_) => None,
             DeviceHandle::Mirror(d) => d.panel_selection(),
-            DeviceHandle::Usb(d) => Some(d.panel_selection()),
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Real(d) => d.panel_selection(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => None,
             #[cfg(feature = "alsa")]
@@ -1811,7 +1671,7 @@ impl DeviceHandle {
     }
 
     /// True for the UC/UCX family (the shared 18-channel Fireface node),
-    /// as opposed to a Babyface Pro.
+    /// as opposed to a Babyface-classic.
     pub fn is_uc_family(&self) -> bool {
         match self {
             DeviceHandle::Mock(d) => d.is_uc() || d.is_ucx(),
@@ -2934,9 +2794,6 @@ pub struct TotalControl {
     /// handle keeps answering for a card that is long gone, so the chip
     /// and About read this, not the handle's mere existence.
     pub connected: bool,
-    /// How the device was opened (`None` = auto-detect), kept so a
-    /// reconnect can use the same path (see `DeviceHandle::open_real`).
-    backend: Option<String>,
     /// `--mock` was passed: never auto-reconnect, there is no hardware to
     /// come back and the mock was asked for.
     explicit_mock: bool,
@@ -3334,8 +3191,12 @@ impl MeterAnim {
 }
 
 #[cfg(test)]
-pub fn new(mock: bool, osc_config: Option<OscConfig>, backend: Option<String>) -> TotalControl {
-    new_with_device(mock, osc_config, backend, None, None)
+pub fn new(
+    mock: bool,
+    osc_config: Option<OscConfig>,
+    preferred: Option<DeviceKind>,
+) -> TotalControl {
+    new_with_device(mock, osc_config, preferred, None)
 }
 
 /// Like [`new`], but honours the device selected in the UI/prefs at
@@ -3343,7 +3204,6 @@ pub fn new(mock: bool, osc_config: Option<OscConfig>, backend: Option<String>) -
 pub fn new_with_device(
     mock: bool,
     osc_config: Option<OscConfig>,
-    backend: Option<String>,
     preferred: Option<DeviceKind>,
     preferred_serial: Option<String>,
 ) -> TotalControl {
@@ -3362,16 +3222,8 @@ pub fn new_with_device(
             );
         }
         let preferred = selected.as_ref().and_then(DeviceHandle::open_target);
-        match preferred.or_else(|| DeviceHandle::open_real(backend.as_deref())) {
+        match preferred.or_else(DeviceHandle::open_real) {
             Some(device) => device,
-            None if backend.is_some() => {
-                eprintln!(
-                    "No device found for --backend {}; refusing to start in simulation mode. \
-                     Use --mock explicitly for the simulation.",
-                    backend.as_deref().unwrap_or("")
-                );
-                std::process::exit(1);
-            }
             None => {
                 eprintln!("No device found. Use --mock for simulation.");
                 DeviceHandle::open_mock()
@@ -3555,7 +3407,6 @@ pub fn new_with_device(
         startup_compare_pending: false,
         startup_compare_scene: None,
         always_init_device: false,
-        backend,
         explicit_mock: mock,
         last_conn_check: None,
         // State persistence (the device has no gain/volume readback —
@@ -3632,7 +3483,7 @@ pub(crate) fn attach_device_service(state: &mut TotalControl) {
     }
     // The mock placeholder is dropped immediately; it only satisfies the
     // type until the service has taken the real handle.
-    let placeholder = DeviceHandle::Mock(MockBabyfacePro::open().expect("placeholder mock"));
+    let placeholder = DeviceHandle::Mock(MockDevice::open().expect("placeholder mock"));
     let device = std::mem::replace(&mut state.device, placeholder);
     let mut service = crate::device_service::DeviceService::spawn(device);
     let updates = service.take_updates();
@@ -8563,10 +8414,8 @@ fn changes_workspace(message: &Message) -> bool {
 }
 
 /// Whether `message` can only do something on a connection that speaks
-/// RME's own protocol: the setters behind `require_proprietary` in the ALSA
-/// backend (`babyface.rs`), plus `set_eq_for_record`, which that backend
-/// does not implement at all. Everything else in the app (routing, gains,
-/// preamps, clock, meters, scenes, the sidebar's own state) works in either
+/// RME's own protocol. Everything else in the app (routing, gains, preamps,
+/// clock, meters, scenes, the sidebar's own state) works in either
 /// personality, so this is deliberately not a general "may the UI do this"
 /// list. The renderers hide the controls these carry, and `update` drops the
 /// messages, so a stale key binding or an OSC message cannot slip past a
@@ -9065,7 +8914,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     // A running simulation must give way to a real unit that
                     // appeared; only then fall back to the stored target.
                     let fresh = if fallback_mock {
-                        DeviceHandle::open_real(state.backend.as_deref()).or_else(|| {
+                        DeviceHandle::open_real().or_else(|| {
                             state
                                 .device_target
                                 .as_ref()
@@ -9076,7 +8925,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             .device_target
                             .as_ref()
                             .and_then(DeviceHandle::open_target)
-                            .or_else(|| DeviceHandle::open_real(state.backend.as_deref()))
+                            .or_else(|| DeviceHandle::open_real())
                     };
                     if let Some(fresh) = fresh {
                         log::info!("Device connected: {}", fresh.target().label());
@@ -12292,12 +12141,10 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
         body = body.push(engine_section(state, LABEL_W));
     }
 
-    // NOTE: there used to be a "SPDIF: Enabled / Emphasis / Professional"
-    // row here. Removed 2026-09-12: those were never Babyface Pro
-    // features. They are generic IEC958 controls that `snd-usb-audio`
-    // synthesizes for any class-compliant device with an S/PDIF
-    // endpoint — RME's own Fireface USB Settings dialog for this card
-    // offers no such options (its SPDIF settings are "Optical Out
+    // There is no SPDIF enable/emphasis/professional row here. Those are
+    // generic IEC958 controls that `snd-usb-audio` synthesizes; the hwdep
+    // backends do not expose them. The card's SPDIF settings are "Optical
+    // Out
     // ADAT/SPDIF" and "SPDIF In TMS"; see PROTOCOL.md's captured UI
     // reference). They reached TotalControl through the CC-mode ALSA surface,
     // and once `open()` started refusing CC-mode cards they were three
@@ -12583,14 +12430,20 @@ fn workspace_confirm_modal(state: &TotalControl) -> Element<'_, Message> {
             .size(theme::TEXT_DIALOG * scale)
             .color(theme::text_sec()),
         row![
-            iced::widget::button(strip::centered_label_auto("Cancel", theme::TEXT_DIALOG * scale))
-                .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
-                .style(theme::ghost_button)
-                .on_press(Message::WorkspaceCancel),
-            iced::widget::button(strip::centered_label_auto(action, theme::TEXT_DIALOG * scale))
-                .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
-                .style(theme::ghost_button)
-                .on_press(Message::WorkspaceConfirm),
+            iced::widget::button(strip::centered_label_auto(
+                "Cancel",
+                theme::TEXT_DIALOG * scale
+            ))
+            .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+            .style(theme::ghost_button)
+            .on_press(Message::WorkspaceCancel),
+            iced::widget::button(strip::centered_label_auto(
+                action,
+                theme::TEXT_DIALOG * scale
+            ))
+            .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+            .style(theme::ghost_button)
+            .on_press(Message::WorkspaceConfirm),
         ]
         .spacing(theme::SPACE_MD * scale),
     ]
@@ -13363,10 +13216,13 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Errors"),
                 iced::widget::Space::new().width(Length::Fill),
-                button(strip::centered_label_auto("reset", theme::TEXT_DIALOG * scale))
-                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                    .style(theme::ghost_button)
-                    .on_press(Message::ResetTransportErrors),
+                button(strip::centered_label_auto(
+                    "reset",
+                    theme::TEXT_DIALOG * scale
+                ))
+                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::ResetTransportErrors),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -13427,10 +13283,13 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     .size(text_size)
                     .color(colour),
                 iced::widget::Space::new().width(Length::Fill),
-                button(strip::centered_label_auto("0 dB", theme::TEXT_DIALOG * scale))
-                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                    .style(theme::ghost_button)
-                    .on_press(Message::HostVolumeUnity),
+                button(strip::centered_label_auto(
+                    "0 dB",
+                    theme::TEXT_DIALOG * scale
+                ))
+                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::HostVolumeUnity),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -13948,18 +13807,16 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
 
     // Workspace > Open/Save.  The file itself is the complete host-side
     // configuration; the menu is deliberately separate from Options.
-    let workspace = iced::widget::button(
-        strip::centered_label_auto(
-            if state.workspace_menu != WorkspaceMenu::Closed {
-                "WORKSPACE ▴"
-            } else if state.workspace_dirty {
-                "WORKSPACE *"
-            } else {
-                "WORKSPACE"
-            },
-            theme::TEXT_MD * scale,
-        ),
-    )
+    let workspace = iced::widget::button(strip::centered_label_auto(
+        if state.workspace_menu != WorkspaceMenu::Closed {
+            "WORKSPACE ▴"
+        } else if state.workspace_dirty {
+            "WORKSPACE *"
+        } else {
+            "WORKSPACE"
+        },
+        theme::TEXT_MD * scale,
+    ))
     .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
     .style(theme::tab_toggle(
         state.workspace_menu != WorkspaceMenu::Closed,
@@ -13968,16 +13825,14 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
 
     // Options > Reset Mix and Settings.  Reset Mix is a submenu; Settings
     // opens the app-level sheet.
-    let options = iced::widget::button(
-        strip::centered_label_auto(
-            if state.options_menu == OptionsMenu::Closed {
-                "OPTIONS"
-            } else {
-                "OPTIONS ▴"
-            },
-            theme::TEXT_MD * scale,
-        ),
-    )
+    let options = iced::widget::button(strip::centered_label_auto(
+        if state.options_menu == OptionsMenu::Closed {
+            "OPTIONS"
+        } else {
+            "OPTIONS ▴"
+        },
+        theme::TEXT_MD * scale,
+    ))
     .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
     .style(theme::tab_toggle(state.options_menu != OptionsMenu::Closed))
     .on_press(Message::ToggleOptions);
@@ -14855,13 +14710,16 @@ fn route_popover(
             RoutingMode::Free => Message::SetFreeTarget(cid, internal),
         };
         list = list.push(
-            button(strip::left_label_wide(label.clone(), theme::TEXT_DIALOG * scale))
-                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                .width(Length::Fill)
-                // The bus a channel routes to is a position, not an "on"
-                // state: the graphite thumb, not the white fill.
-                .style(theme::segment_button(display == current_display))
-                .on_press(message),
+            button(strip::left_label_wide(
+                label.clone(),
+                theme::TEXT_DIALOG * scale,
+            ))
+            .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+            .width(Length::Fill)
+            // The bus a channel routes to is a position, not an "on"
+            // state: the graphite thumb, not the white fill.
+            .style(theme::segment_button(display == current_display))
+            .on_press(message),
         );
     }
     // Floats over the next strips, so it is a raised card with a shadow,
@@ -15318,12 +15176,7 @@ fn settings_popover(
         let gain = p.has_gain.then(|| {
             let gain_max = p.gain_max;
             let linked_left = p.stereo_linked && idx % 2 == 0;
-            let label = input_gain_knob_label(
-                p.gain,
-                p.gain_right,
-                p.gain_half,
-                linked_left,
-            );
+            let label = input_gain_knob_label(p.gain, p.gain_right, p.gain_half, linked_left);
             let right_gain = p.gain_right.unwrap_or(p.gain);
             settings_knob_row(
                 column![
@@ -15838,11 +15691,14 @@ fn dynamics_popover(
     };
 
     let toggle = |on: bool, msg: Message| -> Element<'static, Message> {
-        button(strip::centered_label_auto(if on { "ON" } else { "OFF" }, theme::TEXT_XS * scale))
-            .padding([0.0, theme::SPACE_SM * scale])
-            .style(theme::toggle_button(on, theme::PHANTOM))
-            .on_press(msg)
-            .into()
+        button(strip::centered_label_auto(
+            if on { "ON" } else { "OFF" },
+            theme::TEXT_XS * scale,
+        ))
+        .padding([0.0, theme::SPACE_SM * scale])
+        .style(theme::toggle_button(on, theme::PHANTOM))
+        .on_press(msg)
+        .into()
     };
 
     col = col.push(
@@ -16396,14 +16252,17 @@ fn eq_popover(
     for slope in [6u8, 12, 18, 24] {
         slope_row = slope_row.push(
             container(hint(
-                button(strip::centered_label_wide(format!("{slope}"), theme::TEXT_XS * scale))
-                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_TIGHT * scale])
-                    .width(Length::Fill)
-                    .style(theme::toggle_button(
-                        eq.low_cut_slope_db_oct == slope,
-                        theme::ACCENT,
-                    ))
-                    .on_press(Message::EqLowCutSlope(cid, slope)),
+                button(strip::centered_label_wide(
+                    format!("{slope}"),
+                    theme::TEXT_XS * scale,
+                ))
+                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_TIGHT * scale])
+                .width(Length::Fill)
+                .style(theme::toggle_button(
+                    eq.low_cut_slope_db_oct == slope,
+                    theme::ACCENT,
+                ))
+                .on_press(Message::EqLowCutSlope(cid, slope)),
                 "Low-cut slope (dB/oct)",
                 scale,
             ))
@@ -16599,10 +16458,13 @@ fn fx_header_row(
 ) -> Element<'static, Message> {
     container(
         row![
-            iced::widget::button(strip::centered_label_auto(if on { "ON" } else { "OFF" }, theme::TEXT_XS * scale))
-                .padding([0.0, theme::SPACE_MD * scale])
-                .style(theme::toggle_button(on, theme::ACCENT))
-                .on_press(toggle),
+            iced::widget::button(strip::centered_label_auto(
+                if on { "ON" } else { "OFF" },
+                theme::TEXT_XS * scale
+            ))
+            .padding([0.0, theme::SPACE_MD * scale])
+            .style(theme::toggle_button(on, theme::ACCENT))
+            .on_press(toggle),
             text(name)
                 .size(theme::TEXT_SM * scale)
                 .color(theme::text_sec()),
@@ -18897,9 +18759,13 @@ fn routing_mode_picker(state: &TotalControl, scale: f32) -> Element<'static, Mes
             None => "Free: select a channel to set its target".to_string(),
         },
     };
-    row.push(text(hint).size(theme::TEXT_XS * scale).color(theme::text_sec()))
-        .align_y(iced::Alignment::Center)
-        .into()
+    row.push(
+        text(hint)
+            .size(theme::TEXT_XS * scale)
+            .color(theme::text_sec()),
+    )
+    .align_y(iced::Alignment::Center)
+    .into()
 }
 
 fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
@@ -18929,10 +18795,13 @@ fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
             routing_mode_picker(state, scale),
             // The submix column highlight has no meaning without a selected
             // submix (GUI spec 8.1).
-            iced::widget::button(strip::centered_label_auto("MONO MODE", theme::TEXT_XS * scale))
-                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                .style(theme::toggle_button(state.matrix_mono, theme::ACCENT))
-                .on_press(Message::ToggleMatrixMono),
+            iced::widget::button(strip::centered_label_auto(
+                "MONO MODE",
+                theme::TEXT_XS * scale
+            ))
+            .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+            .style(theme::toggle_button(state.matrix_mono, theme::ACCENT))
+            .on_press(Message::ToggleMatrixMono),
         ]
         .align_y(iced::Alignment::Center)
         .spacing(theme::SPACE_MD),
@@ -18987,7 +18856,10 @@ fn quick_channel_options(state: &TotalControl) -> Vec<(ChannelId, String)> {
         let left = ChannelId::Input(pair * 2);
         let right = ChannelId::Input(pair * 2 + 1);
         if state.device.input_pair_linked(pair) {
-            opts.push((left, format!("{} · IN", quick_pair_title(state, left, right))));
+            opts.push((
+                left,
+                format!("{} · IN", quick_pair_title(state, left, right)),
+            ));
         } else {
             for cid in [left, right] {
                 if channel_exists(state, cid) {
@@ -19001,7 +18873,10 @@ fn quick_channel_options(state: &TotalControl) -> Vec<(ChannelId, String)> {
         let left = ChannelId::Playback(pair * 2);
         let right = ChannelId::Playback(pair * 2 + 1);
         if state.device.playback_linked(pair) {
-            opts.push((left, format!("{} · PB", quick_pair_title(state, left, right))));
+            opts.push((
+                left,
+                format!("{} · PB", quick_pair_title(state, left, right)),
+            ));
         } else {
             for cid in [left, right] {
                 if channel_exists(state, cid) {
@@ -19021,7 +18896,10 @@ fn quick_destination_options(state: &TotalControl) -> Vec<(ChannelId, String)> {
     for pair in state.device.output_display_order() {
         let left = ChannelId::Output(pair * 2);
         if state.device.outputs_one_per_pair() {
-            opts.push((ChannelId::Output(pair), quick_channel_title(state, ChannelId::Output(pair))));
+            opts.push((
+                ChannelId::Output(pair),
+                quick_channel_title(state, ChannelId::Output(pair)),
+            ));
         } else if state.device.output_linked(pair) {
             let right = ChannelId::Output(pair * 2 + 1);
             opts.push((left, quick_pair_title(state, left, right)));
@@ -19165,7 +19043,6 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
         .sel_out
         .min(state.device.output_pair_count().saturating_sub(1));
 
-
     // Rebuilt on every layout pass: the content sits behind a `responsive`
     // (the centered form needs the available size, which a `Length::Fill`
     // cannot provide inside the page's scrollable), so it only captures
@@ -19229,23 +19106,18 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
             ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => {
                 let left = i & !1;
                 if let Some(right) = state.device.inputs().get(left + 1) {
-                    source_params.name =
-                        pair_bus_label(&source_params.name, &right.name);
+                    source_params.name = pair_bus_label(&source_params.name, &right.name);
                 }
-                source_params.meter2 =
-                    state.input_meters.get(left + 1).map(MeterAnim::frame);
+                source_params.meter2 = state.input_meters.get(left + 1).map(MeterAnim::frame);
                 source_params.meter2_available = state.device.has_input_meter(left + 1);
             }
             ChannelId::Playback(i) if state.device.playback_linked(i / 2) => {
                 let left = i & !1;
                 if let Some(right) = state.device.playbacks().get(left + 1) {
-                    source_params.name =
-                        pair_bus_label(&source_params.name, &right.name);
+                    source_params.name = pair_bus_label(&source_params.name, &right.name);
                 }
-                source_params.meter2 =
-                    state.playback_meters.get(left + 1).map(MeterAnim::frame);
-                source_params.meter2_available =
-                    playback_meter_available(state, left + 1);
+                source_params.meter2 = state.playback_meters.get(left + 1).map(MeterAnim::frame);
+                source_params.meter2_available = playback_meter_available(state, left + 1);
             }
             _ => {}
         }
@@ -19289,10 +19161,10 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
             .align_y(iced::Alignment::Start);
 
         column![section_header("QUICK CONTROL", scale), blocks]
-        .spacing(theme::SPACE_LG)
-        .align_x(iced::Alignment::Center)
-        .width(Length::Fill)
-        .into()
+            .spacing(theme::SPACE_LG)
+            .align_x(iced::Alignment::Center)
+            .width(Length::Fill)
+            .into()
     };
 
     // One centered group when it fits, as the view is meant to be read as a
@@ -19336,22 +19208,22 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 mod tests {
     use super::{
         any_channel_muted, any_channel_soloed, apply_control_room_assignments, apply_host_settings,
-        channel_parity, channel_with_parity, strip_target_pair, RoutingMode,
         apply_pending_resize, apply_startup_sync, apply_workspace, apply_workspace_gui,
         attach_device_service, capture_workspace, channel_is_muted, channel_is_soloed,
-        channel_trim, choose_startup_kind, choose_startup_target, control_room_visual_width,
-        control_room_width, converter_frames, frames_ms, fx_reserve, fx_slot, global_feedback,
-        global_feedback_is_typed, global_messages, global_state_commands, host_settings_of,
-        input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
-        power_sum_output_meters, rate_choices, reorder_pair_volumes, save_workspace_to, solo_armed,
-        strength_snapshot, strip_params, sync_control_room_runtime, temporary_group_exists,
-        trim_factor, trim_meter_levels, uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
+        channel_parity, channel_trim, channel_with_parity, choose_startup_kind,
+        choose_startup_target, control_room_visual_width, control_room_width, converter_frames,
+        frames_ms, fx_reserve, fx_slot, global_feedback, global_feedback_is_typed, global_messages,
+        global_state_commands, host_settings_of, input_gain_knob_label, is_control_room_cid,
+        is_undoable, mute_armed, new, new_with_device, power_sum_output_meters, rate_choices,
+        reorder_pair_volumes, save_workspace_to, solo_armed, strength_snapshot, strip_params,
+        strip_target_pair, sync_control_room_runtime, temporary_group_exists, trim_factor,
+        trim_meter_levels, uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
-        PwClock, RateChoice, ResetMix, RowMode, RtlEstimate, StartupMismatch, TotalControl, View,
-        WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H,
-        FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
-        METER_RELEASE_DB_S, ZOOM_STEP,
+        PwClock, RateChoice, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
+        TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,
+        FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H,
+        FX_W, METER_RELEASE_DB_S, ZOOM_STEP,
     };
     use crate::osc::OscOutbound;
     use crate::sidebar;
@@ -19639,8 +19511,7 @@ mod tests {
             .cloned()
             .expect("connect the Fireface UCX");
 
-        let mut state =
-            new_with_device(false, None, None, Some(DeviceKind::Ucx), ucx.serial.clone());
+        let mut state = new_with_device(false, None, Some(DeviceKind::Ucx), ucx.serial.clone());
         assert_eq!(state.device_target.as_ref(), Some(&ucx));
         assert_eq!(state.device.canonical_model(), "Fireface UCX");
 
@@ -19679,9 +19550,9 @@ mod tests {
 
     #[test]
     fn one_connected_device_beats_a_stale_device_preference() {
-        // The saved prefs still said Babyface, but only the UC is present.
+        // The saved prefs still said Babyface-classic, but only the UC is present.
         assert_eq!(
-            choose_startup_kind(&[DeviceKind::Uc], Some(DeviceKind::Babyface)),
+            choose_startup_kind(&[DeviceKind::Uc], Some(DeviceKind::BabyfaceClassic)),
             Some(DeviceKind::Uc)
         );
     }
@@ -19716,7 +19587,7 @@ mod tests {
     fn a_fresh_profile_opens_the_ucx_simulation() {
         assert_eq!(
             choose_startup_kind(
-                &[DeviceKind::Mock, DeviceKind::MockUcx, DeviceKind::MockUc],
+                &[DeviceKind::MockUcx, DeviceKind::MockUcx, DeviceKind::MockUc],
                 None
             ),
             Some(DeviceKind::MockUcx),
@@ -19735,7 +19606,7 @@ mod tests {
     #[test]
     fn a_saved_simulation_gives_way_to_a_connected_device() {
         assert_eq!(
-            choose_startup_kind(&[DeviceKind::Uc], Some(DeviceKind::Mock)),
+            choose_startup_kind(&[DeviceKind::Uc], Some(DeviceKind::MockUcx)),
             Some(DeviceKind::Uc)
         );
     }
@@ -19744,10 +19615,10 @@ mod tests {
     fn the_simulation_is_used_when_nothing_is_connected() {
         assert_eq!(
             choose_startup_kind(
-                &[DeviceKind::Mock, DeviceKind::MockUcx, DeviceKind::MockUc],
-                Some(DeviceKind::Mock)
+                &[DeviceKind::MockUcx, DeviceKind::MockUcx, DeviceKind::MockUc],
+                Some(DeviceKind::MockUcx)
             ),
-            Some(DeviceKind::Mock),
+            Some(DeviceKind::MockUcx),
             "the saved simulation stays while no real device is present"
         );
     }
@@ -21522,18 +21393,13 @@ mod tests {
             Message::MatrixCellChanged(ChannelId::Input(0), pair * 2, 1.0),
         );
         assert!(state.device.matrix_cell_routed(ChannelId::Input(0), pair));
-        assert!(
-            !state
-                .device
-                .routed_pairs_for(ChannelId::Input(0))
-                .is_empty()
-        );
+        assert!(!state
+            .device
+            .routed_pairs_for(ChannelId::Input(0))
+            .is_empty());
 
         // Reset Mix > Clear all submixes must leave nothing routed.
-        let _ = update(
-            &mut state,
-            Message::ResetMix(ResetMix::ClearSubmixes),
-        );
+        let _ = update(&mut state, Message::ResetMix(ResetMix::ClearSubmixes));
         assert!(
             state
                 .device
@@ -21596,10 +21462,7 @@ mod tests {
             .routed_pairs_for(ChannelId::Input(0))
             .is_empty());
 
-        let _ = update(
-            &mut state,
-            Message::ResetMix(ResetMix::StraightPlayback),
-        );
+        let _ = update(&mut state, Message::ResetMix(ResetMix::StraightPlayback));
 
         assert!(
             state
@@ -21610,10 +21473,7 @@ mod tests {
         );
         assert_eq!(state.device.volume(ChannelId::Input(0), 0).unwrap(), 0.0);
         // Playback 1/2 is routed 1:1 into its own output pair.
-        assert_eq!(
-            state.device.volume(ChannelId::Playback(0), 0).unwrap(),
-            1.0
-        );
+        assert_eq!(state.device.volume(ChannelId::Playback(0), 0).unwrap(), 1.0);
     }
 
     fn two_free_routes() -> TotalControl {
@@ -21655,9 +21515,7 @@ mod tests {
         );
 
         assert_eq!(
-            state
-                .device
-                .routed_pairs_for(ChannelId::Input(0)),
+            state.device.routed_pairs_for(ChannelId::Input(0)),
             vec![3],
             "only the shown route is removed"
         );
@@ -21674,15 +21532,10 @@ mod tests {
         // reaches -inf and is removed; the other routing stays.
         let mut state = two_free_routes();
 
-        let _ = update(
-            &mut state,
-            Message::TrimChanged(ChannelId::Input(0), -65.0),
-        );
+        let _ = update(&mut state, Message::TrimChanged(ChannelId::Input(0), -65.0));
 
         assert_eq!(
-            state
-                .device
-                .routed_pairs_for(ChannelId::Input(0)),
+            state.device.routed_pairs_for(ChannelId::Input(0)),
             vec![3],
             "trim at the bottom removes only the shown route"
         );
@@ -22540,7 +22393,7 @@ mod tests {
             peaks
         }
 
-        let mut state = new_with_device(false, None, None, None, None);
+        let mut state = new_with_device(false, None, None, None);
         apply_startup_sync(&mut state);
 
         // Park the existing player if the caller supplied it, then start a
@@ -22827,8 +22680,8 @@ mod tests {
     #[test]
     fn a_stale_output_id_from_the_old_topology_cannot_panic_the_strip_renderer() {
         let state = new(true, None, None);
-        assert_eq!(state.device.outputs().len(), 12);
-        let p = strip_params(&state, ChannelId::Output(12), state.sel_out);
+        let stale = state.device.outputs().len() + 2;
+        let p = strip_params(&state, ChannelId::Output(stale), state.sel_out);
         assert!(p.name.is_empty());
     }
 
@@ -22845,10 +22698,10 @@ mod tests {
     #[test]
     fn switching_devices_drops_channel_ids_from_the_previous_topology() {
         let mut state = new(true, None, None);
-        super::switch_device(&mut state, DeviceTarget::kind_only(DeviceKind::MockUcx))
-            .expect("switch to the UCX simulation");
+        super::switch_device(&mut state, DeviceTarget::kind_only(DeviceKind::MockUc))
+            .expect("switch to the UC simulation");
 
-        let stale = ChannelId::Output(12);
+        let stale = ChannelId::Output(100);
         state.selected.insert(stale);
         state.focus_channel = Some(stale);
         state.select_anchor = Some(stale);
@@ -22859,8 +22712,8 @@ mod tests {
             .flyout_open
             .insert((stale, strip::FlyoutKind::Settings));
 
-        super::switch_device(&mut state, DeviceTarget::kind_only(DeviceKind::Mock))
-            .expect("switch back to the Babyface simulation");
+        super::switch_device(&mut state, DeviceTarget::kind_only(DeviceKind::MockUcx))
+            .expect("switch back to the UCX simulation");
 
         assert!(state.selected.is_empty());
         assert_eq!(state.focus_channel, None);
@@ -23632,13 +23485,17 @@ mod tests {
     #[test]
     fn a_linked_playback_balances_into_a_split_output() {
         let mut state = new(true, None, None);
+        // The test addresses output pair 0 by its display index; use the UC
+        // simulation, whose display order is the identity order.
+        state.device = DeviceHandle::open_mock_uc();
         let left = ChannelId::Playback(0);
         let right = ChannelId::Playback(1);
         let _ = update(&mut state, Message::StereoLinkChanged(left, true));
         state.device.set_playback_volume(0, 0, 0, 1.0).unwrap();
         state.device.set_playback_volume(0, 1, 0, 1.0).unwrap();
         state.device.set_output_linked(0, false).unwrap();
-        state.sel_out = 0;
+        state.sel_out = state.device.display_pair_index(0);
+        let out = state.sel_out;
 
         let order = state.device.output_display_order();
         let left_block = super::output_block_for_pair(&order, 0, 0).unwrap();
@@ -23648,31 +23505,31 @@ mod tests {
         state.sel_out_side = 0;
         assert_eq!(state.device.matrix_cell(left, left_block), Some(1.0));
         assert_eq!(state.device.matrix_cell(right, left_block), None);
-        assert_eq!(super::channel_pan(&state, left, 0), -100);
+        assert_eq!(super::channel_pan(&state, left, out), -100);
 
         state.sel_out_side = 1;
-        assert_eq!(super::channel_pan(&state, left, 0), 100);
+        assert_eq!(super::channel_pan(&state, left, out), 100);
         assert_eq!(state.device.matrix_cell(left, right_block), None);
         assert_eq!(state.device.matrix_cell(right, right_block), Some(1.0));
 
         // Centre only the left block: both source cells get the pair level
         // and the right block keeps its own hard-R cells.
         state.sel_out_side = 0;
-        let _ = update(&mut state, Message::PanChanged(left, 0, 0));
-        assert_eq!(super::channel_pan(&state, left, 0), 0);
+        let _ = update(&mut state, Message::PanChanged(left, out, 0));
+        assert_eq!(super::channel_pan(&state, left, out), 0);
         assert!((state.device.matrix_cell(left, left_block).unwrap() - 1.0).abs() < 1e-4);
         assert!((state.device.matrix_cell(right, left_block).unwrap() - 1.0).abs() < 1e-4);
         assert_eq!(state.device.matrix_cell(left, right_block), None);
         assert_eq!(state.device.matrix_cell(right, right_block), Some(1.0));
 
         // The fader moves the pair level and keeps the balance.
-        let _ = update(&mut state, Message::VolumeChanged(left, 0, 0.5));
+        let _ = update(&mut state, Message::VolumeChanged(left, out, 0.5));
         assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.5).abs() < 1e-4);
         assert!((state.device.matrix_cell(right, left_block).unwrap() - 0.5).abs() < 1e-4);
-        assert!((strip_params(&state, left, 0).vol - 0.5).abs() < 1e-4);
+        assert!((strip_params(&state, left, out).vol - 0.5).abs() < 1e-4);
 
-        let _ = update(&mut state, Message::PanChanged(left, 0, -100));
-        let _ = update(&mut state, Message::VolumeChanged(left, 0, 0.25));
+        let _ = update(&mut state, Message::PanChanged(left, out, -100));
+        let _ = update(&mut state, Message::VolumeChanged(left, out, 0.25));
         assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4);
         assert_eq!(state.device.matrix_cell(right, left_block), None);
 
@@ -23686,7 +23543,7 @@ mod tests {
         assert!(!state.device.has_pair_cell_override(right, 0));
         assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4);
         assert!((state.device.matrix_cell(right, right_block).unwrap() - 1.0).abs() < 1e-4);
-        assert_eq!(super::channel_pan(&state, left, 0), 75);
+        assert_eq!(super::channel_pan(&state, left, out), 75);
 
         // Re-split: the two blocks return to hard L and hard R.
         let _ = update(
@@ -23694,9 +23551,9 @@ mod tests {
             Message::StereoLinkChanged(ChannelId::Output(0), false),
         );
         state.sel_out_side = 0;
-        assert_eq!(super::channel_pan(&state, left, 0), -100);
+        assert_eq!(super::channel_pan(&state, left, out), -100);
         state.sel_out_side = 1;
-        assert_eq!(super::channel_pan(&state, left, 0), 100);
+        assert_eq!(super::channel_pan(&state, left, out), 100);
     }
 
     #[test]

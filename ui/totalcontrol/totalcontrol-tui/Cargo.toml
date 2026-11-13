@@ -6,7 +6,7 @@ description = "TUI for TotalControl — control your RME interface from the term
 license = "GPL-3.0-only"
 
 [dependencies]
-totalcontrol-core = { path = "../totalcontrol-core", default-features = false, features = ["usb"] }
+totalcontrol-core = { path = "../totalcontrol-core", default-features = false }
 ratatui = "0.29"
 crossterm = "0.28"
 log = "0.4"

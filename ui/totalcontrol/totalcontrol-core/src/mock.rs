@@ -1,41 +1,41 @@
 //! Mock implementation of [`RmeDevice`] for development and testing.
 //!
-//! [`MockBabyfacePro`] simulates a Babyface Pro FS entirely in memory,
+//! [`MockDevice`] simulates a supported Fireface entirely in memory,
 //! without any ALSA or hardware interaction.
 //!
 //! Use `--mock` to run the TUI/GUI without a physical device:
 //! ```bash
 //! cargo run -p totalcontrol-gui -- --mock
 //! ```
-//! `--mock-ucx` simulates a Fireface UCX instead: same in-memory device, but
-//! with the UCX's topology and capability set, so the EQ, dynamics, FX bus
-//! and Control Room are all present without the hardware.
+//! The default simulation is the Fireface UCX. `--mock-uc` simulates the
+//! reduced UC surface: same in-memory device, but with the UC's topology and
+//! capability set.
 
 use rand::Rng;
 
+use crate::capabilities::DeviceCapabilities;
 use crate::channel::*;
 use crate::device::{DeviceSettings, RmeDevice};
 use crate::error::Error;
-use crate::capabilities::DeviceCapabilities;
-use crate::profiles::babyface_pro::PROFILE;
 use crate::profiles::uc::PROFILE as UC_PROFILE;
 use crate::profiles::ucx::PROFILE as UCX_PROFILE;
 use crate::scene::Scene;
 
 // ── Main struct ─────────────────────────────────────────────────
 
-/// A simulated Babyface Pro FS that works without any hardware.
+/// A simulated Fireface that works without any hardware.
 ///
 /// All state is kept in memory. Every operation succeeds immediately.
 /// Use this to develop or test UI code without a physical RME device.
 /// Topology (channel counts/names/types) comes from the same
-/// [`PROFILE`] as [`crate::BabyfacePro`], so the two can't drift apart
-/// the way the old hand-duplicated const tables did.
-pub struct MockBabyfacePro {
+/// [`DeviceProfile`](crate::profile::DeviceProfile) as the real backend, so
+/// the two can't drift apart.
+pub struct MockDevice {
     model_name: String,
-    /// Topology this mock was built from: the Babyface Pro FS by default,
-    /// or the Fireface UCX for `--mock-ucx`.
+    /// Topology this mock was built from: the Fireface UCX by default,
+    /// or the Fireface UC for `--mock-uc`.
     profile: &'static crate::profile::DeviceProfile,
+
     /// The unit's capability set, so the gated UI (EQ, dynamics, FX, the
     /// Control Room) can be exercised without the hardware.
     capabilities: DeviceCapabilities,
@@ -72,42 +72,8 @@ fn uc_capabilities() -> DeviceCapabilities {
     crate::fireface::models::UC.capabilities
 }
 
-/// The Babyface Pro FS set: what the trait's derived `capabilities()`
-/// produced for this mock before it took a model argument.
-fn babyface_capabilities() -> DeviceCapabilities {
-    DeviceCapabilities {
-        protocol_features: true,
-        eq: true,
-        low_cut: true,
-        loopback: true,
-        no_trim: false,
-        talkback: false,
-        phase: true,
-        phase_without_eq: false,
-        output_phase: false,
-        output_balance: false,
-        stereo_split: true,
-        matrix_cells: false,
-        class_compliant: false,
-        input_phantom: true,
-        input_pad: true,
-        input_level: false,
-        input_autoset: false,
-        dynamics: false,
-        fx: false,
-        pitch: true,
-        width: true,
-        channel_width: false,
-        ms_proc: true,
-        an12: true,
-        input_link: true,
-        eq_for_record: true,
-        optical_out: true,
-    }
-}
-
-impl MockBabyfacePro {
-    /// Whether this in-memory device is the UCX rather than the Babyface.
+impl MockDevice {
+    /// Whether this in-memory device is the UCX rather than the UC.
     pub fn is_ucx(&self) -> bool {
         std::ptr::eq(self.profile, &UCX_PROFILE)
     }
@@ -164,10 +130,8 @@ impl MockBabyfacePro {
                     ch.ref_level = 1;
                 }
             }
-            // The 4 analog inputs have a hardware EQ strip (see
-            // `InputChannel::eq`'s doc comment and `babyface.rs`'s
-            // `eq_strip_name`, same `idx < 4` gate) — every other input
-            // type stays `None`.
+            // The first four analog inputs carry an EQ strip; a device
+            // with dynamics enabled gets one on every input below.
             ch.eq = (i < 4).then(InputEq::default);
         }
 
@@ -386,7 +350,7 @@ impl MockBabyfacePro {
     }
 }
 
-impl RmeDevice for MockBabyfacePro {
+impl RmeDevice for MockDevice {
     fn model_name(&self) -> &str {
         &self.model_name
     }
@@ -424,9 +388,8 @@ impl RmeDevice for MockBabyfacePro {
     }
 
     fn open() -> Result<Self, Error> {
-        Self::open_with(&PROFILE, PROFILE.model_name, babyface_capabilities())
+        Self::open_ucx()
     }
-
 
     fn inputs(&self) -> &[InputChannel] {
         &self.inputs
@@ -477,9 +440,7 @@ impl RmeDevice for MockBabyfacePro {
         // A pair-level write replaces the custom mono cells for this source
         // and output pair, exactly as the UCX model does.
         self.matrix_overrides
-            .retain(|&(cell_channel, block), _| {
-                !(cell_channel == channel && block / 2 == output)
-            });
+            .retain(|&(cell_channel, block), _| !(cell_channel == channel && block / 2 == output));
         match channel {
             ChannelId::Input(idx) => {
                 let ch = self
@@ -736,7 +697,6 @@ impl RmeDevice for MockBabyfacePro {
         inp.sensitivity = Some(sensitivity);
         Ok(())
     }
-
 
     fn set_pitch(&mut self, pitch_percent: f32) -> Result<(), Error> {
         self.settings.pitch_percent = pitch_percent.clamp(-5.0, 5.0);
@@ -1048,19 +1008,37 @@ impl RmeDevice for MockBabyfacePro {
         Ok(())
     }
 
-    // ── Hardware DSP EQ (mocked: only the 4 analog inputs, same gate
-    // as `babyface.rs`'s `eq_strip_name`) ────────────────────────────
+    // ── Hardware DSP EQ ─────────────────────────────────────────────
+
+    fn set_dynamics(&mut self, channel: ChannelId, dynamics: &Dynamics) -> Result<(), Error> {
+        let slot = match channel {
+            ChannelId::Input(i) => self.inputs.get_mut(i).and_then(|c| c.dynamics.as_mut()),
+            ChannelId::Output(i) => self.outputs.get_mut(i).and_then(|c| c.dynamics.as_mut()),
+            ChannelId::Playback(_) => None,
+        };
+        match slot {
+            Some(d) => {
+                *d = *dynamics;
+                Ok(())
+            }
+            None => Err(Error::InvalidChannel(format!(
+                "{channel:?} has no dynamics"
+            ))),
+        }
+    }
 
     fn set_eq_enabled(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        if idx >= 4 {
-            return Err(Error::InvalidChannel(format!("Input {idx} has no EQ")));
-        }
         let inp = self
             .inputs
             .get_mut(idx)
             .ok_or_else(|| Error::InvalidChannel(format!("Input {idx}")))?;
-        inp.eq.get_or_insert_with(InputEq::default).enabled = on;
-        Ok(())
+        match inp.eq.as_mut() {
+            Some(eq) => {
+                eq.enabled = on;
+                Ok(())
+            }
+            None => Err(Error::InvalidChannel(format!("Input {idx} has no EQ"))),
+        }
     }
 
     fn set_eq_band_type(
@@ -1192,8 +1170,6 @@ impl RmeDevice for MockBabyfacePro {
         Ok(())
     }
 
-
-
     fn set_clock_source(&mut self, source: &str) -> Result<(), Error> {
         if !self.settings.clock_sources.iter().any(|s| s == source) {
             return Err(Error::InvalidChannel(format!(
@@ -1240,14 +1216,14 @@ mod tests {
 
     #[test]
     fn test_open_creates_correct_number_of_channels() {
-        let dev = MockBabyfacePro::open().unwrap();
-        assert_eq!(dev.inputs().len(), 12);
-        assert_eq!(dev.playbacks().len(), 12);
+        let dev = MockDevice::open_ucx().unwrap();
+        assert_eq!(dev.inputs().len(), 18);
+        assert_eq!(dev.playbacks().len(), 18);
     }
 
     #[test]
     fn the_ucx_mock_carries_eq_and_dynamics_on_every_channel() {
-        let dev = MockBabyfacePro::open_ucx().unwrap();
+        let dev = MockDevice::open_ucx().unwrap();
         assert_eq!(dev.inputs().len(), 18);
         assert!(dev.inputs().iter().all(|c| c.dynamics.is_some()));
         assert!(dev.inputs().iter().all(|c| c.eq.is_some()));
@@ -1255,14 +1231,10 @@ mod tests {
         assert!(dev.outputs().iter().all(|c| c.eq.is_some()));
         assert!(dev.capabilities().fx);
         assert!(dev.capabilities().dynamics);
-        // The Babyface mock keeps its four analog EQ strips and no dynamics.
-        let bf = MockBabyfacePro::open().unwrap();
-        assert!(bf.inputs().iter().all(|c| c.dynamics.is_none()));
-        assert_eq!(bf.inputs().iter().filter(|c| c.eq.is_some()).count(), 4);
 
         // The UC mock answers with the UC's gated feature set, so the UI it
         // shows is the one the real UC gets.
-        let uc = MockBabyfacePro::open_uc().unwrap();
+        let uc = MockDevice::open_uc().unwrap();
         assert!(uc.is_uc() && !uc.is_ucx());
         assert!(!uc.capabilities().protocol_features);
         assert!(!uc.capabilities().eq);
@@ -1276,7 +1248,7 @@ mod tests {
 
     #[test]
     fn protocol_features_follows_the_flag() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_protocol_features(true);
         assert!(dev.protocol_features());
         dev.set_protocol_features(false);
@@ -1288,26 +1260,26 @@ mod tests {
 
     #[test]
     fn test_output_pair_count() {
-        let dev = MockBabyfacePro::open().unwrap();
-        assert_eq!(dev.output_pair_count(), 6);
+        let dev = MockDevice::open_ucx().unwrap();
+        assert_eq!(dev.output_pair_count(), 9);
     }
 
     #[test]
     fn test_each_channel_has_per_output_volumes() {
-        let dev = MockBabyfacePro::open().unwrap();
+        let dev = MockDevice::open_ucx().unwrap();
         for ch in dev.inputs() {
-            assert_eq!(ch.volumes.len(), 6);
-            assert_eq!(ch.pans.len(), 6);
+            assert_eq!(ch.volumes.len(), 9);
+            assert_eq!(ch.pans.len(), 9);
         }
         for ch in dev.playbacks() {
-            assert_eq!(ch.volumes.len(), 6);
-            assert_eq!(ch.pans.len(), 6);
+            assert_eq!(ch.volumes.len(), 9);
+            assert_eq!(ch.pans.len(), 9);
         }
     }
 
     #[test]
     fn test_per_output_volume() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         // Set volume for input 0 towards output 2 only
         dev.set_volume(ChannelId::Input(0), 2, 0.3).unwrap();
         assert!((dev.volume(ChannelId::Input(0), 2).unwrap() - 0.3).abs() < 1e-6);
@@ -1318,7 +1290,7 @@ mod tests {
 
     #[test]
     fn test_per_output_pan() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_pan(ChannelId::Playback(0), 3, 50).unwrap();
         assert_eq!(dev.pan(ChannelId::Playback(0), 3).unwrap(), 50);
         assert_eq!(dev.pan(ChannelId::Playback(0), 0).unwrap(), 0);
@@ -1326,7 +1298,7 @@ mod tests {
 
     #[test]
     fn test_volume_clamps_to_range() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_volume(ChannelId::Input(0), 0, 2.0).unwrap();
         assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 2.0).abs() < 1e-6);
         dev.set_volume(ChannelId::Input(0), 0, 2.5).unwrap();
@@ -1337,7 +1309,7 @@ mod tests {
 
     #[test]
     fn test_invalid_channel_returns_error() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         let result = dev.set_volume(ChannelId::Input(99), 0, 0.5);
         assert!(result.is_err());
         let result = dev.set_volume(ChannelId::Input(0), 99, 0.5);
@@ -1346,7 +1318,7 @@ mod tests {
 
     #[test]
     fn test_capture_and_apply_scene() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_volume(ChannelId::Input(0), 0, 0.25).unwrap();
         dev.set_pan(ChannelId::Playback(0), 1, 50).unwrap();
 
@@ -1354,7 +1326,7 @@ mod tests {
         assert!((scene.inputs[0].volumes[0] - 0.25).abs() < 1e-6);
         assert_eq!(scene.playbacks[0].pans[1], 50);
 
-        let mut dev2 = MockBabyfacePro::open().unwrap();
+        let mut dev2 = MockDevice::open().unwrap();
         dev2.apply_scene(&scene).unwrap();
         assert!((dev2.volume(ChannelId::Input(0), 0).unwrap() - 0.25).abs() < 1e-6);
         assert_eq!(dev2.pan(ChannelId::Playback(0), 1).unwrap(), 50);
@@ -1362,7 +1334,7 @@ mod tests {
 
     #[test]
     fn test_poll_events_updates_meters() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         for v in dev.input_meters() {
             assert_eq!(*v, 0.0);
         }
@@ -1373,7 +1345,7 @@ mod tests {
 
     #[test]
     fn test_meter_ranges() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         for _ in 0..100 {
             dev.poll_events().unwrap();
         }
@@ -1387,7 +1359,7 @@ mod tests {
 
     #[test]
     fn test_output_pair_linked_by_default() {
-        let dev = MockBabyfacePro::open().unwrap();
+        let dev = MockDevice::open().unwrap();
         // No explicit entry yet — every pair reads as linked (TotalMix's
         // own default), not "false"/unset.
         for pair in 0..dev.output_pair_count() {
@@ -1397,7 +1369,7 @@ mod tests {
 
     #[test]
     fn test_linked_output_volume_moves_both_channels() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_output_volume(0, 0, 0.5).unwrap();
         assert!((dev.volume(ChannelId::Output(0), 0).unwrap() - 0.5).abs() < 1e-6);
         assert!((dev.volume(ChannelId::Output(1), 0).unwrap() - 0.5).abs() < 1e-6);
@@ -1405,7 +1377,7 @@ mod tests {
 
     #[test]
     fn test_split_output_volume_moves_only_the_selected_channel() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_output_linked(0, false).unwrap();
         assert!(!dev.output_linked(0));
         dev.set_output_volume(0, 0, 0.5).unwrap();
@@ -1416,7 +1388,7 @@ mod tests {
 
     #[test]
     fn test_linked_output_mute_and_solo_move_both_channels() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_output_mute(2, 0, true).unwrap();
         assert!(dev.mute(ChannelId::Output(4)).unwrap());
         assert!(dev.mute(ChannelId::Output(5)).unwrap());
@@ -1427,7 +1399,7 @@ mod tests {
 
     #[test]
     fn test_input_pair_linked_by_default_and_moves_both_channels() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         assert!(dev.input_pair_linked(0));
         dev.set_input_volume(0, 0, 0, 0.5).unwrap();
         assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 0.5).abs() < 1e-6);
@@ -1443,7 +1415,7 @@ mod tests {
         // wrapper at all (unlike volume/mute/solo above), so toggling
         // 48V on a linked strip only ever touched its own channel —
         // found 2026-09-07.
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         assert!(dev.input_pair_linked(0));
         // Mock's own demo default starts both mics' phantom on (see
         // `open()`'s own comment) — normalize to off first, so setting
@@ -1454,7 +1426,10 @@ mod tests {
 
         dev.set_input_phantom(0, true).unwrap();
         assert!(dev.inputs()[0].phantom);
-        assert!(dev.inputs()[1].phantom, "phantom must mirror across a linked pair");
+        assert!(
+            dev.inputs()[1].phantom,
+            "phantom must mirror across a linked pair"
+        );
 
         dev.set_input_pad(0, true).unwrap();
         assert!(dev.inputs()[0].pad);
@@ -1463,22 +1438,34 @@ mod tests {
 
     #[test]
     fn test_linked_input_gain_keeps_the_right_side_independent() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         assert!(dev.input_pair_linked(0));
         dev.set_input_gain(0, 20).unwrap();
         dev.set_input_gain_right(0, 35).unwrap();
         assert_eq!(dev.inputs()[0].gain, Some(20));
-        assert_eq!(dev.inputs()[1].gain, Some(0), "linked gain writes the left side only");
+        assert_eq!(
+            dev.inputs()[1].gain,
+            Some(0),
+            "linked gain writes the left side only"
+        );
         assert_eq!(dev.inputs()[0].gain_right, Some(35));
         dev.set_input_gain(0, 30).unwrap();
         assert_eq!(dev.inputs()[0].gain, Some(30));
-        assert_eq!(dev.inputs()[1].gain, Some(0), "left gain does not touch the right side");
-        assert_eq!(dev.inputs()[0].gain_right, Some(35), "left gain keeps the right value");
+        assert_eq!(
+            dev.inputs()[1].gain,
+            Some(0),
+            "left gain does not touch the right side"
+        );
+        assert_eq!(
+            dev.inputs()[0].gain_right,
+            Some(35),
+            "left gain keeps the right value"
+        );
     }
 
     #[test]
     fn test_split_input_pair_phantom_moves_only_the_selected_channel() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         // Mock's own demo default starts both mics' phantom on (see
         // `open()`'s own comment) — normalize to a known baseline first
         // so this test isn't just re-asserting that default.
@@ -1493,7 +1480,7 @@ mod tests {
 
     #[test]
     fn test_split_input_pair_moves_only_the_selected_channel() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_input_pair_linked(0, false).unwrap();
         dev.set_input_volume(0, 0, 0, 0.5).unwrap();
         dev.set_input_volume(0, 1, 0, 0.25).unwrap();
@@ -1503,7 +1490,7 @@ mod tests {
 
     #[test]
     fn test_input_link_keeps_split_levels_and_derives_balance_from_them() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open_uc().unwrap();
         dev.set_input_pair_linked(0, false).unwrap();
         assert_eq!(dev.pan(ChannelId::Input(0), 0).unwrap(), -100);
         assert_eq!(dev.pan(ChannelId::Input(1), 0).unwrap(), 100);
@@ -1527,7 +1514,7 @@ mod tests {
 
     #[test]
     fn test_linked_input_fader_applies_the_same_db_delta() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open_uc().unwrap();
         dev.set_input_pair_linked(0, false).unwrap();
         dev.set_input_volume(0, 0, 0, 0.1).unwrap();
         dev.set_input_volume(0, 1, 0, 0.5).unwrap();
@@ -1541,7 +1528,7 @@ mod tests {
 
     #[test]
     fn test_input_link_keeps_phase_l_and_phase_r_independent() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open_uc().unwrap();
         dev.set_input_pair_linked(0, false).unwrap();
         dev.set_phase(0, true).unwrap();
         dev.set_phase(1, false).unwrap();
@@ -1552,23 +1539,17 @@ mod tests {
 
     #[test]
     fn test_eq_band_types_reject_device_specific_shelves() {
-        let mut dev = MockBabyfacePro::open().unwrap();
-        assert!(dev
-            .set_eq_band_type(0, 0, EqBandType::HighShelf)
-            .is_err());
-        assert!(dev
-            .set_eq_band_type(0, 2, EqBandType::LowShelf)
-            .is_err());
-        assert!(dev
-            .set_eq_band_type(0, 1, EqBandType::LowPass)
-            .is_err());
+        let mut dev = MockDevice::open().unwrap();
+        assert!(dev.set_eq_band_type(0, 0, EqBandType::HighShelf).is_err());
+        assert!(dev.set_eq_band_type(0, 2, EqBandType::LowShelf).is_err());
+        assert!(dev.set_eq_band_type(0, 1, EqBandType::LowPass).is_err());
         dev.set_eq_band_type(0, 0, EqBandType::LowShelf).unwrap();
         dev.set_eq_band_type(0, 2, EqBandType::LowPass).unwrap();
     }
 
     #[test]
     fn test_right_input_phase_and_gain_are_independent() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         let max = dev.inputs()[0].gain_max.unwrap_or(65);
         dev.set_input_phase_right(0, true).unwrap();
         dev.set_input_gain_right(0, max / 2).unwrap();
@@ -1580,7 +1561,7 @@ mod tests {
 
     #[test]
     fn test_playback_link_preserves_split_volumes() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_playback_linked(0, false).unwrap();
         dev.set_pan(ChannelId::Playback(0), 0, -40).unwrap();
         dev.set_pan(ChannelId::Playback(1), 0, 60).unwrap();
@@ -1599,7 +1580,7 @@ mod tests {
 
     #[test]
     fn test_linked_playback_fader_applies_the_same_db_delta() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_playback_linked(0, false).unwrap();
         dev.set_playback_volume(0, 0, 0, 0.1).unwrap();
         dev.set_playback_volume(0, 1, 0, 0.5).unwrap();
@@ -1613,7 +1594,7 @@ mod tests {
 
     #[test]
     fn test_playback_linked_reads_split_flag_inverted() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         assert!(dev.playback_linked(0));
         dev.set_playback_volume(0, 0, 0, 0.5).unwrap();
         assert!((dev.volume(ChannelId::Playback(0), 0).unwrap() - 0.5).abs() < 1e-6);
@@ -1630,7 +1611,7 @@ mod tests {
 
     #[test]
     fn test_mute_solo_toggle() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         assert!(!dev.mute(ChannelId::Input(0)).unwrap());
         assert!(!dev.solo(ChannelId::Playback(0)).unwrap());
 
@@ -1647,7 +1628,7 @@ mod tests {
 
     #[test]
     fn test_mute_solo_in_scene() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_mute(ChannelId::Input(0), true).unwrap();
         dev.set_solo(ChannelId::Playback(0), true).unwrap();
 
@@ -1655,7 +1636,7 @@ mod tests {
         assert!(scene.inputs[0].mute);
         assert!(scene.playbacks[0].solo);
 
-        let mut dev2 = MockBabyfacePro::open().unwrap();
+        let mut dev2 = MockDevice::open().unwrap();
         dev2.apply_scene(&scene).unwrap();
         assert!(dev2.mute(ChannelId::Input(0)).unwrap());
         assert!(dev2.solo(ChannelId::Playback(0)).unwrap());
@@ -1663,7 +1644,7 @@ mod tests {
 
     #[test]
     fn test_serialize_scene_to_json() {
-        let dev = MockBabyfacePro::open().unwrap();
+        let dev = MockDevice::open().unwrap();
         let scene = dev.capture_scene();
         let json = scene.to_json().unwrap();
         let restored = Scene::from_json(&json).unwrap();
@@ -1672,7 +1653,7 @@ mod tests {
 
     #[test]
     fn test_first_inputs_have_phantom() {
-        let dev = MockBabyfacePro::open().unwrap();
+        let dev = MockDevice::open().unwrap();
         assert!(dev.inputs()[0].phantom);
         assert!(dev.inputs()[1].phantom);
         assert!(!dev.inputs()[2].phantom);
@@ -1680,14 +1661,14 @@ mod tests {
 
     #[test]
     fn test_captured_scene_is_tagged_with_model() {
-        let dev = MockBabyfacePro::open().unwrap();
+        let dev = MockDevice::open().unwrap();
         let scene = dev.capture_scene();
         assert_eq!(scene.model, dev.model_name());
     }
 
     #[test]
     fn test_apply_scene_rejects_model_mismatch() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         let mut scene = dev.capture_scene();
         scene.model = "Some Other RME Device".into();
 
@@ -1697,7 +1678,7 @@ mod tests {
 
     #[test]
     fn test_dim_toggle() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         assert!(!dev.settings().dim);
         dev.set_dim(true).unwrap();
         assert!(dev.settings().dim);
@@ -1705,7 +1686,7 @@ mod tests {
 
     #[test]
     fn test_eq_only_on_first_four_inputs() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open_uc().unwrap();
         dev.set_eq_enabled(3, true).unwrap();
         assert!(dev.inputs()[3].eq.unwrap().enabled);
 
@@ -1715,7 +1696,7 @@ mod tests {
 
     #[test]
     fn test_eq_band_params_clamp_and_persist() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         dev.set_eq_band_type(0, 1, EqBandType::Bell).unwrap();
         dev.set_eq_band_freq(0, 1, 30_000).unwrap(); // clamps to 20_000
         dev.set_eq_band_q(0, 1, 50.0).unwrap(); // clamps to 10.0
@@ -1732,7 +1713,7 @@ mod tests {
 
     #[test]
     fn test_apply_scene_accepts_legacy_scene_with_no_model() {
-        let mut dev = MockBabyfacePro::open().unwrap();
+        let mut dev = MockDevice::open().unwrap();
         let mut scene = dev.capture_scene();
         scene.model = String::new(); // simulates a scene saved before `model` existed
         scene.inputs[0].volumes[0] = 0.42;

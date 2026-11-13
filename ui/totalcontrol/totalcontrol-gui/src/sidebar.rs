@@ -7,7 +7,7 @@
 //! known ("FX show %", the `F` button, most Options rows, the layout
 //! panel's "all/submix"); on 2026-10-20 each was checked against RME's
 //! Control Strip documentation, this app and the kernel driver, and either
-//! made real (`F`, "2 rows", `DIM`) or removed (see `GUI-NOTES.md`).
+//! made real (`F`, "2 rows", `DIM`) or removed.
 //!
 //! Visual weight is deliberate, not incidental. Every control in this
 //! column is the same 210px wide, so the only things telling the eye what
@@ -361,7 +361,7 @@ pub fn sidebar(state: &TotalControl) -> Element<'_, Message> {
 /// The zoom control, fixed at the foot of the column: `-  100%  +`.
 /// The zoom was Ctrl+wheel / Ctrl+= only, which nothing on screen
 /// mentioned. The percentage resets to 100 %. (A fit-to-window mode lived
-/// next to it for a day and was removed: see GUI-NOTES.md.)
+/// next to it for a day and was removed.)
 fn zoom_bar(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     let pct = format!("{:.0}%", state.ui_scale * 100.0);
     let cell = |label: &'static str| {
@@ -476,7 +476,7 @@ fn device_chip(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     // `mock.rs`) — that's needed for scene-compatibility checks, but
     // redundant here since the state right next to it already says
     // "Simulated", and the suffix alone was enough to push
-    // "Babyface Pro FS (mock)" past this chip's text budget in a
+    // "Fireface UCX (mock)" past this chip's text budget in a
     // 140px-wide sidebar. Strip it for display only.
     let display_name = state
         .device

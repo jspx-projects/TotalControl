@@ -2,12 +2,11 @@
 //!
 //! ```bash
 //! cargo run -p totalcontrol-gui              # with real hardware
-//! cargo run -p totalcontrol-gui -- --mock    # simulation (Babyface Pro FS)
+//! cargo run -p totalcontrol-gui -- --mock    # simulation (Fireface UCX)
 //! cargo run -p totalcontrol-gui -- --mock-ucx # simulation (Fireface UCX)
 //! cargo run -p totalcontrol-gui -- --mock-uc  # simulation (Fireface UC)
 //! cargo run -p totalcontrol-gui -- --mock --osc   # + OSC 1.96 surface
 //! cargo run -p totalcontrol-gui -- --mock --osc --osc-mode global  # + Global OSC
-//! cargo run -p totalcontrol-gui -- --backend usb  # force libusb over the kernel driver
 //! cargo run -p totalcontrol-gui -- --view mixer  # open straight on the Mixer page
 //! cargo run -p totalcontrol-gui -- --fullscreen  # start fullscreen (F11 toggles)
 //! cargo run -p totalcontrol-gui -- --mock-ucx --flyouts settings:input:0  # open a panel
@@ -30,8 +29,8 @@ mod sidebar;
 mod sync_dialog;
 mod theme;
 mod tray;
-mod workspaces;
 mod widgets;
+mod workspaces;
 
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -69,8 +68,7 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
 
 /// `--view quick|mixer|matrix`: the page the window opens on.  Mixer is
 /// the default; the flag can still land directly on Quick or Matrix.
-/// Unknown values fall back to the default, the same way `--backend`
-/// falls back to auto-detect instead of opening nothing.
+/// Unknown values fall back to the default.
 fn parse_view(args: &[String]) -> Option<app::View> {
     match arg_value(args, "--view").as_deref() {
         Some("quick") => Some(app::View::Quick),
@@ -93,9 +91,8 @@ fn main() -> iced::Result {
         println!("{}", about::BUILD_ID);
         return Ok(());
     }
-    // `--mock` simulates a Babyface Pro FS; `--mock-ucx` simulates a
-    // Fireface UCX (EQ, dynamics, FX bus, Control Room), so the gated UI can
-    // be used without the hardware.
+    // `--mock` simulates a Fireface UCX; `--mock-uc` simulates the
+    // reduced UC surface, so the gated UI can be used without the hardware.
     if args.iter().any(|a| a == "--mock-ucx") {
         std::env::set_var("TOTALCONTROL_MOCK_MODEL", "ucx");
     } else if args.iter().any(|a| a == "--mock-uc") {
@@ -109,17 +106,6 @@ fn main() -> iced::Result {
     if args.iter().any(|a| a == "--control-only") {
         std::env::set_var("TOTALCONTROL_NO_CAPTURE", "1");
     }
-
-    // `None` = auto-detect (ALSA/kernel-driver first, USB fallback — see
-    // `DeviceHandle::open_real`). An unrecognized value falls back to
-    // auto rather than silently opening nothing.
-    let backend = arg_value(&args, "--backend").and_then(|v| match v.as_str() {
-        "alsa" | "usb" => Some(v),
-        other => {
-            eprintln!("Unknown --backend value {other:?} (use alsa|usb), auto-detecting");
-            None
-        }
-    });
 
     // Opt-in, loopback-only OSC control surface — see osc.rs. Off unless
     // `--osc` is passed, so enabling it is always a deliberate choice.
@@ -147,9 +133,9 @@ fn main() -> iced::Result {
     let start_view = parse_view(&args);
     // Screenshot/automation overrides.  These are applied after the saved
     // layout, so one launch can open exactly the panels a check needs.
-    let start_scale = arg_value(&args, "--scale").and_then(|v| v.parse::<f32>().ok()).map(
-        |scale| scale.clamp(theme::SCALE_MIN, theme::SCALE_MAX),
-    );
+    let start_scale = arg_value(&args, "--scale")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|scale| scale.clamp(theme::SCALE_MIN, theme::SCALE_MAX));
     let start_out = arg_value(&args, "--select-out").and_then(|v| v.parse::<usize>().ok());
     let start_flyouts = arg_value(&args, "--flyouts");
     // Open the device sheet before the first frame, for screenshots.
@@ -193,7 +179,11 @@ fn main() -> iced::Result {
     // The tray icon (not for the simulation, which would put a second icon
     // beside the real one). `--minimized` starts hidden in it, and only when
     // there is one: a hidden window with no icon has no way back.
-    let tray_active = !mock && tray::start(tray::Status { window_visible: true, dim: false });
+    let tray_active = !mock
+        && tray::start(tray::Status {
+            window_visible: true,
+            dim: false,
+        });
     let start_hidden = tray_active && args.iter().any(|a| a == "--minimized");
 
     // A daemon, not a plain application: the window is opened and closed by
@@ -202,14 +192,12 @@ fn main() -> iced::Result {
     // exits with its last window).
     iced::daemon(
         move || {
-            let mut state =
-                app::new_with_device(
-                    mock,
-                    osc_config.clone(),
-                    backend.clone(),
-                    preferred_device,
-                    preferred_serial.clone(),
-                );
+            let mut state = app::new_with_device(
+                mock,
+                osc_config.clone(),
+                preferred_device,
+                preferred_serial.clone(),
+            );
             // Restore the operational settings and the active unit's current
             // workspace (view, sidebar, rows, zoom, channel names, scene)
             // before the command line overrides any of it.
@@ -353,6 +341,9 @@ mod tests {
     #[test]
     fn view_flag_absent_starts_on_the_default() {
         assert_eq!(parse_view(&["totalcontrol-gui".into()]), None);
-        assert_eq!(parse_view(&["totalcontrol-gui".into(), "--mock".into()]), None);
+        assert_eq!(
+            parse_view(&["totalcontrol-gui".into(), "--mock".into()]),
+            None
+        );
     }
 }

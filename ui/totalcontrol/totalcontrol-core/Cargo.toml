@@ -2,7 +2,7 @@
 name = "totalcontrol-core"
 version = "0.1.0"
 edition = "2021"
-description = "Core library for controlling RME audio interfaces (ALSA and proprietary USB backends)"
+description = "Core library for controlling RME audio interfaces"
 license = "MIT"
 
 [dependencies]
@@ -14,21 +14,14 @@ serde_json = "1"
 strum = { version = "0.26", features = ["derive"] }
 libc = "0.2"
 alsa = { version = "0.9", optional = true }
-totalcontrol-usb = { version = "0.1.0", path = "../totalcontrol-usb", optional = true }
 
 [features]
 default = ["alsa"]
-# ALSA class-compliant backend (Linux only).
+# ALSA backend (Linux only).
 alsa = ["dep:alsa"]
-# Proprietary USB backend (the TotalMix protocol, see totalcontrol-usb).
-usb = ["dep:totalcontrol-usb", "totalcontrol-usb/driver"]
 
 [[example]]
 name = "alsa-scan"
-required-features = ["alsa"]
-
-[[example]]
-name = "panel-watch"
 required-features = ["alsa"]
 
 [[example]]

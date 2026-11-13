@@ -32,7 +32,7 @@
 # wireplumber and pulseaudio-utils (pactl).  Build the control example with:
 #   cargo build -p totalcontrol-core --example fireface-ctl --features alsa
 #
-# This gate covers the UC only.  UCX and Babyface Pro FS have separate
+# This gate covers the UC only.  UCX and Babyface-classic have separate
 # transport/protocol validation.
 #
 # Target-selection and rate-layer rules: docs/LOW-RATE-GATE.md

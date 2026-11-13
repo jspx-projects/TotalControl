@@ -1,12 +1,12 @@
 //! `totalcontrol-core` — Abstraction layer for RME audio interfaces on Linux.
 //!
 //! This crate provides a hardware-agnostic interface for controlling
-//! RME audio interfaces through ALSA mixer controls.
+//! RME audio interfaces through the kernel hwdep control node.
 //!
 //! # Design
 //!
 //! The main entrypoint is the [`RmeDevice`] trait, implemented by each
-//! supported RME interface (e.g. [`BabyfacePro`]).
+//! supported RME interface (Fireface UC/UCX and Babyface-classic).
 //!
 //! A device exposes:
 //! - [`InputChannel`]s (physical hardware inputs)
@@ -14,39 +14,25 @@
 //! - Global [`DeviceSettings`] (clock, SPDIF, etc.)
 
 #[cfg(feature = "alsa")]
-pub mod babyface;
-#[cfg(feature = "alsa")]
 pub mod babyface_classic;
-#[cfg(feature = "alsa")]
-pub mod fireface;
-#[cfg(feature = "alsa")]
-pub(crate) mod capture_meter;
 pub mod capabilities;
 pub mod channel;
-pub(crate) mod curves;
 pub mod device;
 pub mod error;
 #[cfg(feature = "alsa")]
-pub mod mixer;
+pub mod fireface;
 pub mod mock;
 pub mod panel;
 pub mod profile;
 pub mod profiles;
 pub mod pw_clock;
 pub mod pw_follow;
-pub mod pw_input;
 pub mod pw_meter;
 pub mod scene;
 pub mod workspace;
-#[cfg(feature = "usb")]
-pub mod usb;
 
 #[cfg(feature = "alsa")]
-pub use babyface::BabyfacePro;
-#[cfg(feature = "alsa")]
 pub use babyface_classic::BabyfaceClassic;
-#[cfg(feature = "alsa")]
-pub use fireface::{DeviceIdentity as FirefaceIdentity, DeviceInfo as FirefaceInfo, Fireface, Model as FirefaceModel};
 pub use capabilities::DeviceCapabilities;
 pub use channel::{
     ChannelId, ChannelType, Dynamics, Echo, InputChannel, InputLevel, OutputChannel,
@@ -55,8 +41,9 @@ pub use channel::{
 pub use device::{DeviceSettings, RmeDevice, TalkbackConfig};
 pub use error::Error;
 #[cfg(feature = "alsa")]
-pub use mixer::AlsaMixer;
-pub use mock::MockBabyfacePro;
+pub use fireface::{
+    DeviceIdentity as FirefaceIdentity, DeviceInfo as FirefaceInfo, Fireface,
+    Model as FirefaceModel,
+};
+pub use mock::MockDevice;
 pub use scene::Scene;
-#[cfg(feature = "usb")]
-pub use usb::BabyfaceProUsb;

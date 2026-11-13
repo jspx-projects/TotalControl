@@ -1,12 +1,9 @@
 //! Per-model device profiles — see [`crate::profile::DeviceProfile`].
 //!
-//! To add a new ALSA-selem RME model, see the recipe in `README.md`
-//! at the repo root: copy `babyface_pro.rs` as a template for the profile
-//! data, then re-verify `selem_name`/`ch_type_str` in `babyface_pro.rs`
-//! against real `amixer scontents` output for your device — that naming
-//! grammar is only confirmed for the Babyface Pro so far.
+//! Each supported model has one profile const. The profile is the single
+//! source for channel names, topology and output display order. Backends and
+//! mocks build their channels from it, so they cannot drift apart.
 
 pub mod babyface_classic;
-pub mod babyface_pro;
 pub mod uc;
 pub mod ucx;

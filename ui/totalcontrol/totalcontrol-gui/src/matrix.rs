@@ -301,9 +301,8 @@ fn shown_gain(src: &RowSource, idx: usize, col: usize) -> Option<f32> {
 ///
 /// **Which columns are interactive**: our own per-channel model stores
 /// one volume *per output pair*, not per individual physical output
-/// channel — matching the hardware itself, which (per `babyface.rs`'s
-/// own crosspoint comment) has no way to route a non-mono source
-/// differently into an output pair's left vs right side at all. That
+/// channel — matching the hardware, which has no way to route a non-mono
+/// source differently into an output pair's left vs right side at all. That
 /// one value is editable through whichever single column (left/right)
 /// this channel naturally feeds (`idx % 2`, the same convention
 /// `set_channel_volume` already uses everywhere); the other column of
@@ -772,16 +771,6 @@ mod tests {
         assert_eq!(groups[0].label, "Phones 7/8");
         assert_eq!(groups[1].label, "AN1/2");
         assert_eq!(groups[3].label, "AN5/6");
-    }
-
-    #[test]
-    fn babyface_labels_use_the_identity_order() {
-        let mut state = crate::app::new(false, None, None);
-        state.device = crate::app::DeviceHandle::open_mock();
-        let groups = playback_row_groups(&state);
-        assert_eq!(groups[0].label, "AN1/2");
-        assert_eq!(output_pair_label(&state, 0), "AN1/2");
-        assert_eq!(output_pair_label(&state, 1), "PH3/4");
     }
 
     #[test]

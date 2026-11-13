@@ -83,12 +83,11 @@ pub struct InputChannel {
     pub gain_right: Option<u32>,
     /// Ref-level code (Instr 3/4: +4dBu / -10dBV / Boost) as the raw
     /// Ref-level code (Instr 3/4): 0 = unset, 1 = +4dBu, 2 = -10dBV,
-    /// 3 = Boost (see `usb::REF_*`; labeled cap_reflevel2.pcap).
+    /// 3 = Boost.
     #[serde(default)]
     pub ref_level: u16,
-    /// Hardware 3-band + low-cut DSP EQ. `Some` only for the 4 analog
-    /// inputs (AN1-AN4 on the Babyface Pro FS — the only channels with
-    /// an EQ strip); `None` for every other input type.
+    /// Hardware 3-band + low-cut DSP EQ. `Some` only for inputs whose
+    /// profile gives them an EQ strip; `None` for every other input type.
     /// `#[serde(default)]` so old scene JSON without EQ still loads.
     #[serde(default)]
     pub eq: Option<InputEq>,

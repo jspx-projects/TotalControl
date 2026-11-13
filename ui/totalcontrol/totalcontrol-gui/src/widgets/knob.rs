@@ -83,7 +83,7 @@ pub struct Knob<Message> {
     pub level_arc_color: Option<Color>,
     /// `false` renders a dimmed, inert knob that ignores all mouse
     /// input — for a slot the reference visually has a knob in, but
-    /// `totalcontrol-core`/`totalcontrol-usb` has no real control backing yet (e.g.
+    /// `totalcontrol-core` has no real control backing yet (e.g.
     /// an Output strip's own pan/balance — see `widgets/strip.rs`'s
     /// `full_strip` doc comment on why that one specifically has no
     /// working control). A knob that's just visually absent (a blank

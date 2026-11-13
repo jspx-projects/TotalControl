@@ -41,7 +41,7 @@ use crate::device::{DeviceSettings, RmeDevice};
 use crate::error::Error;
 use crate::fireface::abi::{EV_METER, MODEL_BABYFACE_CLASSIC};
 use crate::fireface::hwdep::{Direction, Hwdep};
-use crate::mock::MockBabyfacePro;
+use crate::mock::MockDevice;
 use crate::profiles::babyface_classic::PROFILE;
 use crate::scene::Scene;
 
@@ -164,7 +164,7 @@ fn describe(addr: u16, level: u32) -> String {
 
 /// The Babyface-classic (vendor mode) over `snd-fireface-uc`.
 pub struct BabyfaceClassic {
-    state: MockBabyfacePro,
+    state: MockDevice,
     hw: Hwdep,
     capabilities: DeviceCapabilities,
     firmware: Option<u32>,
@@ -275,7 +275,7 @@ impl BabyfaceClassic {
             let serial = info.serial_str();
             (!serial.is_empty()).then_some(serial)
         });
-        let mut state = MockBabyfacePro::open_with(&PROFILE, MODEL, capabilities)?;
+        let mut state = MockDevice::open_with(&PROFILE, MODEL, capabilities)?;
         for ch in state.inputs_mut() {
             ch.phantom = false;
             ch.pad = false;

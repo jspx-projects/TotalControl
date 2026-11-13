@@ -30,7 +30,6 @@ detail.
 | `spec/TOTALCONTROL-STATE-SPEC.md` | state ownership, current workspace, autosave, restore, host settings and layout files |
 | `spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` | Fireface UCX transport, registers, writes and readback |
 | `spec/FIREFFACE-UC-PROTOCOL-SPEC.md` | Fireface UC transport, registers, writes and readback |
-| `spec/BABYFACE-PRO-PROTOCOL-SPEC.md` | Babyface Pro FS transport, ALSA surface, USB protocol and DSP blocks |
 | `spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md` | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI |
 | `spec/TOTALCONTROL-OSC-SPEC.md` | OSC 1.96 and Global OSC address spaces, scales and feedback |
 | `TOTALCONTROL-Manual.md` | installation, setup, use and troubleshooting |
@@ -110,15 +109,14 @@ the controls that connection can drive.
 | Variant | Transport | Support |
 |---|---|---|
 | `Fireface` | Fireface UC/UCX over the kernel hwdep node | production |
-| `BabyfaceClassic` | Babyface-classic over the kernel hwdep node | minimal support |
-| `BabyfacePro` | Babyface ALSA controls | development fallback |
-| `BabyfaceProUsb` | direct libusb vendor protocol | development only |
+| `BabyfaceClassic` | Babyface-classic over the kernel hwdep node | experimental |
 | `Mirror` | UI-side copy owned by the device service | production |
 | `Mock` | simulation | development and tests |
 
 Every variant implements `RmeDevice`. The production installation is the
-kernel driver plus hwdep path; the other real-device backends are documented
-in `DEVELOPMENT-TOOLS.md`.
+kernel driver plus hwdep path. Supported devices are those exposed through
+that path: Fireface UC and Fireface UCX, with experimental Babyface-classic
+support.
 
 ## 5. Device service and mirror
 
