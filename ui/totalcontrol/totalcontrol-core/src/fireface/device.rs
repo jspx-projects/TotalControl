@@ -3323,17 +3323,6 @@ impl Fireface {
     /// Device peak words, in the same channel order as the power meters.
     /// A mixer meter is a peak meter: the power word is mean square (RMS),
     /// which reads several dB lower than the peak for music.
-    /// The UC input record is taken before the channel gain, while the
-    /// TotalMix input meter is post-gain.  Return the linear multiplier for
-    /// the meter accessors.
-    fn uc_input_gain_linear(&self, channel: usize) -> f32 {
-        self.inputs
-            .get(channel)
-            .and_then(|c| c.gain)
-            .map(|db| 10f32.powf(db as f32 / 20.0))
-            .unwrap_or(1.0)
-    }
-
     pub fn input_peaks(&self) -> Option<Vec<f32>> {
         match self.model {
             Model::Ucx => Some(
@@ -3343,7 +3332,7 @@ impl Fireface {
             ),
             Model::Uc => Some(
                 (0..self.inputs.len())
-                    .map(|i| self.uc_meters.input_peak(i) * self.uc_input_gain_linear(i))
+                    .map(|i| self.uc_meters.input_peak(i))
                     .collect(),
             ),
         }
@@ -3353,10 +3342,9 @@ impl Fireface {
     /// backend has no separate RMS feed; the caller falls back to the peak
     /// word.
     ///
-    /// The UC flag-page power word is taken before the channel gain and is
-    /// quantised to one power LSB, so a low pre-gain signal can read zero.
-    /// When that happens the bar uses the peak word's sine equivalent
-    /// (`peak / sqrt(2)`), scaled by the same channel gain.
+    /// The UC flag-page power word is quantised to one power LSB, so a low
+    /// signal can read zero.  When that happens the bar uses the peak
+    /// word's sine equivalent (`peak / sqrt(2)`).
     pub fn input_rms_meters(&self) -> Option<Vec<f32>> {
         match self.model {
             Model::Uc => Some(
@@ -3368,7 +3356,7 @@ impl Fireface {
                         } else {
                             self.uc_meters.input_peak(i) * std::f32::consts::FRAC_1_SQRT_2
                         };
-                        power * self.uc_input_gain_linear(i)
+                        power
                     })
                     .collect(),
             ),
@@ -3596,9 +3584,7 @@ impl Fireface {
             }
             let level = match source_channel {
                 ChannelId::Input(i) => {
-                    self.uc_meters.level(self.uc_meters.input[i])
-                        * self.uc_input_gain_linear(i)
-                        * 0.5f32.sqrt()
+                    self.uc_meters.level(self.uc_meters.input[i]) * 0.5f32.sqrt()
                 }
                 ChannelId::Playback(i) => self.uc_meters.playback_rms[i],
                 ChannelId::Output(_) => continue,
@@ -7192,7 +7178,7 @@ impl RmeDevice for Fireface {
             ),
             Model::Uc => Some(
                 (0..self.inputs.len())
-                    .map(|i| self.uc_meters.input(i) * self.uc_input_gain_linear(i))
+                    .map(|i| self.uc_meters.input(i))
                     .collect(),
             ),
         }
@@ -9410,27 +9396,6 @@ mod tests {
             (bars[0] - 1036.0 / 32768.0 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4,
             "zero power word falls back to peak/sqrt(2), got {}",
             bars[0]
-        );
-        dev.inputs[0].gain = Some(20);
-        let boosted = dev.input_rms_meters().expect("UC input RMS")[0];
-        assert!((boosted / bars[0] - 10.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn uc_input_meter_applies_the_channel_gain() {
-        let (mut dev, _writes) = open(Model::Uc);
-        let mut bytes = [0u8; UcMeterPacket::LEN];
-        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
-        // AN1 -30 dBFS peak before the channel gain.
-        bytes[108..112].copy_from_slice(&(1036u32 << 16).to_le_bytes());
-        let packet = UcMeterPacket::parse(&bytes).expect("data page");
-        dev.uc_meters.apply(&packet, protocol::UcInputLaw::Linear);
-        let base = dev.meters().expect("UC input meters")[0];
-        dev.inputs[0].gain = Some(20);
-        let boosted = dev.meters().expect("UC input meters")[0];
-        assert!(
-            (boosted / base - 10.0).abs() < 0.01,
-            "20 dB gain should multiply the pre-gain record by ten, got {base} -> {boosted}"
         );
     }
 

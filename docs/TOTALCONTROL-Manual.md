@@ -470,11 +470,11 @@ peak record for every output row.
 
 On the same unit every input row takes the device input RMS word for the
 bar and the input peak record for the peak line; the input RMS and peak
-banks cover all eighteen inputs. The device input words are taken before
-the channel gain, so TotalControl applies the gain to both the bar and the
-peak line. When the device RMS word is zero for a very low pre-gain signal,
-the bar uses the peak word's sine equivalent (peak / √2). The input OVR
-block follows the device's input over word.
+banks cover all eighteen inputs. The device input words are taken after
+the channel gain, so TotalControl uses them directly and does not add the
+gain again. When the device RMS word is zero for a very low signal, the
+bar uses the peak word's sine equivalent (peak / √2). The input OVR block
+follows the device's input over word.
 
 The RMS bar is mathematically correct RMS: a full-scale sine reads about
 -3 dB on it. TotalMix FX offers an optional **RMS +3 dB** display shift that
@@ -1279,10 +1279,17 @@ In CHANNEL mode, turning the encoder cycles through:
 Press the encoder to show the selected channel's value. Turning then changes
 that value.
 
-### Input gain
+### Input gain and reference
 
-Inputs 1 and 2 use the microphone range, 0–65 dB, in 1 dB steps. Inputs 3
-and 4 use the instrument/line range, 0–12 dB, in 0.5 dB steps.
+Inputs 1/2 use the microphone range: 0 dB, then +10 to +65 dB in 1 dB
+steps, with 48 V. Inputs 3/4 use the instrument/line range, 0 to +18 dB
+in 0.5 dB steps, with PAD and INST. Inputs 5–8 have no variable gain;
+their reference is −10 dBV, +4 dBu or Lo Gain, which places 0 dBFS at
++2 dBV, +13 dBu or +19 dBu. The line and phones outputs use −10 dBV,
++4 dBu or Hi Gain.
+
+The input meter is post-gain. The device's SIG LED is −65 dBFS and the
+CLIP LED is −2 dBFS; both follow the same post-gain signal as the meter.
 
 A long press on an input enters pair-adjust mode. The left digit gets a dot
 and the encoder moves **both** channels of the pair, whether or not the pair

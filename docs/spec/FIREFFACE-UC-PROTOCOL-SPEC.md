@@ -552,10 +552,10 @@ RMS dBFS      = 10 × log10(word / 32768)
 
 The other three words in each input slot are status/junk.
 
-The data-page peak and flag-page RMS input words are taken before the
-channel gain.  TotalControl multiplies both by the channel gain for the
-input meters.  The RMS word is one power LSB, so a very low pre-gain
-signal can read zero; the bar then uses the peak word's sine equivalent
+The data-page peak and flag-page RMS input words are taken after the
+channel gain.  TotalControl uses them directly and does not add the gain
+again.  The RMS word is one power LSB, so a very low signal can read
+zero; the bar then uses the peak word's sine equivalent
 (`peak / sqrt(2)`).
 
 ### TotalControl behaviour
@@ -574,13 +574,11 @@ signal can read zero; the bar then uses the peak word's sine equivalent
   inside the device's resolvable range; beyond it the hardware output
   rows continue on the row's written `0x1a` fader and routed matrix
   state.
-- Input lower VU bar: the flag-page input RMS bank (`3 + 4c`), scaled
-  by the channel gain.  When the power word is zero for a very low
-  pre-gain signal, the bar uses the peak word's sine equivalent
-  (`peak / sqrt(2)`).
+- Input lower VU bar: the flag-page input RMS bank (`3 + 4c`).  When
+  the power word is zero for a very low signal, the bar uses the peak
+  word's sine equivalent (`peak / sqrt(2)`).
 - Input peak line: the data-page input peak word (AP linear 16-bit
-  analog / 24-bit digital; PC 6800 analog / `0x420000` digital octave),
-  scaled by the channel gain.
+  analog / 24-bit digital; PC 6800 analog / `0x420000` digital octave).
 - Input OVR LED: the analog low-word over event, gated by the global OVR
   sample preference; the digital saturated 24-bit level with the over
   tag.
