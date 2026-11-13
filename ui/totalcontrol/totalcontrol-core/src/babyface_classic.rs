@@ -69,10 +69,6 @@ fn unsupported(what: &str) -> Error {
     Error::InvalidChannel(format!("{what} is not supported on the Babyface-classic"))
 }
 
-fn capabilities() -> DeviceCapabilities {
-    PROFILE.capabilities()
-}
-
 /// Linear pan law shared with the Fireface UC backend.
 fn pan_split(volume: f32, pan: i8) -> (f32, f32) {
     let v = volume.clamp(0.0, 2.0);
@@ -138,7 +134,6 @@ fn describe(addr: u16, level: u32) -> String {
 pub struct BabyfaceClassic {
     state: MockDevice,
     hw: Hwdep,
-    capabilities: DeviceCapabilities,
     firmware: Option<u32>,
     serial: Option<String>,
     /// Last level sent per `0x12` address.
@@ -239,7 +234,6 @@ impl BabyfaceClassic {
 
     fn with_hwdep(hw: Hwdep) -> Result<Self, Error> {
         let info = hw.info().ok();
-        let capabilities = capabilities();
         let firmware = info
             .as_ref()
             .and_then(|info| (info.firmware > 0).then_some(info.firmware));
@@ -247,7 +241,7 @@ impl BabyfaceClassic {
             let serial = info.serial_str();
             (!serial.is_empty()).then_some(serial)
         });
-        let mut state = MockDevice::open_with(&PROFILE, MODEL, capabilities)?;
+        let mut state = MockDevice::open_with(&PROFILE)?;
         for ch in state.inputs_mut() {
             ch.phantom = false;
             ch.pad = false;
@@ -279,7 +273,6 @@ impl BabyfaceClassic {
             state,
             meters: RefCell::new(DspMeters::default()),
             hw,
-            capabilities,
             firmware,
             serial,
             sent: RefCell::new(HashMap::new()),
@@ -594,31 +587,31 @@ impl RmeDevice for BabyfaceClassic {
     }
 
     fn loopback_supported(&self) -> bool {
-        self.capabilities.loopback
+        PROFILE.capabilities().loopback
     }
 
     fn low_cut_supported(&self) -> bool {
-        self.capabilities.low_cut
+        PROFILE.capabilities().low_cut
     }
 
     fn phase_supported(&self) -> bool {
-        self.capabilities.phase
+        PROFILE.capabilities().phase
     }
 
     fn output_balance_supported(&self) -> bool {
-        self.capabilities.output_balance
+        PROFILE.capabilities().output_balance
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
-        self.capabilities
+        PROFILE.capabilities()
     }
 
     fn stereo_split_supported(&self) -> bool {
-        self.capabilities.stereo_split
+        PROFILE.capabilities().stereo_split
     }
 
     fn class_compliant(&self) -> bool {
-        self.capabilities.class_compliant
+        PROFILE.capabilities().class_compliant
     }
 
     fn output_pair_count(&self) -> usize {

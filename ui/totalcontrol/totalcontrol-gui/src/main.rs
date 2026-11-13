@@ -97,10 +97,13 @@ fn main() -> iced::Result {
         std::env::set_var("TOTALCONTROL_MOCK_MODEL", "ucx");
     } else if args.iter().any(|a| a == "--mock-uc") {
         std::env::set_var("TOTALCONTROL_MOCK_MODEL", "uc");
+    } else if args.iter().any(|a| a == "--mock-classic") {
+        std::env::set_var("TOTALCONTROL_MOCK_MODEL", "classic");
     }
     let mock = args.iter().any(|a| a == "--mock")
         || args.iter().any(|a| a == "--mock-ucx")
-        || args.iter().any(|a| a == "--mock-uc");
+        || args.iter().any(|a| a == "--mock-uc")
+        || args.iter().any(|a| a == "--mock-classic");
     // Control-only/DAW mode: the DAW owns the PCM device.  Keep TotalControl on
     // the ALSA control plane only; see docs/PIPEWIRE-PRO-AUDIO.md.
     if args.iter().any(|a| a == "--control-only") {

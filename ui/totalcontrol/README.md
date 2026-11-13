@@ -38,8 +38,8 @@ paru -S totalcontrol        # Arch, CachyOS
 Other distributions: `cargo build --release`, see the
 [guide](docs/guide.md#building-from-source).
 Try it without hardware: `totalcontrol --mock` simulates a Fireface UCX,
-`totalcontrol --mock-ucx` a Fireface UCX and `totalcontrol --mock-uc` a
-Fireface UC. Each brings the panels its unit really has — the UCX adds EQ,
+`totalcontrol --mock-ucx` a Fireface UCX, `totalcontrol --mock-uc` a
+Fireface UC and `totalcontrol --mock-classic` a Babyface-classic. Each brings the panels its unit really has — the UCX adds EQ,
 dynamics, FX and the Control Room; the UC shows the gated set. Both are also
 selectable in the Device picker.
 

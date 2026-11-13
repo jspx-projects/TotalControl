@@ -17,6 +17,7 @@ use crate::capabilities::DeviceCapabilities;
 use crate::channel::*;
 use crate::device::{DeviceSettings, RmeDevice};
 use crate::error::Error;
+use crate::profiles::babyface_classic::PROFILE as CLASSIC_PROFILE;
 use crate::profiles::uc::PC as UC_PROFILE;
 use crate::profiles::ucx::ISO as UCX_PROFILE;
 use crate::scene::Scene;
@@ -61,17 +62,6 @@ pub struct MockDevice {
     matrix_overrides: std::collections::HashMap<(ChannelId, usize), f32>,
 }
 
-/// The UCX's own capability set, taken from the model spec the real
-/// device uses so the two cannot drift.
-fn ucx_capabilities() -> DeviceCapabilities {
-    crate::profiles::ucx::ISO.capabilities()
-}
-
-/// The Fireface UC's own capability set, from the model spec.
-fn uc_capabilities() -> DeviceCapabilities {
-    crate::profiles::uc::PC.capabilities()
-}
-
 impl MockDevice {
     /// Whether this in-memory device is the UCX rather than the UC.
     pub fn is_ucx(&self) -> bool {
@@ -83,56 +73,64 @@ impl MockDevice {
         std::ptr::eq(self.profile, &UC_PROFILE)
     }
 
+    /// Whether this in-memory device is the Babyface-classic.
+    pub fn is_babyface_classic(&self) -> bool {
+        std::ptr::eq(self.profile, &CLASSIC_PROFILE)
+    }
+
     /// The Fireface UCX: same in-memory device, UCX topology and
     /// capabilities, so the FX panel, the Control Room and the UCX-only
     /// Settings rows can be used without the hardware.
     pub fn open_ucx() -> Result<Self, Error> {
-        Self::open_with(&UCX_PROFILE, "Fireface UCX", ucx_capabilities())
+        Self::open_with(&UCX_PROFILE)
     }
 
     /// The Fireface UC: the same in-memory device with the UC's topology and
     /// gated feature set (no EQ, dynamics or FX; the UC's Settings group).
     pub fn open_uc() -> Result<Self, Error> {
-        Self::open_with(&UC_PROFILE, "Fireface UC", uc_capabilities())
+        Self::open_with(&UC_PROFILE)
+    }
+
+    /// The Babyface-classic simulation.
+    pub fn open_babyface_classic() -> Result<Self, Error> {
+        Self::open_with(&CLASSIC_PROFILE)
     }
 
     pub(crate) fn open_with(
         profile: &'static crate::profile::DeviceProfile,
-        model_name: &str,
-        capabilities: DeviceCapabilities,
     ) -> Result<Self, Error> {
+        let model_name = profile.model_name;
+        let capabilities = profile.capabilities();
         // Same topology as the real device, plus a mock-only demo
         // default: the first two (Mic) inputs start with phantom power
         // on, so the UI has something interesting to show immediately.
         let mut inputs = profile.build_inputs();
-        for (i, ch) in inputs.iter_mut().enumerate() {
-            ch.phantom = i < 2;
-            // Ranges matching the kernel driver's controls (2026-08-26:
-            // AN1/2 mic gain 0-65 dB, AN3/4 instrument 0-9 dB — the
-            // instrument raw is dB×2 = 0-18, cap_gain34.pcap).
-            ch.gain_max = match ch.channel_type {
-                ChannelType::Mic => Some(65),
-                ChannelType::Instrument => Some(9),
-                _ => None,
+        for preamp in profile.preamps {
+            let Some(ch) = inputs.get_mut(preamp.input) else {
+                continue;
             };
-            ch.gain = ch.gain_max.map(|_| 0);
-            // AN3/4 are the instrument-capable pair on every Fireface
-            // profile; the real device reports this at open.  Keep the mock
-            // topology identical so the Settings row matches.  On the UCX
-            // the pair keeps a 0-12 dB gain in 0.5 dB steps (0..24 raw)
-            // and a +4 dBu reference.
-            if (2..4).contains(&i) {
-                ch.has_instrument = true;
-                if capabilities.input_level {
-                    ch.gain_max = Some(24);
-                    ch.gain = Some(0);
-                    ch.level = Some(InputLevel::Plus4dBu);
-                    ch.ref_level = 1;
-                }
+            ch.has_pad = preamp.pad;
+            ch.has_instrument = preamp.instrument;
+            ch.autoset = preamp.autoset;
+            ch.phantom = preamp.phantom;
+            if preamp.gain_max > preamp.gain_min {
+                let steps = ((preamp.gain_max - preamp.gain_min) / preamp.gain_step).round() as u32;
+                ch.gain_max = Some(steps);
+                ch.gain = Some(0);
+            } else {
+                ch.gain_max = None;
+                ch.gain = None;
             }
-            // The first four analog inputs carry an EQ strip; a device
-            // with dynamics enabled gets one on every input below.
-            ch.eq = (i < 4).then(InputEq::default);
+            if preamp.level {
+                ch.level = Some(InputLevel::Plus4dBu);
+                ch.ref_level = 1;
+            }
+        }
+        // Keep the first two mic inputs live in the demonstration.
+        for ch in inputs.iter_mut().take(2) {
+            if ch.channel_type == ChannelType::Mic {
+                ch.phantom = true;
+            }
         }
 
         // A unit with the DSP (the UCX) carries EQ/low cut and dynamics on
@@ -1207,6 +1205,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn babyface_classic_mock_uses_profile_topology_and_capabilities() {
+        let dev = MockDevice::open_babyface_classic().unwrap();
+        assert!(dev.is_babyface_classic());
+        assert_eq!(dev.inputs().len(), 10);
+        assert_eq!(dev.playbacks().len(), 12);
+        assert_eq!(dev.outputs().len(), 12);
+        assert!(!dev.capabilities().eq);
+        assert!(!dev.capabilities().dynamics);
+        assert!(!dev.capabilities().fx);
+        assert!(dev.capabilities().input_phantom);
+        assert_eq!(dev.inputs()[0].gain_max, Some(18));
+    }
+
+    #[test]
     fn test_open_creates_correct_number_of_channels() {
         let dev = MockDevice::open_ucx().unwrap();
         assert_eq!(dev.inputs().len(), 18);
@@ -1674,16 +1686,6 @@ mod tests {
         assert!(!dev.settings().dim);
         dev.set_dim(true).unwrap();
         assert!(dev.settings().dim);
-    }
-
-    #[test]
-    fn test_eq_only_on_first_four_inputs() {
-        let mut dev = MockDevice::open_uc().unwrap();
-        dev.set_eq_enabled(3, true).unwrap();
-        assert!(dev.inputs()[3].eq.unwrap().enabled);
-
-        let err = dev.set_eq_enabled(4, true).unwrap_err();
-        assert!(matches!(err, Error::InvalidChannel(_)));
     }
 
     #[test]

@@ -301,6 +301,7 @@ impl DeviceHandle {
     fn open_mock() -> Self {
         let device = match std::env::var("TOTALCONTROL_MOCK_MODEL").ok().as_deref() {
             Some("uc") => MockDevice::open_uc(),
+            Some("classic") => MockDevice::open_babyface_classic(),
             _ => MockDevice::open_ucx(),
         };
         DeviceHandle::Mock(device.expect("mock opens"))
@@ -623,12 +624,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--mock-uc") {
         std::env::set_var("TOTALCONTROL_MOCK_MODEL", "uc");
+    } else if args.iter().any(|a| a == "--mock-classic") {
+        std::env::set_var("TOTALCONTROL_MOCK_MODEL", "classic");
     } else if args.iter().any(|a| a == "--mock-ucx") {
         std::env::set_var("TOTALCONTROL_MOCK_MODEL", "ucx");
     }
     let mock = args.iter().any(|a| a == "--mock")
         || args.iter().any(|a| a == "--mock-uc")
-        || args.iter().any(|a| a == "--mock-ucx");
+        || args.iter().any(|a| a == "--mock-ucx")
+        || args.iter().any(|a| a == "--mock-classic");
 
     let mut device: DeviceHandle = if mock {
         DeviceHandle::open_mock()
