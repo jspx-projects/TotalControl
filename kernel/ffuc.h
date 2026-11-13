@@ -212,6 +212,7 @@ struct ffuc_device_desc {
 	u8 in_ep;
 	u8 status_iface;
 	u8 status_ep;
+	u8 status_bulk;		/* 1 = bulk IN, 0 = interrupt IN */
 	u8 state_iface;
 	u8 state_out_ep;
 	u8 state_in_ep;

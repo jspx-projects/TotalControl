@@ -587,7 +587,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.audio_iface = 0,
 		.out_ep = 0x01,
 		.in_ep = 0x02,
-		.status_iface = FFUC_IFACE_NONE,
+		.status_iface = 4,
+		.status_bulk = 1,
 		.status_ep = 0x8b,
 		.state_iface = 1,
 		.state_out_ep = 0x0c,
@@ -614,7 +615,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.audio_iface = 0,
 		.out_ep = 0x01,
 		.in_ep = 0x02,
-		.status_iface = FFUC_IFACE_NONE,
+		.status_iface = 4,
+		.status_bulk = 1,
 		.status_ep = 0x8b,
 		.state_iface = 1,
 		.state_out_ep = 0x0c,
@@ -1479,10 +1481,18 @@ static int ffuc_status_submit(struct ffuc *chip)
 	if (!chip->status_intf || chip->status_active ||
 	    READ_ONCE(chip->disconnected))
 		return 0;
-	usb_fill_int_urb(chip->status_urb, chip->dev,
-			 usb_rcvintpipe(chip->dev, chip->desc->status_ep),
-			 chip->status_buf, FFUC_STATUS_LEN,
-			 ffuc_status_complete, chip, 1);
+	if (chip->desc->status_bulk)
+		usb_fill_bulk_urb(chip->status_urb, chip->dev,
+				  usb_rcvbulkpipe(chip->dev,
+						  chip->desc->status_ep),
+				  chip->status_buf, FFUC_STATUS_LEN,
+				  ffuc_status_complete, chip);
+	else
+		usb_fill_int_urb(chip->status_urb, chip->dev,
+				 usb_rcvintpipe(chip->dev,
+						chip->desc->status_ep),
+				 chip->status_buf, FFUC_STATUS_LEN,
+				 ffuc_status_complete, chip, 1);
 	WRITE_ONCE(chip->status_armed_at,
 		   jiffies + msecs_to_jiffies(FFUC_STATUS_GRACE_MS));
 	ret = usb_submit_urb(chip->status_urb, GFP_ATOMIC);
