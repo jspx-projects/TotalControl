@@ -146,6 +146,20 @@ impl MeterPacket {
 /// channel was below the meter range, and a page whose records read zero
 /// everywhere is a filler page, not a meter page.
 ///
+/// The data page header also carries the RMS power words for output
+/// channels 4..17 (AN5..ADAT8), two per output pair.  The seven 16-byte
+/// groups start at bytes 0, 16, 32, 48, 64, 80 and 96:
+///
+/// ```text
+/// +0   left RMS power (u32)
+/// +4   left status
+/// +8   right RMS power (u32)
+/// +12  right status
+/// ```
+///
+/// The last group is truncated after its right RMS word at byte 104.
+/// The flag page still carries output RMS for channels 0..3.
+///
 /// The stream alternates data pages with flag pages.  Word 1 is `0x1fff` on
 /// a data page in the original page format and `0` or `1` on a flag page.
 /// The `UC_WIN_RME` personality uses marker `0` on both page kinds, but its
@@ -156,6 +170,8 @@ impl MeterPacket {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UcMeterPacket {
     pub records: [u32; 54],
+    /// Output RMS power for channels 4..17, two words per output pair.
+    pub output_rms: [u32; UC_HEADER_OUTPUT_RMS_CHANNELS],
 }
 
 fn uc_word(b: &[u8], word: usize) -> u16 {
@@ -175,7 +191,10 @@ fn uc_is_data_page(b: &[u8]) -> bool {
 
 impl Default for UcMeterPacket {
     fn default() -> Self {
-        Self { records: [0; Self::RECORD_COUNT] }
+        Self {
+            records: [0; Self::RECORD_COUNT],
+            output_rms: [0; UC_HEADER_OUTPUT_RMS_CHANNELS],
+        }
     }
 }
 
@@ -189,11 +208,6 @@ pub const UC_LINEAR_24_FULL_SCALE: f32 = 8_388_608.0;
 /// level.  The `0x00001fff` filler carries level `0x1f`; a real
 /// -90 dBFS signal is about 265.
 const UC_DIGITAL_INPUT_MIN_LEVEL: u32 = 0x100;
-/// The saturation over field: the low byte's tag nibble is `0xf` and the
-/// upper nibble counts 0..15 half dB steps of headroom over 0 dBFS.
-const UC_OVER_TAG: u8 = 0x0f;
-const UC_OVER_DB_PER_STEP: f32 = 6.0206 / 15.0;
-
 impl UcMeterPacket {
     pub const LEN: usize = 324;
     pub const ANALOG_INPUT_COUNT: usize = 8;
@@ -217,7 +231,16 @@ impl UcMeterPacket {
         for (i, r) in records.iter_mut().enumerate() {
             *r = u32::from_le_bytes(b[108 + i * 4..108 + i * 4 + 4].try_into().unwrap());
         }
-        Some(Self { records })
+        let mut output_rms = [0u32; UC_HEADER_OUTPUT_RMS_CHANNELS];
+        for group in 0..7 {
+            let left = group * 4;
+            let right = left + 2;
+            output_rms[group * 2] =
+                u32::from_le_bytes(b[left * 4..left * 4 + 4].try_into().unwrap());
+            output_rms[group * 2 + 1] =
+                u32::from_le_bytes(b[right * 4..right * 4 + 4].try_into().unwrap());
+        }
+        Some(Self { records, output_rms })
     }
 
     /// Raw analog input record `AN1..AN8`.
@@ -250,8 +273,11 @@ impl UcMeterPacket {
         self.analog_input_over_run(channel) >= UC_OVR_RUN_GATE
     }
 
-    /// Overload ratio from a digital input record.  The 24-bit level
-    /// saturates at `0x7fffff`; the low byte then carries the ratio.
+    /// Full-scale-sample count from a digital input record.  The 24-bit
+    /// level saturates at `0x7fffff`; when it does, the low byte carries
+    /// the count.  The byte is a count, not a nibble tag or a half-dB
+    /// over value: values such as `0x05`, `0x67` and `0x6f` are all valid
+    /// counts.
     pub fn digital_input_over_run(&self, channel: usize) -> u8 {
         let record = self.digital_input(channel);
         if ((record >> 8) & 0xffffff) == 0x7fffff {
@@ -261,12 +287,11 @@ impl UcMeterPacket {
         }
     }
 
-    /// Whether a digital input record carries the over tag.
+    /// Whether a digital input record reaches the global OVR sample gate.
+    /// The digital record has no separate `0xff` event byte; saturation of
+    /// the 24-bit level is the event, and the low byte is the count.
     pub fn digital_input_ovr(&self, channel: usize) -> bool {
-        let record = self.digital_input(channel);
-        ((record >> 8) & 0xffffff) == 0x7fffff
-            && (record as u8) & 0x0f == UC_OVER_TAG
-            && (record as u8) > 0
+        self.digital_input_over_run(channel) >= UC_OVR_RUN_GATE
     }
 
     /// Raw record of a playback channel.
@@ -283,6 +308,16 @@ impl UcMeterPacket {
             .get(Self::INPUT_COUNT + Self::PLAYBACK_COUNT + channel)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// RMS power word for a hardware output channel in the data-page
+    /// header.  The header covers output channels 4..17 only; channels
+    /// 0..3 use the flag-page bank and return 0 here.
+    pub fn output_header_rms(&self, channel: usize) -> u32 {
+        if !(UC_OUTPUT_RMS_CHANNELS..Self::OUTPUT_COUNT).contains(&channel) {
+            return 0;
+        }
+        self.output_rms[channel - UC_OUTPUT_RMS_CHANNELS]
     }
 
     /// Whether a playback channel carries the first word's OVR marker.
@@ -348,6 +383,9 @@ pub struct UcRmsPacket {
 
 /// Output channel count covered by the flag page's output RMS bank.
 pub const UC_OUTPUT_RMS_CHANNELS: usize = 4;
+/// Output channel count covered by the data-page header RMS bank
+/// (AN5..ADAT8; output channels 4..17).
+pub const UC_HEADER_OUTPUT_RMS_CHANNELS: usize = 14;
 
 impl UcRmsPacket {
     pub fn parse(b: &[u8]) -> Option<Self> {
@@ -412,22 +450,13 @@ impl UcRmsPacket {
     }
 }
 
-/// dBFS above full scale of a saturated UC meter record's over field.
-/// A record that is not saturated returns 0.
-pub fn uc_over_dbfs(record: u32) -> f32 {
-    let ratio = record as u8;
-    if ratio & 0x0f != UC_OVER_TAG {
-        return 0.0;
-    }
-    (ratio >> 4) as f32 * UC_OVER_DB_PER_STEP
-}
-
 /// dBFS of a UC digital input meter record (S/PDIF, ADAT).
 ///
 /// The level is a linear 24-bit peak value in bits 8..31; `0x800000` is
-/// full scale.  The low byte is the overload field and is not part of the
-/// level.  A level below the meter's own floor is page filler (`0x1fff`)
-/// and returns `None` so the meter bank holds the previous value.
+/// full scale.  The low byte is a full-scale-sample count and is not part
+/// of the level.  A level below the meter's own floor is page filler
+/// (`0x1fff`) and returns `None` so the meter bank holds the previous
+/// value.
 pub fn uc_digital_dbfs(record: u32) -> Option<f32> {
     let level = (record >> 8) & 0xffffff;
     if level == 0 {
@@ -436,13 +465,7 @@ pub fn uc_digital_dbfs(record: u32) -> Option<f32> {
     if level < UC_DIGITAL_INPUT_MIN_LEVEL {
         return None;
     }
-    let db = 20.0 * (level as f32 / UC_LINEAR_24_FULL_SCALE).log10();
-    let over = record as u8;
-    if over & 0x0f == UC_OVER_TAG {
-        Some(db + (over >> 4) as f32 * UC_OVER_DB_PER_STEP)
-    } else {
-        Some(db)
-    }
+    Some(20.0 * (level as f32 / UC_LINEAR_24_FULL_SCALE).log10())
 }
 
 /// dBFS of a UC software playback meter record.
@@ -465,6 +488,15 @@ pub fn uc_playback_dbfs(record: u32) -> Option<f32> {
 /// `sqrt(0.5)`, i.e. -3 dBFS RMS.
 pub fn uc_playback_rms_linear(word: u16) -> f32 {
     (word as f32 / 32768.0).max(0.0).sqrt()
+}
+
+/// Linear RMS amplitude of a data-page header output RMS word.
+///
+/// The header word is 32-bit linear power with `0x80000000` = full-scale
+/// peak squared.  A full-scale sine has word `0x40000000` and reads
+/// `sqrt(0.5)`, i.e. -3 dBFS RMS.
+pub fn uc_output_header_rms_linear(word: u32) -> f32 {
+    (word as f64 / 0x8000_0000u64 as f64).max(0.0).sqrt() as f32
 }
 
 /// Verified over-band law, OVR counter run -> peak-over-dBFS.
@@ -1127,10 +1159,19 @@ mod tests {
         assert!(!p.analog_input_ovr(0));
         p.records[0] = 0x7fff_1234;
         assert_eq!(p.analog_input_over_run(0), 0);
-        // Digital S/PDIF L: low byte is the overload ratio at saturation.
+        // Digital S/PDIF L: the low byte is a full-scale-sample count when
+        // the 24-bit level saturates.  The low nibble is not a fixed tag.
         p.records[8] = 0x7fffffcf;
         assert_eq!(p.digital_input_over_run(0), 0xcf);
         assert!(p.digital_input_ovr(0));
+        p.records[8] = 0x7fffff05;
+        assert_eq!(p.digital_input_over_run(0), 5);
+        assert!(p.digital_input_ovr(0));
+        p.records[8] = 0x7fffff67;
+        assert_eq!(p.digital_input_over_run(0), 0x67);
+        assert!(p.digital_input_ovr(0));
+        p.records[8] = 0x7fffff02;
+        assert!(!p.digital_input_ovr(0), "count 2 is under the gate");
         p.records[8] = 0x0ccd0000;
         assert!(!p.digital_input_ovr(0));
         p.records[8] = 0x7fffff00;
@@ -1219,15 +1260,33 @@ mod tests {
         let level = (UC_LINEAR_24_FULL_SCALE * 10f32.powf(-6.0 / 20.0)) as u32;
         assert!((uc_digital_dbfs(level << 8).unwrap() + 6.0).abs() < 0.05);
         assert_eq!(uc_digital_dbfs(0), Some(f32::NEG_INFINITY));
-        // The over tag in the low byte counts half dB steps above 0 dBFS.
+        // The low byte is an over count, not a half-dB headroom value.  It
+        // does not move the level past the saturated 24-bit level.
         assert!(uc_digital_dbfs(0x8000000f).unwrap().abs() < 1e-6);
-        assert_eq!(
-            uc_digital_dbfs(0x8000002f).unwrap(),
-            2.0 * 6.0206 / 15.0
-        );
+        assert!(uc_digital_dbfs(0x8000002f).unwrap().abs() < 1e-6);
+        assert!(uc_digital_dbfs(0x7fffff6f).unwrap().abs() < 1e-5);
         // No-data fillers are not levels and must not peg the meter.
         assert_eq!(uc_digital_dbfs(0x00001fff), None);
         assert_eq!(uc_digital_dbfs(0x00000fff), None);
+    }
+
+    #[test]
+    fn uc_data_page_header_carries_output_rms() {
+        let mut b = [0u8; UcMeterPacket::LEN];
+        b[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // A nonzero record keeps the page a meter page.
+        b[252..256].copy_from_slice(&0x0100_0000u32.to_le_bytes());
+        // AN5 left/right: full-scale sine power (0.5) -> 0.7071 RMS.
+        b[0..4].copy_from_slice(&0x4000_0000u32.to_le_bytes());
+        b[8..12].copy_from_slice(&0x4000_0000u32.to_le_bytes());
+        // ADAT 7/8 right is the last header word at byte 104.
+        b[104..108].copy_from_slice(&0x2000_0000u32.to_le_bytes());
+        let p = UcMeterPacket::parse(&b).expect("data page");
+        assert_eq!(p.output_header_rms(4), 0x4000_0000);
+        assert_eq!(p.output_header_rms(5), 0x4000_0000);
+        assert_eq!(p.output_header_rms(17), 0x2000_0000);
+        assert_eq!(p.output_header_rms(0), 0, "AN1 is on the flag page");
+        assert!((uc_output_header_rms_linear(0x4000_0000) - 0.70710677).abs() < 1e-5);
     }
 
 }

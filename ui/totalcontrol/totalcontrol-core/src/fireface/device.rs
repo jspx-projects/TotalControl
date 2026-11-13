@@ -346,8 +346,8 @@ struct UcMeterBank {
     playback: [f32; 18],
     playback_rms: [f32; 18],
     output: [f32; 18],
-    /// Device output RMS (the flag page's truncated power bank); only
-    /// channels 0..3 carry device RMS, all others default 0.
+    /// Device output RMS: channels 0..3 from the flag page's truncated
+    /// bank and channels 4..17 from the data-page header's seven pairs.
     output_rms: [f32; 18],
     /// Device-side consecutive-over sample counts per channel, decoded
     /// from each data page's OVR word.
@@ -440,6 +440,12 @@ impl UcMeterBank {
             self.playback_over[channel] = packet.playback_over_run(channel);
             self.output_over[channel] = packet.output_over_run(channel);
         }
+        // The data-page header publishes the remaining output RMS bank.
+        // Channels 0..3 stay on the flag page.
+        for channel in protocol::UC_OUTPUT_RMS_CHANNELS..18 {
+            self.output_rms[channel] =
+                protocol::uc_output_header_rms_linear(packet.output_header_rms(channel));
+        }
     }
 
     fn apply_rms(&mut self, packet: &UcRmsPacket) {
@@ -488,15 +494,11 @@ impl UcMeterBank {
         self.level(self.output[channel])
     }
 
-    /// The row bar's level.  Channels 0..3 take the device's own output
-    /// RMS (the flag page's truncated bank); the other channels have no
-    /// published RMS and fall back to the post-fader meter record.
+    /// The row bar's device RMS level.  Channels 0..3 use the flag-page
+    /// bank and channels 4..17 the data-page header.  The device words are
+    /// pre-fader; the output-meter path applies the row fader for display.
     fn output_rms(&self, channel: usize) -> f32 {
-        if channel < protocol::UC_OUTPUT_RMS_CHANNELS {
-            self.output_rms[channel]
-        } else {
-            self.output(channel)
-        }
+        self.output_rms[channel]
     }
 
     fn output_over_run(&self, channel: usize) -> u8 {
@@ -3303,10 +3305,11 @@ impl Fireface {
             Model::Uc => Some(
                 (0..self.outputs.len())
                     .map(|i| {
-                         if i < protocol::UC_OUTPUT_RMS_CHANNELS {
-                            self.uc_meters.output_rms[i]
+                        let rms = self.uc_meters.output_rms[i];
+                        if post {
+                            if self.outputs[i].mute { 0.0 } else { rms * self.outputs[i].volume }
                         } else {
-                            self.uc_output_estimated_rms(i, post)
+                            rms
                         }
                     })
                     .collect(),
@@ -3552,16 +3555,13 @@ impl Fireface {
     /// The device reports them in display/DSP order (AN1/2 first), so the
     /// profile's display order maps each pair back.  Used by the GUI when
     /// the unit supplies real post-fader meters.
-    /// Post-fader level for output channels whose meter feed has no device
-    /// RMS word (channels 4..17: AN5..ADAT8).  The `0x85` stream publishes
-    /// output RMS only for channels 0..3, so this is a host-side
-    /// approximation of the TotalMix post-fader meter: the power sum of
-    /// every routed source's device level scaled by its matrix cell gain
-    /// and the pair's own `0x1a` out fader.  Analog input records are peak
-    /// values, so a sine-weighted peak/√2 stands in until an input RMS
-    /// word is found.  The approximation is documented in the user manual;
-    /// the device feed for these rows remains an open question.
-    fn uc_output_estimated_rms(&self, channel: usize, post: bool) -> f32 {
+    /// Host-side power estimate used only for the red-band carry state
+    /// above the device OVR counter's resolvable range.  The lower VU bar
+    /// now uses the device header RMS for every output; this estimate is
+    /// the power sum of every routed source's device level scaled by its
+    /// matrix cell gain and the pair's own `0x1a` out fader.  Analog input
+    /// records are peak values, so a sine-weighted peak/√2 stands in.
+    fn uc_output_estimated_rms(&self, channel: usize, _post: bool) -> f32 {
         if self.outputs[channel].mute {
             return 0.0;
         }
@@ -9249,14 +9249,13 @@ mod tests {
             "AN1 out peak at 0 dBFS, got {:?}",
             outputs
         );
-        // The hardware RMS bank only reaches output channels 0..3, so a
-        // row bar without a flag-page RMS update must read silence there
-        // while a channel beyond the bank falls back to the peak record.
+        // Channels 0..3 use the flag-page bank; the empty bank reads
+        // silence.  Channels 4..17 use the data-page header.
         let bars = dev.output_meters_internal(true).expect("UC output bars");
         assert_eq!(bars[0], 0.0, "AN1 out without flag RMS reads silence");
         // OVR is the low word of the same record and does not change the
         // Peak level.  The high byte is the event and the low byte is the
-        // RMS over amount.
+        // full-scale-sample count.
         let mut bytes2 = bytes;
         bytes2[256..260].copy_from_slice(&0x7fffff2fu32.to_le_bytes());
         let packet2 = UcMeterPacket::parse(&bytes2).expect("meter page");
@@ -9413,51 +9412,49 @@ mod tests {
         bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
         // AN1 analog: high halfword 0x7fff, low halfword 0xff04.
         bytes[108..112].copy_from_slice(&0x7fffff04u32.to_le_bytes());
-        // S/PDIF L: saturated 24-bit level and over ratio 0xcf.
+        // S/PDIF L: saturated 24-bit level and an 8-bit full-scale count.
         bytes[140..144].copy_from_slice(&0x7fffffcfu32.to_le_bytes());
         let packet = UcMeterPacket::parse(&bytes).expect("data page");
         dev.uc_meters.apply(&packet);
         let ovr = dev.input_ovr().expect("UC input OVR");
         assert!(ovr[0], "AN1 analog over event");
-        assert!(ovr[8], "S/PDIF L digital over tag");
+        assert!(ovr[8], "S/PDIF L digital over count");
         assert!(!ovr[1], "AN2 silent");
     }
 
     #[test]
-    fn uc_flag_page_rms_carries_first_four_outputs() {
+    fn uc_output_rms_uses_flag_and_header_banks() {
         let (mut dev, _writes) = open(Model::Uc);
-        // Bank words 147/151/155/159 are the RMS power words of output
-        // channels 0..3; the page ends before channel 4's own slot, so
-        // AN5..ADAT8 have no device RMS and their row bar uses the
-        // host-side post-fader estimate from the routed sources.
-        dev.set_matrix_cell(ChannelId::Playback(0), 4, 1.0).unwrap();
-        // The estimate includes the pair's own 0x1a out fader; put it at
-        // 0 dB for a clean 1.0 scale.
-        dev.set_volume(ChannelId::Output(4), 0, 1.0).unwrap();
         let mut flag = [0u8; UcMeterPacket::LEN];
         flag[4..8].copy_from_slice(&1u32.to_le_bytes());
-        // Playback 1's RMS bank word (left) is routed to AN5's estimate.
-        flag[75 * 2..75 * 2 + 2].copy_from_slice(&8192u16.to_le_bytes());
         for (i, word) in [8192u16, 4096u16, 2048u16, 1024u16].iter().enumerate() {
             let off = (147 + 4 * i) * 2;
             flag[off..off + 2].copy_from_slice(&word.to_le_bytes());
         }
         let rms = UcRmsPacket::parse(&flag).expect("flag page");
         dev.uc_meters.apply_rms(&rms);
+
+        let mut data = [0u8; UcMeterPacket::LEN];
+        data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // Keep the page a meter page while the header carries the output
+        // RMS.  AN5 left/right = 0.5/0.25 RMS power; AN6 0.125/0.0625.
+        data[0..4].copy_from_slice(&0x2000_0000u32.to_le_bytes());
+        data[8..12].copy_from_slice(&0x0800_0000u32.to_le_bytes());
+        data[16..20].copy_from_slice(&0x0200_0000u32.to_le_bytes());
+        data[24..28].copy_from_slice(&0x0080_0000u32.to_le_bytes());
+        data[252..256].copy_from_slice(&0x0100_0000u32.to_le_bytes());
+        let packet = UcMeterPacket::parse(&data).expect("data page");
+        dev.uc_meters.apply(&packet);
+        // Put the AN5 row fader at -6 dB to check that the displayed output
+        // meter applies the device's own fader.
+        dev.set_volume(ChannelId::Output(4), 0, 0.5).unwrap();
+        dev.set_volume(ChannelId::Output(5), 0, 0.5).unwrap();
         let bars = dev.output_meters_internal(true).expect("UC output bars");
-        assert!((bars[0] - 0.5).abs() < 1e-3, "AN1 out RMS {:?}", bars);
-        assert!((bars[1] - 0.35355339).abs() < 1e-6, "AN2 out RMS");
-        assert!((bars[2] - 0.25).abs() < 1e-6, "AN3 out RMS");
-        assert!((bars[3] - 0.1767767).abs() < 1e-6, "AN4 out RMS");
-        // Output channels 4..17 have no device RMS: the row bar is the
-        // host-side post-fader estimate from the routed sources (routed
-        // playback 1 left at 0 dB with source RMS 0.5; the flag test
-        // seeded all RMS banks before this run).
-        assert!(
-            (bars[4] - 0.5f32).abs() < 1e-3,
-            "AN5 out estimate = routed playback 1 RMS, got {:?}",
-            bars
-        );
+        assert!((bars[0] - 0.5).abs() < 1e-3, "AN1 flag RMS {:?}", bars);
+        assert!((bars[4] - 0.25).abs() < 1e-3, "AN5 header RMS x fader");
+        assert!((bars[5] - 0.125).abs() < 1e-3, "AN6 header RMS x fader");
+        assert!((bars[6] - 0.125).abs() < 1e-3, "AN7 header RMS x fader");
+        assert!((bars[7] - 0.0625).abs() < 1e-3, "AN8 header RMS x fader");
     }
 
     #[test]

@@ -460,14 +460,12 @@ after the channel trim but before its send fader, so moving a send or
 changing the selected submix does not change them. Hardware output meters
 are post-fader and show the finished bus.
 
-On the Fireface UC the device publishes RMS only for the four analog output
-channels AN1..AN4. Those rows take the device RMS word. The remaining
-output rows (AN5/6, S/PDIF, ADAT) draw the RMS bar from a documented
-TotalControl estimate: the power sum of every routed source's device meter
-level scaled by its matrix cell gain and the row's own out fader. Treat
-that bar as an approximation while the device's own meter word for those
-rows is still unknown; the peak line and the OVR block use the device's
-peak record for every output row.
+On the Fireface UC the device publishes RMS for all eighteen hardware
+outputs: AN1..AN4 from the flag-page bank and AN5/6 through ADAT7/8 from
+the data-page header. The device words are measured before the row fader;
+TotalControl applies the row's output fader and mute so the displayed
+output meter is post-fader. The peak line and the OVR block use the
+device's output record for every output row.
 
 On the same unit every input row takes the device input RMS word for the
 bar and the input peak record for the peak line; the input RMS and peak
