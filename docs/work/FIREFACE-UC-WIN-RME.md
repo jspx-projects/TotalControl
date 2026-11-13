@@ -1,7 +1,14 @@
 # Fireface UC, UC_WIN_RME: open questions
 
 Working notes for the PC personality matched as `FFUC_PRODUCT_UC_WIN_RME`
-(firmware 138 on the test unit).  Not part of the specification.
+(firmware 138 and 133 on the test units).  Not part of the specification.
+
+## Sample format by firmware
+
+Firmware 138 carries S32 sample words in both directions, firmware 133
+carries float32.  Firmware 134 to 137 has not been measured; the driver
+treats it as float32.  A capture from any of those versions settles where
+the format changes.
 
 ## Period signalling on the isochronous transport
 

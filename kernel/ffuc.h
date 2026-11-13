@@ -363,6 +363,7 @@ struct ffuc {
 	/* identity */
 	u32 firmware;
 	char serial[32];
+	bool int32_samples;	/* wire carries S32, see ffuc_wire_int32() */
 
 	struct ffuc_ep eps[2][FFUC_MAX_EPS];
 	struct ffuc_stream streams[2];

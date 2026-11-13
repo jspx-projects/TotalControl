@@ -29,7 +29,11 @@ The PC personalities differ in the interrupt transport:
 | PC product | Sample words | Engine start |
 |---|---|---|
 | `UC_PC`, `UC_PC_RME` | float32 | alt N; alt reselect only on a rate-band change |
-| `UC_WIN_RME` | S32 | alt 0, then alt N, on every start |
+| `UC_WIN_RME`, firmware 138 and later | S32 | alt 0, then alt N, on every start |
+| `UC_WIN_RME`, firmware below 138 | float32 | alt 0, then alt N, on every start |
+
+The driver reads the firmware with the EP0 revision request at probe and
+selects the `UC_WIN_RME` sample words from it; an unread firmware selects S32.
 
 On `UC_WIN_RME` the output latch clears only on the alt 0 → alt N reselect.
 Every UC engine start follows the previous engine stop by at least

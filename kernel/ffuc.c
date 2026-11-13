@@ -1078,7 +1078,7 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
-		if (chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES)
+		if (chip->int32_samples)
 			ffuc_capture_copy_int32(subs->runtime, s->pos[ep->index],
 						urb->transfer_buffer, frames, words,
 						ep->index * words, words, 1, total);
@@ -1106,7 +1106,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
-		if (chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES)
+		if (chip->int32_samples)
 			ffuc_playback_copy_int32(subs->runtime, s->pos[ep->index],
 						 urb->transfer_buffer, frames,
 						 words, ep->index * words,
@@ -2337,6 +2337,26 @@ static void ffuc_read_identity(struct ffuc *chip)
 		strscpy(chip->serial, chip->dev->serial, sizeof(chip->serial));
 }
 
+/*
+ * The wire sample format of the UC_WIN_RME personality depends on the
+ * firmware: a firmware 133 unit carries float samples both ways, a firmware
+ * 138 unit carries S32 (docs/work/FIREFACE-UC-WIN-RME.md).  Nothing between
+ * the two has been measured, so firmware below 138 keeps float.  An unread
+ * firmware (0) keeps the descriptor's format.
+ */
+static bool ffuc_wire_int32(const struct ffuc *chip)
+{
+	const struct ffuc_device_desc *desc = chip->desc;
+
+	if (!(desc->quirks & FFUC_QUIRK_INT32_SAMPLES))
+		return false;
+	if (desc->vendor == FFUC_VENDOR_RME &&
+	    desc->product == FFUC_PRODUCT_UC_WIN_RME &&
+	    chip->firmware && chip->firmware < 138)
+		return false;
+	return true;
+}
+
 static int ffuc_probe(struct usb_interface *intf,
 		      const struct usb_device_id *usb_id)
 {
@@ -2484,6 +2504,9 @@ static int ffuc_probe(struct usb_interface *intf,
 	}
 
 	ffuc_read_identity(chip);
+	chip->int32_samples = ffuc_wire_int32(chip);
+	dev_info(&intf->dev, "firmware %u, %s samples on the wire\n",
+		 chip->firmware, chip->int32_samples ? "S32" : "float");
 	{
 		u32 st = 0;
 
