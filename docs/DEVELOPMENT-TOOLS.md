@@ -139,6 +139,7 @@ All development switches use the `TOTALCONTROL_` prefix:
 | `ucx-state-watch` example | Print changed UCX state words |
 | `ucx-dump-diff` example | Request the full dump, change one control, print the changed words |
 | `fireface-meterdump` example | Dump raw UC `0x85` meter pages (`fireface-meterdump <card> <seconds>`) |
+| `fireface-rawdecode` example | Replay a `fireface-meterdump` capture through the UC parsers (`fireface-rawdecode <capture-file>`) |
 | `uc-route-out` example | Route a playback pair to one matrix output pair (`uc-route-out <source> <matrix_channel> [gain_db]`) |
 | `uc-loopback` example | Write the UC loopback bank (`uc-loopback <card> <index> [more]`) |
 | `ucx-dump-compare` example | Request the full dump and compare it with a saved scene |
