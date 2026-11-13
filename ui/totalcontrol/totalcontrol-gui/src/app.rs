@@ -1658,10 +1658,11 @@ impl DeviceHandle {
     }
 
     /// The transport/personality of the connected hwdep Fireface.
-    pub fn personality(&self) -> Option<totalcontrol_core::fireface::Personality> {
+    pub fn personality_label(&self) -> Option<&'static str> {
         match self {
             #[cfg(feature = "alsa")]
-            DeviceHandle::Fireface(d) => Some(d.personality()),
+            DeviceHandle::Fireface(d) => Some(d.personality().short_label()),
+            DeviceHandle::Mirror(d) => d.info().personality,
             _ => None,
         }
     }

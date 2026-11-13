@@ -440,11 +440,8 @@ pub(crate) fn device_state(state: &TotalControl) -> (Color, String) {
         (theme::ysim(), "Simulated".to_string())
     } else if state.device.class_compliant() {
         (theme::ysim(), "Class Compliant".to_string())
-    } else if let Some(personality) = state.device.personality() {
-        (
-            theme::GCONN,
-            format!("Proprietary · {}", personality.short_label()),
-        )
+    } else if let Some(personality) = state.device.personality_label() {
+        (theme::GCONN, format!("Proprietary · {personality}"))
     } else {
         (theme::GCONN, "Proprietary".to_string())
     }

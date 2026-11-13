@@ -103,6 +103,9 @@ pub struct DeviceInfo {
     pub is_mock: bool,
     pub kind: crate::app::DeviceKind,
     pub target: crate::app::DeviceTarget,
+    /// Short personality label (`PC`, `AP`, `ISO`, `IF5`), when the
+    /// connection reports one.
+    pub personality: Option<&'static str>,
     pub card_id: String,
     pub firmware: Option<u32>,
     pub serial: Option<String>,
@@ -1520,6 +1523,7 @@ fn capture_info(device: &DeviceHandle) -> DeviceInfo {
         is_mock: device.is_mock(),
         kind: device.kind(),
         target: device.target(),
+        personality: device.personality_label(),
         card_id: device.card_id(),
         firmware: device.firmware(),
         serial: device.serial().map(str::to_owned),
