@@ -1176,7 +1176,7 @@ impl Fireface {
             model,
             info.iso
         );
-        let profile = spec.profile;
+        let profile = super::models::profile_for_personality(info.personality);
         let mut inputs = profile.build_inputs();
         let playbacks = profile.build_playbacks();
         let mut outputs = profile.build_outputs();
@@ -1346,7 +1346,7 @@ impl Fireface {
     }
 
     fn output_order(&self) -> &'static [usize] {
-        self.spec.profile.output_order
+        self.spec.profile.output_order()
     }
 
     fn transport(&self) -> std::sync::MutexGuard<'_, Box<dyn ControlTransport>> {
@@ -3429,7 +3429,7 @@ impl Fireface {
         let raw = self.output_peaks(post)?;
         Some(reorder_output_meters(
             &raw,
-            self.spec.profile.output_order,
+            self.spec.profile.output_order(),
         ))
     }
 
@@ -3507,7 +3507,7 @@ impl Fireface {
         let raw = self.output_meters(post)?;
         Some(reorder_output_meters(
             &raw,
-            self.spec.profile.output_order,
+            self.spec.profile.output_order(),
         ))
     }
 
@@ -3553,7 +3553,7 @@ impl Fireface {
                 return;
             }
         }
-        let order = self.spec.profile.output_order;
+        let order = self.spec.profile.output_order();
         let Some(idx) = uc::output_from_encoder(chan as u8, order) else {
             return;
         };
@@ -4009,7 +4009,7 @@ impl Fireface {
         let display = self
             .spec
             .profile
-            .output_order
+            .output_order()
             .iter()
             .position(|&p| p == pair)?;
         Some((display * 2, display * 2 + 1))
@@ -4197,31 +4197,31 @@ impl RmeDevice for Fireface {
     }
 
     fn capabilities(&self) -> crate::capabilities::DeviceCapabilities {
-        self.spec.capabilities
+        self.spec.profile.capabilities()
     }
 
     fn protocol_features(&self) -> bool {
-        self.spec.capabilities.protocol_features
+        self.spec.profile.capabilities().protocol_features
     }
 
     fn loopback_supported(&self) -> bool {
-        self.spec.capabilities.loopback
+        self.spec.profile.capabilities().loopback
     }
 
     fn phase_supported(&self) -> bool {
-        self.spec.capabilities.phase
+        self.spec.profile.capabilities().phase
     }
 
     fn output_balance_supported(&self) -> bool {
-        self.spec.capabilities.output_balance
+        self.spec.profile.capabilities().output_balance
     }
 
     fn stereo_split_supported(&self) -> bool {
-        self.spec.capabilities.stereo_split
+        self.spec.profile.capabilities().stereo_split
     }
 
     fn class_compliant(&self) -> bool {
-        self.spec.capabilities.class_compliant
+        self.spec.profile.capabilities().class_compliant
     }
 
     fn is_connected(&self) -> bool {
@@ -4233,7 +4233,7 @@ impl RmeDevice for Fireface {
     }
 
     fn output_display_order(&self) -> Vec<usize> {
-        self.spec.profile.output_order.to_vec()
+        self.spec.profile.output_order().to_vec()
     }
 
     fn matrix_uses_display_order(&self) -> bool {

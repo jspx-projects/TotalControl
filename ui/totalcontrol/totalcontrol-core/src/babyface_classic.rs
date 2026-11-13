@@ -70,35 +70,7 @@ fn unsupported(what: &str) -> Error {
 }
 
 fn capabilities() -> DeviceCapabilities {
-    DeviceCapabilities {
-        protocol_features: false,
-        eq: false,
-        low_cut: false,
-        loopback: false,
-        no_trim: false,
-        talkback: false,
-        phase: false,
-        phase_without_eq: false,
-        output_phase: false,
-        output_balance: false,
-        stereo_split: false,
-        matrix_cells: false,
-        class_compliant: false,
-        input_phantom: true,
-        input_pad: false,
-        input_level: false,
-        input_autoset: false,
-        dynamics: false,
-        fx: false,
-        pitch: false,
-        width: false,
-        channel_width: false,
-        ms_proc: false,
-        an12: false,
-        input_link: false,
-        eq_for_record: false,
-        optical_out: false,
-    }
+    PROFILE.capabilities()
 }
 
 /// Linear pan law shared with the Fireface UC backend.

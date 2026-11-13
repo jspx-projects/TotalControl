@@ -17,8 +17,8 @@ use crate::capabilities::DeviceCapabilities;
 use crate::channel::*;
 use crate::device::{DeviceSettings, RmeDevice};
 use crate::error::Error;
-use crate::profiles::uc::PROFILE as UC_PROFILE;
-use crate::profiles::ucx::PROFILE as UCX_PROFILE;
+use crate::profiles::uc::PC as UC_PROFILE;
+use crate::profiles::ucx::ISO as UCX_PROFILE;
 use crate::scene::Scene;
 
 // ── Main struct ─────────────────────────────────────────────────
@@ -64,12 +64,12 @@ pub struct MockDevice {
 /// The UCX's own capability set, taken from the model spec the real
 /// device uses so the two cannot drift.
 fn ucx_capabilities() -> DeviceCapabilities {
-    crate::fireface::models::UCX.capabilities
+    crate::profiles::ucx::ISO.capabilities()
 }
 
 /// The Fireface UC's own capability set, from the model spec.
 fn uc_capabilities() -> DeviceCapabilities {
-    crate::fireface::models::UC.capabilities
+    crate::profiles::uc::PC.capabilities()
 }
 
 impl MockDevice {
@@ -417,7 +417,7 @@ impl RmeDevice for MockDevice {
 
     fn output_display_order(&self) -> Vec<usize> {
         if self.is_uc() {
-            self.profile.output_order.to_vec()
+            self.profile.output_order().to_vec()
         } else {
             (0..self.output_pair_count()).collect()
         }
