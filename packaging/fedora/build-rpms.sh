@@ -108,7 +108,8 @@ fi
     echo "artifacts:"
     for rpm in "$OUT"/*.rpm; do
         [ -f "$rpm" ] || continue
-        sha256sum "$rpm" | awk '{print "  " $1 "  " $2}'
+        sha=$(sha256sum "$rpm" | cut -d' ' -f1)
+        echo "  $sha  $(basename "$rpm")"
     done
 } > "$OUT/RELEASE-MANIFEST.txt"
 

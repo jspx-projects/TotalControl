@@ -5,6 +5,9 @@
 
 %{!?app_version:%global app_version 0.1.0}
 %{!?commit:%global commit unknown}
+# Convenience package: keep the release assets to the application and kmod
+# binaries, as in the existing Fedora release.
+%global debug_package %{nil}
 
 Name:           totalcontrol
 Version:        %{app_version}
