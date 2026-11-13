@@ -126,8 +126,9 @@ The top bar carries `OPTIONS` beside the view tabs. It opens a menu with
 opens the device Audio Configuration panel immediately left of the CONTROLS sidebar and is
 disabled without a connected device. `TotalControl` opens the centered
 application settings dialog. `Control Room` opens the Control Room settings
-panel above the Control Room and is always available, including without a
-device. `Reset Mix` is a submenu; choosing an entry closes the menu, rewrites
+panel above the Control Room when the active backend has a mapped Control Room
+path; it is currently present for the UCX and omitted for the UC and
+Babyface-classic until their monitoring writes are mapped. `Reset Mix` is a submenu; choosing an entry closes the menu, rewrites
 the whole mixer and pushes it in a single scene apply:
 
 | Entry | Effect |
@@ -1521,8 +1522,10 @@ Room is always linked and never splits.
 
 ## 12. Control Room
 
-The Control Room panel is flush with the mixer's right edge beside the FX
-column. Its button stack is one channel wide; every button in the stack has
+The Control Room is shown for models with a mapped monitoring path; the UC and
+Babyface-classic omit the section and the Options entry until their host-side
+Control Room writes are implemented. On a mapped model the panel is flush with
+the mixer's right edge beside the FX column. Its button stack is one channel wide; every button in the stack has
 the same width and height, and its label is centred. Long labels use the next
 smaller type tier. The stack runs, top to bottom:
 
