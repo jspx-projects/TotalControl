@@ -379,13 +379,16 @@ Data page (either page kind that sets word 6; 4-byte records, two
 
 | Words (bytes) | Contents |
 |---|---|
-| 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), everything else Unknown.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
+| 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), plus seven 16-byte output-pair RMS groups at bytes 0, 16, 32, 48, 64, 80 and 96.  Each group is `+0` left RMS power (u32), `+4` left status, `+8` right RMS power (u32), `+12` right status.  The last group ends after its right RMS word at byte 104.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
 | 54..69 (108..139) | AN1..AN8 input records: high halfword = linear 16-bit peak, low halfword = OVR word when over |
-| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = linear 24-bit peak, bits 0..7 = overload ratio, `0x00001fff` filler before the first sample |
+| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = linear 24-bit peak, bits 0..7 = full-scale-sample count, `0x00001fff` filler before the first sample |
 | 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit Peak |
 | 126..161 (252..323) | hardware outputs AN1..8, S/PDIF and ADAT 1..8 records: OVR word + linear 16-bit Peak |
 
-Unknown bytes on the data page: 104 of 324 (the header/status region).
+Unknown bytes on the data page: 48 of 324.  The 52 status bytes are the
+two status words of the six full output-pair groups plus the last group's
+left status word; four bytes are the page discriminator and the remaining
+48 are status/filler.
 
 Flag page (the non-data page of the alternation, word 6 reads zero):
 
@@ -459,30 +462,51 @@ verified with an 18-channel source: each pair's RMS appears only at
 
 ### Output RMS bank
 
-The flag page carries output RMS in the same per-channel slot shape as the
-playback bank, starting at word 144: four words per output channel with the
-RMS power word at `147 + 4c`.  Only channels 0..3 fall inside the page
-(AN1, AN2, AN3, AN4); word 160/161 is the truncated head of channel 4's own
-slot and the page ends before channel 4's level word.
+The flag page carries output RMS for channels 0..3 (AN1..AN4) in the same
+per-channel slot shape as the playback bank, starting at word 144: four
+words per output channel with the RMS power word at `147 + 4c`.  Word
+160/161 is the truncated head of channel 4's own slot.
 
-A 120-second solo capture of the `0x85` stream
-(`docs/captures/uc/fullstream-monoAN1.raw`, no competing reader) confirms
-the bank covers channels 0..3: every non-data page has the same nonzero
-word pattern, and output RMS for AN5..ADAT8 appears nowhere in the stream.
-While a row is over 0 dBFS the device holds its output RMS word at zero, so
-the bank is the row's 0..0 dB meter only; the over band is not a device
-RMS feed.  TotalControl's rows beyond AN4 therefore draw the bar from the
-documented host-side post-fader estimate, and the over band on every row
-comes from the row's own written fader and matrix state when the device
-reports the row over.
+The data page header carries the remaining output channels 4..17
+(AN5/6 through ADAT7/8) in seven 16-byte groups.  The left power word is at
+group offset 0 and the right power word at group offset 8; the words at
+offsets 4 and 12 are status.  The groups map to output pairs in display
+order:
+
+| Group byte | Output pair |
+|---:|---|
+| 0 | AN5/6 |
+| 16 | AN7/8 |
+| 32 | S/PDIF L/R |
+| 48 | ADAT 1/2 |
+| 64 | ADAT 3/4 |
+| 80 | ADAT 5/6 |
+| 96 | ADAT 7/8 |
+
+The last group is truncated after its right RMS word; the header ends at
+byte 107.  A header word is linear power with `0x80000000` full-scale peak
+squared:
+
+```text
+RMS amplitude = sqrt(word / 0x80000000)
+RMS dBFS      = 10 × log10(word / 0x80000000)
+```
+
+A full-scale sine has word `0x40000000` and reads −3.01 dBFS RMS.  The
+header and flag-page output RMS words are measured before the row's `0x1a`
+output fader; TotalControl applies that fader for the displayed post-fader
+output meter.  The over band comes from the output record's OVR word.
 
 ### OVR trigger
 
-The device supplies the over event and its own consecutive sample count in
-the record's OVR word.  The host gates the OVR LED on that count against
-the **Full scale samples for OVR** sample preference (`FSCntOVR`), default
-three, range 1..10 on the UC USB settings.  No USB control write carries
-this setting; it is a host preference.
+The device supplies the over event and its own full-scale-sample count.
+Analog inputs, playback and hardware outputs carry the count in the OVR
+word's low byte with a `0xff` event byte; digital inputs carry the count
+in the low nibble when the 24-bit level saturates.  The host gates
+the OVR LED on that count against the **Full scale samples for OVR**
+sample preference (`FSCntOVR`), default three, range 1..10 on the UC USB
+settings.  No USB control write carries this setting; it is a host
+preference.
 
 ### Analog input records
 
@@ -508,17 +532,24 @@ meter.
 ### Digital input records
 
 The digital input carries a linear 24-bit peak in bits 8..31; the low byte
-is the overload ratio:
+is a full-scale-sample count:
 
 ```text
 level = record >> 8 & 0xffffff
 level == 0              -> below range
 dBFS  = 20 × log10(level / 0x800000)
+over  = record & 0x0f
 ```
 
-At saturation the level field is `0x7fffff`; the low nibble is `0x0f` and
-the high nibble counts the over in half-dB steps.  The `0x00001fff` filler
-has a level below the meter's floor and is no data, not a level.
+The low nibble is a full-scale-sample count (0..15).  A controlled
+S/PDIF loop with 1, 2, 4, 8 and 12 full-scale samples per 48-sample
+period read `0x01`, `0x02`, `0x04`, `0x08` and `0x0c`; repeating the
+widths at a 96-sample period gave the same low nibbles.  The low nibble
+saturates at 15.  The upper nibble is a status/overflow field; its packing
+is not yet clear.  The 24-bit level saturates at `0x7fffff`, and the over
+LED uses the low-nibble count against the global **Full scale samples for
+OVR** preference.  The `0x00001fff` filler has a level below the meter's
+floor and is no data.
 
 ### Input RMS words
 
@@ -541,15 +572,15 @@ zero; the bar then uses the peak word's sine equivalent
 ### TotalControl behaviour
 
 - Playback lower VU bar: the flag-page RMS bank (all 18 playbacks).
-- Hardware output lower VU bar: AN1..AN4 from the flag-page output RMS
-  bank; AN5..ADAT8 from the documented host-side post-fader estimate
-  (power sum of every routed source's device level times its matrix cell
-  gain, scaled by the row's `0x1a` out fader, zero when the row is
-  muted).
+- Hardware output lower VU bar: the flag-page bank for AN1..AN4 and the
+  data-page header for AN5..ADAT8.  The device words are pre-fader;
+  TotalControl applies the row's `0x1a` output fader and mute for the
+  displayed post-fader meter.
 - Playback and output peak line: the data-page Peak word.
 - Playback and output OVR LED: the device's consecutive-over count in the
   record's OVR word, compared with the global OVR sample preference
-  (default three).
+  (default three).  The data-page output records carry OVR for all 18
+  outputs.
 - Playback and output red band (0..+6 dB): the record's OVR count inverse
   inside the device's resolvable range; beyond it the hardware output
   rows continue on the row's written `0x1a` fader and routed matrix
@@ -560,8 +591,8 @@ zero; the bar then uses the peak word's sine equivalent
 - Input peak line: the data-page input peak word (linear 16-bit analog /
   24-bit digital).
 - Input OVR LED: the analog low-word over event, gated by the global OVR
-  sample preference; the digital saturated 24-bit level with the over
-  tag.
+  sample preference; the digital full-scale-sample count, gated by the
+  same preference.
 - Ballistics are host side: a 10 dB/s release and a 2 s peak hold.
 Input meters measure the physical input before loopback.  A
 loopback-enabled output replaces the input's record signal, but does not
