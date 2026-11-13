@@ -264,8 +264,9 @@ When the channels do not all fit, one slider at the lower right scrolls all
 three rows together, so the routing picture stays aligned.
 
 The device card in the sidebar reads `Internal, <sample rate>, <buffer>` and
-opens the device sheet, which carries clock source, sample rate, the digital
-input formats and firmware and serial information.
+opens the Audio Configuration panel beside the mixer, which carries clock
+source, sample rate, the digital input formats and firmware and serial
+information.
 
 The sample-rate control has three kinds of choice:
 
@@ -490,7 +491,8 @@ the three-sample default for now.
 The meters show the level as it arrives at the interface. If the host
 (PipeWire) volume is below 0 dB, a full-scale recording reaches the
 interface that much lower and the playback meter reads correspondingly
-low. The device sheet shows the host volume and has a `0 dB` button; set it
+low. The Audio Configuration panel shows the host volume and has a `0 dB`
+button; set it
 to unity and use the interface's own faders for monitoring. A linked pair
 shows one meter bar per channel; each bar shows that channel's own signal,
 so linking controls does not copy a signal from one channel to the other.
@@ -882,9 +884,10 @@ are stored in a workspace and restored when that workspace is opened.
 
 The Talkback source and Dim, Listenback source and Dim, Recall level, Main Dim,
 External Input and Gain, and the Solo/PFL modes are set in the Control Room
-Settings dialog. Press `settings`, immediately above `assign`.
+Settings panel. Press `settings`, immediately above `assign`; the panel opens
+above the Control Room and is not modal.
 
-The dialog has four sections:
+The panel has four sections:
 
 - **Talkback**: source and Dim.
 - **Listenback**: source and Dim.
@@ -969,7 +972,8 @@ The top bar has a `WORKSPACE` menu before `OPTIONS`. `WORKSPACE` opens and
 saves the complete host-side configuration described in section 13, and
 contains the built-in `Factory Workspaces` layouts.
 
-The `OPTIONS` menu contains `Reset Mix` and `Settings`.
+The `OPTIONS` menu contains `Audio Config`, `TotalControl`, `Control Room`
+and `Reset Mix`, in that order.
 
 `Reset Mix` lists the standard mixes:
 
@@ -987,9 +991,10 @@ The `OPTIONS` menu contains `Reset Mix` and `Settings`.
 
 Choosing one rewrites the whole mixer in one go.
 
-`Settings` opens the centered TotalControl settings dialog: background
+`TotalControl` opens the centered TotalControl settings dialog: background
 behaviour, startup sync, and the virtual surround outputs described in
-Appendix B. Independent options are checkboxes; one-of-many choices such as
+Appendix B. The mixer is dimmed and cannot be used with the mouse or keyboard
+until the dialog closes. Independent options are checkboxes; one-of-many choices such as
 the startup sync direction and OSC protocol are radio buttons.
 
 ## 13. Workspaces, snapshots, layouts, undo and redo
@@ -1171,8 +1176,8 @@ groups with the stored ones.
 
 ## 14. Latency
 
-The Settings drawer shows the round-trip latency for the current sample
-rate and buffer size, and the **Quantum** picker sets the PipeWire graph
+The Audio Configuration panel shows the round-trip latency for the current
+sample rate and buffer size, and the **Quantum** picker sets the PipeWire graph
 period in samples. The UCX and UC paths without a loopback calibration use
 the model estimate: USB queue, device lead, converter and one graph period;
 the UC estimate is labelled ±1.5 ms and the UCX ±1.2 ms.
@@ -1207,9 +1212,10 @@ problem. **Host event drops** is separate from the USB rows: the
 kernel's hwdep event queue was full and the application reader fell behind,
 so an event was discarded. It is not a USB fault.
 
-The tooltips in the drawer are deliberately short. This section is the
+The tooltips in the Audio Configuration panel are deliberately short. This section is the
 longer reference; **reset** clears the display baselines without changing
 the device or the audio graph.
+
 
 ## 15. Where TotalControl keeps its data
 
@@ -1430,7 +1436,7 @@ channels are presented as `AUX0…AUX17`.  Desktop players that send a surround
 stream cannot map those speaker positions onto AUX channels, so PipeWire
 keeps only the front pair.
 
-For surround media, open `Options → Settings` and enable `Virtual 5.1 output`,
+For surround media, open `Options → TotalControl` and enable `Virtual 5.1 output`,
 `Virtual 7.1 output`, or both. The sinks exist while TotalControl runs and
 follow the selected Fireface/MR18 device:
 
@@ -1448,7 +1454,7 @@ channels and can route it like any other playback source.
 
 ## Appendix C — OSC setup
 
-OSC is opt-in and binds to loopback. Open `Options > Settings`, enable
+OSC is opt-in and binds to loopback. Open `Options > TotalControl`, enable
 `Enable OSC control surface`, and choose `OSC 1.96` or `Global`; the receive
 and send ports are in the same section and are saved with the other settings.
 Disabling the switch stops the surface immediately.

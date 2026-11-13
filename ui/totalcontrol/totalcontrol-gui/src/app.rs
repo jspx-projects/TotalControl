@@ -2089,7 +2089,7 @@ pub enum Message {
     /// to `set_input_pair_linked`/`set_playback_linked`/
     /// `set_output_linked` depending on which kind `cid` is.
     StereoLinkChanged(ChannelId, bool),
-    /// Settings panel content, all in the `device_panel` drawer.
+    /// Audio Configuration panel content, all in the `device_panel` drawer.
     PitchChanged(f32),
     WidthChanged(f32),
     /// Per-channel stereo width (inputs and playbacks), -1..+1.
@@ -2218,7 +2218,7 @@ pub enum Message {
     OscSendPortChanged(String),
     /// Parse both port fields and restart the worker if they changed.
     ApplyOscPorts,
-    /// Toggles the Settings panel (clock source, SPDIF,
+    /// Toggles the Audio Configuration panel (clock source, SPDIF,
     /// sample rate).
     ToggleDevicePanel,
     /// Shows or hides the FX column beside the mixer.
@@ -2251,8 +2251,10 @@ pub enum Message {
     OptionsReset,
     /// Returns from Reset Mix to the Options root.
     OptionsBack,
-    /// Opens the app-level Settings sheet from Options.
+    /// Opens the app-level TotalControl settings sheet from Options.
     OptionsSettings,
+    /// Opens the device Audio Configuration panel from Options.
+    OptionsAudio,
     /// Closes the Options menu.
     CloseOptions,
     /// Start/stop the virtual 5.1 and 7.1 outputs.
@@ -2759,7 +2761,7 @@ pub struct TotalControl {
     /// opening the panel after a burst of activity isn't a blank page.
     pub osc_log: VecDeque<String>,
     pub show_osc_log: bool,
-    /// Docked Settings panel (device group, clock source, SPDIF
+    /// Docked Audio Configuration panel (device group, clock source, SPDIF
     /// flags) — same pattern as `show_osc_log`, see `device_panel`.
     pub show_device_panel: bool,
     /// Talkback is engaged.  Performance state, not part of the scene.
@@ -8254,6 +8256,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::OptionsReset
             | Message::OptionsBack
             | Message::OptionsSettings
+            | Message::OptionsAudio
             | Message::CloseOptions
             | Message::SetSurround51(_)
             | Message::SetSurround71(_)
@@ -8654,6 +8657,20 @@ fn apply_matrix_cell(state: &mut TotalControl, cid: ChannelId, block: usize, v: 
 }
 
 pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
+    // The TotalControl settings dialog is modal over the mixer.  Ignore the
+    // keyboard shortcuts that would otherwise edit or navigate the mixer
+    // behind the scrim; Escape and the settings shortcut still work.
+    if state.show_settings
+        && matches!(
+            &message,
+            Message::Undo
+                | Message::Redo
+                | Message::NudgeVolume(_)
+                | Message::TabPressed
+        )
+    {
+        return Task::none();
+    }
     // A host change whose confirming snapshot never arrived (a rejected
     // command, or a stopped service) must not capture a later snapshot.
     if state
@@ -9277,6 +9294,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 };
             }
             crate::tray::TrayEvent::Settings => {
+                suspend_mixer_input(state);
                 state.show_settings = true;
                 state.show_device_panel = false;
                 return show_window(state);
@@ -10654,10 +10672,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if !state.connected || state.device.is_mock() {
                 state.show_device_panel = false;
                 state.notice = Some((
-                    "Connect a Fireface to open settings.".into(),
+                    "Connect a Fireface to open audio configuration.".into(),
                     Instant::now(),
                 ));
                 return Task::none();
+            }
+            if !state.show_device_panel {
+                suspend_mixer_input(state);
             }
             state.show_device_panel = !state.show_device_panel;
             state.show_settings = false;
@@ -10763,6 +10784,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::ToggleSettings => {
             close_top_menus(state);
+            if !state.show_settings {
+                suspend_mixer_input(state);
+            }
             state.show_settings = !state.show_settings;
             state.show_device_panel = false;
         }
@@ -10830,8 +10854,23 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::OptionsBack => state.options_menu = OptionsMenu::Root,
         Message::OptionsSettings => {
             state.options_menu = OptionsMenu::Closed;
+            suspend_mixer_input(state);
             state.show_settings = true;
             state.show_device_panel = false;
+        }
+        Message::OptionsAudio => {
+            state.options_menu = OptionsMenu::Closed;
+            if !state.connected || state.device.is_mock() {
+                state.show_device_panel = false;
+                state.notice = Some((
+                    "Connect a Fireface to open audio configuration.".into(),
+                    Instant::now(),
+                ));
+                return Task::none();
+            }
+            suspend_mixer_input(state);
+            state.show_device_panel = true;
+            state.show_settings = false;
         }
         Message::CloseOptions => state.options_menu = OptionsMenu::Closed,
         Message::SetSurround51(on) => {
@@ -11275,6 +11314,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_osc_bool(state, "/talkback", on);
         }
         Message::OpenControlRoomSettings => {
+            close_top_menus(state);
+            suspend_mixer_input(state);
             state.control_room_draft = state.control_room.clone();
             state.control_room_settings_open = true;
         }
@@ -12058,7 +12099,7 @@ fn view_inner(state: &TotalControl, _window: window::Id) -> Element<'_, Message>
             .into();
     }
     if state.control_room_settings_open {
-        base = stack(vec![base, control_room_settings_modal(state)])
+        base = stack(vec![base, control_room_settings_panel(state)])
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
@@ -12250,7 +12291,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     };
 
     let header = row![
-        text("Settings")
+        text("Audio Configuration settings")
             .color(theme::text_primary())
             .size(text_size),
         iced::widget::Space::new().width(Length::Fill),
@@ -12409,8 +12450,8 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     popover(state, body.into(), Message::ToggleDevicePanel, 520.0)
 }
 
-/// The card of a popover docked beside the sidebar, closing on `close` when
-/// a click lands outside it.
+/// The card of a left-side inspector docked beside the sidebar, closing on
+/// `close` when a click lands outside it.
 fn popover<'a>(
     state: &'a TotalControl,
     body: Element<'a, Message>,
@@ -12418,11 +12459,23 @@ fn popover<'a>(
     width: f32,
 ) -> Element<'a, Message> {
     let scale = state.ui_scale;
+    let available = state
+        .window_size
+        .map(|(_, height)| {
+            (height - POPOVER_TOP * scale - 3.0 * theme::SPACE_XL * scale).max(220.0)
+        })
+        .unwrap_or(700.0 * scale);
     let card = opaque(
-        container(body)
-            .style(theme::dialog)
-            .padding(theme::SPACE_XL * scale)
-            .width(Length::Fixed(width * scale)),
+        container(
+            scrollable(body)
+                .height(Length::Fixed(available))
+                .direction(scrollable::Direction::Vertical(
+                    theme::thin_scrollbar(),
+                )),
+        )
+        .style(theme::dialog)
+        .padding(theme::SPACE_XL * scale)
+        .width(Length::Fixed(width * scale)),
     );
 
     // One layer, not a catcher stacked under the card: in a `stack`, the
@@ -12431,18 +12484,18 @@ fn popover<'a>(
     // catcher underneath never saw a click. Here the card (`opaque`)
     // captures its own clicks first, and `mouse_area` only acts on the
     // uncaptured ones: a click anywhere outside the card closes it, like a
-    // menu. No dimming: it is a popover, not a modal.
+    // menu. No dimming: it is an inspector, not a modal.
     opaque(
         mouse_area(
             container(card)
-                .align_x(iced::Alignment::End)
+                .align_x(iced::Alignment::Start)
                 .padding(iced::Padding {
                     top: POPOVER_TOP * scale,
                     // Beside the device card that opens it, just off the
                     // sidebar's edge.
-                    right: theme::SPACE_MD * scale + sidebar_px(state),
+                    left: sidebar_px(state) + theme::SPACE_MD * scale,
+                    right: 0.0,
                     bottom: 0.0,
-                    left: 0.0,
                 })
                 .width(Length::Fill)
                 .height(Length::Fill),
@@ -12510,6 +12563,18 @@ fn notice_toast(message: &str, scale: f32) -> Element<'_, Message> {
 fn close_top_menus(state: &mut TotalControl) {
     state.workspace_menu = WorkspaceMenu::Closed;
     state.options_menu = OptionsMenu::Closed;
+}
+
+/// Drop inline mixer edits and menus before a settings panel takes focus.
+/// The panels cover or sit beside the mixer; leaving a rename or typed dB
+/// field focused would let keystrokes continue editing underneath.
+fn suspend_mixer_input(state: &mut TotalControl) {
+    state.renaming = None;
+    state.rename_buf.clear();
+    state.editing = None;
+    state.assign_menu = AssignMenu::Closed;
+    state.assign_pinned = false;
+    state.group_edit = None;
 }
 
 /// Place a menu card at `left` below the top bar.  The click catcher starts
@@ -12625,29 +12690,47 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     menu_below_top_bar(card.into(), 390.0, Message::CloseWorkspace, scale)
 }
 
-/// The top-bar Options menu.  Root holds Reset Mix and Settings; Reset Mix
-/// expands into the reset actions.
+/// The top-bar Options menu.  Root groups the device audio configuration,
+/// app-level settings, Control Room settings and the Reset Mix submenu.
 fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
-    let item = |label: String, message: Message| {
-        iced::widget::button(strip::left_label_wide(label, text_size))
+    let item = |label: String, message: Message, enabled: bool| {
+        let button = iced::widget::button(strip::left_label_wide(label, text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
-            .style(theme::ghost_button)
-            .on_press(message)
+            .style(theme::ghost_button);
+        if enabled {
+            button.on_press(message)
+        } else {
+            button
+        }
     };
     let mut card = column![].spacing(0.0).width(Length::Fixed(224.0 * scale));
     match state.options_menu {
         OptionsMenu::Root => {
             card = card
-                .push(item("Reset Mix  ▸".into(), Message::OptionsReset))
-                .push(item("Settings…".into(), Message::OptionsSettings));
+                .push(item(
+                    "Audio Config".into(),
+                    Message::OptionsAudio,
+                    state.connected && !state.device.is_mock(),
+                ))
+                .push(item(
+                    "TotalControl".into(),
+                    Message::OptionsSettings,
+                    true,
+                ))
+                .push(item(
+                    "Control Room".into(),
+                    Message::OpenControlRoomSettings,
+                    true,
+                ))
+                .push(item("Reset Mix  ▸".into(), Message::OptionsReset, true));
         }
         OptionsMenu::Reset => {
-            card = card.push(item("‹  Reset Mix".into(), Message::OptionsBack));
+            card = card.push(item("‹  Reset Mix".into(), Message::OptionsBack, true));
             for (name, kind) in RESET_MIX {
-                card = card.push(item(name.to_string(), Message::ResetMix(kind)));
+                card = card.push(item(name.to_string(), Message::ResetMix(kind), true));
             }
         }
         OptionsMenu::Closed => {}
@@ -18398,7 +18481,7 @@ fn db_control(value: f32, on_change: fn(f32) -> Message, scale: f32) -> Element<
 
 /// The Control Room Settings dialog. It edits a draft only; the live
 /// settings change when `OK` is pressed, and the snapshot is saved there.
-fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
+fn control_room_settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let draft = &state.control_room_draft;
     let text_size = theme::TEXT_DIALOG * scale;
@@ -18562,31 +18645,44 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
     .align_y(iced::Alignment::Center)
     .width(Length::Fill);
 
+    let available = state
+        .window_size
+        .map(|(_, height)| {
+            (height - (strip::STRIP_H + 2.0 * theme::SPACE_XL) * scale).max(220.0)
+        })
+        .unwrap_or(520.0 * scale);
     let card = opaque(
         container(
-            column![body, footer]
-                .spacing(theme::SPACE_LG * scale)
-                .width(Length::Fill),
+            scrollable(
+                column![body, footer]
+                    .spacing(theme::SPACE_LG * scale)
+                    .width(Length::Fill),
+            )
+            .height(Length::Fixed(available))
+            .direction(scrollable::Direction::Vertical(
+                theme::thin_scrollbar(),
+            )),
         )
         .style(theme::dialog)
         .padding(theme::SPACE_XL * scale)
         .width(Length::Fixed(content_w + 2.0 * theme::SPACE_XL * scale)),
     );
 
+    // A contextual panel above the Control Room, not a modal: no dimming.
+    // The card captures its own clicks; a click outside cancels the draft.
     opaque(
         mouse_area(
             container(card)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .align_x(iced::Alignment::End)
+                .align_y(iced::Alignment::End)
+                .padding(iced::Padding {
+                    bottom: (strip::STRIP_H + theme::SPACE_MD) * scale,
+                    right: theme::SPACE_MD * scale,
+                    left: 0.0,
+                    top: 0.0,
+                })
                 .width(Length::Fill)
-                .height(Length::Fill)
-                .style(|_theme: &iced::Theme| container::Style {
-                    background: Some(Background::Color(Color {
-                        a: 0.55,
-                        ..Color::BLACK
-                    })),
-                    ..container::Style::default()
-                }),
+                .height(Length::Fill),
         )
         .on_press(Message::CancelControlRoomSettings),
     )
@@ -20224,6 +20320,43 @@ mod tests {
         let _ = update(&mut state, Message::OptionsSettings);
         assert_eq!(state.options_menu, OptionsMenu::Closed);
         assert!(state.show_settings);
+    }
+
+    #[test]
+    fn totalcontrol_settings_blocks_mixer_keyboard_shortcuts() {
+        let mut state = new(true, None, None);
+        let view_before = format!("{:?}", state.view);
+        let volume_before = state.device.outputs()[0].volume;
+        state.show_settings = true;
+
+        let _ = update(&mut state, Message::TabPressed);
+        let _ = update(&mut state, Message::NudgeVolume(1.0));
+        let _ = update(&mut state, Message::Undo);
+
+        assert_eq!(format!("{:?}", state.view), view_before);
+        assert_eq!(state.device.outputs()[0].volume, volume_before);
+        assert!(state.show_settings);
+    }
+
+    #[test]
+    fn options_audio_requires_a_real_device_but_control_room_always_opens() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::ToggleOptions);
+        let _ = update(&mut state, Message::OptionsAudio);
+        assert!(!state.show_device_panel);
+        assert_eq!(state.options_menu, OptionsMenu::Closed);
+        assert!(
+            state
+                .notice
+                .as_ref()
+                .is_some_and(|(text, _)| text.contains("audio configuration"))
+        );
+
+        state.connected = false;
+        state.options_menu = OptionsMenu::Root;
+        let _ = update(&mut state, Message::OpenControlRoomSettings);
+        assert_eq!(state.options_menu, OptionsMenu::Closed);
+        assert!(state.control_room_settings_open);
     }
 
     #[test]

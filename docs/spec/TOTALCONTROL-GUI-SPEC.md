@@ -122,8 +122,13 @@ that same height. The standard height is 350 px at scale 1.0.
 ### 1.1 Options menu
 
 The top bar carries `OPTIONS` beside the view tabs. It opens a menu with
-`Reset Mix` and `Settings`. `Reset Mix` is a submenu; choosing an entry closes
-the menu, rewrites the whole mixer and pushes it in a single scene apply:
+`Audio Config`, `TotalControl`, `Control Room` and `Reset Mix`. `Audio Config`
+opens the device Audio Configuration panel to the right of the sidebar and is
+disabled without a connected device. `TotalControl` opens the centered
+application settings dialog. `Control Room` opens the Control Room settings
+panel above the Control Room and is always available, including without a
+device. `Reset Mix` is a submenu; choosing an entry closes the menu, rewrites
+the whole mixer and pushes it in a single scene apply:
 
 | Entry | Effect |
 |---|---|
@@ -205,10 +210,10 @@ it immediately on the first press; submenu items open on the first click.
 
 ### 1.3 App settings
 
-`Options > Settings`, the tray Settings entry and the `,` shortcut open the
-app-level settings sheet. It is a centered modal dialog with a dimmed scrim,
-not a sidebar popover; it holds BACKGROUND, STARTUP SYNC, SURROUND and OSC
-sections.  Independent options are checkboxes, one-of-many options are radio
+`Options > TotalControl`, the tray Settings entry and the `,` shortcut open
+the app-level settings dialog. It is centered with a dimmed scrim, not a
+sidebar popover, and it blocks mouse and keyboard access to the mixer until it
+closes. It holds BACKGROUND, STARTUP SYNC, SURROUND and OSC sections.  Independent options are checkboxes, one-of-many options are radio
 buttons, and the only footer action is `Close`.
 
 SURROUND has the `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
@@ -972,10 +977,13 @@ moves both preamps by the same step; the wheel over the top or bottom number
 moves only that preamp, as described in §2.1.1. The orange arc follows the
 higher of the two gains.
 
-### 3.3 Device sheet
+### 3.3 Audio Configuration panel
 
 The device card at the top of the sidebar (or the gear on the folded rail)
-opens the device sheet. It starts with the group the unit itself owns. Where
+opens the Audio Configuration panel, anchored to the right of the sidebar.
+Its title is `Audio Configuration settings`. It is a scrollable inspector, not
+a modal and not dimmed; a click outside or `Escape` closes it. It starts with
+the group the unit itself owns. Where
 the unit has no readback, the saved scene value is written at connect and the
 sheet shows that value. A value is written when it changes there.
 
@@ -1721,9 +1729,10 @@ not the Control Room Main assignment; `PH` always addresses channels 7/8.
 
 ### 11.3 Control Room Settings
 
-`settings` opens a modal dialog titled `CONTROL ROOM SETTINGS`. It edits a
-draft; the stored values change only when `OK` is pressed. `Cancel`, `Escape`
-and a click outside the dialog discard the draft.
+`settings` opens a panel titled `CONTROL ROOM SETTINGS`, anchored above the
+Control Room. It is scrollable and not dimmed. It edits a draft; the stored
+values change only when `OK` is pressed. `Cancel`, `Escape` and a click
+outside the panel discard the draft.
 
 | Section | Controls |
 |---|---|
@@ -1750,11 +1759,11 @@ applied to the running device on `OK`.
 
 ## 13. Latency display
 
-The Settings panel shows the round-trip latency and its terms. The UCX and
-UC paths without a loopback calibration use the model: USB queue, device
-lead, converter and one graph period; the UC estimate is labelled ±1.5 ms
-and the UCX ±1.2 ms. The buffer-size picker sets the graph quantum. The
-formulas and the device-side model are in
+The Audio Configuration panel shows the round-trip latency and its terms.
+The UCX and UC paths without a loopback calibration use the model: USB
+queue, device lead, converter and one graph period; the UC estimate is
+labelled ±1.5 ms and the UCX ±1.2 ms. The buffer-size picker sets the graph
+quantum. The formulas and the device-side model are in
 [`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §10.
 
 The UC PC and AP paths use separate loopback calibrations at 32, 44.1, 48,
