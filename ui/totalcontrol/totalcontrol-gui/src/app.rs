@@ -19100,7 +19100,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     // at the last channel instead of running into the Control Room.
     let mut strips_width = 0.0f32;
     let cr_w = control_room_visual_width(state, scale, anim_now);
-    let natural_out = if state.device.capabilities().protocol_features {
+    let natural_out = if control_room_available(state) {
         out_width + theme::SPACE_MD + cr_w
     } else {
         out_width
@@ -19122,7 +19122,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     };
     let available = main_space - reserve;
     let fx_overlay = fx_open && reserve < fx_extent;
-    let out_row: Element<'_, Message> = if state.device.capabilities().protocol_features {
+    let out_row: Element<'_, Message> = if control_room_available(state) {
         strips_width = out_width;
         out_width = natural_out.max(available);
         // The strips are the row; the Control Room rides above them, pinned
@@ -19201,7 +19201,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     };
     // Two section titles share this line: HARDWARE OUTPUTS over the channel
     // strips, `control room` starting at the section's leftmost channel.
-    let outputs_header: Element<'_, Message> = if state.device.capabilities().protocol_features {
+    let outputs_header: Element<'_, Message> = if control_room_available(state) {
         let cr_w = control_room_visual_width(state, scale, anim_now);
         // The title starts exactly at the section's left edge — the panel's
         // own left edge — so the two line up at any window width. The slack
