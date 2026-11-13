@@ -1287,18 +1287,19 @@ pub struct MeterSnapshot {
     pub playbacks: [f32; 18],
     pub outputs: [f32; 18],
     /// Peak-hold values for the same channels, held for two seconds and
-    /// then falling at 20 dB/s while the service polls at the device
+    /// then falling at 10 dB/s while the service polls at the device
     /// rate.  A canvas may only draw 30 frames a second; these catch
     /// transients that fall between those frames.
     pub input_peaks: [f32; 18],
     pub playback_peaks: [f32; 18],
     pub output_peaks: [f32; 18],
-    /// Device-backed playback OVR flags, already counted for the configured
-    /// consecutive meter updates.  `None` means the backend has no OVR word;
-    /// the fader falls back to its peak threshold.
-    pub playback_ovr: Option<[bool; 18]>,
-    /// Device-backed hardware-output OVR flags.
-    pub output_ovr: Option<[bool; 18]>,
+/// Device-backed playback OVR flags, gated per the record's own
+/// consecutive-over count (the device counts the samples above full
+/// scale itself).  `None` means the backend has no OVR word; the fader
+/// falls back to its peak threshold.
+pub playback_ovr: Option<[bool; 18]>,
+/// Device-backed hardware-output OVR flags.
+pub output_ovr: Option<[bool; 18]>,
     pub fx: [f32; 2],
     pub fx_overload: [bool; 2],
     /// Whether the device is still connected.  A disconnected device has no
@@ -1322,30 +1323,23 @@ const METER_ACTIVE_FLOOR: f32 = 0.0005;
 /// service.  This is the TotalMix default.
 const OVR_FULL_SCALE_SAMPLES: u8 = 3;
 
-/// Count consecutive device OVR flags.  A flag that is absent resets the
-/// channel immediately; once the count is reached the snapshot exposes OVR
-/// until the next non-over update.
-fn count_ovr(
+/// Gate the device's own consecutive-over counts.  The UC counts the
+/// samples at or above full scale inside each record window and clears
+/// the count with the next sample below full scale, so an over flag in
+/// the snapshot is the device's per-window count compared with the
+/// global OVR sample preference; the host runs no sample counting of
+/// its own.
+fn over_flags(
     held: &mut Option<[bool; 18]>,
-    counts: &mut [u8; 18],
-    fresh: Option<&[bool]>,
+    fresh: Option<&[u8]>,
 ) {
     let Some(fresh) = fresh else {
-        *counts = [0; 18];
         *held = None;
         return;
     };
     let out = held.get_or_insert([false; 18]);
     for i in 0..18 {
-        if fresh.get(i).copied().unwrap_or(false) {
-            counts[i] = counts[i].saturating_add(1);
-            if counts[i] >= OVR_FULL_SCALE_SAMPLES {
-                out[i] = true;
-            }
-        } else {
-            counts[i] = 0;
-            out[i] = false;
-        }
+        out[i] = fresh.get(i).copied().unwrap_or(0) >= OVR_FULL_SCALE_SAMPLES;
     }
 }
 
@@ -1555,8 +1549,6 @@ fn run(
     let mut last_overload = [false; 2];
     let mut last_counters = Instant::now() - Duration::from_secs(1);
     let mut peak_at = [[Instant::now(); 18]; 3];
-    let mut ovr_count = [0u8; 18];
-    let mut output_ovr_count = [0u8; 18];
 
     loop {
         // The timeout paces the polling loop at about 120 Hz while still
@@ -1610,8 +1602,13 @@ fn run(
             } else {
                 vec![0.0; 18]
             };
-            let playback_ovr = if connected {
-                device.device_playback_ovr()
+            let playback_over_runs = if connected {
+                device.device_playback_over_runs()
+            } else {
+                None
+            };
+            let output_over_runs = if connected {
+                device.device_output_over_runs()
             } else {
                 None
             };
@@ -1621,11 +1618,6 @@ fn run(
                     .unwrap_or_else(|| outputs.clone())
             } else {
                 vec![0.0; 18]
-            };
-            let output_ovr = if connected {
-                device.device_output_ovr()
-            } else {
-                None
             };
             let fx = if connected {
                 device.fx_meters().unwrap_or([0.0, 0.0])
@@ -1637,6 +1629,16 @@ fn run(
             } else {
                 [false, false]
             };
+            let over_flags_pb = if connected {
+                device.device_playback_over_levels()
+            } else {
+                None
+            };
+            let over_flags_out = if connected {
+                device.device_output_over_levels(true)
+            } else {
+                None
+            };
             let mut m = meters.lock().unwrap();
             for (slot, value) in m.inputs.iter_mut().zip(inputs) {
                 *slot = value;
@@ -1647,19 +1649,18 @@ fn run(
             for (slot, value) in m.outputs.iter_mut().zip(outputs) {
                 *slot = value;
             }
+            // The red band (0..+6 dB) merges into the row bar: the device
+            // counter's inverse value, or the row's written fader and
+            // matrix state once the device reports the row over.  The
+            // release fall brings the bar back below 0 dB when the band
+            // clears.
+            merge_over(m.playbacks.iter_mut(), over_flags_pb.as_deref());
+            merge_over(m.outputs.iter_mut(), over_flags_out.as_deref());
             hold_peaks(&mut m.input_peaks, &input_peaks, &mut peak_at[0], now);
             hold_peaks(&mut m.playback_peaks, &playback_peaks, &mut peak_at[1], now);
             hold_peaks(&mut m.output_peaks, &output_peaks, &mut peak_at[2], now);
-            count_ovr(
-                &mut m.playback_ovr,
-                &mut ovr_count,
-                playback_ovr.as_deref(),
-            );
-            count_ovr(
-                &mut m.output_ovr,
-                &mut output_ovr_count,
-                output_ovr.as_deref(),
-            );
+            over_flags(&mut m.playback_ovr, playback_over_runs.as_deref());
+            over_flags(&mut m.output_ovr, output_over_runs.as_deref());
             m.fx = fx;
             m.fx_overload = overload;
             m.connected = connected;
@@ -1717,7 +1718,23 @@ fn run(
     }
 }
 
-/// Hold each channel's peak for two seconds, then fall at 20 dB/s.  The
+/// Merge the red-band (0..+6 dB) bar values into the row bars.  A row
+/// whose over feed carries a value takes that value when it exceeds the
+/// row's own 0 dB state; the meter's release fall brings the bar back
+/// when the band clears.
+fn merge_over<'a, I>(slots: I, over: Option<&[Option<f32>]>)
+where
+    I: Iterator<Item = &'a mut f32>,
+{
+    let Some(over) = over else { return };
+    for (slot, value) in slots.zip(over) {
+        if let Some(value) = value {
+            *slot = slot.max(*value);
+        }
+    }
+}
+
+/// Hold each channel's peak for two seconds, then fall at 10 dB/s.  The
 /// service sees every device packet, so a transient shorter than a canvas
 /// frame still reaches the needle.
 fn hold_peaks(
@@ -1734,7 +1751,7 @@ fn hold_peaks(
         } else {
             let held = now.duration_since(peak_at[i]).as_secs_f32();
             if held > 2.0 {
-                let decayed = *slot * 10f32.powf(-(held - 2.0));
+                let decayed = *slot * 10f32.powf(-(held - 2.0) / 2.0);
                 *slot = decayed.max(value);
             }
         }
@@ -1935,10 +1952,10 @@ mod tests {
         super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(1900));
         assert!((peaks[0] - 0.8).abs() < 1e-6);
 
-        // After the two-second hold it falls at 20 dB/s (a factor of ten
-        // per second).
+        // After the two-second hold it falls at 10 dB/s (a factor
+        // 10^(−1/2) per second against the 20 dB ruler).
         super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(2900));
-        assert!((peaks[0] - 0.8 * 0.1f32.powf(0.9)).abs() < 1e-4);
+        assert!((peaks[0] - 0.8 * 0.1f32.powf(0.45)).abs() < 1e-4);
     }
 
     #[test]

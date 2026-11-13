@@ -1187,6 +1187,45 @@ impl DeviceHandle {
         None
     }
 
+    /// The device's own consecutive-over sample counts per record window,
+    /// decoded from each OVR word.  The meter gate compares these with the
+    /// global OVR sample preference; no host-side sampling is needed.
+    pub fn device_playback_over_runs(&self) -> Option<Vec<u8>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.playback_over_runs();
+        }
+        None
+    }
+
+    pub fn device_output_over_runs(&self) -> Option<Vec<u8>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.output_over_runs();
+        }
+        None
+    }
+
+    /// Device red-band bar values per playback row and hardware output
+    /// row (0..+6 dB).  Inside the device counter's resolvable range the
+    /// value is the count's inverse law; beyond it the estimate path
+    /// continues on the row's written fader and matrix state.
+    pub fn device_playback_over_levels(&self) -> Option<Vec<Option<f32>>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.playback_over_levels();
+        }
+        None
+    }
+
+    pub fn device_output_over_levels(&self, post: bool) -> Option<Vec<Option<f32>>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.output_over_levels(post);
+        }
+        None
+    }
+
     pub fn device_output_peaks(&self) -> Option<Vec<f32>> {
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
@@ -3163,9 +3202,10 @@ const STRENGTH_READOUT_GUARD_MS: u64 = 200;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
-/// TotalMix FX's peak meter release is 10 dB/s (measured on the UCX and
-/// documented for TotalMix; our previous value was 20 dB/s and read twice
-/// too fast against TotalMix's bars).  Use a real dB/s fall rather
+/// TotalMix FX's peak meter release measured 10 dB/s (UCX reference,
+/// 2026-10-22; our previous 20 dB/s read twice too fast).  RME documents
+/// only "zero attack" for the peak and a slow RMS time constant; the
+/// release rate is not in their manuals.  Use a real dB/s fall rather
 /// than a per-tick easing factor so the same ballistics hold when the UI
 /// tick or meter canvas frame rate changes.
 const METER_RELEASE_DB_S: f32 = 10.0;
@@ -20147,7 +20187,7 @@ mod tests {
         let expected = peak * 10f32.powf(-METER_RELEASE_DB_S * 0.05 / 20.0);
         assert!(
             (m.frame().value - expected).abs() < 1e-4,
-            "one 50 ms release tick should fall 20 dB/s: {} vs {expected}",
+            "one 50 ms release tick should fall 10 dB/s: {} vs {expected}",
             m.frame().value
         );
     }

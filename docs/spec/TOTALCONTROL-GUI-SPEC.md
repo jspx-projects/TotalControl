@@ -472,7 +472,8 @@ bar is mathematically correct RMS, so a full-scale sine reads about -3 dB;
 no RMS +3 dB shift is applied. There is no separate red guide across the
 meter bar.
 
-Falling levels use a 20 dB/s release. The peak hold is fixed at two seconds.
+Falling levels release at 10 dB/s, measured against the reference
+application's meters. The peak hold is fixed at two seconds.
 The OVR segment lights after three consecutive full-scale samples. The OVR
 sample count is a global meter setting (1–15, default three), not a dB
 threshold and not a per-channel value. There is no configurable hold time.
@@ -481,8 +482,14 @@ release instead of freezing at their last reading.
 
 Input and playback meters are pre-fader and post-trim: the trim changes the
 reading, the send fader and selected submix do not. Hardware output meters
-are post-fader and go to zero when the output is muted.  The Fireface UC and
-UCX take both the RMS bar and the peak line from their hardware meter pages.
+are post-fader and go to zero when the output is muted. The Fireface UC and
+UCX take both the RMS bar and the peak line from their hardware meter
+pages, with one documented limit: the UC's meter stream publishes output
+RMS only for AN1..AN4 (the truncated device bank), so the remaining UC
+output rows draw the RMS bar from the documented host-side post-fader
+estimate — the power sum of every routed source's device level scaled by
+its matrix cell gain and the row's out fader — while the peak line and the
+OVR block still come from the device's peak record for all output rows.
 
 #### 2.7.2 Fader scale
 

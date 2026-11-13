@@ -472,7 +472,7 @@ fn bus_levels(
 
 /// Advance a bus-driven meter by one canvas frame.  Rising levels follow the
 /// device immediately; falling levels and a disconnected device use
-/// TotalMix's 20 dB/s release instead of freezing or snapping to zero.
+/// TotalMix's 10 dB/s release instead of freezing or snapping to zero.
 fn advance_bus(
     old: MeterFrame,
     value: f32,
@@ -486,7 +486,7 @@ fn advance_bus(
         target
     } else {
         let elapsed = now.duration_since(old.since).as_secs_f32();
-        let fall = 10f32.powf(-20.0 * elapsed / 20.0);
+        let fall = 10f32.powf(-10.0 * elapsed / 20.0);
         (current * fall).max(target)
     };
     let peak = peak.max(value);
@@ -2081,10 +2081,10 @@ mod tests {
             false,
             start + Duration::from_millis(50),
         );
-        let expected = 10f32.powf(-20.0 * 0.05 / 20.0);
+        let expected = 10f32.powf(-10.0 * 0.05 / 20.0);
         assert!(
             (next.value - expected).abs() < 1e-4,
-            "disconnected meter should release 20 dB/s: {} vs {expected}",
+            "disconnected meter should release 10 dB/s: {} vs {expected}",
             next.value
         );
     }

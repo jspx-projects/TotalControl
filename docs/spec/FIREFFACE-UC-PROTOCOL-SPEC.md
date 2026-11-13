@@ -124,7 +124,7 @@ For a stereo pair, source `N` writes the left cell in block `2p` and source
 `N + 1` writes the right cell in block `2p + 1`; `p` is the output pair.
 
 The output masters use `wIndex = 992 + block`.  The block order is the
-TotalMix display order: AN1/2 is `0`, and Phones 7/8 is `6`.  The four submix
+reference mixer's display order: AN1/2 is `0`, and Phones 7/8 is `6`.  The four submix
 banks occupy `wIndex` bits 14:15; an output-balance change writes the left and
 right masters in each bank.
 
@@ -245,8 +245,7 @@ The matrix applies live.  A `0x12` cell write takes effect on the running
 engine, so a route made while audio plays is audible immediately and a scene
 applied while the engine runs takes effect at once.  TotalControl still writes
 the complete matrix — 36 sources × 18 blocks plus 18 masters — on connect,
-because that is TotalMix's own sequence and because a fresh device holds no
-scene.  Loopback is live as well.
+because a fresh device holds no scene.  Loopback is live as well.
 
 Input gain uses `0x1a` with 1 dB steps for inputs 1/2 and 0.5 dB steps
 (codes 0–36) for inputs 3/4.
@@ -336,9 +335,45 @@ words.  The stream alternates a data page and a flag page.
 | Data | 32-bit word at byte 4 is `0x00001fff` |
 | Flag | 32-bit word at byte 4 is `0` or `1` |
 
+The page kind of one mode carries marker `0x1fff` (see the table above)
+on the data page, another carries `0`.  There word 6 (byte 12..13) is the
+discriminator: the data page carries a non-zero status word there and the
+flag page carries zero.  A reader classifies the page as data when the
+marker is `0x1fff` **or** word 6 is non-zero, and as flag otherwise.
+
 The data page carries the Peak and OVR words.  The flag page carries the
 software-playback RMS words.  A reader must not apply a flag page to the
-Peak bank.
+Peak bank, and must not apply a data page to the RMS bank: in the modes
+that carry marker `0` on both page kinds, reading the data page's record
+region at the flag-page word offsets turns input/peak data into huge
+phantom RMS values.
+
+### Page map
+
+Data page (either page kind that sets word 6; 4-byte records, two
+16-bit words per record):
+
+| Words (bytes) | Contents |
+|---|---|
+| 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), everything else Unknown.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
+| 54..69 (108..139) | AN1..AN8 input records: high halfword = level (0 dBFS at 6800, 0.12745 dB per unit), low halfword = junk |
+| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = 24-bit log level, bits 0..7 = overload ratio, `0x00001fff` filler before the first sample |
+| 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit Peak |
+| 126..161 (252..323) | hardware outputs AN1..8, S/PDIF and ADAT 1..8 records: OVR word + linear 16-bit Peak |
+
+Unknown bytes on the data page: 104 of 324 (the header/status region).
+
+Flag page (the non-data page of the alternation, word 6 reads zero):
+
+| Words (bytes) | Contents |
+|---|---|
+| 0..71 (0..143) | header/status: Unknown |
+| 72..143 (144..287) | SW playback 1..18 RMS bank: four 16-bit words per channel with the power word at slot offset 3 |
+| 144..159 (288..319) | hardware output RMS bank: the power words at 147, 151, 155, 159 = AN1, AN2, AN3, AN4; the other twelve words are junk |
+| 160..161 (320..323) | truncated head of output channel 4's own slot: Unknown |
+
+Unknown bytes on the flag page: 172 of 324 (the header/status region, the
+junk words of the output bank and the truncation tail).
 
 ### Playback and output Peak/OVR words
 
@@ -361,17 +396,26 @@ A Peak word is a linear 16-bit value:
 Peak dBFS = 20 × log10(word / 32768)
 ```
 
+The word clamps at `0x7fff` (0 dBFS): the record is measured upstream of the
+row's `0x1a` output fader, so pushing that fader alone into the over band
+keeps this word at its ceiling.
+
 The OVR word is two bytes:
 
 | Bits | Contents |
 |---|---|
-| 15..8 | `0xff` while OVR is active, otherwise not `0xff` |
-| 7..0 | RMS over amount in 0.5 dB steps |
+| 15..8 | `0xff` while the channel is at or above full scale, the over event |
+| 7..0 | consecutive samples at or above full scale, counted by the device |
 
-An OVR is active only when the high byte is `0xff` and the low byte is
-nonzero.  `0xff00` is the no-over filler and must not light the LED.  The
-low byte is the RMS over amount, not a sample count.  The high byte is the
-OVR event that the host counts.
+The low byte is the device's own consecutive-over-sample count within the
+record's update window: it reads 0 on the `0xff00`/`0x0000` no-over
+fillers, climbs with the over fraction of the record window (4/8/11/13/15
+at sine peaks of +0.05/+0.25/+0.50/+0.75/+1.00 dB), and saturates: the
+upper nibble carries the count past 15 until both nibbles read `0xff`
+(every window sample over).  Verified against sine and square staircases
+in `docs/work/UC-METER-DECODE.md`.  The host LED gate is this count
+compared with the global OVR sample preference (default three); the host
+runs no sample counting of its own.
 
 ### Playback RMS words
 
@@ -389,16 +433,32 @@ Playback pair 1 uses bytes 150 and 158.  All nine playback pairs were
 verified with an 18-channel source: each pair's RMS appears only at
 `75 + 8p` and `79 + 8p`.
 
-Output RMS words have not been identified; output RMS is not decoded.
+### Output RMS bank
+
+The flag page carries output RMS in the same per-channel slot shape as the
+playback bank, starting at word 144: four words per output channel with the
+RMS power word at `147 + 4c`.  Only channels 0..3 fall inside the page
+(AN1, AN2, AN3, AN4); word 160/161 is the truncated head of channel 4's own
+slot and the page ends before channel 4's level word.
+
+A 120-second solo capture of the `0x85` stream
+(`docs/captures/uc/fullstream-monoAN1.raw`, no competing reader) confirms
+the bank covers channels 0..3: every non-data page has the same nonzero
+word pattern, and output RMS for AN5..ADAT8 appears nowhere in the stream.
+While a row is over 0 dBFS the device holds its output RMS word at zero, so
+the bank is the row's 0..0 dB meter only; the over band is not a device
+RMS feed.  TotalControl's rows beyond AN4 therefore draw the bar from the
+documented host-side post-fader estimate, and the over band on every row
+comes from the row's own written fader and matrix state when the device
+reports the row over.
 
 ### OVR trigger
 
-TotalMix FX reads the meter values and counts consecutive OVR events on the
-host.  The count is the global **Full scale samples for OVR** preference
-(`FSCntOVR`), default three, range 1..10 on the UC USB settings and 1..15 in
-TotalMix.  No USB control write carries this setting; it is stored in
-TotalMix's host preferences.  The device supplies the OVR marker; the host
-supplies the count and the LED.
+The device supplies the over event and its own consecutive sample count in
+the record's OVR word.  The host gates the OVR LED on that count against
+the **Full scale samples for OVR** sample preference (`FSCntOVR`), default
+three, range 1..10 on the UC USB settings.  No USB control write carries
+this setting; it is a host preference.
 
 ### Analog input records
 
@@ -416,16 +476,25 @@ is the detector's hold value, not an instantaneous level.
 
 ### TotalControl behaviour
 
-- Playback Lower VU bar: flag-page RMS.
-- Playback and output peak line: data-page Peak word.
-- Playback and output OVR: data-page OVR high byte, counted by the host.
-- Analog inputs: data-page analog law.
-- Digital input records are mapped but held silent until their channel
+- Playback lower VU bar: the flag-page RMS bank (all 18 playbacks).
+- Hardware output lower VU bar: AN1..AN4 from the flag-page output RMS
+  bank; AN5..ADAT8 from the documented host-side post-fader estimate
+  (power sum of every routed source's device level times its matrix cell
+  gain, scaled by the row's `0x1a` out fader, zero when the row is
+  muted).
+- Playback and output peak line: the data-page Peak word.
+- Playback and output OVR LED: the device's consecutive-over count in the
+  record's OVR word, compared with the global OVR sample preference
+  (default three).
+- Playback and output red band (0..+6 dB): the record's OVR count inverse
+  inside the device's resolvable range; beyond it the hardware output
+  rows continue on the row's written `0x1a` fader and routed matrix
+  state.
+- Analog inputs: the data-page analog law.
+- Digital input records are mapped and held silent until their channel
   identity is verified.
-- Ballistics are host side: 10 dB/s release and a 2 s peak hold.
-- The OVR LED uses the high byte; the low byte is available for a future
-  over-amount readout.
-
-Input meters measure the physical input before loopback.  A loopback-enabled
-output replaces the input's record signal, but does not change the input meter
-or the input bank in the `0x85` page.
+- Ballistics are host side: a 10 dB/s release (measured against the
+  reference application) and a 2 s peak hold.
+Input meters measure the physical input before loopback.  A
+loopback-enabled output replaces the input's record signal, but does not
+change the input meter or the input bank in the `0x85` page.
