@@ -380,8 +380,8 @@ Data page (either page kind that sets word 6; 4-byte records, two
 | Words (bytes) | Contents |
 |---|---|
 | 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), everything else Unknown.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
-| 54..69 (108..139) | AN1..AN8 input records: high halfword = peak, low halfword = OVR word when over.  AP linear 16-bit peak; PC 6800 log word |
-| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = level, bits 0..7 = overload ratio, `0x00001fff` filler before the first sample.  AP linear 24-bit peak; PC `0x420000` octave word |
+| 54..69 (108..139) | AN1..AN8 input records: high halfword = linear 16-bit peak, low halfword = OVR word when over |
+| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = linear 24-bit peak, bits 0..7 = overload ratio, `0x00001fff` filler before the first sample |
 | 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit Peak |
 | 126..161 (252..323) | hardware outputs AN1..8, S/PDIF and ADAT 1..8 records: OVR word + linear 16-bit Peak |
 
@@ -486,13 +486,12 @@ this setting; it is a host preference.
 
 ### Analog input records
 
-The input level law is personality-dependent: the AP personality publishes
-linear peak words, while the PC personality publishes the 6800 (analog) and
-`0x420000` (digital) octave words.  Playback and hardware-output records
-use the linear 16-bit Peak word in both.
+The input peak law is linear in both personalities.  The analog inputs
+carry a linear 16-bit peak in the upper halfword of the data-page record;
+the digital inputs carry a linear 24-bit peak in bits 8..31.  Playback and
+hardware-output records use the linear 16-bit Peak word as well.
 
-The AP personality carries a linear 16-bit peak in the upper halfword of
-the data-page record.  The lower halfword is the OVR word when the input is
+For an analog input the lower halfword is the OVR word when the input is
 over: high byte `0xff`, low byte the device's consecutive-over count, with
 `0xff00` the no-over filler:
 
@@ -506,19 +505,9 @@ The analog detector settles slowly, so a reading is its hold value, not an
 instantaneous level.  The input reference and gain are applied before the
 meter.
 
-The PC (interrupt) personality uses the octave scale instead:
-
-```text
-u == 0                  -> below range
-dBFS = (6800 - u) * 0.12745,  u = record >> 16
-```
-
-Records outside the 6740..7550 window are no data in that mode.
-The decoder selects the law from the active personality.
-
 ### Digital input records
 
-The AP personality carries a linear 24-bit peak in bits 8..31; the low byte
+The digital input carries a linear 24-bit peak in bits 8..31; the low byte
 is the overload ratio:
 
 ```text
@@ -530,15 +519,6 @@ dBFS  = 20 × log10(level / 0x800000)
 At saturation the level field is `0x7fffff`; the low nibble is `0x0f` and
 the high nibble counts the over in half-dB steps.  The `0x00001fff` filler
 has a level below the meter's floor and is no data, not a level.
-
-The PC personality uses the octave word instead:
-
-```text
-level = record >> 8 & 0xffffff
-dBFS  = -(level - 0x420000) * 6.0206 / 0x8000
-```
-
-with `0x7fffff` the saturation record and the over value in the low byte.
 
 ### Input RMS words
 
@@ -577,8 +557,8 @@ zero; the bar then uses the peak word's sine equivalent
 - Input lower VU bar: the flag-page input RMS bank (`3 + 4c`).  When
   the power word is zero for a very low signal, the bar uses the peak
   word's sine equivalent (`peak / sqrt(2)`).
-- Input peak line: the data-page input peak word (AP linear 16-bit
-  analog / 24-bit digital; PC 6800 analog / `0x420000` digital octave).
+- Input peak line: the data-page input peak word (linear 16-bit analog /
+  24-bit digital).
 - Input OVR LED: the analog low-word over event, gated by the global OVR
   sample preference; the digital saturated 24-bit level with the over
   tag.

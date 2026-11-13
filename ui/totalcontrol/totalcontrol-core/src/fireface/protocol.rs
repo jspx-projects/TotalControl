@@ -189,27 +189,6 @@ pub const UC_LINEAR_24_FULL_SCALE: f32 = 8_388_608.0;
 /// level.  The `0x00001fff` filler carries level `0x1f`; a real
 /// -90 dBFS signal is about 265.
 const UC_DIGITAL_INPUT_MIN_LEVEL: u32 = 0x100;
-/// UC PC octave input law: 0 dBFS at 6800 in the analog upper halfword.
-const UC_ANALOG_INPUT_ZERO_DBFS: i32 = 6800;
-const UC_ANALOG_INPUT_DB_PER_UNIT: f32 = 0.12745;
-/// UC PC octave input law: 0 dBFS at 0x420000 in the digital level field.
-const UC_LEVEL_ZERO_DBFS: u32 = 0x420000;
-const UC_LEVEL_MAX: u32 = 0x7fffff;
-const UC_DB_PER_LEVEL_LSB: f32 = 6.0206 / 0x8000 as f32;
-
-/// Input level law used by the UC meter page.
-///
-/// The two personalities encode input levels differently.  The PC
-/// (interrupt) personality uses the octave/log words measured on 2026-11-12;
-/// the AP (ISO) personality publishes linear peak words.  Playback and
-/// hardware-output records use the linear 16-bit word in both.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UcInputLaw {
-    /// UC PC: analog 6800 log scale, digital 0x420000 octave scale.
-    Octave,
-    /// UC AP: analog linear 16-bit peak, digital linear 24-bit peak.
-    Linear,
-}
 /// The saturation over field: the low byte's tag nibble is `0xf` and the
 /// upper nibble counts 0..15 half dB steps of headroom over 0 dBFS.
 const UC_OVER_TAG: u8 = 0x0f;
@@ -466,25 +445,6 @@ pub fn uc_digital_dbfs(record: u32) -> Option<f32> {
     }
 }
 
-/// dBFS of a UC PC digital input meter record (S/PDIF, ADAT).
-///
-/// The PC personality publishes a 24-bit octave word in bits 8..31 with
-/// 0 dBFS at `0x420000`, one octave per `0x8000` and the bottom at
-/// `0x47ffff`.  `0x7fffff` is saturation with the over tag in the low byte.
-pub fn uc_digital_dbfs_octave(record: u32) -> Option<f32> {
-    let level = ((record >> 8) & 0xffffff) as i64;
-    if level == 0 {
-        return Some(f32::NEG_INFINITY);
-    }
-    if level == UC_LEVEL_MAX as i64 {
-        return Some(uc_over_dbfs(record));
-    }
-    if !(UC_LEVEL_ZERO_DBFS as i64..=0x4a0000).contains(&level) {
-        return None;
-    }
-    Some(-((level - UC_LEVEL_ZERO_DBFS as i64) as f32) * UC_DB_PER_LEVEL_LSB)
-}
-
 /// dBFS of a UC software playback meter record.
 ///
 /// A playback record carries the channel's 16-bit linear peak in the upper
@@ -556,22 +516,6 @@ pub const UC_OVR_RUN_GATE: u8 = 3;
 /// gain.
 pub fn uc_analog_input_dbfs(record: u32) -> Option<f32> {
     uc_playback_dbfs(record)
-}
-
-/// dBFS of a UC PC analog input record.
-///
-/// The PC personality publishes the level in the upper halfword on the
-/// 6800 log scale: 0 dBFS at 6800 and 0.12745 dB per unit.  Records
-/// outside the verified 6740..7550 window are packet noise, not a level.
-pub fn uc_analog_input_dbfs_octave(record: u32) -> Option<f32> {
-    let u = (record >> 16) as u16 as i32;
-    if u == 0 {
-        return Some(f32::NEG_INFINITY);
-    }
-    if !(6740..=7550).contains(&u) {
-        return None;
-    }
-    Some((UC_ANALOG_INPUT_ZERO_DBFS - u) as f32 * UC_ANALOG_INPUT_DB_PER_UNIT)
 }
 
 pub fn power_dbfs(power: u64) -> f32 {
@@ -1286,16 +1230,4 @@ mod tests {
         assert_eq!(uc_digital_dbfs(0x00000fff), None);
     }
 
-    #[test]
-    fn uc_pc_input_records_decode_the_octave_scale() {
-        // PC personality: (6800 - u) * 0.12745 dB for the analog upper
-        // halfword; the digital record is the 0x420000 octave word.
-        assert!(uc_analog_input_dbfs_octave(7505u32 << 16).unwrap() + 90.0 < 0.2);
-        assert!(uc_analog_input_dbfs_octave(6800u32 << 16).unwrap().abs() < 1e-5);
-        assert_eq!(uc_analog_input_dbfs_octave(0), Some(f32::NEG_INFINITY));
-        assert_eq!(uc_analog_input_dbfs_octave(0x33210000), None);
-        assert!(uc_digital_dbfs_octave(0x4975ff00).unwrap() + 89.8 < 0.1);
-        assert!(uc_digital_dbfs_octave(0x427a5f00).unwrap() + 5.8 < 0.1);
-        assert_eq!(uc_digital_dbfs_octave(0x00001fff), None);
-    }
 }
