@@ -131,6 +131,8 @@ pub enum DeviceKind {
     MockUcx,
     /// The in-memory device, as a Fireface UC: the UC's gated feature set.
     MockUc,
+    /// The in-memory device, as a Babyface-classic.
+    MockBabyfaceClassic,
 }
 
 /// Choose the startup backend from the devices that are actually present.
@@ -155,7 +157,7 @@ fn choose_startup_kind(
         if let Some(real) = available
             .iter()
             .copied()
-            .find(|k| !matches!(k, DeviceKind::MockUcx | DeviceKind::MockUc))
+            .find(|k| !matches!(k, DeviceKind::MockUcx | DeviceKind::MockUc | DeviceKind::MockBabyfaceClassic))
         {
             return Some(real);
         }
@@ -178,7 +180,7 @@ fn choose_startup_kind(
     let only_simulations = !available.is_empty()
         && available
             .iter()
-            .all(|k| matches!(k, DeviceKind::MockUcx | DeviceKind::MockUc));
+            .all(|k| matches!(k, DeviceKind::MockUcx | DeviceKind::MockUc | DeviceKind::MockBabyfaceClassic));
     if preferred.is_none() && only_simulations && available.contains(&DeviceKind::MockUcx) {
         return Some(DeviceKind::MockUcx);
     }
@@ -234,7 +236,7 @@ fn choose_startup_target(
         }
     }
     if let Some(kind) = preferred {
-        if !matches!(kind, DeviceKind::MockUcx | DeviceKind::MockUc) {
+        if !matches!(kind, DeviceKind::MockUcx | DeviceKind::MockUc | DeviceKind::MockBabyfaceClassic) {
             if let Some(target) = available.iter().find(|t| t.kind == kind) {
                 return Some(target.clone());
             }
@@ -257,13 +259,14 @@ fn choose_startup_target(
 }
 
 impl DeviceKind {
-    pub const ALL: [DeviceKind; 6] = [
+    pub const ALL: [DeviceKind; 7] = [
         DeviceKind::Fireface,
         DeviceKind::Ucx,
         DeviceKind::Uc,
         DeviceKind::BabyfaceClassic,
         DeviceKind::MockUcx,
         DeviceKind::MockUc,
+        DeviceKind::MockBabyfaceClassic,
     ];
 
     pub fn label(self) -> &'static str {
@@ -274,6 +277,7 @@ impl DeviceKind {
             DeviceKind::BabyfaceClassic => "Babyface-classic (experimental)",
             DeviceKind::MockUcx => "Fireface UCX (simulated)",
             DeviceKind::MockUc => "Fireface UC (simulated)",
+            DeviceKind::MockBabyfaceClassic => "Babyface-classic (simulated)",
         }
     }
 
@@ -871,9 +875,15 @@ impl DeviceHandle {
         DeviceHandle::Mock(MockDevice::open_uc().expect("mock opens"))
     }
 
+    /// The Babyface-classic simulation.
+    pub fn open_mock_classic() -> Self {
+        DeviceHandle::Mock(MockDevice::open_babyface_classic().expect("mock opens"))
+    }
+
     pub fn open_mock() -> Self {
         let device = match std::env::var("TOTALCONTROL_MOCK_MODEL").ok().as_deref() {
             Some("uc") => MockDevice::open_uc(),
+            Some("classic") => MockDevice::open_babyface_classic(),
             Some("ucx") | None => MockDevice::open_ucx(),
             Some(_) => MockDevice::open_ucx(),
         };
@@ -885,6 +895,8 @@ impl DeviceHandle {
             DeviceHandle::Mock(d) => {
                 if d.is_uc() {
                     DeviceKind::MockUc
+                } else if d.is_babyface_classic() {
+                    DeviceKind::MockBabyfaceClassic
                 } else {
                     DeviceKind::MockUcx
                 }
@@ -907,6 +919,8 @@ impl DeviceHandle {
             DeviceHandle::Mock(d) => {
                 if d.is_uc() {
                     "FirefaceUC".to_string()
+                } else if d.is_babyface_classic() {
+                    "Babyface".to_string()
                 } else {
                     "FirefaceUCX".to_string()
                 }
@@ -923,6 +937,7 @@ impl DeviceHandle {
         match kind {
             DeviceKind::MockUcx => Some(Self::open_mock_ucx()),
             DeviceKind::MockUc => Some(Self::open_mock_uc()),
+            DeviceKind::MockBabyfaceClassic => Some(Self::open_mock_classic()),
             #[cfg(feature = "alsa")]
             DeviceKind::Fireface => Fireface::open().ok().map(DeviceHandle::Fireface),
             #[cfg(feature = "alsa")]
@@ -960,6 +975,7 @@ impl DeviceHandle {
             // the hardware.
             out.push(DeviceTarget::kind_only(DeviceKind::MockUcx));
             out.push(DeviceTarget::kind_only(DeviceKind::MockUc));
+            out.push(DeviceTarget::kind_only(DeviceKind::MockBabyfaceClassic));
             out
         }
         #[cfg(not(feature = "alsa"))]
@@ -973,6 +989,8 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(d) => DeviceTarget::kind_only(if d.is_uc() {
                 DeviceKind::MockUc
+            } else if d.is_babyface_classic() {
+                DeviceKind::MockBabyfaceClassic
             } else {
                 DeviceKind::MockUcx
             }),
@@ -24201,6 +24219,15 @@ mod tests {
         );
         assert!(!state.workspace_dirty, "the new file is written now");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn babyface_classic_simulation_is_selectable() {
+        let dev = DeviceHandle::open_mock_classic();
+        assert_eq!(dev.kind(), DeviceKind::MockBabyfaceClassic);
+        assert_eq!(dev.target().kind, DeviceKind::MockBabyfaceClassic);
+        assert_eq!(dev.card_id(), "Babyface");
+        assert_eq!(dev.inputs().len(), 10);
     }
 }
 

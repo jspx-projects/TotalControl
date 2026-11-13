@@ -1456,6 +1456,7 @@ on the same feedback port.
 | `--mock` | Simulate a Fireface UCX |
 | `--mock-ucx` | Simulate a Fireface UCX |
 | `--mock-uc` | Simulate a Fireface UC |
+| `--mock-classic` | Simulate a Babyface-classic |
 | `--control-only` | Do not open the capture PCM |
 
 The mock modes are for demonstration and development. Capture tools are
