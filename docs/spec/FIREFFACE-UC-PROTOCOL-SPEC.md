@@ -336,9 +336,18 @@ words.  The stream alternates a data page and a flag page.
 | Data | 32-bit word at byte 4 is `0x00001fff` |
 | Flag | 32-bit word at byte 4 is `0` or `1` |
 
+The `UC_WIN_RME` personality sends marker `0` on both page kinds.  There
+word 6 (byte 12..13) is the discriminator: the data page carries a non-zero
+status word there and the flag page carries zero.  A reader classifies the
+page as data when the marker is `0x1fff` **or** word 6 is non-zero, and as
+flag otherwise.
+
 The data page carries the Peak and OVR words.  The flag page carries the
 software-playback RMS words.  A reader must not apply a flag page to the
-Peak bank.
+Peak bank, and must not apply a data page to the RMS bank: in the
+`UC_WIN_RME` mode both pages carry marker `0`, and reading the data page's
+record region at the flag-page word offsets turns input/peak data into huge
+phantom RMS values.
 
 ### Playback and output Peak/OVR words
 
@@ -390,6 +399,23 @@ verified with an 18-channel source: each pair's RMS appears only at
 `75 + 8p` and `79 + 8p`.
 
 Output RMS words have not been identified; output RMS is not decoded.
+
+### Output RMS bank (partial, verified)
+
+The flag page also carries output RMS in the same per-channel slot shape as
+the playback bank, starting at word 144: four words per output channel with
+the RMS power word at `147 + 4c`.  Only channels 0..3 fall inside the page
+(AN1, AN2, AN3, AN4); word 160/161 is the truncated head of channel 4's own
+slot and the page ends before channel 4's level word.
+
+The playback bank covers all 18 playbacks; the output bank only carries
+channels 0..3 (AN1..AN4).  A 120-second solo capture of the `0x85` stream
+(`docs/captures/uc/fullstream-monoAN1.raw`, no competing reader) pages know
+no third kind: every non-data page has the same nonzero-word pattern, and
+output RMS for AN5..ADAT8 does not appear anywhere.  TotalMix FX still
+draws RMS bars on those output rows, so their RMS source is host-side
+post-fader computation, or another feed we have not seen; both stay open
+questions in `docs/work/UC-METER-DECODE.md`.
 
 ### OVR trigger
 

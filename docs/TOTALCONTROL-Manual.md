@@ -457,6 +457,15 @@ after the channel trim but before its send fader, so moving a send or
 changing the selected submix does not change them. Hardware output meters
 are post-fader and show the finished bus.
 
+On the Fireface UC the device publishes RMS only for the four analog output
+channels AN1..AN4. Those rows take the device RMS word. The remaining
+output rows (AN5/6, S/PDIF, ADAT) draw the RMS bar from a documented
+TotalControl estimate: the power sum of every routed source's device meter
+level scaled by its matrix cell gain and the row's own out fader. Treat
+that bar as an approximation while the device's own meter word for those
+rows is still unknown; the peak line and the OVR block use the device's
+peak record for every output row.
+
 The RMS bar is mathematically correct RMS: a full-scale sine reads about
 -3 dB on it. TotalMix FX offers an optional **RMS +3 dB** display shift that
 makes the RMS reading and the peak line both read 0 dB for a full-scale
