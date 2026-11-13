@@ -147,12 +147,30 @@ impl MeterPacket {
 /// everywhere is a filler page, not a meter page.
 ///
 /// The stream alternates data pages with flag pages.  Word 1 is `0x1fff` on
-/// a data page and `1` on a flag page.  A flag page also carries digital
-/// input records, so its record region is not entirely zero; its zero
-/// playback records must not be treated as silence.
+/// a data page in the original page format and `0` or `1` on a flag page.
+/// The `UC_WIN_RME` personality uses marker `0` on both page kinds, but its
+/// data page sets word 6; flag pages leave it zero.
+/// A flag page also carries digital input records, so its record region is
+/// not entirely zero; its zero playback records must not be treated as
+/// silence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UcMeterPacket {
     pub records: [u32; 54],
+}
+
+fn uc_word(b: &[u8], word: usize) -> u16 {
+    u16::from_le_bytes(b[word * 2..word * 2 + 2].try_into().unwrap())
+}
+
+/// Whether a 324-byte `0x85` page is the Peak/OVR data page.
+///
+/// The original format marks it with `0x1fff` in word 1.  `UC_WIN_RME`
+/// marks neither page there, so word 6 is the discriminator: the data page
+/// always carries a non-zero status word there, while the flag page leaves
+/// it zero.
+fn uc_is_data_page(b: &[u8]) -> bool {
+    let marker = u32::from_le_bytes(b[4..8].try_into().unwrap());
+    marker == 0x1fff || uc_word(b, 6) != 0
 }
 
 impl Default for UcMeterPacket {
@@ -192,10 +210,9 @@ impl UcMeterPacket {
             return None;
         }
         // Only the data page carries Peak/OVR records.  The alternate flag
-        // page uses marker 0 or 1 and carries the RMS words; applying its
-        // zero peak records would release every meter once per data page.
-        let page_flag = u32::from_le_bytes(b[4..8].try_into().unwrap());
-        if page_flag != 0x1fff {
+        // page carries the RMS words; applying its zero peak records would
+        // release every meter once per data page.
+        if !uc_is_data_page(b) {
             return None;
         }
         let mut records = [0u32; Self::RECORD_COUNT];
@@ -254,20 +271,34 @@ impl UcMeterPacket {
 
 /// The alternate UC `0x85` flag page, carrying RMS power words.
 ///
-/// Playback pair `p` uses words `72 + 8p .. 79 + 8p`; the fourth and eighth
-/// words are the left and right RMS power.  The page's word 1 is `1`.
+/// The page carries one 4-word slot per channel with the RMS power word at
+/// slot offset 3.  The playback bank occupies words 72..143 (channels
+/// 0..17); the output bank follows at words 144..161 but is truncated after
+/// output channels 0..3 (AN1..AN4), so their RMS words sit at 147, 151,
+/// 155 and 159.  The page's word 1 is 0 or 1; word 6 stays zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UcRmsPacket {
     pub playback: [u16; 18],
+    /// RMS bank for hardware output channels 0..3 (AN1..AN4); the page's
+    /// word budget ends before output channel 4's own slot.
+    pub output: [u16; 4],
 }
+
+/// Output channel count covered by the flag page's output RMS bank.
+pub const UC_OUTPUT_RMS_CHANNELS: usize = 4;
 
 impl UcRmsPacket {
     pub fn parse(b: &[u8]) -> Option<Self> {
         if b.len() != UcMeterPacket::LEN {
             return None;
         }
-        let page_flag = u32::from_le_bytes(b[4..8].try_into().unwrap());
-        if page_flag == 0x1fff || b[108..].iter().all(|&byte| byte == 0) {
+        if uc_is_data_page(b) {
+            return None;
+        }
+        // A quiet flag page can be all zero; there is simply no RMS update
+        // to apply.  The playback RMS bank occupies words 72..143 and the
+        // output bank words 144..161.
+        if (72..=161).all(|word| uc_word(b, word) == 0) {
             return None;
         }
         let mut playback = [0u16; 18];
@@ -281,11 +312,24 @@ impl UcRmsPacket {
                 b[right * 2..right * 2 + 2].try_into().unwrap(),
             );
         }
-        Some(Self { playback })
+        let mut output = [0u16; UC_OUTPUT_RMS_CHANNELS];
+        for channel in 0..UC_OUTPUT_RMS_CHANNELS {
+            let word = 147 + channel * 4;
+            output[channel] = u16::from_le_bytes(
+                b[word * 2..word * 2 + 2].try_into().unwrap(),
+            );
+        }
+        Some(Self { playback, output })
     }
 
     pub fn playback(&self, channel: usize) -> u16 {
         self.playback.get(channel).copied().unwrap_or(0)
+    }
+
+    /// RMS power word of a hardware output channel; channels beyond the
+    /// page's truncated bank read 0 (no RMS published).
+    pub fn output(&self, channel: usize) -> u16 {
+        self.output.get(channel).copied().unwrap_or(0)
     }
 }
 
@@ -929,6 +973,31 @@ mod tests {
             assert_eq!(all.playback(pair * 2), pair as u16 + 1);
             assert_eq!(all.playback(pair * 2 + 1), pair as u16 + 101);
         }
+    }
+
+    #[test]
+    fn uc_win_rme_data_page_uses_word_six_and_is_not_rms() {
+        // UC_WIN_RME marks neither page with 0x1fff.  Its data page sets
+        // word 6 and carries the Peak/OVR records; its flag page leaves
+        // word 6 zero.  A data page read as RMS would turn playback 1's
+        // peak at word 91 into fake RMS on AN5/6 and Main's peak at word
+        // 139 into fake RMS on ADAT7/8.
+        let mut b = [0u8; UcMeterPacket::LEN];
+        b[4..8].copy_from_slice(&0u32.to_le_bytes());
+        b[6 * 2..6 * 2 + 2].copy_from_slice(&8191u16.to_le_bytes());
+        b[91 * 2..91 * 2 + 2].copy_from_slice(&12000u16.to_le_bytes());
+        b[139 * 2..139 * 2 + 2].copy_from_slice(&80u16.to_le_bytes());
+        b[180..184].copy_from_slice(&0x3fff0000u32.to_le_bytes());
+
+        let data = UcMeterPacket::parse(&b).expect("data page marker 0");
+        assert_eq!(data.playback(0) >> 16, 0x3fff);
+        assert!(UcRmsPacket::parse(&b).is_none(), "data page is not RMS");
+
+        // The same marker and word 6 zero is the flag page.
+        b[6 * 2..6 * 2 + 2].fill(0);
+        b[75 * 2..75 * 2 + 2].copy_from_slice(&16384u16.to_le_bytes());
+        assert!(UcMeterPacket::parse(&b).is_none());
+        assert!(UcRmsPacket::parse(&b).is_some(), "flag page carries RMS");
     }
 
     #[test]
