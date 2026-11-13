@@ -135,6 +135,7 @@ pub const PROFILE: DeviceProfile = DeviceProfile {
     playback_ops: PLAYBACK_OPS,
     output_ops: OUTPUT_OPS,
     globals: GLOBALS,
+    clock_sources: &[],
     preamps: PREAMPS,
     meters: METERS,
     layout: LAYOUT,

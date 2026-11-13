@@ -206,6 +206,7 @@ pub const PC: DeviceProfile = DeviceProfile {
     playback_ops: PLAYBACK_OPS,
     output_ops: OUTPUT_OPS,
     globals: GLOBALS,
+    clock_sources: &["Internal", "SPDIF Coaxial", "Optical", "Word Clock", "LTC"],
     preamps: PREAMPS,
     meters: METERS,
     layout: LAYOUT,

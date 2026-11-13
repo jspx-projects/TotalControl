@@ -332,6 +332,7 @@ pub const ISO: DeviceProfile = DeviceProfile {
     playback_ops: PLAYBACK_OPS,
     output_ops: OUTPUT_OPS,
     globals: GLOBALS,
+    clock_sources: &["Internal", "SPDIF Coaxial", "Optical", "Word Clock"],
     preamps: PREAMPS,
     meters: METERS,
     layout: LAYOUT,

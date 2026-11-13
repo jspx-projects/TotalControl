@@ -63,7 +63,10 @@ pub enum Model {
 
 impl Model {
     pub fn name(self) -> &'static str {
-        super::models::for_model(self).name
+        match self {
+            Model::Uc => "Fireface UC",
+            Model::Ucx => "Fireface UCX",
+        }
     }
 
     fn from_abi(model: u32) -> Option<Self> {
@@ -728,7 +731,7 @@ pub struct Fireface {
     transport: Arc<Mutex<Box<dyn ControlTransport>>>,
     info: DeviceInfo,
     model: Model,
-    spec: &'static super::models::ModelSpec,
+    profile: &'static crate::profile::DeviceProfile,
     inputs: Vec<InputChannel>,
     playbacks: Vec<PlaybackChannel>,
     outputs: Vec<OutputChannel>,
@@ -1168,7 +1171,6 @@ impl Fireface {
         async_writer: bool,
     ) -> Result<Self, Error> {
         let model = info.model;
-        let spec = super::models::for_personality(info.personality);
         log::info!(
             "opened {} as {} (model {:?}, ISO {})",
             info.name,
@@ -1229,7 +1231,7 @@ impl Fireface {
         }
 
         let mut settings = Scene::new("").settings;
-        settings.clock_sources = spec
+        settings.clock_sources = profile
             .clock_sources
             .iter()
             .map(|source| (*source).to_string())
@@ -1253,7 +1255,7 @@ impl Fireface {
             transport: Arc::new(Mutex::new(transport)),
             info,
             model,
-            spec,
+            profile,
             inputs,
             playbacks,
             outputs,
@@ -1321,8 +1323,23 @@ impl Fireface {
         self.info.personality
     }
 
-    pub fn spec(&self) -> &'static super::models::ModelSpec {
-        self.spec
+    pub fn profile(&self) -> &'static crate::profile::DeviceProfile {
+        self.profile
+    }
+
+    /// ALSA card id for the card that owns this hwdep node.
+    pub fn card_id(&self) -> String {
+        let path = format!("/sys/class/sound/card{}/id", self.info.card);
+        if let Ok(id) = std::fs::read_to_string(&path) {
+            let id = id.trim();
+            if !id.is_empty() {
+                return id.to_string();
+            }
+        }
+        match self.model {
+            Model::Uc => "FirefaceUC".to_string(),
+            Model::Ucx => "FirefaceUCX".to_string(),
+        }
     }
 
     /// Ignore output-volume status events for a short connect window.
@@ -1346,7 +1363,7 @@ impl Fireface {
     }
 
     fn output_order(&self) -> &'static [usize] {
-        self.spec.profile.output_order()
+        self.profile.output_order()
     }
 
     fn transport(&self) -> std::sync::MutexGuard<'_, Box<dyn ControlTransport>> {
@@ -3429,7 +3446,7 @@ impl Fireface {
         let raw = self.output_peaks(post)?;
         Some(reorder_output_meters(
             &raw,
-            self.spec.profile.output_order(),
+            self.profile.output_order(),
         ))
     }
 
@@ -3507,7 +3524,7 @@ impl Fireface {
         let raw = self.output_meters(post)?;
         Some(reorder_output_meters(
             &raw,
-            self.spec.profile.output_order(),
+            self.profile.output_order(),
         ))
     }
 
@@ -3553,7 +3570,7 @@ impl Fireface {
                 return;
             }
         }
-        let order = self.spec.profile.output_order();
+        let order = self.profile.output_order();
         let Some(idx) = uc::output_from_encoder(chan as u8, order) else {
             return;
         };
@@ -4007,7 +4024,6 @@ impl Fireface {
 
     fn display_blocks_for_pair(&self, pair: usize) -> Option<(usize, usize)> {
         let display = self
-            .spec
             .profile
             .output_order()
             .iter()
@@ -4197,31 +4213,31 @@ impl RmeDevice for Fireface {
     }
 
     fn capabilities(&self) -> crate::capabilities::DeviceCapabilities {
-        self.spec.profile.capabilities()
+        self.profile.capabilities()
     }
 
     fn protocol_features(&self) -> bool {
-        self.spec.profile.capabilities().protocol_features
+        self.profile.capabilities().protocol_features
     }
 
     fn loopback_supported(&self) -> bool {
-        self.spec.profile.capabilities().loopback
+        self.profile.capabilities().loopback
     }
 
     fn phase_supported(&self) -> bool {
-        self.spec.profile.capabilities().phase
+        self.profile.capabilities().phase
     }
 
     fn output_balance_supported(&self) -> bool {
-        self.spec.profile.capabilities().output_balance
+        self.profile.capabilities().output_balance
     }
 
     fn stereo_split_supported(&self) -> bool {
-        self.spec.profile.capabilities().stereo_split
+        self.profile.capabilities().stereo_split
     }
 
     fn class_compliant(&self) -> bool {
-        self.spec.profile.capabilities().class_compliant
+        self.profile.capabilities().class_compliant
     }
 
     fn is_connected(&self) -> bool {
@@ -4233,7 +4249,7 @@ impl RmeDevice for Fireface {
     }
 
     fn output_display_order(&self) -> Vec<usize> {
-        self.spec.profile.output_order().to_vec()
+        self.profile.output_order().to_vec()
     }
 
     fn matrix_uses_display_order(&self) -> bool {

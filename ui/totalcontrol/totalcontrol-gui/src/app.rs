@@ -902,20 +902,20 @@ impl DeviceHandle {
 
     /// ALSA card id used by `/proc/asound/card*/id`; must match the
     /// kernel driver's `snd_card_set_id`, not the display name.
-    pub fn card_id(&self) -> &'static str {
+    pub fn card_id(&self) -> String {
         match self {
             DeviceHandle::Mock(d) => {
                 if d.is_uc() {
-                    "FirefaceUC"
+                    "FirefaceUC".to_string()
                 } else {
-                    "FirefaceUCX"
+                    "FirefaceUCX".to_string()
                 }
             }
-            DeviceHandle::Mirror(d) => d.info().card_id,
+            DeviceHandle::Mirror(d) => d.info().card_id.clone(),
             #[cfg(feature = "alsa")]
-            DeviceHandle::Fireface(d) => d.spec().card_id,
+            DeviceHandle::Fireface(d) => d.card_id(),
             #[cfg(feature = "alsa")]
-            DeviceHandle::BabyfaceClassic(_) => "Babyface",
+            DeviceHandle::BabyfaceClassic(_) => "Babyface".to_string(),
         }
     }
 
@@ -3993,7 +3993,7 @@ fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
         .is_some()
         .then_some((rate, Instant::now()));
     state.engine = pw_clock::read();
-    state.card_stream = pw_clock::card_stream(state.device.card_id());
+    state.card_stream = pw_clock::card_stream(&state.device.card_id());
     state.startup_scene = Some(scene.clone());
     state.startup_scene_full_rewrite = true;
     state.startup_scene_due = Some(Instant::now() + Duration::from_millis(1_500));
@@ -5052,7 +5052,7 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
         state.pending_device_rate = None;
     }
     state.engine = pw_clock::read();
-    state.card_stream = pw_clock::card_stream(state.device.card_id());
+    state.card_stream = pw_clock::card_stream(&state.device.card_id());
 }
 
 /// Replace `clock.allowed-rates` with the connected device's list, saving the
@@ -5182,7 +5182,7 @@ pub fn restore_engine(state: &mut TotalControl) {
         }
     }
     state.engine = pw_clock::read();
-    state.card_stream = pw_clock::card_stream(state.device.card_id());
+    state.card_stream = pw_clock::card_stream(&state.device.card_id());
     // The scene was just written, but at the rate the card had before the
     // stream opens.  The unit reloads its stored mixer when the stream starts
     // (the `#70` case), so queue the same full rewrite a runtime rate change
@@ -10954,7 +10954,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     log::warn!("Setting the PipeWire buffer size failed: {e}");
                 }
                 state.engine = pw_clock::read();
-                state.card_stream = pw_clock::card_stream(state.device.card_id());
+                state.card_stream = pw_clock::card_stream(&state.device.card_id());
             }
         }
         Message::HostVolumeUnity => {
@@ -10981,7 +10981,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     };
                     (
                         pw_clock::read(),
-                        pw_clock::card_stream(card_id),
+                        pw_clock::card_stream(&card_id),
                         sink_running,
                         host_volume,
                     )
@@ -22474,7 +22474,7 @@ mod tests {
             let _ = update(&mut state, Message::Tick);
         }
 
-        let after_rate = totalcontrol_core::pw_clock::card_stream(state.device.card_id())
+        let after_rate = totalcontrol_core::pw_clock::card_stream(&state.device.card_id())
             .map(|s| s.rate)
             .or_else(|| state.engine.map(|e| e.effective_rate()))
             .unwrap_or(0);
