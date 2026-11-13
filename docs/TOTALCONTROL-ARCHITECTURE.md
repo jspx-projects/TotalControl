@@ -109,13 +109,14 @@ the controls that connection can drive.
 | Variant | Transport | Support |
 |---|---|---|
 | `Fireface` | Fireface UC/UCX over the kernel hwdep node | production |
-| `BabyfaceClassic` | Babyface-classic over the kernel hwdep node | minimal support |
+| `BabyfaceClassic` | Babyface-classic over the kernel hwdep node | experimental |
 | `Mirror` | UI-side copy owned by the device service | production |
 | `Mock` | simulation | development and tests |
 
 Every variant implements `RmeDevice`. The production installation is the
 kernel driver plus hwdep path. Supported devices are those exposed through
-that path: Fireface UC, Fireface UCX and Babyface-classic.
+that path: Fireface UC and Fireface UCX, with experimental Babyface-classic
+support.
 
 ## 5. Device service and mirror
 

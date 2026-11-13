@@ -1,7 +1,7 @@
 # Contributing to TotalControl
 
-TotalControl supports the Fireface UC, Fireface UCX and Babyface-classic
-through the kernel hwdep interface. Contributions that keep the device model,
+TotalControl supports the Fireface UC and Fireface UCX, with experimental
+Babyface-classic support, through the kernel hwdep interface. Contributions that keep the device model,
 the protocol specifications and the UI consistent are welcome.
 
 ## Development setup

@@ -53,8 +53,8 @@ reduced control set.
 - A kernel with matching headers and DKMS for the driver.
 - Rust and the build dependencies for the source or RPM build.
 
-The supported devices are the Fireface UC and Fireface UCX. The
-Babyface-classic uses the same kernel driver and is supported for the controls
+The supported devices are the Fireface UC and Fireface UCX. Babyface-classic
+support is experimental: it uses the same kernel driver and covers the controls
 described in its protocol specification.
 
 The source and RPM paths below are alternatives.  Use the source path to work

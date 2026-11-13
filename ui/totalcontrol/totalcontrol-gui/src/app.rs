@@ -271,7 +271,7 @@ impl DeviceKind {
             DeviceKind::Fireface => "Fireface (auto)",
             DeviceKind::Ucx => "Fireface UCX",
             DeviceKind::Uc => "Fireface UC",
-            DeviceKind::BabyfaceClassic => "Babyface-classic",
+            DeviceKind::BabyfaceClassic => "Babyface-classic (experimental)",
             DeviceKind::MockUcx => "Fireface UCX (simulated)",
             DeviceKind::MockUc => "Fireface UC (simulated)",
         }

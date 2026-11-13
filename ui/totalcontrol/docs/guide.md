@@ -68,8 +68,9 @@ Pro Audio profile and keeps ALSA scheduling polled.
 
 ## Status
 
-- The supported devices are the Fireface UC, Fireface UCX and Babyface-classic.
-  All three use the in-tree kernel driver and the hwdep control node.
+- The supported devices are the Fireface UC and Fireface UCX. Babyface-classic
+  support is experimental; all three use the in-tree kernel driver and the
+  hwdep control node.
 - The UC and UCX control paths are hardware-validated, including preamps,
   routing, EQ, dynamics, FX and device meters.
 - The Babyface-classic path is hardware-validated for the channel model,

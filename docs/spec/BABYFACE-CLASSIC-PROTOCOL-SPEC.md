@@ -1,5 +1,7 @@
 # Babyface-classic protocol specification
 
+Support status: experimental.
+
 This document defines the native-mode USB transport, PCM streams, channel
 model, mixer writes, preamps, metering and hwdep ABI of the Babyface-classic as
 implemented by `snd-fireface-uc` and the `BabyfaceClassic` backend.

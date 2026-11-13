@@ -20,8 +20,8 @@ Routing, gains, monitoring, EQ, FX sends and scenes for RME interfaces,
 without the Windows software. Reverse-engineered from the vendor protocol and
 validated on real hardware.
 
-> **Supported today:** the Fireface UC and Fireface UCX, plus the
-> Babyface-classic through the same kernel driver.
+> **Supported today:** the Fireface UC and Fireface UCX. Babyface-classic
+> support is experimental.
 
 - **Three views**: Quick, Mixer and Matrix
 - **The whole DSP mixer**: preamp, trim, EQ, width, loopback, mute/solo groups

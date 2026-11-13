@@ -22,7 +22,7 @@ specification per device, an OSC specification and a user manual.
 |---|---|
 | [`spec/FIREFFACE-UCX-PROTOCOL-SPEC.md`](spec/FIREFFACE-UCX-PROTOCOL-SPEC.md) | Fireface UCX |
 | [`spec/FIREFFACE-UC-PROTOCOL-SPEC.md`](spec/FIREFFACE-UC-PROTOCOL-SPEC.md) | Fireface UC |
-| [`spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md`](spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md) | Babyface-classic |
+| [`spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md`](spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md) | Babyface-classic (experimental) |
 
 ## Layout reference files
 

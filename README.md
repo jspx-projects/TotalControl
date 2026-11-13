@@ -1,14 +1,14 @@
 # TotalControl and the Fireface driver for Linux
 
-Native Linux support for the RME Fireface UC, UCX and Babyface-classic in
-normal RME vendor mode. TotalControl: give linux users total control over
+Native Linux support for the RME Fireface UC and UCX, with experimental
+Babyface-classic support, in normal RME vendor mode. TotalControl: give linux users total control over
 their RME devices.
 
 ![The TotalControl mixer and Control Room driving a Fireface UCX, with the EQ and dynamics panels, sends, and the reverb and echo panels open](ui/totalcontrol/docs/screenshots/mixer-ucx-2026-11.png)
 
 ## Functionality
 
-- **Fireface UC, Fireface UCX and Babyface-classic support.**
+- **Fireface UC and Fireface UCX support, with experimental Babyface-classic support.**
 - **Complete mixer with Control room** Mixer with channel strips that slide their panels in and out, EQ and dynamics (for the UCX).
 - **MIDI in and out over USB.** 
 - **Full OSC support.**  We support two RME OSC dialects: Classic and Global OSC, they can be used to control the complete mixer
