@@ -542,13 +542,16 @@ dBFS  = 20 × log10(level / 0x800000)
 over  = record & 0xff
 ```
 
-The over byte is a count, not a half-dB value and not a nibble tag.  A
-controlled S/PDIF loop with 1, 2, 4, 8 and 12 full-scale samples per
-48-sample period read `0x01`, `0x02`, `0x04`, `0x08` and `0x0c`; higher
-densities drive the field into saturation.  The 24-bit level saturates at
-`0x7fffff`, and the over LED uses the count against the global
-**Full scale samples for OVR** preference.  The `0x00001fff` filler has a
-level below the meter's floor and is no data, not a level.
+The over byte is a full-scale-sample count/ratio, not a half-dB value and
+not a fixed nibble tag.  A controlled S/PDIF loop with 1, 2, 4, 8 and 12
+full-scale samples per 48-sample period read `0x01`, `0x02`, `0x04`,
+`0x08` and `0x0c`; the low nibble tracks the run length up to 15 and the
+field saturates at higher densities.  The high-nibble packing beyond that
+point is still being mapped; it is not a 0..6 dB / 12-step field.  The
+24-bit level saturates at `0x7fffff`, and the over LED uses the count
+against the global **Full scale samples for OVR** preference.  The
+`0x00001fff` filler has a level below the meter's floor and is no data,
+not a level.
 
 ### Input RMS words
 
