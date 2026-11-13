@@ -697,9 +697,10 @@ views of one value. The echo block also shows the FX bus level meters.
 
 ## 10. Control Room
 
-The Control Room section sits at the right of the Hardware Outputs row. It
-turns ordinary hardware outputs into monitoring destinations with fixed
-names: `Main`, `Speaker B` and `Phones 1–4`. Every hardware output is either
+On the UCX the Control Room section sits at the right of the Hardware Outputs
+row. The UC and Babyface-classic currently omit it until their host-side
+Control Room writes are mapped. It turns ordinary hardware outputs into
+monitoring destinations with fixed names: `Main`, `Speaker B` and `Phones 1–4`. Every hardware output is either
 assigned in the Control Room or remains an ordinary output in the Hardware
 Outputs row; there are no empty slots.
 
@@ -973,7 +974,9 @@ saves the complete host-side configuration described in section 13, and
 contains the built-in `Factory Workspaces` layouts.
 
 The `OPTIONS` menu contains `Audio Config`, `TotalControl`, `Control Room`
-and `Reset Mix`, in that order.
+and `Reset Mix`, in that order. `Control Room` is shown for models whose
+Control Room path is implemented; the UC and Babyface-classic currently omit it
+until their monitoring writes are mapped.
 
 `Reset Mix` lists the standard mixes:
 

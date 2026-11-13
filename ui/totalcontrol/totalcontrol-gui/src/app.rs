@@ -12690,6 +12690,14 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     menu_below_top_bar(card.into(), 390.0, Message::CloseWorkspace, scale)
 }
 
+/// Whether the Control Room menu and settings are meaningful for the active
+/// backend. The UC and Babyface-classic Control Room paths are not mapped yet;
+/// keep them out of the UI until the host-side monitoring and Talkback writes
+/// are implemented. The mixer section uses the same capability gate.
+fn control_room_available(state: &TotalControl) -> bool {
+    state.device.capabilities().protocol_features
+}
+
 /// The top-bar Options menu.  Root groups the device audio configuration,
 /// app-level settings, Control Room settings and the Reset Mix submenu.
 fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
@@ -12719,13 +12727,15 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
                     "TotalControl".into(),
                     Message::OptionsSettings,
                     true,
-                ))
-                .push(item(
+                ));
+            if control_room_available(state) {
+                card = card.push(item(
                     "Control Room".into(),
                     Message::OpenControlRoomSettings,
                     true,
-                ))
-                .push(item("Reset Mix  ▸".into(), Message::OptionsReset, true));
+                ));
+            }
+            card = card.push(item("Reset Mix  ▸".into(), Message::OptionsReset, true));
         }
         OptionsMenu::Reset => {
             card = card.push(item("‹  Reset Mix".into(), Message::OptionsBack, true));
@@ -19684,6 +19694,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 mod tests {
     use super::{
         any_channel_muted, any_channel_soloed, apply_control_room_assignments, apply_host_settings,
+        control_room_available,
         apply_pending_resize, apply_startup_sync, apply_workspace, apply_workspace_gui,
         attach_device_service, capture_workspace, channel_is_muted, channel_is_soloed,
         channel_parity, channel_trim, channel_with_parity, choose_startup_kind,
@@ -20336,6 +20347,20 @@ mod tests {
         assert_eq!(format!("{:?}", state.view), view_before);
         assert_eq!(state.device.outputs()[0].volume, volume_before);
         assert!(state.show_settings);
+    }
+
+    #[test]
+    fn control_room_menu_is_limited_to_mapped_models() {
+        let ucx = new(true, None, None);
+        assert!(control_room_available(&ucx));
+
+        let mut uc = new(true, None, None);
+        uc.device = DeviceHandle::open_mock_uc();
+        assert!(!control_room_available(&uc));
+
+        let mut babyface = new(true, None, None);
+        babyface.device = DeviceHandle::open_mock_classic();
+        assert!(!control_room_available(&babyface));
     }
 
     #[test]
