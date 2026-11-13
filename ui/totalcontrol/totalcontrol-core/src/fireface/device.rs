@@ -338,6 +338,9 @@ struct UcMeterBank {
     playback: [f32; 18],
     playback_rms: [f32; 18],
     output: [f32; 18],
+    /// Device output RMS (the flag page's truncated power bank); only
+    /// channels 0..3 carry device RMS, all others default 0.
+    output_rms: [f32; 18],
     playback_ovr: [bool; 18],
     output_ovr: [bool; 18],
 }
@@ -349,6 +352,7 @@ impl Default for UcMeterBank {
             playback: [f32::NEG_INFINITY; 18],
             playback_rms: [0.0; 18],
             output: [f32::NEG_INFINITY; 18],
+            output_rms: [0.0; 18],
             playback_ovr: [false; 18],
             output_ovr: [false; 18],
         }
@@ -356,11 +360,14 @@ impl Default for UcMeterBank {
 }
 
 impl UcMeterBank {
-    fn merge(slot: &mut [f32], channel: usize, record: u32, analog: bool) {
-        // A zero record is a real silence reading; release the channel.
-        // A no-data record (the 0x1fff filler, packet noise outside the
-        // meter's own range) means the detector did not refresh this
-        // channel, so the held value stays.
+    /// A data-page record replaces the held level: the record refreshes
+    /// every page with the detector's current value (verified on hardware:
+    /// records rise and fall page by page, 197 down-moves vs 178 up-moves
+    /// on one stream).  A zero record is a real silence reading; release.
+    /// A no-data record (the `0x1fff`/`0x47ffff` filler, packet noise
+    /// outside the meter's own range) means the detector did not refresh
+    /// this channel, so the held value stays.
+    fn set_level(slot: &mut [f32], channel: usize, record: u32, analog: bool) {
         if record == 0 {
             slot[channel] = f32::NEG_INFINITY;
             return;
@@ -371,21 +378,20 @@ impl UcMeterBank {
             protocol::uc_digital_dbfs(record)
         };
         if let Some(db) = db {
-            if db > slot[channel] {
-                slot[channel] = db;
-            }
+            slot[channel] = db;
         }
     }
 
-    fn merge_playback(slot: &mut [f32], channel: usize, record: u32) {
+    /// Set a UC Peak/OVR record the same way.  Playback and hardware-output
+    /// records use the same shape: the low word is OVR and the high word is
+    /// a linear 16-bit Peak, so the level decoder reads the upper word.
+    fn set_peak(slot: &mut [f32], channel: usize, record: u32) {
         if record == 0 {
             slot[channel] = f32::NEG_INFINITY;
             return;
         }
         if let Some(db) = protocol::uc_playback_dbfs(record) {
-            if db > slot[channel] {
-                slot[channel] = db;
-            }
+            slot[channel] = db;
         }
     }
 
@@ -395,14 +401,14 @@ impl UcMeterBank {
         // their own channel map is verified against a loopback capture.
         for channel in 0..8 {
             let record = packet.analog_input(channel);
-            Self::merge(&mut self.input, channel, record, true);
+            Self::set_level(&mut self.input, channel, record, true);
         }
         for channel in 0..18 {
             let record = packet.playback(channel);
-            Self::merge_playback(&mut self.playback, channel, record);
+            Self::set_peak(&mut self.playback, channel, record);
             self.playback_ovr[channel] = packet.playback_ovr(channel);
             let record = packet.output(channel);
-            Self::merge(&mut self.output, channel, record, false);
+            Self::set_peak(&mut self.output, channel, record);
             self.output_ovr[channel] = packet.output_ovr(channel);
         }
     }
@@ -411,6 +417,10 @@ impl UcMeterBank {
         for channel in 0..18 {
             self.playback_rms[channel] =
                 protocol::uc_playback_rms_linear(packet.playback(channel));
+        }
+        for channel in 0..protocol::UC_OUTPUT_RMS_CHANNELS {
+            self.output_rms[channel] =
+                protocol::uc_playback_rms_linear(packet.output(channel));
         }
     }
 
@@ -435,6 +445,17 @@ impl UcMeterBank {
 
     fn output(&self, channel: usize) -> f32 {
         self.level(self.output[channel])
+    }
+
+    /// The row bar's level.  Channels 0..3 take the device's own output
+    /// RMS (the flag page's truncated bank); the other channels have no
+    /// published RMS and fall back to the post-fader meter record.
+    fn output_rms(&self, channel: usize) -> f32 {
+        if channel < protocol::UC_OUTPUT_RMS_CHANNELS {
+            self.output_rms[channel]
+        } else {
+            self.output(channel)
+        }
     }
 
     /// The record is the detector's held level per channel, so the peak
@@ -3218,7 +3239,13 @@ impl Fireface {
             ),
             Model::Uc => Some(
                 (0..self.outputs.len())
-                    .map(|i| self.uc_meters.output(i))
+                    .map(|i| {
+                        if i < protocol::UC_OUTPUT_RMS_CHANNELS {
+                            self.uc_meters.output_rms[i]
+                        } else {
+                            self.uc_output_estimated_rms(i)
+                        }
+                    })
                     .collect(),
             ),
         }
@@ -3337,6 +3364,43 @@ impl Fireface {
     /// The device reports them in display/DSP order (AN1/2 first), so the
     /// profile's display order maps each pair back.  Used by the GUI when
     /// the unit supplies real post-fader meters.
+    /// Post-fader level for output channels whose meter feed has no device
+    /// RMS word (channels 4..17: AN5..ADAT8).  The `0x85` stream publishes
+    /// output RMS only for channels 0..3, so this is a host-side
+    /// approximation of the TotalMix post-fader meter: the power sum of
+    /// every routed source's device level scaled by its matrix cell gain
+    /// and the pair's own `0x1a` out fader.  Analog input records are peak
+    /// values, so a sine-weighted peak/√2 stands in until an input RMS
+    /// word is found.  The approximation is documented in the user manual;
+    /// the device feed for these rows remains an open question.
+    fn uc_output_estimated_rms(&self, channel: usize) -> f32 {
+        if self.outputs[channel].mute {
+            return 0.0;
+        }
+        let mut power = 0.0f32;
+        for source in 0..36 {
+            let Some(source_channel) = Self::matrix_source_channel(source) else {
+                continue;
+            };
+            let Some(gain) = self.cell_gain(source_channel, channel) else {
+                continue;
+            };
+            if gain <= 0.0 {
+                continue;
+            }
+            let level = match source_channel {
+                ChannelId::Input(i) => {
+                    self.uc_meters.level(self.uc_meters.input[i]) * 0.5f32.sqrt()
+                }
+                ChannelId::Playback(i) => self.uc_meters.playback_rms[i],
+                ChannelId::Output(_) => continue,
+            };
+            let scaled = level * gain * self.outputs[channel].volume;
+            power += scaled * scaled;
+        }
+        power.sqrt()
+    }
+
     pub fn output_meters_internal(&self, post: bool) -> Option<Vec<f32>> {
         let raw = self.output_meters(post)?;
         Some(reorder_output_meters(
@@ -8969,8 +9033,9 @@ mod tests {
         bytes[181] = 0x00;
         bytes[183] = 0x42; // crude write of the low half; the high half below
         let full = (level << 8) | 0x00; bytes[180..184].copy_from_slice(&full.to_le_bytes());
-        // Output AN1 record at exactly 0 dBFS with the over tag saturated.
-        bytes[252..256].copy_from_slice(&0x7fffff0fu32.to_le_bytes());
+        // Output AN1 record: low word OVR, high word linear Peak.  Peak
+        // 0x7fff is 0 dBFS; the OVR word is the no-over filler.
+        bytes[252..256].copy_from_slice(&0x7fff0000u32.to_le_bytes());
         let packet = UcMeterPacket::parse(&bytes).expect("meter page");
         dev.uc_meters.apply(&packet);
 
@@ -8987,17 +9052,53 @@ mod tests {
         let playback = dev.playback_meters().expect("UC playback meters");
         assert!((playback[0] - 0.5012).abs() < 0.02, "playback 1 RMS at -6.0 dBFS");
         let outputs = dev
-            .output_meters_internal(true)
-            .expect("UC output meters");
-        assert!((outputs[0] - 1.0).abs() < 1e-6, "AN1 out at 0 dBFS");
-        // Over 0 dBFS the record saturates with the over tag; apply again.
+            .output_peaks_internal(true)
+            .expect("UC output peak line");
+        assert!(
+            (outputs[0] - 32767.0 / 32768.0).abs() < 1e-6,
+            "AN1 out peak at 0 dBFS, got {:?}",
+            outputs
+        );
+        // The hardware RMS bank only reaches output channels 0..3, so a
+        // row bar without a flag-page RMS update must read silence there
+        // while a channel beyond the bank falls back to the peak record.
+        let bars = dev.output_meters_internal(true).expect("UC output bars");
+        assert_eq!(bars[0], 0.0, "AN1 out without flag RMS reads silence");
+        // OVR is the low word of the same record and does not change the
+        // Peak level.  The high byte is the event and the low byte is the
+        // RMS over amount.
         let mut bytes2 = bytes;
         bytes2[256..260].copy_from_slice(&0x7fffff2fu32.to_le_bytes());
         let packet2 = UcMeterPacket::parse(&bytes2).expect("meter page");
         dev.uc_meters.apply(&packet2);
-        let over = dev.output_meters_internal(true).expect("UC over meters");
-        // Over tag 2 counts two over steps: 2 * 6.0206/15 dB above full scale.
-        assert!((over[1] - 10f32.powf(2.0 * 6.0206 / 15.0 / 20.0)).abs() < 1e-5);
+        let over = dev.output_peaks_internal(true).expect("UC over meters");
+        assert!(
+            (over[1] - 32767.0 / 32768.0).abs() < 1e-6,
+            "Peak stays at 0 dBFS"
+        );
+        assert!(dev.output_ovr().unwrap()[1]);
+    }
+
+    #[test]
+    fn uc_output_peak_word_is_linear_16_bit() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut bytes = [0u8; UcMeterPacket::LEN];
+        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // Output channel 6 is Phones 7, the left of pair 3 (Out 7/8).  The
+        // record starts at word 138: the low word is OVR (`0x0100`, no
+        // over), the high word is Peak 80.
+        bytes[276..278].copy_from_slice(&0x0100u16.to_le_bytes());
+        bytes[278..280].copy_from_slice(&80u16.to_le_bytes());
+        let packet = UcMeterPacket::parse(&bytes).expect("meter page");
+        dev.uc_meters.apply(&packet);
+
+        // The record's Peak word is the peak line's device feed for all
+        // eighteen outputs, independent of the truncated RMS bank.
+        let peaks = dev
+            .output_peaks_internal(true)
+            .expect("UC output peak line");
+        assert!((peaks[6] - 80.0 / 32768.0).abs() < 1e-6);
+        assert!(!dev.output_ovr().unwrap()[6]);
     }
 
     #[test]
@@ -9023,6 +9124,43 @@ mod tests {
     }
 
     #[test]
+    fn uc_flag_page_rms_carries_first_four_outputs() {
+        let (mut dev, _writes) = open(Model::Uc);
+        // Bank words 147/151/155/159 are the RMS power words of output
+        // channels 0..3; the page ends before channel 4's own slot, so
+        // AN5..ADAT8 have no device RMS and their row bar uses the
+        // host-side post-fader estimate from the routed sources.
+        dev.set_matrix_cell(ChannelId::Playback(0), 4, 1.0).unwrap();
+        // The estimate includes the pair's own 0x1a out fader; put it at
+        // 0 dB for a clean 1.0 scale.
+        dev.set_volume(ChannelId::Output(4), 0, 1.0).unwrap();
+        let mut flag = [0u8; UcMeterPacket::LEN];
+        flag[4..8].copy_from_slice(&1u32.to_le_bytes());
+        // Playback 1's RMS bank word (left) is routed to AN5's estimate.
+        flag[75 * 2..75 * 2 + 2].copy_from_slice(&8192u16.to_le_bytes());
+        for (i, word) in [8192u16, 4096u16, 2048u16, 1024u16].iter().enumerate() {
+            let off = (147 + 4 * i) * 2;
+            flag[off..off + 2].copy_from_slice(&word.to_le_bytes());
+        }
+        let rms = UcRmsPacket::parse(&flag).expect("flag page");
+        dev.uc_meters.apply_rms(&rms);
+        let bars = dev.output_meters_internal(true).expect("UC output bars");
+        assert!((bars[0] - 0.5).abs() < 1e-3, "AN1 out RMS {:?}", bars);
+        assert!((bars[1] - 0.35355339).abs() < 1e-6, "AN2 out RMS");
+        assert!((bars[2] - 0.25).abs() < 1e-6, "AN3 out RMS");
+        assert!((bars[3] - 0.1767767).abs() < 1e-6, "AN4 out RMS");
+        // Output channels 4..17 have no device RMS: the row bar is the
+        // host-side post-fader estimate from the routed sources (routed
+        // playback 1 left at 0 dB with source RMS 0.5; the flag test
+        // seeded all RMS banks before this run).
+        assert!(
+            (bars[4] - 0.5f32).abs() < 1e-3,
+            "AN5 out estimate = routed playback 1 RMS, got {:?}",
+            bars
+        );
+    }
+
+    #[test]
     fn uc_playback_matrix_uses_display_columns() {
         let (mut dev, writes) = open(Model::Uc);
         // Matrix column 1 is AN3/4; playback 1 left = source 18, raw block 2.
@@ -9030,6 +9168,61 @@ mod tests {
         let w = writes.lock().unwrap();
         let (value, index) = uc::matrix_word(0.5, 2 * 36 + 18);
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+    }
+
+    #[test]
+    fn uc_meter_record_replace_hold_release() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut data = [0u8; UcMeterPacket::LEN];
+        data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // Output Phones 7 (record 42): -20 dBFS first.
+        data[276..280]
+            .copy_from_slice(&((0x420000u32 - 0x8000u32 * 20 / 6) << 8).to_le_bytes());
+        dev.uc_meters
+            .apply(&UcMeterPacket::parse(&data).expect("data page"));
+        let high = dev.output_meters_internal(true).expect("UC output meters")[6];
+        // A lower record replaces the level; else the VU freezes at the max.
+        let low_record = ((0x420000u32 - 0x8000u32 * 40 / 6) << 8) as u32;
+        data[276..280].copy_from_slice(&low_record.to_le_bytes());
+        dev.uc_meters
+            .apply(&UcMeterPacket::parse(&data).expect("data page"));
+        let low = dev.output_meters_internal(true).expect("UC output meters")[6];
+        assert!(
+            low + 20.0 * (0.5f32).log10() < high + 0.05,
+            "a lower record must replace, got high {high} low {low}"
+        );
+        // A zero record is silence and releases the channel.  Keep another
+        // record non-zero so the page still parses (a page whose whole
+        // record region reads zero is a filler page).
+        data[276..280].copy_from_slice(&0u32.to_le_bytes());
+        data[108+4*30..112+4*30].copy_from_slice(&1u32.to_le_bytes());
+        dev.uc_meters
+            .apply(&UcMeterPacket::parse(&data).expect("data page"));
+        let silent = dev.output_meters_internal(true).expect("UC output meters")[6];
+        assert_eq!(silent, 0.0, "record zero releases the channel");
+
+        // Analog input records: a record outside the verified level window
+        // is packet noise, not a level; the held value stays.  (Verified on
+        // hardware: the noise band sits below u = 6740.)
+        let mut an = [0u8; UcMeterPacket::LEN];
+        an[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        an[108..112].copy_from_slice(&((7035u32 << 16) as u32).to_le_bytes());
+        dev.uc_meters
+            .apply(&UcMeterPacket::parse(&an).expect("data page"));
+        let settled = dev.meters().expect("UC input meters")[0];
+        assert!(settled > 0.0, "a valid analog record gives a level");
+        an[108..112].copy_from_slice(&(0x9000u32 << 16).to_le_bytes());
+        dev.uc_meters
+            .apply(&UcMeterPacket::parse(&an).expect("data page"));
+        let held = dev.meters().expect("UC input meters")[0];
+        assert_eq!(held, settled, "packet noise must hold the last value");
+        // A zero analog record is silence and releases.
+        an[108..112].copy_from_slice(&0u32.to_le_bytes());
+        an[108+120..112+120].copy_from_slice(&1u32.to_le_bytes());
+        dev.uc_meters
+            .apply(&UcMeterPacket::parse(&an).expect("data page"));
+        let silent = dev.meters().expect("UC input meters")[0];
+        assert_eq!(silent, 0.0, "record zero releases the channel");
     }
 
     #[test]
