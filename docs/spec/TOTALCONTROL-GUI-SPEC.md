@@ -1017,11 +1017,13 @@ rather than shown inert.
 
 Below the device group, the host engine group shows the PipeWire rate,
 quantum and latency when the sound server owns the rate. `Quantum` is the
-graph quantum, one ALSA period; the `Latency` line shows the resulting ring,
-USB queue and device lead. It also shows the Fireface sink's host volume in
-percent and dB, with a `0 dB` action. The host volume is an attenuation before
-the interface, so it lowers the playback meters by the same amount; the
-interface's own faders remain the monitoring level.
+graph quantum, one ALSA period; the `Latency` line shows the round-trip
+estimate (USB queue, device lead, converter and one graph period). The UC
+uses its own measured queue and the UCX uses its feedback-delay queue. It
+also shows the Fireface sink's host volume in percent and dB, with a `0 dB`
+action. The host volume is an attenuation before the interface, so it lowers
+the playback meters by the same amount; the interface's own faders remain
+the monitoring level.
 
 The rate control offers `Auto (PipeWire)`, `Follow SW playback 1/2` and the
 connected device's fixed rates: 32, 44.1, 48, 64, 88.2, 96, 128, 176.4 and
@@ -1045,13 +1047,21 @@ connected device's nine rates, keeping the previous value. On disconnect or a
 clean exit it restores that value if the list is still the one it wrote. No
 persistent PipeWire configuration file is installed.
 
-`Errors` lists the driver transport faults since the sheet opened or the
-last `reset`, one row per type: `usb` (URB status errors), `urb` (URB resubmit
-errors), `gaps` (the USB queue ran dry), `short` (short packets), `recover`
-(engine recoveries) and `events` (dropped driver events). `usb`, `gaps` and
-`short` show input/output as `in / out`; `urb`, `recover` and `events` are
-single values. A non-zero row is a fault; the section is absent when the
-backend does not expose counters.
+Above the driver rows, `Xruns (PipeWire)` counts the PipeWire graph xruns
+for the RME output node, sampled once a second while the drawer is open.
+It is reset with the same button as the driver rows.
+
+`Driver errors` lists the kernel USB transport counters since the sheet
+opened or the last `reset`: `usb` (USB status errors), `urb` (URB
+submission/completion errors), `gaps` (missing packets), `short` (short
+packets), `short — rate switch` (expected during a sample-rate change),
+`recover` (driver recoveries). `usb`, `gaps`, `short` and the rate-switch
+row show `in / out`; `urb` and `recover` are single values. `in` is
+device-to-host (capture), `out` is host-to-device (playback); the host is
+the computer. A rate-switch burst is amber, a real error red. `Host event
+drops` is below the driver rows: the kernel hwdep event queue was full and
+the application reader fell behind. It is not a USB fault. The section is
+absent when the backend does not expose counters.
 
 ## 5. Equalizer panel
 
@@ -1740,13 +1750,31 @@ applied to the running device on `OK`.
 
 ## 13. Latency display
 
-The Settings panel shows the application/ALSA latency budget and its terms:
-the host ring, USB queue, device lead and converter. The buffer-size picker
-sets the graph quantum. The formulas and the device-side model are in
+The Settings panel shows the round-trip latency estimate and its terms:
+USB queue, device lead, converter and one graph period. The buffer-size
+picker sets the graph quantum. The UC and UCX use the same structure with
+their own queue parameters; the UC is labelled ±1.5 ms and the UCX ±1.2 ms.
+The formulas and the device-side model are in
 [`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §10.
 
 The displayed line is an estimate, not a measured acoustic round trip. The
-panel labels it accordingly and keeps the four terms visible.
+panel labels it accordingly and keeps the terms visible. A full-duplex UC
+loopback measurement (output 5 to input 5) is recorded in
+`docs/work/UC-RTL-LOOPBACK.md`.
+
+Below it, **Xruns (PipeWire)** shows the PipeWire graph xrun count for the
+RME output node, above the driver rows. It is sampled once a second while
+the drawer is open and reset with the driver baselines.
+
+**Driver errors** lists the USB transport counters: `usb` (status errors),
+`urb` (URB errors), `gaps` (missing packets), `short` (short packets) and
+`recover` (driver recovery). `in` is device→host and `out` is host→device;
+`usb`, `gaps` and `short` show both. A rate-change short burst is shown as
+`short — rate switch`, expected and shown in amber; the rate-switch row
+accumulates expected bursts since reset, while the `short` row restarts after
+each switch. **Host event drops** is outside the driver group: it is
+the application's hwdep reader falling behind. Tooltips are short; the
+manual carries the full explanation.
 
 ## 14. State references
 
