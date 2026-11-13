@@ -5320,11 +5320,6 @@ impl RmeDevice for Fireface {
     }
 
     fn set_dim_with(&mut self, on: bool, amount_db: f32) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Dim is not decoded on the UC".into(),
-            ));
-        }
         let amount_db = amount_db.clamp(-65.0, 0.0);
         self.settings.dim_amount_db = amount_db;
         if on == self.settings.dim {
@@ -5363,7 +5358,9 @@ impl RmeDevice for Fireface {
                 self.set_volume(ChannelId::Output(saved_pair * 2), 0, left_level)?;
                 self.set_volume(ChannelId::Output(saved_pair * 2 + 1), 0, right_level)?;
             }
-            self.write_word(ucx::global::DIM, 0)?;
+            if !self.is_uc() {
+                self.write_word(ucx::global::DIM, 0)?;
+            }
             self.settings.dim = false;
             self.settings.dim_saved.clear();
             return Ok(());
@@ -5408,17 +5405,14 @@ impl RmeDevice for Fireface {
             self.set_volume(ChannelId::Output(pair * 2), 0, dim(left_level))?;
             self.set_volume(ChannelId::Output(pair * 2 + 1), 0, dim(right_level))?;
         }
-        self.write_word(ucx::global::DIM, 1)?;
+        if !self.is_uc() {
+            self.write_word(ucx::global::DIM, 1)?;
+        }
         self.settings.dim = true;
         Ok(())
     }
 
     fn set_main_recall(&mut self, db: f32) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Recall is not decoded on the UC".into(),
-            ));
-        }
         let Some(pair) = self.settings.main_out else {
             return Err(Error::InvalidChannel(
                 "Recall needs an assigned Main Out".into(),
@@ -5461,15 +5455,14 @@ impl RmeDevice for Fireface {
     /// only the monitor state word changes.  `0xNN02` bit 1 means
     /// monitor-muted, not "this pair is Main".
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Assign is not decoded on the UC".into(),
-            ));
-        }
         if let Some(pair) = pair {
             if pair >= BLOCKS / 2 {
                 return Err(Error::InvalidChannel(format!("output pair {pair}")));
             }
+        }
+        if self.is_uc() {
+            self.settings.main_out = pair;
+            return Ok(());
         }
         let previous = self.settings.main_out;
         if previous == pair {
@@ -5504,15 +5497,17 @@ impl RmeDevice for Fireface {
     /// control-room state word stays `0` while Speaker B is off; assigning
     /// a pair must not set that pair's mode bit or mute it.
     fn set_main_out_b(&mut self, pair: Option<usize>) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Assign is not decoded on the UC".into(),
-            ));
-        }
         if let Some(pair) = pair {
             if pair >= BLOCKS / 2 {
                 return Err(Error::InvalidChannel(format!("output pair {pair}")));
             }
+        }
+        if self.is_uc() {
+            self.settings.main_b_out = pair;
+            if pair.is_none() {
+                self.settings.speaker_b = false;
+            }
+            return Ok(());
         }
         let previous = self.settings.main_b_out;
         if previous == pair {
@@ -5784,9 +5779,27 @@ impl RmeDevice for Fireface {
 
     fn set_speaker_b(&mut self, on: bool) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Speaker B does not exist on the UC".into(),
-            ));
+            if on == self.settings.speaker_b {
+                return Ok(());
+            }
+            let Some(main) = self.settings.main_out else {
+                return Err(Error::InvalidChannel(
+                    "Speaker B needs an assigned Main Out".into(),
+                ));
+            };
+            let Some(b) = self.settings.main_b_out else {
+                return Err(Error::InvalidChannel(
+                    "Speaker B needs an assigned output".into(),
+                ));
+            };
+            if main != b {
+                self.set_mute(ChannelId::Output(main * 2), on)?;
+                self.set_mute(ChannelId::Output(main * 2 + 1), on)?;
+                self.set_mute(ChannelId::Output(b * 2), !on)?;
+                self.set_mute(ChannelId::Output(b * 2 + 1), !on)?;
+            }
+            self.settings.speaker_b = on;
+            return Ok(());
         }
         let Some(main) = self.settings.main_out else {
             return Err(Error::InvalidChannel(
@@ -5836,11 +5849,6 @@ impl RmeDevice for Fireface {
     }
 
     fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Speaker B does not exist on the UC".into(),
-            ));
-        }
         self.speaker_b_linked = on;
         if on {
             if let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) {

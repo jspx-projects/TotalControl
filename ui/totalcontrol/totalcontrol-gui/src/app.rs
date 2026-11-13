@@ -12695,7 +12695,7 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
 /// keep them out of the UI until the host-side monitoring and Talkback writes
 /// are implemented. The mixer section uses the same capability gate.
 fn control_room_available(state: &TotalControl) -> bool {
-    state.device.capabilities().protocol_features
+    state.device.capabilities().talkback
 }
 
 /// The top-bar Options menu.  Root groups the device audio configuration,
@@ -20356,7 +20356,7 @@ mod tests {
 
         let mut uc = new(true, None, None);
         uc.device = DeviceHandle::open_mock_uc();
-        assert!(!control_room_available(&uc));
+        assert!(control_room_available(&uc));
 
         let mut babyface = new(true, None, None);
         babyface.device = DeviceHandle::open_mock_classic();
