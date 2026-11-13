@@ -41,7 +41,7 @@ live information:
 
 | Endpoint | Direction | Contents |
 |---|---|---|
-| `0x8b` | interrupt IN | Front-panel encoder events and status-ticker frames |
+| `0x8b` | interrupt IN on PC, bulk IN on interface 4 for AP | Front-panel encoder events and status-ticker frames |
 | `0x85` | bulk IN | 324-byte hardware Peak/RMS meter pages |
 
 Mixer state is write-only.  The host model is the authoritative copy and is
@@ -203,6 +203,30 @@ When byte 2 bit 7 is set the frame is a stereo pair command and the level
 applies to both channels of the pair.  The front panel has gain for inputs
 1–4 only; inputs 5–18 produce no gain events.  Output levels use channels
 `4..21`; captured Phones is `62 e3 2b 8b`, channel `11`, value `43`.
+
+The AP personality reports the same four-byte frames on interface 4, bulk IN
+endpoint `0x8b`. The frame layout and channel numbers are unchanged.
+
+### 4.2 Front-panel display
+
+The encoder cycles through these entries:
+
+```text
+i.1, i.2, i.3, i.4,
+L.1, L.2, L.3, L.4, L.5, L.6,
+PH, SP,
+A.1, A.2, A.3, A.4, A.5, A.6, A.7, A.8
+```
+
+| Entry | Value | Range | Step |
+|---|---|---|---|
+| `i.1`, `i.2` | input gain | 0 (mute), then 10–65 dB | 1 dB |
+| `i.3`, `i.4` | input gain | 0–18 dB | 0.5 dB, dot for half |
+| `L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8` | output level | +6 … −58 dB, then mute | 1 dB |
+
+A long press (more than one second) toggles stereo setup mode; the display
+shows `on` or `off`. In stereo mode only the left channel of a pair is shown
+(`L.1`, `L.3`, `L.5`, …), and a level change applies to both sides.
 
 ## 5. Switches and references
 
