@@ -100,6 +100,7 @@ application reads it from the card associated with the hwdep node.
 | `mixer` | Matrix shape, fader range, pan law and mute/phase semantics |
 | `operations` | Host operations for the input, playback and output rows |
 | `globals` | Host-operable device-wide controls |
+| `clock_sources` | Clock sources offered by the clock-source control, in order |
 | `preamps` | Per-input type, gain range and step, switches, references and read policy |
 | `meters` | Meter layout id and whether hardware and playback meters exist |
 | `layout` | Template id and control flags |
