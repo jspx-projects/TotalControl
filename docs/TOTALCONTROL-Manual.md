@@ -470,8 +470,11 @@ peak record for every output row.
 
 On the same unit every input row takes the device input RMS word for the
 bar and the input peak record for the peak line; the input RMS and peak
-banks cover all eighteen inputs. The input OVR block follows the device's
-input over word.
+banks cover all eighteen inputs. The device input words are taken before
+the channel gain, so TotalControl applies the gain to both the bar and the
+peak line. When the device RMS word is zero for a very low pre-gain signal,
+the bar uses the peak word's sine equivalent (peak / √2). The input OVR
+block follows the device's input over word.
 
 The RMS bar is mathematically correct RMS: a full-scale sine reads about
 -3 dB on it. TotalMix FX offers an optional **RMS +3 dB** display shift that
