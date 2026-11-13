@@ -380,8 +380,8 @@ Data page (either page kind that sets word 6; 4-byte records, two
 | Words (bytes) | Contents |
 |---|---|
 | 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), everything else Unknown.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
-| 54..69 (108..139) | AN1..AN8 input records: high halfword = level (0 dBFS at 6800, 0.12745 dB per unit), low halfword = junk |
-| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = 24-bit log level, bits 0..7 = overload ratio, `0x00001fff` filler before the first sample |
+| 54..69 (108..139) | AN1..AN8 input records: high halfword = level, low halfword = junk.  AP linear 16-bit RMS; PC 6800 log word |
+| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = level, bits 0..7 = overload ratio, `0x00001fff` filler before the first sample.  AP linear 24-bit RMS; PC `0x420000` octave word |
 | 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit Peak |
 | 126..161 (252..323) | hardware outputs AN1..8, S/PDIF and ADAT 1..8 records: OVR word + linear 16-bit Peak |
 
@@ -486,17 +486,56 @@ this setting; it is a host preference.
 
 ### Analog input records
 
-The analog inputs carry their level in the upper halfword of the data-page
-record on a coarser scale with 0 dBFS at 6800 and about 0.127 dB per unit:
+The input level law is personality-dependent: the AP personality publishes
+linear RMS words, while the PC personality publishes the 6800 (analog) and
+`0x420000` (digital) octave words.  Playback and hardware-output records
+use the linear 16-bit Peak word in both.
+
+The AP personality carries a linear 16-bit RMS word in the upper halfword
+of the data-page record; the lower halfword is packet noise:
+
+```text
+u == 0                  -> below range
+dBFS = 20 × log10(u / 32768),  u = record >> 16
+```
+
+The word is the same linear scale as the playback and output Peak words.
+The analog detector settles slowly, so a reading is its hold value, not an
+instantaneous level.  The input reference and gain are applied before the
+meter.
+
+The PC (interrupt) personality uses the octave scale instead:
 
 ```text
 u == 0                  -> below range
 dBFS = (6800 - u) * 0.12745,  u = record >> 16
 ```
 
-The law also covers the over zone: the record continues past 0 dBFS and its
-reach bottoms at +6.02 dBFS.  The analog meter settles slowly, so a reading
-is the detector's hold value, not an instantaneous level.
+Records outside the 6740..7550 window are no data in that mode.
+The decoder selects the law from the active personality.
+
+### Digital input records
+
+The AP personality carries a linear 24-bit RMS word in bits 8..31; the low
+byte is the overload field:
+
+```text
+level = record >> 8 & 0xffffff
+level == 0              -> below range
+dBFS  = 20 × log10(level / 0x800000)
+```
+
+The `0x00001fff` filler has a level below the meter's floor and is no data,
+not a level.
+
+The PC personality uses the octave word instead:
+
+```text
+level = record >> 8 & 0xffffff
+dBFS  = -(level - 0x420000) * 6.0206 / 0x8000
+```
+
+with `0x7fffff` the saturation record and the over value in the low byte.
 
 ### TotalControl behaviour
 
@@ -514,11 +553,11 @@ is the detector's hold value, not an instantaneous level.
   inside the device's resolvable range; beyond it the hardware output
   rows continue on the row's written `0x1a` fader and routed matrix
   state.
-- Analog inputs: the data-page analog law.
-- Digital input records are mapped and held silent until their channel
-  identity is verified.
-- Ballistics are host side: a 10 dB/s release (measured against the
-  reference application) and a 2 s peak hold.
+- Analog inputs: the data-page input record, decoded on the active
+  personality's law (AP linear 16-bit RMS, PC 6800 log).
+- Digital inputs: the data-page input record, in record order S/PDIF L/R
+  then ADAT 1..8 (AP linear 24-bit RMS, PC `0x420000` octave).
+- Ballistics are host side: a 10 dB/s release and a 2 s peak hold.
 Input meters measure the physical input before loopback.  A
 loopback-enabled output replaces the input's record signal, but does not
 change the input meter or the input bank in the `0x85` page.

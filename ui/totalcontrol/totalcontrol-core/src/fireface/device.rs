@@ -376,16 +376,11 @@ impl UcMeterBank {
     /// A no-data record (the `0x1fff`/`0x47ffff` filler, packet noise
     /// outside the meter's own range) means the detector did not refresh
     /// this channel, so the held value stays.
-    fn set_level(slot: &mut [f32], channel: usize, record: u32, analog: bool) {
+    fn set_level(slot: &mut [f32], channel: usize, record: u32, db: Option<f32>) {
         if record == 0 {
             slot[channel] = f32::NEG_INFINITY;
             return;
         }
-        let db = if analog {
-            protocol::uc_analog_input_dbfs(record)
-        } else {
-            protocol::uc_digital_dbfs(record)
-        };
         if let Some(db) = db {
             slot[channel] = db;
         }
@@ -404,13 +399,31 @@ impl UcMeterBank {
         }
     }
 
-    fn apply(&mut self, packet: &UcMeterPacket) {
-        // The eight analog input records carry the analog level scale; the
-        // digital input records are undecoded, so keep them silent until
-        // their own channel map is verified against a loopback capture.
-        for channel in 0..8 {
+    fn apply(&mut self, packet: &UcMeterPacket, law: protocol::UcInputLaw) {
+        // Analog input records and digital input records share the data
+        // page.  The AP personality publishes linear RMS words; the PC
+        // personality publishes the octave/log words.  Playback and output
+        // records are linear in both.
+        let analog_db: fn(u32) -> Option<f32> = match law {
+            protocol::UcInputLaw::Octave => protocol::uc_analog_input_dbfs_octave,
+            protocol::UcInputLaw::Linear => protocol::uc_analog_input_dbfs,
+        };
+        let digital_db: fn(u32) -> Option<f32> = match law {
+            protocol::UcInputLaw::Octave => protocol::uc_digital_dbfs_octave,
+            protocol::UcInputLaw::Linear => protocol::uc_digital_dbfs,
+        };
+        for channel in 0..UcMeterPacket::ANALOG_INPUT_COUNT {
             let record = packet.analog_input(channel);
-            Self::set_level(&mut self.input, channel, record, true);
+            Self::set_level(&mut self.input, channel, record, analog_db(record));
+        }
+        for channel in 0..UcMeterPacket::DIGITAL_INPUT_COUNT {
+            let record = packet.digital_input(channel);
+            Self::set_level(
+                &mut self.input,
+                UcMeterPacket::ANALOG_INPUT_COUNT + channel,
+                record,
+                digital_db(record),
+            );
         }
         for channel in 0..18 {
             let record = packet.playback(channel);
@@ -3695,7 +3708,11 @@ impl Fireface {
                     EV_METER => {
                         if self.is_uc() {
                             if let Some(packet) = UcMeterPacket::parse(&event.data) {
-                                self.uc_meters.apply(&packet);
+                                let law = match self.personality() {
+                                    Personality::UcAp => protocol::UcInputLaw::Linear,
+                                    _ => protocol::UcInputLaw::Octave,
+                                };
+                                self.uc_meters.apply(&packet, law);
                             } else if let Some(rms) = UcRmsPacket::parse(&event.data) {
                                 self.uc_meters.apply_rms(&rms);
                             }
@@ -9142,20 +9159,19 @@ mod tests {
         let (mut dev, _writes) = open(Model::Uc);
         let mut bytes = [0u8; UcMeterPacket::LEN];
         bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
-        // AN1 at -30 dBFS: u = 6800 + 30/0.12745 = 7035 in the input scale.
-        bytes[108..112].copy_from_slice(&(7035u32 << 16).to_le_bytes());
-        // Playback 1 record at -6.0 dBFS: level 0x420000 + 0x8000*6/6.0206.
-        let level = (protocol::UC_LEVEL_ZERO_DBFS as f32 + 6.0 / 0.00018374) as u32;
-        bytes[180 + 4] = level as u8;
-        bytes[180] = 0x00;
-        bytes[181] = 0x00;
-        bytes[183] = 0x42; // crude write of the low half; the high half below
-        let full = (level << 8) | 0x00; bytes[180..184].copy_from_slice(&full.to_le_bytes());
+        // AN1 at -30 dBFS: linear 16-bit RMS, level = 32768 * 10^(-30/20).
+        let an = (protocol::UC_LINEAR_16_FULL_SCALE * 10f32.powf(-30.0 / 20.0)) as u32;
+        bytes[108..112].copy_from_slice(&(an << 16).to_le_bytes());
+        // S/PDIF left at -20 dBFS: linear 24-bit RMS in bits 8..31.
+        let dig = (protocol::UC_LINEAR_24_FULL_SCALE * 10f32.powf(-20.0 / 20.0)) as u32;
+        bytes[140..144].copy_from_slice(&(dig << 8).to_le_bytes());
+        // Playback 1 peak at -6.02 dBFS: half scale in the upper halfword.
+        bytes[180..184].copy_from_slice(&0x3fff0000u32.to_le_bytes());
         // Output AN1 record: low word OVR, high word linear Peak.  Peak
         // 0x7fff is 0 dBFS; the OVR word is the no-over filler.
         bytes[252..256].copy_from_slice(&0x7fff0000u32.to_le_bytes());
         let packet = UcMeterPacket::parse(&bytes).expect("meter page");
-        dev.uc_meters.apply(&packet);
+        dev.uc_meters.apply(&packet, protocol::UcInputLaw::Linear);
 
         // Playback RMS is on the flag page; 0.5012^2 * 32768 ~= 8233.
         let mut rms_bytes = [0u8; UcMeterPacket::LEN];
@@ -9166,7 +9182,11 @@ mod tests {
 
         let inputs = dev.meters().expect("UC input meters");
         assert!((inputs[0] - 0.0316).abs() < 0.003, "AN1 at -30 dBFS");
-        assert_eq!(inputs[8], 0.0, "digital inputs stay silent until decoded");
+        assert!(
+            (inputs[8] - 0.1).abs() < 0.002,
+            "S/PDIF L at -20 dBFS, got {:?}",
+            inputs
+        );
         let playback = dev.playback_meters().expect("UC playback meters");
         assert!((playback[0] - 0.5012).abs() < 0.02, "playback 1 RMS at -6.0 dBFS");
         let outputs = dev
@@ -9188,7 +9208,7 @@ mod tests {
         let mut bytes2 = bytes;
         bytes2[256..260].copy_from_slice(&0x7fffff2fu32.to_le_bytes());
         let packet2 = UcMeterPacket::parse(&bytes2).expect("meter page");
-        dev.uc_meters.apply(&packet2);
+        dev.uc_meters.apply(&packet2, protocol::UcInputLaw::Linear);
         let over = dev.output_peaks_internal(true).expect("UC over meters");
         assert!(
             (over[1] - 32767.0 / 32768.0).abs() < 1e-6,
@@ -9226,7 +9246,7 @@ mod tests {
         // value is the verified sine inverse for 0.25 dB.
         bytes[252..256].copy_from_slice(&0x7fffff08u32.to_le_bytes());
         let run = UcMeterPacket::parse(&bytes).expect("data page");
-        dev.uc_meters.apply(&run);
+        dev.uc_meters.apply(&run, protocol::UcInputLaw::Linear);
         let over = dev.output_over_levels(true).expect("UC over levels");
         assert_eq!(
             over[0],
@@ -9238,7 +9258,7 @@ mod tests {
         // The playback record reads the same counter law.
         bytes[180..184].copy_from_slice(&0x7fffff0bu32.to_le_bytes());
         let run = UcMeterPacket::parse(&bytes).expect("data page");
-        dev.uc_meters.apply(&run);
+        dev.uc_meters.apply(&run, protocol::UcInputLaw::Linear);
         let over = dev.playback_over_levels().expect("UC playback over");
         assert_eq!(over[0], Some(10f32.powf(0.50 / 20.0)), "run 11 = +0.5 dB");
         // The carry state (0xff) falls back to the row's written fader and
@@ -9246,13 +9266,13 @@ mod tests {
         // value (one, zero dBFS).
         bytes[252..256].copy_from_slice(&0x7fffffffu32.to_le_bytes());
         let run = UcMeterPacket::parse(&bytes).expect("data page");
-        dev.uc_meters.apply(&run);
+        dev.uc_meters.apply(&run, protocol::UcInputLaw::Linear);
         let over = dev.output_over_levels(true).expect("UC over levels");
         assert_eq!(over[0], Some(1.0), "carry state holds 0 dBFS at least");
         // Below the LED gate the band stays clear.
         bytes[252..256].copy_from_slice(&0x7fffff02u32.to_le_bytes());
         let run = UcMeterPacket::parse(&bytes).expect("data page");
-        dev.uc_meters.apply(&run);
+        dev.uc_meters.apply(&run, protocol::UcInputLaw::Linear);
         let over = dev.output_over_levels(true).expect("UC over levels");
         assert_eq!(over[0], None, "run 2 stays under the OVR gate");
     }
@@ -9268,7 +9288,7 @@ mod tests {
         bytes[276..278].copy_from_slice(&0x0100u16.to_le_bytes());
         bytes[278..280].copy_from_slice(&80u16.to_le_bytes());
         let packet = UcMeterPacket::parse(&bytes).expect("meter page");
-        dev.uc_meters.apply(&packet);
+        dev.uc_meters.apply(&packet, protocol::UcInputLaw::Linear);
 
         // The record's Peak word is the peak line's device feed for all
         // eighteen outputs, independent of the truncated RMS bank.
@@ -9287,7 +9307,7 @@ mod tests {
         // Half-scale playback peak; the lower halfword is the separate OVR.
         bytes[180..184].copy_from_slice(&0x3fff0000u32.to_le_bytes());
         let packet = UcMeterPacket::parse(&bytes).expect("data page");
-        dev.uc_meters.apply(&packet);
+        dev.uc_meters.apply(&packet, protocol::UcInputLaw::Linear);
         let peaks = dev.playback_peaks().expect("UC playback peaks");
         assert!((peaks[0] - 0.5).abs() < 1e-3);
 
@@ -9353,20 +9373,29 @@ mod tests {
         let (mut dev, _writes) = open(Model::Uc);
         let mut data = [0u8; UcMeterPacket::LEN];
         data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
-        // Output Phones 7 (record 42): -20 dBFS first.
-        data[276..280]
-            .copy_from_slice(&((0x420000u32 - 0x8000u32 * 20 / 6) << 8).to_le_bytes());
+        // Output Phones 7 (record 42): linear 16-bit RMS, -20 dBFS.
+        data[276..280].copy_from_slice(&0x0ccd0000u32.to_le_bytes());
         dev.uc_meters
-            .apply(&UcMeterPacket::parse(&data).expect("data page"));
-        let high = dev.output_meters_internal(true).expect("UC output meters")[6];
+            .apply(
+                &UcMeterPacket::parse(&data).expect("data page"),
+                protocol::UcInputLaw::Linear,
+            );
+        let high = dev
+            .output_peaks_internal(true)
+            .expect("UC output peak line")[6];
         // A lower record replaces the level; else the VU freezes at the max.
-        let low_record = ((0x420000u32 - 0x8000u32 * 40 / 6) << 8) as u32;
-        data[276..280].copy_from_slice(&low_record.to_le_bytes());
+        // -40 dBFS is level 0x0148 on the same linear scale.
+        data[276..280].copy_from_slice(&0x01480000u32.to_le_bytes());
         dev.uc_meters
-            .apply(&UcMeterPacket::parse(&data).expect("data page"));
-        let low = dev.output_meters_internal(true).expect("UC output meters")[6];
+            .apply(
+                &UcMeterPacket::parse(&data).expect("data page"),
+                protocol::UcInputLaw::Linear,
+            );
+        let low = dev
+            .output_peaks_internal(true)
+            .expect("UC output peak line")[6];
         assert!(
-            low + 20.0 * (0.5f32).log10() < high + 0.05,
+            low < high * 0.5,
             "a lower record must replace, got high {high} low {low}"
         );
         // A zero record is silence and releases the channel.  Keep another
@@ -9375,32 +9404,94 @@ mod tests {
         data[276..280].copy_from_slice(&0u32.to_le_bytes());
         data[108+4*30..112+4*30].copy_from_slice(&1u32.to_le_bytes());
         dev.uc_meters
-            .apply(&UcMeterPacket::parse(&data).expect("data page"));
-        let silent = dev.output_meters_internal(true).expect("UC output meters")[6];
+            .apply(
+                &UcMeterPacket::parse(&data).expect("data page"),
+                protocol::UcInputLaw::Linear,
+            );
+        let silent = dev
+            .output_peaks_internal(true)
+            .expect("UC output peak line")[6];
         assert_eq!(silent, 0.0, "record zero releases the channel");
 
-        // Analog input records: a record outside the verified level window
-        // is packet noise, not a level; the held value stays.  (Verified on
-        // hardware: the noise band sits below u = 6740.)
+        // Analog input records use the linear 16-bit scale too.  AN1 at
+        // -30 dBFS is level 1036.
         let mut an = [0u8; UcMeterPacket::LEN];
         an[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
-        an[108..112].copy_from_slice(&((7035u32 << 16) as u32).to_le_bytes());
+        an[108..112].copy_from_slice(&(1036u32 << 16).to_le_bytes());
         dev.uc_meters
-            .apply(&UcMeterPacket::parse(&an).expect("data page"));
+            .apply(
+                &UcMeterPacket::parse(&an).expect("data page"),
+                protocol::UcInputLaw::Linear,
+            );
         let settled = dev.meters().expect("UC input meters")[0];
         assert!(settled > 0.0, "a valid analog record gives a level");
-        an[108..112].copy_from_slice(&(0x9000u32 << 16).to_le_bytes());
-        dev.uc_meters
-            .apply(&UcMeterPacket::parse(&an).expect("data page"));
-        let held = dev.meters().expect("UC input meters")[0];
-        assert_eq!(held, settled, "packet noise must hold the last value");
         // A zero analog record is silence and releases.
         an[108..112].copy_from_slice(&0u32.to_le_bytes());
         an[108+120..112+120].copy_from_slice(&1u32.to_le_bytes());
         dev.uc_meters
-            .apply(&UcMeterPacket::parse(&an).expect("data page"));
+            .apply(
+                &UcMeterPacket::parse(&an).expect("data page"),
+                protocol::UcInputLaw::Linear,
+            );
         let silent = dev.meters().expect("UC input meters")[0];
         assert_eq!(silent, 0.0, "record zero releases the channel");
+    }
+
+    #[test]
+    fn uc_digital_input_record_replaces_and_holds_past_a_filler() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut data = [0u8; UcMeterPacket::LEN];
+        data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // S/PDIF L at -20 dBFS: linear 24-bit RMS in bits 8..31.
+        data[140..144].copy_from_slice(&0x0ccd0000u32.to_le_bytes());
+        dev.uc_meters
+            .apply(
+                &UcMeterPacket::parse(&data).expect("data page"),
+                protocol::UcInputLaw::Linear,
+            );
+        let level = dev.meters().expect("UC input meters")[8];
+        assert!((level - 0.1).abs() < 1e-3, "S/PDIF at -20 dBFS, got {level}");
+        // The 0x1fff filler is no data, not a level: hold the last value.
+        data[140..144].copy_from_slice(&0x00001fffu32.to_le_bytes());
+        dev.uc_meters
+            .apply(
+                &UcMeterPacket::parse(&data).expect("data page"),
+                protocol::UcInputLaw::Linear,
+            );
+        assert_eq!(
+            dev.meters().expect("UC input meters")[8],
+            level,
+            "filler must hold the last level"
+        );
+        // A zero record is silence and releases.
+        data[140..144].copy_from_slice(&0u32.to_le_bytes());
+        data[108+120..112+120].copy_from_slice(&1u32.to_le_bytes());
+        dev.uc_meters
+            .apply(
+                &UcMeterPacket::parse(&data).expect("data page"),
+                protocol::UcInputLaw::Linear,
+            );
+        assert_eq!(dev.meters().expect("UC input meters")[8], 0.0);
+    }
+
+    #[test]
+    fn uc_pc_meter_records_use_the_octave_input_law() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut bytes = [0u8; UcMeterPacket::LEN];
+        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // AN1 octave record at -30 dBFS: u = 6800 + 30/0.12745 = 7035.
+        bytes[108..112].copy_from_slice(&(7035u32 << 16).to_le_bytes());
+        // S/PDIF left at the -89.8 dBFS octave staircase value.
+        bytes[140..144].copy_from_slice(&0x4975ff00u32.to_le_bytes());
+        let packet = UcMeterPacket::parse(&bytes).expect("PC data page");
+        dev.uc_meters.apply(&packet, protocol::UcInputLaw::Octave);
+        let inputs = dev.meters().expect("UC input meters");
+        assert!((inputs[0] - 0.0316).abs() < 0.003, "AN1 octave -30 dBFS");
+        assert!(
+            (20.0 * inputs[8].log10() + 89.8).abs() < 0.2,
+            "S/PDIF octave -89.8 dBFS, got {}",
+            inputs[8]
+        );
     }
 
     #[test]
