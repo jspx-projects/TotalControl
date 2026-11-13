@@ -11067,27 +11067,34 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::EnginePoll => {
-            // Off the UI thread: both the graph read and the `pactl`
-            // probe spawn processes (~10 ms).  Capture what the async
-            // block needs before it; the device handle itself cannot
-            // cross the task boundary.
+            // Off the UI thread: the graph read and the `pactl` probes
+            // spawn processes (~10 ms).  Capture what the task needs before
+            // it; the device handle itself cannot cross the task boundary.
+            // `spawn_blocking` keeps the subprocess waits off the async
+            // executor, so a slow PipeWire or PulseAudio query cannot stall
+            // the UI task.
             let card_id = state.device.card_id();
             let follows = state.device.rate_follows_sound_server();
             let is_mock = state.device.is_mock();
             return Task::perform(
                 async move {
-                    let sink_running = follows && !is_mock && pw_clock::fireface_sink_running();
-                    let host_volume = if follows && !is_mock {
-                        pw_clock::fireface_sink_volume()
-                    } else {
-                        None
-                    };
-                    (
-                        pw_clock::read(),
-                        pw_clock::card_stream(&card_id),
-                        sink_running,
-                        host_volume,
-                    )
+                    tokio::task::spawn_blocking(move || {
+                        let sink_running =
+                            follows && !is_mock && pw_clock::fireface_sink_running();
+                        let host_volume = if follows && !is_mock {
+                            pw_clock::fireface_sink_volume()
+                        } else {
+                            None
+                        };
+                        (
+                            pw_clock::read(),
+                            pw_clock::card_stream(&card_id),
+                            sink_running,
+                            host_volume,
+                        )
+                    })
+                    .await
+                    .unwrap_or((None, None, false, None))
                 },
                 |(clock, stream, sink_running, host_volume)| {
                     Message::EngineRead(clock, stream, sink_running, host_volume)
@@ -11095,6 +11102,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             );
         }
         Message::EngineRead(clock, stream, sink_running, host_volume) => {
+            if !state.device.is_mock() {
+                state.driver_queue = pw_clock::driver_urb_queue();
+            }
             if host_volume.is_some() {
                 state.host_volume = host_volume;
             }
@@ -13552,9 +13562,8 @@ fn transport_delta(
 }
 
 /// The latency line.  While the card plays, it uses the card's actual period
-/// and the USB queue from the module parameters.  Both the UC and UCX report
-/// the same round-trip estimate; the 60-frame device lead and converter are
-/// shared, and the UC's queue is its own `(nurbs + 1) * frames_per_urb`.
+/// and the live USB queue.  The UC in PC mode uses its loopback calibration;
+/// the UCX, UC AP mode and uncalibrated UC rates use the model estimate.
 fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let line = |s: String, c: Color| text(s).color(c).size(theme::TEXT_DIALOG * scale);
@@ -13562,7 +13571,17 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
         Some(card) => {
             let mut col = column![].spacing(theme::SPACE_TIGHT * scale);
             if state.device.is_uc_model() {
-                if let Some(queue) = state.driver_queue {
+                let measured = if state.device.personality_label() == Some("PC") {
+                    state.driver_queue.and_then(|queue| {
+                        uc_pc_measured_rtl(card.rate, queue, card.period)
+                    })
+                } else {
+                    None
+                };
+                if let Some(rtl) = measured {
+                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.breakdown(), theme::text_sec()));
+                } else if let Some(queue) = state.driver_queue {
                     let (usb, lead) = uc_rtl_frames(card.rate, queue);
                     let rtl = RtlEstimate {
                         usb,
@@ -13637,6 +13656,21 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             };
             let buffer = quantum.saturating_mul(periods);
             if state.device.is_uc_model() {
+                let measured = if state.device.personality_label() == Some("PC") {
+                    state
+                        .driver_queue
+                        .and_then(|queue| uc_pc_measured_rtl(rate, queue, quantum))
+                } else {
+                    None
+                };
+                if let Some(rtl) = measured {
+                    return column![
+                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.breakdown(), theme::text_sec()),
+                    ]
+                    .spacing(theme::SPACE_TIGHT * scale)
+                    .into();
+                }
                 if let Some(queue) = state.driver_queue {
                     let (usb, lead) = uc_rtl_frames(rate, queue);
                     let rtl = RtlEstimate {
@@ -13685,10 +13719,10 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
     }
 }
 
-/// Round-trip estimate for the UC and UCX: USB queue, device lead,
-/// converter and one graph period.  The tolerance is the stated uncertainty
-/// of the model (UC 1.5 ms, UCX 1.2 ms); the UC cable measurement is in the
-/// latency work note.
+/// Model-based round-trip estimate: USB queue, device lead, converter and
+/// one graph period.  Used for the UCX and for UC paths without a PC-mode
+/// loopback calibration.  The tolerance is the stated uncertainty of the
+/// model (UC 1.5 ms, UCX 1.2 ms).
 struct RtlEstimate {
     usb: u32,
     lead: u32,
@@ -13720,6 +13754,92 @@ impl RtlEstimate {
             frames_ms(self.graph, self.rate)
         )
     }
+}
+
+/// One loopback measurement of the UC PC-mode device round trip.  The
+/// measurement excludes the graph period; `queue_frames` is the USB queue
+/// at which it was taken, so a driver queue change can be applied without
+/// re-measuring.  Source: `docs/work/UC-RTL-LOOPBACK.md`.
+struct UcPcMeasurement {
+    rate: u32,
+    device_frames: u32,
+    queue_frames: u32,
+}
+
+const UC_PC_MEASUREMENTS: &[UcPcMeasurement] = &[
+    UcPcMeasurement {
+        rate: 32_000,
+        device_frames: 215,
+        queue_frames: 144,
+    },
+    UcPcMeasurement {
+        rate: 44_100,
+        device_frames: 215,
+        queue_frames: 144,
+    },
+    UcPcMeasurement {
+        rate: 48_000,
+        device_frames: 215,
+        queue_frames: 144,
+    },
+    UcPcMeasurement {
+        rate: 96_000,
+        device_frames: 351,
+        queue_frames: 288,
+    },
+    UcPcMeasurement {
+        rate: 192_000,
+        device_frames: 617,
+        queue_frames: 576,
+    },
+];
+
+/// A loopback-calibrated UC PC-mode estimate.  The measured device total
+/// includes the USB queue; the current queue is applied as a delta from the
+/// calibration queue, and one live graph period is added.
+struct MeasuredRtl {
+    device: u32,
+    live_queue: u32,
+    graph: u32,
+    rate: u32,
+}
+
+impl MeasuredRtl {
+    fn total(&self) -> u32 {
+        self.device + self.graph
+    }
+
+    fn summary(&self) -> String {
+        format!("{:.1} ms RTL (measured PC)", frames_ms(self.total(), self.rate))
+    }
+
+    fn breakdown(&self) -> String {
+        format!(
+            "{:.1} ms measured device (including {:.1} ms live USB queue) + {:.1} ms graph",
+            frames_ms(self.device, self.rate),
+            frames_ms(self.live_queue, self.rate),
+            frames_ms(self.graph, self.rate)
+        )
+    }
+}
+
+/// Return the measured PC-mode estimate for a rate covered by the loopback
+/// calibration.  If the driver queue differs from the calibration, its delta
+/// is applied to the device total; the graph period is always live.
+fn uc_pc_measured_rtl(rate: u32, queue: (u32, u32), graph: u32) -> Option<MeasuredRtl> {
+    let measurement = UC_PC_MEASUREMENTS
+        .iter()
+        .find(|measurement| measurement.rate == rate)?;
+    let (usb, endpoint) = uc_usb_frames(rate, queue);
+    let live_queue = usb + endpoint;
+    let device = measurement.device_frames as i64 + live_queue as i64
+        - measurement.queue_frames as i64;
+    Some(MeasuredRtl {
+        device: device.max(0) as u32,
+        live_queue,
+        graph: graph.max(1),
+        rate,
+    })
 }
 
 /// The ALSA ring as time and frames, with the period composition that
@@ -19419,7 +19539,8 @@ mod tests {
         is_undoable, mute_armed, new, new_with_device, power_sum_output_meters, rate_choices,
         reorder_pair_volumes, save_workspace_to, solo_armed, strength_snapshot, strip_params,
         strip_target_pair, sync_control_room_runtime, temporary_group_exists, trim_factor,
-        trim_meter_levels, uc_min_buffer_frames, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames,
+        trim_meter_levels, uc_min_buffer_frames, uc_pc_measured_rtl, uc_rtl_frames,
+        uc_usb_frames, ucx_min_buffer_frames, UC_PC_MEASUREMENTS,
         ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         PwClock, RateChoice, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
@@ -19702,6 +19823,42 @@ mod tests {
         assert_eq!(rtl.total(), 1241);
         assert_eq!(rtl.summary(), "28.1 ms RTL estimate (±1.5 ms)");
         assert!(rtl.breakdown().contains("23.2 ms graph"));
+    }
+
+    #[test]
+    fn uc_pc_measured_rtl_uses_the_calibration_and_live_inputs() {
+        for measurement in UC_PC_MEASUREMENTS {
+            let (usb, endpoint) = uc_usb_frames(measurement.rate, (48, 2));
+            assert_eq!(
+                usb + endpoint,
+                measurement.queue_frames,
+                "calibration queue drifted at {} Hz",
+                measurement.rate
+            );
+        }
+
+        let rtl = uc_pc_measured_rtl(44_100, (48, 2), 1024).expect("44.1 kHz is calibrated");
+        assert_eq!(rtl.device, 215);
+        assert_eq!(rtl.live_queue, 144);
+        assert_eq!(rtl.total(), 1239);
+        assert_eq!(rtl.summary(), "28.1 ms RTL (measured PC)");
+        assert!(rtl.breakdown().contains("3.3 ms live USB queue"));
+        assert!(rtl.breakdown().contains("23.2 ms graph"));
+
+        let rtl = uc_pc_measured_rtl(192_000, (48, 2), 128).expect("192 kHz is calibrated");
+        assert_eq!(rtl.device, 617);
+        assert_eq!(rtl.live_queue, 576);
+        assert_eq!(rtl.total(), 745);
+        assert_eq!(rtl.summary(), "3.9 ms RTL (measured PC)");
+
+        // A driver queue change is applied as a delta from the calibration,
+        // without a new loopback measurement.
+        let adjusted = uc_pc_measured_rtl(44_100, (48, 3), 128).expect("calibrated rate");
+        assert_eq!(adjusted.live_queue, 192);
+        assert_eq!(adjusted.device, 263);
+        assert_eq!(adjusted.total(), 391);
+
+        assert!(uc_pc_measured_rtl(64_000, (48, 2), 128).is_none());
     }
 
     #[test]

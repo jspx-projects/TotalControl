@@ -1018,10 +1018,10 @@ rather than shown inert.
 Below the device group, the host engine group shows the PipeWire rate,
 quantum and latency when the sound server owns the rate. `Quantum` is the
 graph quantum, one ALSA period; the `Latency` line shows the round-trip
-estimate (USB queue, device lead, converter and one graph period). The UC
-uses its own measured queue and the UCX uses its feedback-delay queue. It
-also shows the Fireface sink's host volume in percent and dB, with a `0 dB`
-action. The host volume is an attenuation before the interface, so it lowers
+value (USB queue, device lead, converter and one graph period). The UC in
+PC mode uses its loopback calibration with a live queue and graph period;
+the UCX and UC AP/untested rates use the model. It also shows the Fireface
+sink's host volume in percent and dB, with a `0 dB` action. The host volume is an attenuation before the interface, so it lowers
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
 
@@ -1750,16 +1750,22 @@ applied to the running device on `OK`.
 
 ## 13. Latency display
 
-The Settings panel shows the round-trip latency estimate and its terms:
-USB queue, device lead, converter and one graph period. The buffer-size
-picker sets the graph quantum. The UC and UCX use the same structure with
-their own queue parameters; the UC is labelled ±1.5 ms and the UCX ±1.2 ms.
-The formulas and the device-side model are in
+The Settings panel shows the round-trip latency and its terms. The UCX and
+UC paths without a PC-mode calibration use the model: USB queue, device
+lead, converter and one graph period; the UC estimate is labelled ±1.5 ms
+and the UCX ±1.2 ms. The buffer-size picker sets the graph quantum. The
+formulas and the device-side model are in
 [`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §10.
 
-The displayed line is an estimate, not a measured acoustic round trip. The
-panel labels it accordingly and keeps the terms visible. A full-duplex UC
-loopback measurement (output 5 to input 5) is recorded in
+The UC PC path uses a loopback calibration at 32, 44.1, 48, 96 and 192 kHz
+and is labelled **measured PC**. The calibrated device total includes the
+USB queue; the display applies a live queue delta and adds the current graph
+period. AP mode and rates outside the calibrated set show the model
+estimate. The calibration is per personality and must be repeated after a
+firmware or device-path change.
+
+The displayed line is not an acoustic measurement. The PC calibration is a
+full-duplex electrical loopback (output 5 to input 5); the evidence is in
 `docs/work/UC-RTL-LOOPBACK.md`.
 
 Below it, **Xruns (PipeWire)** shows the PipeWire graph xrun count for the

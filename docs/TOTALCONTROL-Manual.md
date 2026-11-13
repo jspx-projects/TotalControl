@@ -1171,13 +1171,19 @@ groups with the stored ones.
 
 ## 14. Latency
 
-The Settings drawer shows the round-trip latency estimate for the current
-sample rate and buffer size, and the **Quantum** picker sets the PipeWire
-graph period in samples. Both the UC and the UCX use the same structure:
-USB queue, device lead, converter and one graph period. The UC estimate is
-labelled ±1.5 ms and the UCX estimate ±1.2 ms. A full-duplex cable
-measurement on the UC (output 5 to input 5) matched the formula within
-0.17 ms at all five tested rates (32, 44.1, 48, 96 and 192 kHz).
+The Settings drawer shows the round-trip latency for the current sample
+rate and buffer size, and the **Quantum** picker sets the PipeWire graph
+period in samples. The UCX and UC paths without a PC-mode calibration use
+the model estimate: USB queue, device lead, converter and one graph period;
+the UC estimate is labelled ±1.5 ms and the UCX ±1.2 ms.
+
+On the UC in PC mode the device part is a loopback calibration taken at
+32, 44.1, 48, 96 and 192 kHz. The display says **measured PC** and applies
+the live USB queue and the current graph period. If a driver change alters
+the USB queue, the calibration is adjusted by the queue difference without
+another cable measurement. AP mode and rates outside the calibrated set
+use the model estimate. A different firmware or device path needs a new
+calibration.
 
 Below the latency line, **Xruns (PipeWire)** counts the PipeWire graph
 xruns for the RME output node. This is an audio-graph counter, not a USB

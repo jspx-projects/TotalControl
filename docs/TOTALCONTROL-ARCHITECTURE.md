@@ -333,10 +333,17 @@ The host ring is the ALSA buffer managed by PipeWire or the application. The
 USB queue is the driver's feedback delay and queued URBs. The device lead is a
 fixed vendor-path delay. The converters add a fixed small delay.
 
-The GUI latency line reports the round-trip estimate, not a measured acoustic
-round trip. It derives the device side from the kernel parameters and adds one
-graph period. The UC and UCX share the formula; the UC uses its own
-`(nurbs + 1) * urb_frames` queue and the same 60-frame device lead. The UC's
+The GUI latency line reports a round-trip value, not a measured acoustic
+round trip. The UCX and UC paths without a PC-mode calibration derive the
+device side from the kernel parameters and add one graph period. The UC uses
+its own `(nurbs + 1) * urb_frames` queue and the same 60-frame device lead.
+
+The UC PC path uses a loopback calibration at 32, 44.1, 48, 96 and 192 kHz.
+The calibrated device total excludes the graph period; a live USB-queue
+delta and the current graph period are added at render time. The engine
+poll reads the PipeWire inputs off the UI task and refreshes the module
+queue from sysfs. The calibration is per personality; AP mode and
+uncalibrated rates use the model. The UC's
 full-duplex loopback evidence is kept in `docs/work/UC-RTL-LOOPBACK.md`.
 
 The vendor path and the class-compliant path are mutually exclusive device
