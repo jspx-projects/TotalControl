@@ -13571,12 +13571,14 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
         Some(card) => {
             let mut col = column![].spacing(theme::SPACE_TIGHT * scale);
             if state.device.is_uc_model() {
-                let measured = if state.device.personality_label() == Some("PC") {
-                    state.driver_queue.and_then(|queue| {
-                        uc_pc_measured_rtl(card.rate, queue, card.period)
-                    })
-                } else {
-                    None
+                let measured = match state.device.personality_label() {
+                    Some("PC") => state.driver_queue.and_then(|queue| {
+                        uc_measured_rtl(card.rate, queue, card.period, false)
+                    }),
+                    Some("AP") => state.driver_queue.and_then(|queue| {
+                        uc_measured_rtl(card.rate, queue, card.period, true)
+                    }),
+                    _ => None,
                 };
                 if let Some(rtl) = measured {
                     col = col.push(line(rtl.summary(), theme::text_primary()));
@@ -13656,12 +13658,14 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             };
             let buffer = quantum.saturating_mul(periods);
             if state.device.is_uc_model() {
-                let measured = if state.device.personality_label() == Some("PC") {
-                    state
-                        .driver_queue
-                        .and_then(|queue| uc_pc_measured_rtl(rate, queue, quantum))
-                } else {
-                    None
+                let measured = match state.device.personality_label() {
+                    Some("PC") => state.driver_queue.and_then(|queue| {
+                        uc_measured_rtl(rate, queue, quantum, false)
+                    }),
+                    Some("AP") => state.driver_queue.and_then(|queue| {
+                        uc_measured_rtl(rate, queue, quantum, true)
+                    }),
+                    _ => None,
                 };
                 if let Some(rtl) = measured {
                     return column![
@@ -13756,52 +13760,81 @@ impl RtlEstimate {
     }
 }
 
-/// One loopback measurement of the UC PC-mode device round trip.  The
-/// measurement excludes the graph period; `queue_frames` is the USB queue
-/// at which it was taken, so a driver queue change can be applied without
-/// re-measuring.  Source: `docs/work/UC-RTL-LOOPBACK.md`.
-struct UcPcMeasurement {
+/// One loopback measurement of the UC device round trip.  The measurement
+/// excludes the graph period; `queue_frames` is the nominal host queue at
+/// which it was taken, so a driver queue change can be applied without
+/// re-measuring.  Sources: `docs/work/UC-RTL-LOOPBACK.md`.
+struct UcMeasurement {
     rate: u32,
     device_frames: u32,
     queue_frames: u32,
 }
 
-const UC_PC_MEASUREMENTS: &[UcPcMeasurement] = &[
-    UcPcMeasurement {
+const UC_PC_MEASUREMENTS: &[UcMeasurement] = &[
+    UcMeasurement {
         rate: 32_000,
         device_frames: 215,
         queue_frames: 144,
     },
-    UcPcMeasurement {
+    UcMeasurement {
         rate: 44_100,
         device_frames: 215,
         queue_frames: 144,
     },
-    UcPcMeasurement {
+    UcMeasurement {
         rate: 48_000,
         device_frames: 215,
         queue_frames: 144,
     },
-    UcPcMeasurement {
+    UcMeasurement {
         rate: 96_000,
         device_frames: 351,
         queue_frames: 288,
     },
-    UcPcMeasurement {
+    UcMeasurement {
         rate: 192_000,
         device_frames: 617,
         queue_frames: 576,
     },
 ];
 
-/// A loopback-calibrated UC PC-mode estimate.  The measured device total
-/// includes the USB queue; the current queue is applied as a delta from the
+const UC_AP_MEASUREMENTS: &[UcMeasurement] = &[
+    UcMeasurement {
+        rate: 32_000,
+        device_frames: 155,
+        queue_frames: 96,
+    },
+    UcMeasurement {
+        rate: 44_100,
+        device_frames: 179,
+        queue_frames: 144,
+    },
+    UcMeasurement {
+        rate: 48_000,
+        device_frames: 187,
+        queue_frames: 144,
+    },
+    UcMeasurement {
+        rate: 96_000,
+        device_frames: 295,
+        queue_frames: 288,
+    },
+    UcMeasurement {
+        rate: 192_000,
+        device_frames: 505,
+        queue_frames: 576,
+    },
+];
+
+/// A loopback-calibrated UC estimate.  The measured device total includes
+/// the USB queue; the current queue is applied as a delta from the
 /// calibration queue, and one live graph period is added.
 struct MeasuredRtl {
     device: u32,
     live_queue: u32,
     graph: u32,
     rate: u32,
+    mode: &'static str,
 }
 
 impl MeasuredRtl {
@@ -13810,7 +13843,11 @@ impl MeasuredRtl {
     }
 
     fn summary(&self) -> String {
-        format!("{:.1} ms RTL (measured PC)", frames_ms(self.total(), self.rate))
+        format!(
+            "{:.1} ms RTL (measured {})",
+            frames_ms(self.total(), self.rate),
+            self.mode
+        )
     }
 
     fn breakdown(&self) -> String {
@@ -13823,15 +13860,35 @@ impl MeasuredRtl {
     }
 }
 
-/// Return the measured PC-mode estimate for a rate covered by the loopback
+/// The nominal host queue for the active personality.  PC uses the
+/// interrupt URB frame count; AP uses the ISO packet count.
+fn uc_live_queue_frames(rate: u32, queue: (u32, u32), ap: bool) -> u32 {
+    if ap {
+        ucx_usb_frames(rate, queue).0
+    } else {
+        let (usb, endpoint) = uc_usb_frames(rate, queue);
+        usb + endpoint
+    }
+}
+
+/// Return the measured estimate for a rate covered by the loopback
 /// calibration.  If the driver queue differs from the calibration, its delta
 /// is applied to the device total; the graph period is always live.
-fn uc_pc_measured_rtl(rate: u32, queue: (u32, u32), graph: u32) -> Option<MeasuredRtl> {
-    let measurement = UC_PC_MEASUREMENTS
+fn uc_measured_rtl(
+    rate: u32,
+    queue: (u32, u32),
+    graph: u32,
+    ap: bool,
+) -> Option<MeasuredRtl> {
+    let measurements = if ap {
+        UC_AP_MEASUREMENTS
+    } else {
+        UC_PC_MEASUREMENTS
+    };
+    let measurement = measurements
         .iter()
         .find(|measurement| measurement.rate == rate)?;
-    let (usb, endpoint) = uc_usb_frames(rate, queue);
-    let live_queue = usb + endpoint;
+    let live_queue = uc_live_queue_frames(rate, queue, ap);
     let device = measurement.device_frames as i64 + live_queue as i64
         - measurement.queue_frames as i64;
     Some(MeasuredRtl {
@@ -13839,6 +13896,7 @@ fn uc_pc_measured_rtl(rate: u32, queue: (u32, u32), graph: u32) -> Option<Measur
         live_queue,
         graph: graph.max(1),
         rate,
+        mode: if ap { "AP" } else { "PC" },
     })
 }
 
@@ -19539,8 +19597,8 @@ mod tests {
         is_undoable, mute_armed, new, new_with_device, power_sum_output_meters, rate_choices,
         reorder_pair_volumes, save_workspace_to, solo_armed, strength_snapshot, strip_params,
         strip_target_pair, sync_control_room_runtime, temporary_group_exists, trim_factor,
-        trim_meter_levels, uc_min_buffer_frames, uc_pc_measured_rtl, uc_rtl_frames,
-        uc_usb_frames, ucx_min_buffer_frames, UC_PC_MEASUREMENTS,
+        trim_meter_levels, uc_live_queue_frames, uc_min_buffer_frames, uc_measured_rtl, uc_rtl_frames,
+        uc_usb_frames, ucx_min_buffer_frames, UC_AP_MEASUREMENTS, UC_PC_MEASUREMENTS,
         ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         PwClock, RateChoice, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
@@ -19826,18 +19884,26 @@ mod tests {
     }
 
     #[test]
-    fn uc_pc_measured_rtl_uses_the_calibration_and_live_inputs() {
+    fn uc_measured_rtl_uses_the_mode_calibration_and_live_inputs() {
         for measurement in UC_PC_MEASUREMENTS {
             let (usb, endpoint) = uc_usb_frames(measurement.rate, (48, 2));
             assert_eq!(
                 usb + endpoint,
                 measurement.queue_frames,
-                "calibration queue drifted at {} Hz",
+                "PC calibration queue drifted at {} Hz",
+                measurement.rate
+            );
+        }
+        for measurement in UC_AP_MEASUREMENTS {
+            let live = uc_live_queue_frames(measurement.rate, (48, 2), true);
+            assert_eq!(
+                live, measurement.queue_frames,
+                "AP calibration queue drifted at {} Hz",
                 measurement.rate
             );
         }
 
-        let rtl = uc_pc_measured_rtl(44_100, (48, 2), 1024).expect("44.1 kHz is calibrated");
+        let rtl = uc_measured_rtl(44_100, (48, 2), 1024, false).expect("PC 44.1 calibrated");
         assert_eq!(rtl.device, 215);
         assert_eq!(rtl.live_queue, 144);
         assert_eq!(rtl.total(), 1239);
@@ -19845,20 +19911,28 @@ mod tests {
         assert!(rtl.breakdown().contains("3.3 ms live USB queue"));
         assert!(rtl.breakdown().contains("23.2 ms graph"));
 
-        let rtl = uc_pc_measured_rtl(192_000, (48, 2), 128).expect("192 kHz is calibrated");
-        assert_eq!(rtl.device, 617);
+        let rtl = uc_measured_rtl(44_100, (48, 2), 128, true).expect("AP 44.1 calibrated");
+        assert_eq!(rtl.device, 179);
+        assert_eq!(rtl.live_queue, 144);
+        assert_eq!(rtl.total(), 307);
+        assert_eq!(rtl.summary(), "7.0 ms RTL (measured AP)");
+        assert!(rtl.breakdown().contains("3.3 ms live USB queue"));
+
+        let rtl = uc_measured_rtl(192_000, (48, 2), 128, true).expect("AP 192 calibrated");
+        assert_eq!(rtl.device, 505);
         assert_eq!(rtl.live_queue, 576);
-        assert_eq!(rtl.total(), 745);
-        assert_eq!(rtl.summary(), "3.9 ms RTL (measured PC)");
+        assert_eq!(rtl.total(), 633);
+        assert_eq!(rtl.summary(), "3.3 ms RTL (measured AP)");
 
         // A driver queue change is applied as a delta from the calibration,
         // without a new loopback measurement.
-        let adjusted = uc_pc_measured_rtl(44_100, (48, 3), 128).expect("calibrated rate");
+        let adjusted = uc_measured_rtl(44_100, (48, 3), 128, false).expect("calibrated rate");
         assert_eq!(adjusted.live_queue, 192);
         assert_eq!(adjusted.device, 263);
         assert_eq!(adjusted.total(), 391);
 
-        assert!(uc_pc_measured_rtl(64_000, (48, 2), 128).is_none());
+        assert!(uc_measured_rtl(64_000, (48, 2), 128, false).is_none());
+        assert!(uc_measured_rtl(64_000, (48, 2), 128, true).is_none());
     }
 
     #[test]
