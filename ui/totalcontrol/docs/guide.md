@@ -27,8 +27,8 @@ The full end-user manual lives at
 - **Matrix**: the full routing grid.
 
 `totalcontrol --view quick|mixer|matrix` opens a given view. `--mock`,
-`--mock-ucx` and `--mock-uc` run against a simulated Fireface UCX or UC, no
-hardware needed. Each simulation carries exactly the panels its unit has: the
+`--mock-ucx`, `--mock-uc` and `--mock-classic` run against a simulated
+Fireface UCX, UC or Babyface-classic, no hardware needed. Each simulation carries exactly the panels its unit has: the
 UCX shows EQ, dynamics, FX and the Control Room, while the UC shows the gated
 set. Both are listed in the Device picker.
 

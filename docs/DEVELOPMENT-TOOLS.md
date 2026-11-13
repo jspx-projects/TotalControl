@@ -33,6 +33,7 @@ The mock backends run the complete UI without hardware:
 totalcontrol --mock       # Fireface UCX
 totalcontrol --mock-ucx   # Fireface UCX
 totalcontrol --mock-uc    # Fireface UC
+totalcontrol --mock-classic  # Babyface-classic
 ```
 
 The mocks are used by the unit tests and by headless UI checks.
