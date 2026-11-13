@@ -1206,6 +1206,26 @@ impl DeviceHandle {
         None
     }
 
+    /// Device red-band bar values per playback row and hardware output
+    /// row (0..+6 dB).  Inside the device counter's resolvable range the
+    /// value is the count's inverse law; beyond it the estimate path
+    /// continues on the row's written fader and matrix state.
+    pub fn device_playback_over_levels(&self) -> Option<Vec<Option<f32>>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.playback_over_levels();
+        }
+        None
+    }
+
+    pub fn device_output_over_levels(&self, post: bool) -> Option<Vec<Option<f32>>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.output_over_levels(post);
+        }
+        None
+    }
+
     pub fn device_output_peaks(&self) -> Option<Vec<f32>> {
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {

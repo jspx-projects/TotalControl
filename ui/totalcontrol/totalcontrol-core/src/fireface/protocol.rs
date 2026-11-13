@@ -410,6 +410,46 @@ pub fn uc_playback_rms_linear(word: u16) -> f32 {
     (word as f32 / 32768.0).max(0.0).sqrt()
 }
 
+/// Verified over-band law, OVR counter run -> peak-over-dBFS.
+///
+/// The record's OVR word counts the samples at or above full scale within
+/// the record's own update window.  Measured staircases (sine, 440 Hz, the
+/// Phones pair; `docs/work/UC-METER-DECODE.md`) give these run/over pairs,
+/// and a record whose count steps between the pairs follows this law by
+/// interpolation; a sustained pulse train (every sample over) drives both
+/// nibbles to `0xff`.  A run below 4 is inside the over gate and a byte
+/// wider than the 4-bit value domain carries the count past 15, where the
+/// device no longer resolves the over level.
+pub const UC_OVER_RUN_TABLE: [(u8, f32); 5] =
+    [(4, 0.05), (8, 0.25), (11, 0.50), (13, 0.75), (15, 1.0)];
+
+/// Peak-over-dBFS of a record's OVR count under the verified law.  `None`
+/// where the count does not describe an over value it can resolve: under
+/// the lowest table point, or in the counter's carry state.
+pub fn uc_counter_over_db(run: u8) -> Option<f32> {
+    if run < UC_OVER_RUN_TABLE[0].0 || run > 15 {
+        return None;
+    }
+    let last = (run == 15).then(|| UC_OVER_RUN_TABLE[4].1);
+    if let Some(db) = last {
+        return Some(db);
+    }
+    for pair in UC_OVER_RUN_TABLE.windows(2) {
+        let (r0, db0) = pair[0];
+        let (r1, db1) = pair[1];
+        if run < r1 {
+            let t = (run - r0) as f32 / (r1 - r0) as f32;
+            return Some(db0 + t * (db1 - db0));
+        }
+    }
+    None
+}
+
+/// The device's OVR count that lights the OVR LED: TotalMix's global
+/// "Full scale samples for OVR" preference default.  The host settings
+/// expose the rest of the 1..10 range.
+pub const UC_OVR_RUN_GATE: u8 = 3;
+
 /// Analog input records use their own scale; the level range behaves the
 /// same way: 0 is below range and records outside the verified window
 /// (the idle 0x0041..0x0069 packet-noise band below 6740, and the stuck

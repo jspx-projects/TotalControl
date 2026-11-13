@@ -472,9 +472,8 @@ bar is mathematically correct RMS, so a full-scale sine reads about -3 dB;
 no RMS +3 dB shift is applied. There is no separate red guide across the
 meter bar.
 
-Falling levels release at 10 dB/s, measured against TotalMix FX's own
-meters (RME documents zero attack for peaks and a slow RMS constant, no
-rate). The peak hold is fixed at two seconds.
+Falling levels release at 10 dB/s, measured against the reference
+application's meters. The peak hold is fixed at two seconds.
 The OVR segment lights after three consecutive full-scale samples. The OVR
 sample count is a global meter setting (1–15, default three), not a dB
 threshold and not a per-channel value. There is no configurable hold time.

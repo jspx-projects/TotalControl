@@ -1629,6 +1629,16 @@ fn run(
             } else {
                 [false, false]
             };
+            let over_flags_pb = if connected {
+                device.device_playback_over_levels()
+            } else {
+                None
+            };
+            let over_flags_out = if connected {
+                device.device_output_over_levels(true)
+            } else {
+                None
+            };
             let mut m = meters.lock().unwrap();
             for (slot, value) in m.inputs.iter_mut().zip(inputs) {
                 *slot = value;
@@ -1639,6 +1649,13 @@ fn run(
             for (slot, value) in m.outputs.iter_mut().zip(outputs) {
                 *slot = value;
             }
+            // The red band (0..+6 dB) merges into the row bar: the device
+            // counter's inverse value, or the row's written fader and
+            // matrix state once the device reports the row over.  The
+            // release fall brings the bar back below 0 dB when the band
+            // clears.
+            merge_over(m.playbacks.iter_mut(), over_flags_pb.as_deref());
+            merge_over(m.outputs.iter_mut(), over_flags_out.as_deref());
             hold_peaks(&mut m.input_peaks, &input_peaks, &mut peak_at[0], now);
             hold_peaks(&mut m.playback_peaks, &playback_peaks, &mut peak_at[1], now);
             hold_peaks(&mut m.output_peaks, &output_peaks, &mut peak_at[2], now);
@@ -1697,6 +1714,22 @@ fn run(
                 let _ = updates.send(update);
                 snapshot_notify().notify_one();
             }
+        }
+    }
+}
+
+/// Merge the red-band (0..+6 dB) bar values into the row bars.  A row
+/// whose over feed carries a value takes that value when it exceeds the
+/// row's own 0 dB state; the meter's release fall brings the bar back
+/// when the band clears.
+fn merge_over<'a, I>(slots: I, over: Option<&[Option<f32>]>)
+where
+    I: Iterator<Item = &'a mut f32>,
+{
+    let Some(over) = over else { return };
+    for (slot, value) in slots.zip(over) {
+        if let Some(value) = value {
+            *slot = slot.max(*value);
         }
     }
 }

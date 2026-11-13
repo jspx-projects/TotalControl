@@ -3256,10 +3256,10 @@ impl Fireface {
             Model::Uc => Some(
                 (0..self.outputs.len())
                     .map(|i| {
-                        if i < protocol::UC_OUTPUT_RMS_CHANNELS {
+                         if i < protocol::UC_OUTPUT_RMS_CHANNELS {
                             self.uc_meters.output_rms[i]
                         } else {
-                            self.uc_output_estimated_rms(i)
+                            self.uc_output_estimated_rms(i, post)
                         }
                     })
                     .collect(),
@@ -3361,6 +3361,55 @@ impl Fireface {
         if playback { self.playback_over_runs() } else { self.output_over_runs() }
     }
 
+    /// Red-band bar values (0..+6 dB) per playback row, per the device's
+    /// verified counter law: the count's inverse gives the peak-over-dBFS
+    /// inside the device's resolvable range (to about +1 dB), and past
+    /// that the count's carry state holds the last known value (the
+    /// host runs no estimate for the stream's exact amplitude).
+    pub fn playback_over_levels(&self) -> Option<Vec<Option<f32>>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.playbacks.len()).map(|i| {
+                    let run = self.uc_meters.playback_over_run(i);
+                    if run < protocol::UC_OVR_RUN_GATE {
+                        return None;
+                    }
+                    protocol::uc_counter_over_db(run)
+                        .map(|db| 10f32.powf(db / 20.0))
+                        .or(Some(1.0))
+                    .filter(|level| *level > 0.0)
+                }).collect(),
+            ),
+            Model::Ucx => None,
+        }
+    }
+
+    /// Red-band bar values (0..+6 dB) per hardware output row.  Inside the
+    /// device counter's resolvable range the bar takes the count's inverse
+    /// law; past it (the carry state) the bar continues on the row's own
+    /// written `0x1a` fader and routed matrix state — the documented
+    /// estimate — gated by the device's over event.  TotalMix's global OVR
+    /// sample preference default is the gate.
+    pub fn output_over_levels(&self, post: bool) -> Option<Vec<Option<f32>>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.outputs.len()).map(|i| {
+                    let run = self.uc_meters.output_over_run(i);
+                    if run < protocol::UC_OVR_RUN_GATE {
+                        return None;
+                    }
+                    if let Some(db) = protocol::uc_counter_over_db(run) {
+                        return Some(10f32.powf(db / 20.0));
+                    }
+                    // Carry state: the row's written fader and matrix value
+                    // the level beyond the device's resolvable range.
+                    Some(self.uc_output_estimated_rms(i, post).max(1.0))
+                }).collect(),
+            ),
+            Model::Ucx => None,
+        }
+    }
+
     pub fn output_peaks(&self, post: bool) -> Option<Vec<f32>> {
         match self.model {
             Model::Ucx => Some(
@@ -3426,7 +3475,7 @@ impl Fireface {
     /// values, so a sine-weighted peak/√2 stands in until an input RMS
     /// word is found.  The approximation is documented in the user manual;
     /// the device feed for these rows remains an open question.
-    fn uc_output_estimated_rms(&self, channel: usize) -> f32 {
+    fn uc_output_estimated_rms(&self, channel: usize, post: bool) -> f32 {
         if self.outputs[channel].mute {
             return 0.0;
         }
@@ -9130,6 +9179,66 @@ mod tests {
             "Peak stays at 0 dBFS"
         );
         assert!(dev.output_ovr().unwrap()[1]);
+    }
+
+    #[test]
+    fn uc_counter_over_db_matches_the_sine_staircase() {
+        // Verified run/over pairs (sine staircase, docs/work).
+        for (run, over) in [(4u8, 0.05f32), (8, 0.25), (11, 0.50), (13, 0.75), (15, 1.0)] {
+            let db = protocol::uc_counter_over_db(run)
+                .unwrap_or_else(|| panic!("run {run} must resolve"));
+            assert!((db - over).abs() < 1e-6, "run {run}: {db} vs {over}");
+        }
+        // A reading between two table points interpolates: run 9 sits a
+        // third of the way from 8 (0.25) to 11 (0.50 dB).
+        let db = protocol::uc_counter_over_db(9).unwrap();
+        assert!((db - (0.25 + 0.25 / 3.0)).abs() < 1e-6);
+        // Under the first table point (inside the LED gate) no over value
+        // resolves; the carry state holds the last known value instead.
+        assert!(protocol::uc_counter_over_db(2).is_none());
+        assert!(protocol::uc_counter_over_db(0).is_none());
+        assert!(protocol::uc_counter_over_db(0xff).is_none());
+    }
+
+    #[test]
+    fn uc_output_over_levels_follow_the_counter() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut bytes = [0u8; UcMeterPacket::LEN];
+        bytes[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // Record bytes, little-endian: [count, 0xff event, peak bytes].
+        // Output channel 0 carries run 8 with the saturated peak; the bar
+        // value is the verified sine inverse for 0.25 dB.
+        bytes[252..256].copy_from_slice(&0x7fffff08u32.to_le_bytes());
+        let run = UcMeterPacket::parse(&bytes).expect("data page");
+        dev.uc_meters.apply(&run);
+        let over = dev.output_over_levels(true).expect("UC over levels");
+        assert_eq!(
+            over[0],
+            Some(10f32.powf(0.25 / 20.0)),
+            "run 8 = +0.25 dB"
+        );
+        // A row without over stays clear.
+        assert_eq!(over[4], None);
+        // The playback record reads the same counter law.
+        bytes[180..184].copy_from_slice(&0x7fffff0bu32.to_le_bytes());
+        let run = UcMeterPacket::parse(&bytes).expect("data page");
+        dev.uc_meters.apply(&run);
+        let over = dev.playback_over_levels().expect("UC playback over");
+        assert_eq!(over[0], Some(10f32.powf(0.50 / 20.0)), "run 11 = +0.5 dB");
+        // The carry state (0xff) falls back to the row's written fader and
+        // matrix state; with no route set the bar holds the last known
+        // value (one, zero dBFS).
+        bytes[252..256].copy_from_slice(&0x7fffffffu32.to_le_bytes());
+        let run = UcMeterPacket::parse(&bytes).expect("data page");
+        dev.uc_meters.apply(&run);
+        let over = dev.output_over_levels(true).expect("UC over levels");
+        assert_eq!(over[0], Some(1.0), "carry state holds 0 dBFS at least");
+        // Below the LED gate the band stays clear.
+        bytes[252..256].copy_from_slice(&0x7fffff02u32.to_le_bytes());
+        let run = UcMeterPacket::parse(&bytes).expect("data page");
+        dev.uc_meters.apply(&run);
+        let over = dev.output_over_levels(true).expect("UC over levels");
+        assert_eq!(over[0], None, "run 2 stays under the OVR gate");
     }
 
     #[test]
