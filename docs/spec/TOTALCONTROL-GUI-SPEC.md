@@ -1736,9 +1736,11 @@ not the Control Room Main assignment; `PH` always addresses channels 7/8.
 ### 11.3 Control Room Settings
 
 `settings` opens a panel titled `CONTROL ROOM SETTINGS`, anchored above the
-Control Room. It is scrollable and not dimmed. It edits a draft; the stored
-values change only when `OK` is pressed. `Cancel`, `Escape` and a click
-outside the panel discard the draft.
+Control Room. Its bottom edge sits on the Control Room's top edge and the
+panel shrinks to its content; it scrolls only when the content exceeds the
+available height. It is not dimmed. It edits a draft; the stored values change
+only when `OK` is pressed. `Cancel`, `Escape` and a click outside the panel
+discard the draft.
 
 | Section | Controls |
 |---|---|

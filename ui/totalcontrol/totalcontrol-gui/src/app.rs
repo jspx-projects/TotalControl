@@ -18684,11 +18684,14 @@ fn control_room_settings_panel(state: &TotalControl) -> Element<'_, Message> {
                     .spacing(theme::SPACE_LG * scale)
                     .width(Length::Fill),
             )
-            .height(Length::Fixed(available))
+            // Shrink to the settings content.  The container below caps it
+            // at the available height so a long form still scrolls.
+            .height(Length::Shrink)
             .direction(scrollable::Direction::Vertical(
                 theme::thin_scrollbar(),
             )),
         )
+        .max_height(available)
         .style(theme::dialog)
         .padding(theme::SPACE_XL * scale)
         .width(Length::Fixed(content_w + 2.0 * theme::SPACE_XL * scale)),
@@ -18702,7 +18705,9 @@ fn control_room_settings_panel(state: &TotalControl) -> Element<'_, Message> {
                 .align_x(iced::Alignment::End)
                 .align_y(iced::Alignment::End)
                 .padding(iced::Padding {
-                    bottom: (strip::STRIP_H + theme::SPACE_MD) * scale,
+                    // The panel's bottom edge sits on the Control Room's top
+                    // edge, with no blank strip between them.
+                    bottom: strip::STRIP_H * scale,
                     right: theme::SPACE_MD * scale,
                     left: 0.0,
                     top: 0.0,
