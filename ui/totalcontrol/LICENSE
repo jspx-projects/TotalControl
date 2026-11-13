@@ -23,6 +23,6 @@ SOFTWARE.
 ---
 
 The applications are licensed differently, and the MIT text above does not
-cover them: `totalcontrol-gui` and `totalcontrol-tui` are GPL-3.0-only, `totalcontrol-usb` is
-GPL-3.0-or-later, `totalcontrol-sys` is GPL-3.0. `totalcontrol-core` and the remaining
-source in this directory stay MIT. The GPL-3.0 text is in `COPYING`.
+cover them: `totalcontrol-gui`, `totalcontrol-layout` and `totalcontrol-tui`
+are GPL-3.0-only. `totalcontrol-core` and the remaining source in this
+directory stay MIT. The GPL-3.0 text is in `COPYING`.

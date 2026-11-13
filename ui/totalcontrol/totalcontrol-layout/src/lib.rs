@@ -2162,7 +2162,7 @@ mod config_tests {
 
         // No matching key keeps the document's own default.
         assert_eq!(
-            document.resolve_for("Babyface Pro FS").geometry,
+            document.resolve_for("Babyface-classic").geometry,
             LayoutMetrics::default()
         );
     }

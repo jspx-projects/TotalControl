@@ -214,7 +214,7 @@ is a complete template object.
 ### Device overrides
 
 `devices` maps a canonical model name (`Fireface UC`, `Fireface UCX`,
-`Babyface Pro FS`) or a family prefix (`Fireface`) to an override.  The
+`Babyface-classic`) or a family prefix (`Fireface`) to an override.  The
 longest matching key wins; an exact model match wins over a family prefix.  A
 present `geometry`, `visual`, `colors` or `templates` section replaces the
 default section as a whole, and an absent section inherits the default:

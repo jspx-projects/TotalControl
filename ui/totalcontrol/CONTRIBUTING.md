@@ -1,9 +1,8 @@
 # Contributing to TotalControl
 
-TotalControl is pre-alpha and the architecture is still settling, but the most
-useful thing outside contributors can do right now — adding support for a
-second real RME device — has a concrete recipe below. If you're not sure
-where something fits, open an issue first rather than guessing.
+TotalControl supports the Fireface UC, Fireface UCX and Babyface-classic
+through the kernel hwdep interface. Contributions that keep the device model,
+the protocol specifications and the UI consistent are welcome.
 
 ## Development setup
 
@@ -18,77 +17,54 @@ cargo run -p totalcontrol-gui -- --mock
 cargo run -p totalcontrol-tui -- --mock
 ```
 
-Dependencies: `rustc`, `cargo`, `alsa-lib` (dev headers).
+Dependencies: `rustc`, `cargo`, `alsa-lib` (dev headers) and a kernel with the
+matching headers for the driver.
 
-## Adding a new ALSA-selem device profile
+## Architecture
 
-This is the highest-value contribution right now if you own an RME
-interface other than the Babyface Pro FS. It only covers **ALSA
-simple-mixer-element (selem) devices** — USB class-compliant interfaces
-like the Babyface family. RME's newer MIDI-SysEx-based models (Fireface
-UCX II, UFX+/III) need a different I/O backend entirely and aren't in
-scope for this recipe — see [Workspace](docs/guide.md#workspace) in the
-guide if you want to help with that instead.
+The kernel module owns USB transport, the ALSA PCM device and one hwdep control
+node per card. `totalcontrol-core` owns the device model and writes through
+hwdep. The GUI and TUI are two front ends over the same `RmeDevice` trait.
 
-1. **Get real `amixer scontents` output from your device.** Plug it in
-   and run `amixer -c <card name> scontents > scontents.txt`. You'll need
-   this to confirm every step below — don't guess at control names.
+- Wire encoding lives in `totalcontrol-core/src/fireface/`.
+- Channel topology and per-model data live in `totalcontrol-core/src/profiles/`.
+- Visible behaviour is specified in `docs/spec/`.
 
-2. **Copy `totalcontrol-core/src/profiles/babyface_pro.rs`** to a new file
-   (e.g. `profiles/digiface.rs`) and adjust its `const PROFILE:
-   DeviceProfile` to your device's real channel layout: `card_substring`
-   (a substring of your card's name as it appears in
-   `/proc/asound/cards`), `model_name`, one `InputSpec` per physical
-   input in channel-id order, one `OutputPairSpec` per stereo output
-   pair. Register the new module in `profiles/mod.rs`.
+## Adding a device
 
-3. **Re-verify the ALSA control-naming grammar.** `babyface.rs`'s
-   `selem_name`/`ch_type_str` helpers encode a specific naming pattern
-   (`"<Type>-<Name>-<Output>"`, `" 48V"`/`" PAD"`/`" Sens."` suffixes,
-   `"Clock Mode"`) observed on the Babyface Pro FS specifically — **this
-   is not confirmed to be shared by any other RME model.** Compare it
-   against your `scontents.txt` line by line. If your device's controls
-   are named differently, you'll need to adjust those helpers (or, if
-   you're the second real device to need different naming, that's the
-   signal to promote naming into `DeviceProfile` itself as a proper
-   per-model strategy — see the comment on `DeviceProfile` in
-   `profile.rs` for why that wasn't built speculatively ahead of time).
+A new device needs a descriptor and hwdep node in this repository's kernel
+module. Backends that depend on a driver outside this repository, or that speak
+USB directly, are not part of the supported set.
 
-4. **Wire it up for testing.** Right now `totalcontrol-gui`'s `DeviceHandle`
-   enum (`app.rs`) only opens one real device type — `BabyfacePro`,
-   pointed at the Babyface Pro FS profile. There's no auto-detection
-   across multiple profiles yet (nothing to detect between, with only one
-   real device implemented). To test your new profile against real
-   hardware end-to-end today, temporarily point `BabyfacePro::open()` at
-   your profile instead of `profiles::babyface_pro::PROFILE`, or add a
-   `DeviceHandle` variant and extend `open_real()` to try each profile's
-   `card_substring` in turn. A real multi-device-detection pass is
-   planned but not built — happy to help design it once a second device
-   is actually working.
+1. Add the kernel descriptor and its hwdep transport in `kernel/`.
+2. Add a `DeviceProfile` under `totalcontrol-core/src/profiles/` with the
+   channel names, counts and output display order.
+3. Register the model and transport in the profile selection.
+4. Add the device protocol specification under `docs/spec/`.
+5. Add profile and backend tests. Use the existing mock for the model where it
+   applies.
 
-5. **Add tests.** `mock.rs`'s existing suite (channel counts, output pair
-   count, phantom-power defaults, etc.) is the pattern to follow — it
-   should read straight off your new profile's data, the same way the
-   Babyface Pro FS ones do.
+## Tests
 
-6. **Open a PR** with your profile, the adjusted naming helpers if
-   needed, and a note on which real device you tested against.
+Run both required suites before opening a pull request:
 
-## Other ways to help
+```bash
+cd ui/totalcontrol
+cargo test -p totalcontrol-core --lib --features alsa
+cargo test -p totalcontrol-gui
+cargo test -p totalcontrol-tui -p totalcontrol-layout
+cd ../..
+python3 scripts/check-docs.py
+```
 
-- **UI / UX**: improve the iced GUI or the ratatui TUI — see
-  [Status](docs/guide.md#status) and `GUI-NOTES.md` for what's open.
-- **Babyface Pro FS ALSA verification**: `babyface.rs`'s mapping
-  (crosspoints, master volume/mute, phantom/pad/gain, loopback,
-  AN 1>2/link/MS/dim/width/FX send/pitch, EQ) is hardware-validated as
-  of 2026-08-28. Not yet wired: Sensitivity/Clock Source/SPDIF (no
-  matching ALSA control exists in the kernel driver at all) and
-  per-input EQ interaction edge cases — if you own the hardware,
-  poking at those is directly useful.
-- **MIDI SysEx backend**: help design the I/O layer for UCX II/UFX+/
-  III-class devices — a bigger, separate effort from the recipe above.
-- **Testing**: run `cargo test --workspace` and report anything that
-  breaks, especially on hardware.
+## Hardware tests
 
-See the [open issues](https://github.com/jspx-projects/TotalControl/issues) for
-starter tasks.
+Record the device model, transport, firmware, quantum and the test steps.
+Preserve the user scene and the current workspace, and leave the unit on the
+user's scene when the test ends. Use one Fireface at a time.
+
+## Pull requests
+
+Open one pull request per logical change. Keep `main` linear; do not merge
+without the required checks. Explain why the change is needed and which
+behaviour or specification it updates.

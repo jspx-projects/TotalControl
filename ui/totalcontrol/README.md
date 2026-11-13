@@ -20,14 +20,14 @@ Routing, gains, monitoring, EQ, FX sends and scenes for RME interfaces,
 without the Windows software. Reverse-engineered from the vendor protocol and
 validated on real hardware.
 
-> **Supported today:** the Babyface Pro FS. More RME models are the goal,
-> see [Contributing](CONTRIBUTING.md) to help bring yours.
+> **Supported today:** the Fireface UC and Fireface UCX, plus the
+> Babyface-classic through the same kernel driver.
 
 - **Three views**: Quick, Mixer and Matrix
 - **The whole DSP mixer**: preamp, trim, EQ, width, loopback, mute/solo groups
 - **Snapshots and layouts**, undo/redo, custom channel names
 - **Lives in the tray**: the front-panel DIM button and your mix survive a replug
-- **GUI and TUI**, over the [kernel driver](../../kernel/README.md) or plain libusb
+- **GUI and TUI**, over the [kernel driver](../../kernel/README.md)
 
 ## Install
 
@@ -37,11 +37,11 @@ paru -S totalcontrol        # Arch, CachyOS
 
 Other distributions: `cargo build --release`, see the
 [guide](docs/guide.md#building-from-source).
-Try it without hardware: `totalcontrol --mock` simulates a Babyface Pro FS,
-`totalcontrol --mock-ucx` a Fireface UCX and `totalcontrol --mock-uc` a Fireface UC. Each
-one brings the panels its unit really has — the UCX adds EQ, dynamics, FX and
-the Control Room; the UC shows the gated set. All three are also selectable in
-the Device picker.
+Try it without hardware: `totalcontrol --mock` simulates a Fireface UCX,
+`totalcontrol --mock-ucx` a Fireface UCX and `totalcontrol --mock-uc` a
+Fireface UC. Each brings the panels its unit really has — the UCX adds EQ,
+dynamics, FX and the Control Room; the UC shows the gated set. Both are also
+selectable in the Device picker.
 
 ## Learn more
 

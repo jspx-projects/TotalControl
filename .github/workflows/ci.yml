@@ -21,8 +21,6 @@ jobs:
       layout: ${{ steps.changes.outputs.layout }}
       gui: ${{ steps.changes.outputs.gui }}
       tui: ${{ steps.changes.outputs.tui }}
-      usb: ${{ steps.changes.outputs.usb }}
-      alsa_plugin: ${{ steps.changes.outputs.alsa_plugin }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -57,8 +55,6 @@ jobs:
           echo "layout=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-layout/')" >> "$GITHUB_OUTPUT"
           echo "gui=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-gui/')" >> "$GITHUB_OUTPUT"
           echo "tui=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-tui/')" >> "$GITHUB_OUTPUT"
-          echo "usb=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-(usb|sys)/')" >> "$GITHUB_OUTPUT"
-          echo "alsa_plugin=$(flag "$rust_all" '^ui/totalcontrol/tools/alsa/')" >> "$GITHUB_OUTPUT"
 
   docs:
     runs-on: ubuntu-24.04
@@ -163,50 +159,6 @@ jobs:
       - name: Build TUI
         run: cargo test -p totalcontrol-tui
 
-  usb:
-    needs: changes
-    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.usb == 'true'
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: ui/totalcontrol
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ui/totalcontrol
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libudev-dev pkg-config
-      - name: Test USB and FFI crates
-        run: |
-          cargo test -p totalcontrol-usb --features driver
-          cargo build -p totalcontrol-sys --release
-
-  alsa_plugin:
-    needs: changes
-    if: needs.changes.outputs.alsa_plugin == 'true' || needs.changes.outputs.usb == 'true'
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: ui/totalcontrol
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ui/totalcontrol
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libasound2-dev libudev-dev pkg-config
-      - name: Build FFI and ALSA plugin
-        run: |
-          cargo build -p totalcontrol-sys --release
-          make -C tools/alsa
-
   totalcontrol:
     needs:
       - changes
@@ -216,8 +168,6 @@ jobs:
       - layout
       - gui
       - tui
-      - usb
-      - alsa_plugin
     if: always()
     runs-on: ubuntu-24.04
     steps:

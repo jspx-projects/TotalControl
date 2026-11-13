@@ -11,7 +11,7 @@ default = ["alsa"]
 alsa = ["totalcontrol-core/alsa"]
 
 [dependencies]
-totalcontrol-core = { path = "../totalcontrol-core", default-features = false, features = ["usb"] }
+totalcontrol-core = { path = "../totalcontrol-core", default-features = false }
 totalcontrol-layout = { path = "../totalcontrol-layout" }
 iced = { version = "0.14", features = ["canvas", "tokio", "advanced", "image-without-codecs"] }
 log = "0.4"

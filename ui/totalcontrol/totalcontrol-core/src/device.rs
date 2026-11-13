@@ -257,26 +257,21 @@ fn ensure_balance_len(balance: &mut Vec<i8>, block: usize) {
 /// The device exposes a matrix (submix) mixer: each input and playback
 /// channel has its own volume and pan towards every hardware output pair.
 pub trait RmeDevice {
-    /// Human-readable model name (e.g. "Babyface Pro FS"), decorated per
-    /// backend for display in the UI (e.g. "Babyface Pro FS (USB)",
-    /// "Babyface Pro FS (mock)") — NOT what scene compatibility should be
-    /// judged on, see [`Self::canonical_model`].
+    /// Human-readable model name, decorated per backend for display in the
+    /// UI (for example "Fireface UCX (mock)"). Not what scene compatibility
+    /// is judged on, see [`Self::canonical_model`].
     fn model_name(&self) -> &str;
 
-    /// Model identity used for [`Scene::check_compatible`] — deliberately
+    /// Model identity used for [`Scene::check_compatible`], deliberately
     /// separate from [`Self::model_name`]. Two backends that talk to the
-    /// same physical device (e.g. the ALSA kernel-driver path and the
-    /// direct-USB path both controlling a Babyface Pro FS) should be able
-    /// to restore each other's saved scenes; only genuinely different
-    /// hardware should be rejected. Defaults to [`Self::model_name`] for
-    /// backends where the two don't need to differ (e.g. the mock, whose
-    /// captures are never persisted to the shared auto-scene anyway).
+    /// same physical device should be able to restore each other's saved
+    /// scenes; only genuinely different hardware should be rejected.
     fn canonical_model(&self) -> &str {
         self.model_name()
     }
 
-    /// The sample rates this device supports.  The UC, UCX and Babyface Pro
-    /// FS share the nine 1x/2x/4x classes; a future model can override it.
+    /// The sample rates this device supports. The supported Fireface and
+    /// Babyface-classic models share the nine 1x/2x/4x classes.
     fn sample_rates(&self) -> &'static [u32] {
         &crate::pw_clock::DEVICE_SAMPLE_RATES
     }
@@ -371,8 +366,8 @@ pub trait RmeDevice {
     /// personality.  Distinct from [`Self::protocol_features`]: a
     /// proprietary driver can expose only a v1 subset (our UCX driver:
     /// routing, gains, mutes, phantom/PAD and clock) while still speaking
-    /// the vendor protocol.  Defaults to `!protocol_features()` for the
-    /// backends where the two coincide (Babyface Pro, mock, USB).
+    /// the vendor protocol. Defaults to `!protocol_features()` where the
+    /// two coincide.
     fn class_compliant(&self) -> bool {
         !self.protocol_features()
     }
@@ -1494,9 +1489,9 @@ pub trait RmeDevice {
         ))
     }
 
-    /// FX send level in dB (-65..0, 0 = max send). The backends whose send
-    /// is a single global control (Babyface Pro's ALSA "FX Send") use this
-    /// one; per-channel backends implement [`Self::set_channel_fx_send`].
+    /// FX send level in dB (-65..0, 0 = max send). Backends whose send is
+    /// one global control use this one; per-channel backends implement
+    /// [`Self::set_channel_fx_send`].
     fn set_fx_send(&mut self, db: f32) -> Result<(), Error> {
         let _ = db;
         Err(Error::InvalidChannel(

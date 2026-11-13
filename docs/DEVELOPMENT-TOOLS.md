@@ -8,9 +8,6 @@ testing.
 ## Contents
 
 - [Support status](#support-status)
-- [Direct USB backend](#direct-usb-backend)
-- [Legacy ALSA backends](#legacy-alsa-backends)
-- [ALSA PCM plugin](#alsa-pcm-plugin)
 - [Mock modes](#mock-modes)
 - [Environment variables](#environment-variables)
 - [Capture and probe tools](#capture-and-probe-tools)
@@ -22,81 +19,18 @@ testing.
 | Path | Status |
 |---|---|
 | Kernel driver + hwdep | supported user path |
-| `totalcontrol-usb` direct libusb | development only |
-| `BabyfacePro` ALSA | development fallback |
-| ALSA PCM plugin | development only |
 | Probe and capture programs | development only |
 | Mock backends | development and tests |
 
 The manual does not describe these as installation options. They are kept
 because they are useful for protocol work, capture sessions and comparisons.
 
-## Direct USB backend
-
-`totalcontrol-usb` speaks the vendor protocol over libusb. It bypasses ALSA and
-the kernel driver and claims the USB interface directly. It cannot coexist
-with the kernel driver or a running PipeWire graph on the same device.
-
-Use it for:
-
-- protocol probes and captures;
-- the Babyface proprietary-mode work;
-- comparing a direct transport with the kernel path.
-
-Start it explicitly:
-
-```sh
-totalcontrol --backend usb
-```
-
-Do not use this mode for normal monitoring. The kernel driver path is the
-supported one.
-
-## Babyface ALSA backend
-
-`BabyfacePro` reads and writes the ALSA mixer controls exposed by the Babyface
-kernel driver. It is used when the direct hwdep path is not available for that
-unit.
-
-It is selected automatically when its card is present, or explicitly:
-
-```sh
-totalcontrol --backend alsa
-```
-
-## ALSA PCM plugin
-
-`ui/totalcontrol/tools/alsa/` contains the Babyface Pro FS proprietary-mode PCM
-bridge:
-
-```text
-ALSA application
-  -> libasound_module_pcm_totalcontrol.so
-  -> libtotalcontrol_sys.so
-  -> totalcontrol-usb
-```
-
-It exposes playback and capture channels to ALSA and PipeWire while
-`totalcontrol-usb` owns the device. It is part of the direct-USB development
-path, not the kernel-driver installation.
-
-Build and test:
-
-```sh
-cd ui/totalcontrol
-cargo build -p totalcontrol-sys --release
-sudo make -C tools/alsa install
-```
-
-The plugin and its PipeWire drop-in are documented in
-`ui/totalcontrol/tools/alsa/README.md`.
-
 ## Mock modes
 
 The mock backends run the complete UI without hardware:
 
 ```sh
-totalcontrol --mock       # Babyface Pro FS
+totalcontrol --mock       # Fireface UCX
 totalcontrol --mock-ucx   # Fireface UCX
 totalcontrol --mock-uc    # Fireface UC
 ```
@@ -227,8 +161,6 @@ The application license split is described in `ui/totalcontrol/LICENSE`:
 
 - `totalcontrol-core`: MIT
 - `totalcontrol-gui`, `totalcontrol-layout` and `totalcontrol-tui`: GPL-3.0-only
-- `totalcontrol-usb`: GPL-3.0-or-later
-- `totalcontrol-sys`: GPL-3.0
 
 The kernel module is GPL-2.0-only. Tools and scripts follow the repository
 license unless their own notice says otherwise.

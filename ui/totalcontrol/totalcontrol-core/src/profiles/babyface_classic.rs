@@ -27,7 +27,6 @@ const PAIRS: &[OutputPairSpec] = &[
 ];
 
 pub const PROFILE: DeviceProfile = DeviceProfile {
-    card_substring: "Babyface",
     model_name: "Babyface-classic",
     inputs: &[
         input("AN1", ChannelType::Mic),

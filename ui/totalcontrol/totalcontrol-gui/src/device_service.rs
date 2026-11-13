@@ -1780,10 +1780,10 @@ mod tests {
     use crate::app::DeviceHandle;
     use std::thread;
     use std::time::{Duration, Instant};
-    use totalcontrol_core::{ChannelId, MockBabyfacePro, RmeDevice};
+    use totalcontrol_core::{ChannelId, MockDevice, RmeDevice};
 
     fn mock() -> DeviceHandle {
-        DeviceHandle::Mock(MockBabyfacePro::open_ucx().expect("mock opens"))
+        DeviceHandle::Mock(MockDevice::open_ucx().expect("mock opens"))
     }
 
     #[test]

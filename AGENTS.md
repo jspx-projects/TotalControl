@@ -64,8 +64,6 @@ Authoritative files:
 - `docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` — UCX transport, registers,
   controls and metering.
 - `docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md` — UC protocol and controls.
-- `docs/spec/BABYFACE-PRO-PROTOCOL-SPEC.md` — Babyface Pro FS channel model,
-  ALSA surface, vendor USB protocol, DSP EQ blocks and metering.
 - `docs/spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md` — Babyface-classic transport,
   channel model, mixer writes, preamps, metering and hwdep ABI.
 - `docs/DEVELOPMENT-TOOLS.md` — development-only backends and tools.

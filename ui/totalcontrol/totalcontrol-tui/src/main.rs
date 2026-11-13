@@ -2,8 +2,8 @@
 //!
 //! ```bash
 //! cargo run -p totalcontrol-tui              # with hardware
-//! cargo run -p totalcontrol-tui -- --mock    # simulation
-//! cargo run -p totalcontrol-tui -- --backend usb  # force libusb over the kernel driver
+//! cargo run -p totalcontrol-tui -- --mock    # simulation (Fireface UCX)
+//! cargo run -p totalcontrol-tui -- --mock-uc # simulation (Fireface UC)
 //! ```
 //!
 //! The one control surface no other RME mixer — official or third-party —
@@ -36,32 +36,33 @@ use ratatui::{
 use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-#[cfg(feature = "alsa")]
-use totalcontrol_core::BabyfacePro;
 use totalcontrol_core::channel::{ChannelType, EqBandType};
 use totalcontrol_core::pw_meter::PlaybackTap;
-use totalcontrol_core::{BabyfaceProUsb, ChannelId, MockBabyfacePro, RmeDevice};
+#[cfg(feature = "alsa")]
+use totalcontrol_core::{BabyfaceClassic, Fireface};
+use totalcontrol_core::{ChannelId, MockDevice, RmeDevice};
 
 enum DeviceHandle {
     #[cfg(feature = "alsa")]
-    Real(BabyfacePro),
-    Mock(MockBabyfacePro),
-    /// The proprietary USB backend (the TotalMix protocol) — the path
-    /// that actually works with the device in proprietary mode on Linux.
-    Usb(BabyfaceProUsb),
+    Fireface(Fireface),
+    #[cfg(feature = "alsa")]
+    BabyfaceClassic(BabyfaceClassic),
+    Mock(MockDevice),
 }
 macro_rules! delegate {
     ($self:expr, $method:ident($($arg:expr),*)) => { match $self {
         DeviceHandle::Mock(d) => d.$method($($arg),*),
-        DeviceHandle::Usb(d) => d.$method($($arg),*),
         #[cfg(feature = "alsa")]
-        DeviceHandle::Real(d) => d.$method($($arg),*),
+        DeviceHandle::Fireface(d) => d.$method($($arg),*),
+        #[cfg(feature = "alsa")]
+        DeviceHandle::BabyfaceClassic(d) => d.$method($($arg),*),
     } };
     ($self:expr, $method:ident) => { match $self {
         DeviceHandle::Mock(d) => d.$method(),
-        DeviceHandle::Usb(d) => d.$method(),
         #[cfg(feature = "alsa")]
-        DeviceHandle::Real(d) => d.$method(),
+        DeviceHandle::Fireface(d) => d.$method(),
+        #[cfg(feature = "alsa")]
+        DeviceHandle::BabyfaceClassic(d) => d.$method(),
     } };
 }
 impl RmeDevice for DeviceHandle {
@@ -107,13 +108,23 @@ impl RmeDevice for DeviceHandle {
     fn settings_mut(&mut self) -> &mut totalcontrol_core::DeviceSettings {
         delegate!(self, settings_mut)
     }
-    fn set_volume(&mut self, ch: ChannelId, out: usize, v: f32) -> Result<(), totalcontrol_core::Error> {
+    fn set_volume(
+        &mut self,
+        ch: ChannelId,
+        out: usize,
+        v: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_volume(ch, out, v))
     }
     fn volume(&self, ch: ChannelId, out: usize) -> Result<f32, totalcontrol_core::Error> {
         delegate!(self, volume(ch, out))
     }
-    fn set_pan(&mut self, ch: ChannelId, out: usize, p: i8) -> Result<(), totalcontrol_core::Error> {
+    fn set_pan(
+        &mut self,
+        ch: ChannelId,
+        out: usize,
+        p: i8,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_pan(ch, out, p))
     }
     fn pan(&self, ch: ChannelId, out: usize) -> Result<i8, totalcontrol_core::Error> {
@@ -217,7 +228,12 @@ impl RmeDevice for DeviceHandle {
     ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_band_freq(idx, band, freq_hz))
     }
-    fn set_eq_band_q(&mut self, idx: usize, band: usize, q: f32) -> Result<(), totalcontrol_core::Error> {
+    fn set_eq_band_q(
+        &mut self,
+        idx: usize,
+        band: usize,
+        q: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_band_q(idx, band, q))
     }
     fn set_eq_band_gain(
@@ -228,7 +244,11 @@ impl RmeDevice for DeviceHandle {
     ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_band_gain(idx, band, gain_db))
     }
-    fn set_eq_low_cut_freq(&mut self, idx: usize, freq_hz: u16) -> Result<(), totalcontrol_core::Error> {
+    fn set_eq_low_cut_freq(
+        &mut self,
+        idx: usize,
+        freq_hz: u16,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_eq_low_cut_freq(idx, freq_hz))
     }
     fn set_eq_low_cut_slope(
@@ -241,7 +261,10 @@ impl RmeDevice for DeviceHandle {
     fn capture_scene(&self) -> totalcontrol_core::Scene {
         delegate!(self, capture_scene)
     }
-    fn apply_scene(&mut self, s: &totalcontrol_core::Scene) -> Result<(), totalcontrol_core::Error> {
+    fn apply_scene(
+        &mut self,
+        s: &totalcontrol_core::Scene,
+    ) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, apply_scene(s))
     }
     fn poll_events(&mut self) -> Result<(), totalcontrol_core::Error> {
@@ -249,116 +272,101 @@ impl RmeDevice for DeviceHandle {
     }
 }
 impl DeviceHandle {
-    /// Opens the real hardware. `backend` forces a specific path
-    /// (`"alsa"` or `"usb"`) — anything else (including `None`) auto-
-    /// detects: ALSA (the kernel driver) first, falling back to the
-    /// direct USB backend if the kernel driver isn't loaded. The USB
-    /// backend refuses to open while the kernel driver owns the device
-    /// (see `totalcontrol-usb`), so the two paths are mutually exclusive —
-    /// auto-detect never double-opens, it just wasn't ever *said* which
-    /// one won. Every path now logs that at `info` level so a failure
-    /// to find the device isn't a silent "which one did it even try?".
-    fn open_real(backend: Option<&str>) -> Option<Self> {
-        #[cfg_attr(not(feature = "alsa"), allow(unused_variables))]
-        let want_alsa = !matches!(backend, Some("usb"));
-        let want_usb = !matches!(backend, Some("alsa"));
-
+    /// Opens the first real hwdep device: a Fireface UC/UCX or a
+    /// Babyface-classic.
+    fn open_real() -> Option<Self> {
         #[cfg(feature = "alsa")]
-        if want_alsa {
-            match BabyfacePro::open() {
+        {
+            match Fireface::open() {
                 Ok(d) => {
-                    log::info!("Device backend: ALSA (kernel driver)");
-                    return Some(DeviceHandle::Real(d));
+                    log::info!(
+                        "Device backend: hwdep ({} on card {})",
+                        d.model_name(),
+                        d.info().card
+                    );
+                    return Some(DeviceHandle::Fireface(d));
                 }
-                Err(e) if backend == Some("alsa") => {
-                    log::warn!("--backend alsa requested but ALSA open failed: {e:?}");
-                    return None;
-                }
-                // The card was found, it's just in a mode this backend
-                // can't drive — user-actionable, so say it on stderr
-                // instead of falling through to the generic (and here
-                // simply wrong) "No device found".
-                Err(e @ totalcontrol_core::Error::UnsupportedDeviceMode { .. }) => {
-                    eprintln!("{e}");
-                }
-                Err(_) => {}
+                Err(e) => log::debug!("Fireface hwdep open not available: {e:?}"),
             }
-        }
-        #[cfg(not(feature = "alsa"))]
-        if backend == Some("alsa") {
-            log::warn!("--backend alsa requested but this build has no `alsa` feature");
-            return None;
-        }
-
-        if want_usb {
-            match BabyfaceProUsb::open() {
+            match BabyfaceClassic::open_first() {
                 Ok(d) => {
-                    log::info!("Device backend: USB (libusb)");
-                    return Some(DeviceHandle::Usb(d));
+                    log::info!("Device backend: hwdep (Babyface-classic)");
+                    return Some(DeviceHandle::BabyfaceClassic(d));
                 }
-                Err(e) if backend == Some("usb") => {
-                    log::warn!("--backend usb requested but USB open failed: {e:?}");
-                }
-                Err(_) => {}
+                Err(e) => log::debug!("Babyface-classic hwdep open not available: {e:?}"),
             }
         }
         None
     }
     fn open_mock() -> Self {
-        DeviceHandle::Mock(MockBabyfacePro::open().expect("mock opens"))
+        let device = match std::env::var("TOTALCONTROL_MOCK_MODEL").ok().as_deref() {
+            Some("uc") => MockDevice::open_uc(),
+            _ => MockDevice::open_ucx(),
+        };
+        DeviceHandle::Mock(device.expect("mock opens"))
     }
-    /// All input meter levels in one call (the USB backend's
-    /// `meters()` is draining — call once per draw, not per channel).
+    /// All input meter levels in one call (a device backend's `meters()`
+    /// is draining — call once per draw, not per channel).
     fn input_meters(&self) -> Vec<f32> {
         let n = self.inputs().len();
         match self {
             DeviceHandle::Mock(d) => (0..n).map(|i| d.input_meter(i)).collect(),
-            DeviceHandle::Usb(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
-            DeviceHandle::Real(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
+            DeviceHandle::Fireface(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
         }
     }
     fn playback_meters(&self) -> Vec<f32> {
         let n = self.playbacks().len();
         match self {
             DeviceHandle::Mock(d) => (0..n).map(|i| d.playback_meter(i)).collect(),
-            // Playback meters come from the OUT stream — not wired yet.
             #[cfg(feature = "alsa")]
-            DeviceHandle::Real(_) => vec![0.0; n],
-            DeviceHandle::Usb(_) => vec![0.0; n],
+            DeviceHandle::Fireface(d) => d.playback_meters().unwrap_or_else(|| vec![0.0; n]),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(_) => vec![0.0; n],
         }
     }
-    /// Per-channel availability for the input strips: the ALSA backend
-    /// has real levels for all twelve inputs in the device's own order
-    /// with the v7 driver (AS1/2 is at capture 4/5). See `totalcontrol-gui`'s
-    /// identical method and `totalcontrol-core`'s `capture_meter` module for
-    /// the live mapping.
+    /// Per-channel availability for the input strips. The hwdep backends
+    /// meter every input they expose.
     fn has_input_meter(&self, idx: usize) -> bool {
         match self {
             DeviceHandle::Mock(_) => true,
-            DeviceHandle::Usb(_) => idx < 4,
             #[cfg(feature = "alsa")]
-            DeviceHandle::Real(d) => idx < d.inputs().len() && d.meters_available(),
+            DeviceHandle::Fireface(d) => idx < d.inputs().len(),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(d) => idx < d.inputs().len() && d.meters_available(),
         }
     }
-    /// Whether `playback_meters()` is real — true only for Mock; see
-    /// `totalcontrol-gui`'s identical method (the USB backend's ISO OUT stream
-    /// runs in meter-only/silence mode, and only one process can hold the
-    /// device's single streaming session at a time).
+    /// Whether `playback_meters()` is real. The hwdep Fireface backend
+    /// publishes device playback meters; the simulation generates them.
     fn has_playback_meters(&self) -> bool {
-        matches!(self, DeviceHandle::Mock(_))
+        match self {
+            DeviceHandle::Mock(_) => true,
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(_) => true,
+            _ => false,
+        }
     }
     /// Output meters, computed host-side like TotalMix from levels the
     /// caller already drained this draw. Passing them in matters:
-    /// `input_meters()`/`playback_meters()` drain on the USB and ALSA
-    /// backends, and the old `output_meters()` called them a second time,
-    /// so the sum used a near-empty second drain. See
+    /// `input_meters()`/`playback_meters()` drain on the hwdep backends,
+    /// and the old `output_meters()` called them a second time, so the sum
+    /// used a near-empty second drain. See
     /// `power_sum_output_meters`'s own doc comment for the math.
     fn output_meters_from(&self, input_meters: &[f32], playback_meters: &[f32]) -> Vec<f32> {
         power_sum_output_meters(
-            &self.inputs().iter().map(|c| c.volumes.clone()).collect::<Vec<_>>(),
+            &self
+                .inputs()
+                .iter()
+                .map(|c| c.volumes.clone())
+                .collect::<Vec<_>>(),
             input_meters,
-            &self.playbacks().iter().map(|c| c.volumes.clone()).collect::<Vec<_>>(),
+            &self
+                .playbacks()
+                .iter()
+                .map(|c| c.volumes.clone())
+                .collect::<Vec<_>>(),
             playback_meters,
             self.outputs().len(),
         )
@@ -527,7 +535,11 @@ fn set_channel_solo(dev: &mut DeviceHandle, cid: ChannelId, s: bool) {
 /// at — a linked pair's `ChannelId` is its first/left channel (every
 /// pair-aware `set_*` method above writes both sides regardless of
 /// which one is named).
-fn item_channel_id(items: &[PairItem], channel: usize, make: impl Fn(usize) -> ChannelId) -> ChannelId {
+fn item_channel_id(
+    items: &[PairItem],
+    channel: usize,
+    make: impl Fn(usize) -> ChannelId,
+) -> ChannelId {
     match items.get(channel) {
         Some(PairItem::Linked(pair)) => make(pair * 2),
         Some(PairItem::Single(ch)) => make(*ch),
@@ -609,27 +621,19 @@ fn current_workspace(dev: &DeviceHandle) -> Option<PathBuf> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args: Vec<String> = std::env::args().collect();
-    let mock = args.iter().any(|a| a == "--mock");
-
-    // `None` = auto-detect (ALSA/kernel-driver first, USB fallback — see
-    // `DeviceHandle::open_real`). An unrecognized value falls back to
-    // auto rather than silently opening nothing.
-    let backend = args
-        .iter()
-        .position(|a| a == "--backend")
-        .and_then(|i| args.get(i + 1))
-        .and_then(|v| match v.as_str() {
-            "alsa" | "usb" => Some(v.as_str()),
-            other => {
-                eprintln!("Unknown --backend value {other:?} (use alsa|usb), auto-detecting");
-                None
-            }
-        });
+    if args.iter().any(|a| a == "--mock-uc") {
+        std::env::set_var("TOTALCONTROL_MOCK_MODEL", "uc");
+    } else if args.iter().any(|a| a == "--mock-ucx") {
+        std::env::set_var("TOTALCONTROL_MOCK_MODEL", "ucx");
+    }
+    let mock = args.iter().any(|a| a == "--mock")
+        || args.iter().any(|a| a == "--mock-uc")
+        || args.iter().any(|a| a == "--mock-ucx");
 
     let mut device: DeviceHandle = if mock {
         DeviceHandle::open_mock()
     } else {
-        DeviceHandle::open_real(backend).unwrap_or_else(|| {
+        DeviceHandle::open_real().unwrap_or_else(|| {
             eprintln!("No device found. Use --mock.");
             DeviceHandle::open_mock()
         })
@@ -713,7 +717,7 @@ fn run(
                 }
             }
         }
-        // Meters are draining on the USB backend — fetch once per draw.
+        // Meters are draining on the hwdep backend — fetch once per draw.
         let in_meters = dev.input_meters();
         let (tap_levels, tap_channels) = playback_tap.drain();
         let pb_meters = if dev.is_mock() {
@@ -765,8 +769,7 @@ fn run(
                             if !dev.is_mock() {
                                 let scene = dev.capture_scene();
                                 if let Some(path) = workspace_path.as_deref() {
-                                    let _ =
-                                        totalcontrol_core::workspace::write_scene(path, &scene);
+                                    let _ = totalcontrol_core::workspace::write_scene(path, &scene);
                                 }
                             }
                             break;
@@ -1179,7 +1182,7 @@ fn run(
                         }
                         // Sample rate cycle: r = next in 44.1/48/96/192 kHz
                         // (the supported rate classes — alt 1/2/3). Only the
-                        // proprietary backend actually switches (SET_INTERFACE
+                        // hwdep Fireface backend actually switches (SET_INTERFACE
                         // + stream restart); other backends no-op.
                         KeyCode::Char('r') => {
                             let cur = dev.settings().sample_rate;
@@ -1204,8 +1207,8 @@ fn run(
 /// that drive RME's own protocol are dead (their setters refuse, see
 /// `RmeDevice::protocol_features`), so the bar stops advertising them,
 /// the same rule the bottom footer already follows. `w` (optical out
-/// format) and `c` (cue) leave with them: the ALSA backend implements
-/// neither, and a class-compliant card is only ever reached over ALSA.
+/// format) and `c` (cue) leave with them: the hwdep backends implement
+/// neither.
 fn top_hints(protocol_features: bool) -> &'static str {
     if protocol_features {
         "  o:submix  r:rate  y/h:pitch  u/j:width  x:MS  a:AN1>2  k:input link  f:EQ rec  w:SPDIF out"
@@ -1270,7 +1273,10 @@ fn ui(
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("TotalControl", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "TotalControl",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::raw(format!(" - {}  ", dev.model_name())),
             mode,
             Span::raw(format!("{}", view_tag)),
@@ -1611,10 +1617,7 @@ fn render_strips(
             Span::styled(name, base.add_modifier(Modifier::BOLD)),
         ];
         if let Some(tag) = &v.tag {
-            spans.push(Span::styled(
-                format!(" {tag}"),
-                base.fg(Color::DarkGray),
-            ));
+            spans.push(Span::styled(format!(" {tag}"), base.fg(Color::DarkGray)));
         }
         f.render_widget(
             Paragraph::new(Line::from(spans)),
@@ -1634,18 +1637,29 @@ fn render_strips(
         let buf = f.buffer_mut();
         for k in 0..bar_h {
             let y = bar_top + bar_h - 1 - k; // k = 0 is the bottom cell
-            // Fader: a thin track, filled up to the cap.
+                                             // Fader: a thin track, filled up to the cap.
             let on = k < fader_fill;
             buf.set_string(
                 fader_x,
                 y,
-                if k + 1 == fader_fill { "\u{2501}" } else if on { "\u{2503}" } else { "\u{2502}" },
+                if k + 1 == fader_fill {
+                    "\u{2501}"
+                } else if on {
+                    "\u{2503}"
+                } else {
+                    "\u{2502}"
+                },
                 base.fg(if on { BADGE_COLOR } else { Color::DarkGray }),
             );
             // Meter: green below -12 dB, amber to -3, red above; dashed
             // and dim when the backend has no reading at all.
             if !v.meter_available {
-                buf.set_string(meter_x, y, if k % 2 == 0 { "\u{2504}" } else { " " }, base.fg(Color::DarkGray));
+                buf.set_string(
+                    meter_x,
+                    y,
+                    if k % 2 == 0 { "\u{2504}" } else { " " },
+                    base.fg(Color::DarkGray),
+                );
                 continue;
             }
             let frac = (k as f32 + 0.5) / bar_h as f32;
@@ -1659,7 +1673,12 @@ fn render_strips(
             if k < meter_fill {
                 buf.set_string(meter_x, y, "\u{2588}", base.fg(color));
             } else {
-                buf.set_string(meter_x, y, "\u{2591}", base.fg(Color::Rgb(0x30, 0x31, 0x36)));
+                buf.set_string(
+                    meter_x,
+                    y,
+                    "\u{2591}",
+                    base.fg(Color::Rgb(0x30, 0x31, 0x36)),
+                );
             }
         }
 
@@ -1672,7 +1691,8 @@ fn render_strips(
         let mut line_y = bar_top;
         let put = |buf: &mut ratatui::buffer::Buffer, y: u16, spans: Vec<Span>| {
             if y < cell.bottom() {
-                Paragraph::new(Line::from(spans)).render(Rect::new(text_x, y, text_w as u16, 1), buf);
+                Paragraph::new(Line::from(spans))
+                    .render(Rect::new(text_x, y, text_w as u16, 1), buf);
             }
         };
         put(
@@ -1743,7 +1763,11 @@ fn matrix_playback_groups(dev: &DeviceHandle) -> Vec<(String, usize, usize)> {
     (0..n / 2)
         .map(|pair| {
             (
-                OUT_LABELS.get(pair).copied().unwrap_or_default().to_string(),
+                OUT_LABELS
+                    .get(pair)
+                    .copied()
+                    .unwrap_or_default()
+                    .to_string(),
                 pair * 2,
                 2,
             )
@@ -1848,23 +1872,35 @@ fn render_matrix(f: &mut Frame, title: &str, area: Rect, dev: &DeviceHandle, col
 
     let mut header = format!("{:<label_w$}", "", label_w = MATRIX_LABEL_W);
     for &o in &cols {
-        header.push_str(&format!("{:>col_w$}", format!("Out{}", o + 1), col_w = MATRIX_COL_W));
+        header.push_str(&format!(
+            "{:>col_w$}",
+            format!("Out{}", o + 1),
+            col_w = MATRIX_COL_W
+        ));
     }
     lines.push(header);
 
     matrix_render_rows(&mut lines, &cols, &matrix_input_groups(dev), "I", |idx| {
         dev.inputs()[idx].volumes.clone()
     });
-    matrix_render_rows(&mut lines, &cols, &matrix_playback_groups(dev), "P", |idx| {
-        dev.playbacks()[idx].volumes.clone()
-    });
+    matrix_render_rows(
+        &mut lines,
+        &cols,
+        &matrix_playback_groups(dev),
+        "P",
+        |idx| dev.playbacks()[idx].volumes.clone(),
+    );
 
     // Master "Outputs" row + pair-group footer.
     lines.push(String::new());
     let mut out_row = format!("{:<label_w$}", "Out", label_w = MATRIX_LABEL_W);
     for &o in &cols {
         let vol = dev.outputs().get(o).map(|c| c.volume).unwrap_or(0.0);
-        out_row.push_str(&format!("{:>col_w$}", matrix_cell_text(vol), col_w = MATRIX_COL_W));
+        out_row.push_str(&format!(
+            "{:>col_w$}",
+            matrix_cell_text(vol),
+            col_w = MATRIX_COL_W
+        ));
     }
     lines.push(out_row);
 
@@ -1914,11 +1950,7 @@ fn render_eq(f: &mut Frame, area: Rect, dev: &DeviceHandle, idx: usize, eq_row: 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let eq = dev
-        .inputs()
-        .get(idx)
-        .and_then(|c| c.eq)
-        .unwrap_or_default();
+    let eq = dev.inputs().get(idx).and_then(|c| c.eq).unwrap_or_default();
 
     let mut rows = vec![format!(
         "Enabled          : {}",
@@ -1983,11 +2015,7 @@ fn step_freq_hz(current: u16, dir: i32, coarse: bool) -> u16 {
 }
 
 fn adjust_eq_field(dev: &mut DeviceHandle, idx: usize, row: usize, dir: i32, coarse: bool) {
-    let eq = dev
-        .inputs()
-        .get(idx)
-        .and_then(|c| c.eq)
-        .unwrap_or_default();
+    let eq = dev.inputs().get(idx).and_then(|c| c.eq).unwrap_or_default();
     match row {
         0 => {
             if dev.protocol_features() {
@@ -2061,8 +2089,14 @@ mod tests {
         assert_eq!(out[1], 0.0, "pair 0 (ch1) has no signal routed to it");
         assert_eq!(out[2], 0.0, "pair 1 (ch2) has no signal routed to it");
         assert_eq!(out[3], 0.0, "pair 1 (ch3) has no signal routed to it");
-        assert_eq!(out[4], 1.0, "pair 2 (ch4) should read the full routed signal");
-        assert_eq!(out[5], 1.0, "pair 2 (ch5) should read the full routed signal");
+        assert_eq!(
+            out[4], 1.0,
+            "pair 2 (ch4) should read the full routed signal"
+        );
+        assert_eq!(
+            out[5], 1.0,
+            "pair 2 (ch5) should read the full routed signal"
+        );
     }
 
     #[test]
@@ -2103,13 +2137,16 @@ mod tests {
             );
         }
         for key in ["o:submix", "r:rate"] {
-            assert!(cc.contains(key), "{key} still works on a class-compliant card");
+            assert!(
+                cc.contains(key),
+                "{key} still works on a class-compliant card"
+            );
         }
     }
 
     #[test]
     fn matrix_input_groups_splits_mic_solo_and_pairs_the_rest() {
-        let dev = DeviceHandle::Mock(MockBabyfacePro::open().unwrap());
+        let dev = DeviceHandle::Mock(MockDevice::open().unwrap());
         let groups = matrix_input_groups(&dev);
         // AN1, AN2 (Mic) each solo; everything else in pairs of 2.
         assert_eq!(groups[0], ("AN1".to_string(), 0, 1));
@@ -2160,7 +2197,10 @@ mod tests {
             presses += 1;
         }
         assert_eq!(hz, 20_000, "should reach the top of the range");
-        assert!(presses < 50, "took {presses} coarse presses, expected well under 50");
+        assert!(
+            presses < 50,
+            "took {presses} coarse presses, expected well under 50"
+        );
     }
 
     #[test]
@@ -2180,7 +2220,7 @@ mod tests {
 
     #[test]
     fn selected_channel_id_maps_sections_correctly() {
-        let dev = DeviceHandle::Mock(MockBabyfacePro::open().unwrap());
+        let dev = DeviceHandle::Mock(MockDevice::open().unwrap());
         // All pairs linked by default in every section — item index 3
         // is the pair starting at physical channel 6.
         assert_eq!(selected_channel_id(&dev, 0, 3), ChannelId::Input(6));
@@ -2199,7 +2239,7 @@ mod tests {
 
     #[test]
     fn output_items_all_linked_by_default() {
-        let dev = DeviceHandle::Mock(MockBabyfacePro::open().unwrap());
+        let dev = DeviceHandle::Mock(MockDevice::open().unwrap());
         let items = output_items(&dev);
         assert_eq!(items.len(), dev.output_pair_count());
         assert_eq!(items[0], PairItem::Linked(0));
@@ -2207,7 +2247,7 @@ mod tests {
 
     #[test]
     fn output_items_reflect_a_split_pair() {
-        let mut dev = DeviceHandle::Mock(MockBabyfacePro::open().unwrap());
+        let mut dev = DeviceHandle::Mock(MockDevice::open().unwrap());
         dev.set_output_linked(0, false).unwrap();
         let items = output_items(&dev);
         // One extra item: the split pair contributes 2 entries instead
@@ -2223,7 +2263,7 @@ mod tests {
 
     #[test]
     fn input_items_all_linked_by_default() {
-        let dev = DeviceHandle::Mock(MockBabyfacePro::open().unwrap());
+        let dev = DeviceHandle::Mock(MockDevice::open().unwrap());
         let items = input_items(&dev);
         assert_eq!(items.len(), dev.inputs().len() / 2);
         assert_eq!(items[0], PairItem::Linked(0));
@@ -2231,7 +2271,7 @@ mod tests {
 
     #[test]
     fn input_items_reflect_a_split_pair_and_isolate_writes() {
-        let mut dev = DeviceHandle::Mock(MockBabyfacePro::open().unwrap());
+        let mut dev = DeviceHandle::Mock(MockDevice::open().unwrap());
         dev.set_input_pair_linked(0, false).unwrap();
         let items = input_items(&dev);
         assert_eq!(items.len(), dev.inputs().len() / 2 + 1);
@@ -2249,7 +2289,7 @@ mod tests {
 
     #[test]
     fn playback_items_all_linked_by_default() {
-        let dev = DeviceHandle::Mock(MockBabyfacePro::open().unwrap());
+        let dev = DeviceHandle::Mock(MockDevice::open().unwrap());
         let items = playback_items(&dev);
         assert_eq!(items.len(), dev.playbacks().len() / 2);
         assert_eq!(items[0], PairItem::Linked(0));
@@ -2257,7 +2297,7 @@ mod tests {
 
     #[test]
     fn playback_items_reflect_a_split_pair_and_isolate_mute() {
-        let mut dev = DeviceHandle::Mock(MockBabyfacePro::open().unwrap());
+        let mut dev = DeviceHandle::Mock(MockDevice::open().unwrap());
         dev.set_playback_linked(0, false).unwrap();
         let items = playback_items(&dev);
         assert_eq!(items.len(), dev.playbacks().len() / 2 + 1);
@@ -2291,6 +2331,9 @@ mod tests {
     fn long_names_are_cut_with_an_ellipsis_not_run_into_the_next_cell() {
         assert_eq!(fit("AN1/2", 10), "AN1/2");
         assert_eq!(fit("A very long channel name", 8), "A very \u{2026}");
-        assert_eq!(fit("abc", 0), "\u{2026}".chars().take(0).collect::<String>() + "\u{2026}");
+        assert_eq!(
+            fit("abc", 0),
+            "\u{2026}".chars().take(0).collect::<String>() + "\u{2026}"
+        );
     }
 }

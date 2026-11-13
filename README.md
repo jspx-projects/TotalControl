@@ -1,13 +1,14 @@
 # TotalControl and the Fireface driver for Linux
 
-Native Linux support for the RME Fireface UC and UCX in normal RME vendor
-mode. TotalControl: give linux users total control over their RME devices.
+Native Linux support for the RME Fireface UC, UCX and Babyface-classic in
+normal RME vendor mode. TotalControl: give linux users total control over
+their RME devices.
 
 ![The TotalControl mixer and Control Room driving a Fireface UCX, with the EQ and dynamics panels, sends, and the reverb and echo panels open](ui/totalcontrol/docs/screenshots/mixer-ucx-2026-11.png)
 
 ## Functionality
 
-- **Fireface UC and Fireface UCX support.** 
+- **Fireface UC, Fireface UCX and Babyface-classic support.**
 - **Complete mixer with Control room** Mixer with channel strips that slide their panels in and out, EQ and dynamics (for the UCX).
 - **MIDI in and out over USB.** 
 - **Full OSC support.**  We support two RME OSC dialects: Classic and Global OSC, they can be used to control the complete mixer
@@ -44,7 +45,7 @@ WirePlumber.
   shared channel templates, layout configuration, invariants and preview.
 - [UC protocol specification](docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md).
 - [UCX protocol specification](docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md).
-- [Babyface Pro protocol specification](docs/spec/BABYFACE-PRO-PROTOCOL-SPEC.md).
+- [Babyface-classic protocol specification](docs/spec/BABYFACE-CLASSIC-PROTOCOL-SPEC.md).
 - [OSC 1.96 and Global OSC specification](docs/spec/TOTALCONTROL-OSC-SPEC.md).
 - [User manual](docs/TOTALCONTROL-Manual.md).
 - [Development tools](docs/DEVELOPMENT-TOOLS.md) — non-user-facing backends,
@@ -136,8 +137,6 @@ The repository contains separate works under different licenses:
   [LICENSE](LICENSE).
 - `ui/totalcontrol/totalcontrol-core` — **MIT**.
 - `ui/totalcontrol/totalcontrol-gui` and `ui/totalcontrol/totalcontrol-tui` — **GPL-3.0-only**.
-- `ui/totalcontrol/totalcontrol-usb` — **GPL-3.0-or-later**;
-  `ui/totalcontrol/totalcontrol-sys` — **GPL-3.0**.
 
 The UI notices are in [ui/totalcontrol/LICENSE](ui/totalcontrol/LICENSE) and
 [ui/totalcontrol/COPYING](ui/totalcontrol/COPYING).
@@ -151,7 +150,7 @@ This project is built on prior work, and we are grateful to its authors.
 
 - [TuxMix](https://github.com/ismail-bahloul/TuxMix) by Ismaïl Bahloul
   (MIT core, GPL-3.0-only GUI/TUI) is the base of the mixer application: its
-  device model, the Babyface Pro FS support, the TUI and the scene system. His
+  device model, the TUI and the scene system. His
   commit history is archived on the `archive/tuxmix-upstream` branch, and the
   license and copyright notice stay in [`ui/totalcontrol/LICENSE`](ui/totalcontrol/LICENSE)
   and [`ui/totalcontrol/COPYING`](ui/totalcontrol/COPYING).

@@ -53,8 +53,9 @@ reduced control set.
 - A kernel with matching headers and DKMS for the driver.
 - Rust and the build dependencies for the source or RPM build.
 
-The supported devices are the Fireface UC and Fireface UCX. The Babyface Pro
-FS backend is present but is not part of the supported installation path yet.
+The supported devices are the Fireface UC and Fireface UCX. The
+Babyface-classic uses the same kernel driver and is supported for the controls
+described in its protocol specification.
 
 The source and RPM paths below are alternatives.  Use the source path to work
 from a checkout; use the RPM path when you want packages that can be installed
@@ -1452,11 +1453,11 @@ on the same feedback port.
 | `--minimized` | Start hidden in the tray |
 | `--scale <n>` | Initial UI scale |
 | `--select-out <n>` | Initial submix |
-| `--mock` | Simulate a Babyface Pro FS |
+| `--mock` | Simulate a Fireface UCX |
 | `--mock-ucx` | Simulate a Fireface UCX |
 | `--mock-uc` | Simulate a Fireface UC |
 | `--control-only` | Do not open the capture PCM |
 
-The mock modes are for demonstration and development. Device backend switches
-and capture tools are documented in `DEVELOPMENT-TOOLS.md` and are not
-supported installation options.
+The mock modes are for demonstration and development. Capture tools are
+documented in `DEVELOPMENT-TOOLS.md` and are not supported installation
+options.

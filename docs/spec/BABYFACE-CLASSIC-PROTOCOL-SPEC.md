@@ -2,9 +2,7 @@
 
 This document defines the native-mode USB transport, PCM streams, channel
 model, mixer writes, preamps, metering and hwdep ABI of the Babyface-classic as
-implemented by `snd-fireface-uc` and the `BabyfaceClassic` backend. The
-Babyface Pro FS is a different device; see
-[BABYFACE-PRO-PROTOCOL-SPEC.md](BABYFACE-PRO-PROTOCOL-SPEC.md).
+implemented by `snd-fireface-uc` and the `BabyfaceClassic` backend.
 
 ## Contents
 

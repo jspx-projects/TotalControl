@@ -16,7 +16,8 @@
 
 use std::process::{Command, Stdio};
 
-/// The sample-rate classes the Fireface UC, UCX and Babyface Pro FS support:
+/// The sample-rate classes the supported Fireface and Babyface-classic
+/// models use:
 /// 1x, 2x and 4x for the 32, 44.1 and 48 kHz families.
 pub const DEVICE_SAMPLE_RATES: [u32; 9] = [
     32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 128_000, 176_400, 192_000,
@@ -189,14 +190,10 @@ impl CardStream {
     }
 }
 
-/// The smallest period the kernel driver accepts.  The UC's period floor is
-/// one URB (`urb_frames`, 48 samples at 1x); the Babyface Pro FS uses its
-/// `urb_frames_min`.  `None` when no RME transport module is loaded.
+/// The smallest period the kernel driver accepts, read from the loaded
+/// transport module.  `None` when no RME transport module is loaded.
 pub fn driver_period_floor() -> Option<u32> {
-    for path in [
-        "/sys/module/snd_fireface_uc/parameters/urb_frames",
-        "/sys/module/snd_usb_babyface_pro/parameters/urb_frames_min",
-    ] {
+    for path in ["/sys/module/snd_fireface_uc/parameters/urb_frames"] {
         if let Ok(text) = std::fs::read_to_string(path) {
             if let Ok(value) = text.trim().parse() {
                 return Some(value);
@@ -344,8 +341,8 @@ pub fn parse_hw_params(text: &str) -> Option<CardStream> {
 
 /// The open *playback* stream of the ALSA card whose `id` is `card_id`.
 /// `None` when no such card exists or nothing is playing. Playback only: the
-/// capture side is held open by TotalControl's own input meter
-/// (`capture_meter`), so reading it would report the app's own stream
+/// capture side is held open by TotalControl's own input meter, so
+/// reading it would report the app's own stream
 /// (it once showed the meter's period as the card's).
 pub fn card_stream(card_id: &str) -> Option<CardStream> {
     let cards = std::fs::read_dir("/proc/asound").ok()?;

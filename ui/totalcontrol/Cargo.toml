@@ -5,8 +5,6 @@ members = [
     "totalcontrol-tui",
     "totalcontrol-gui",
     "totalcontrol-layout",
-    "totalcontrol-usb",
-    "totalcontrol-sys",
 ]
 
 # The GUI is a retained-mode view rebuilt on every interaction: unoptimized

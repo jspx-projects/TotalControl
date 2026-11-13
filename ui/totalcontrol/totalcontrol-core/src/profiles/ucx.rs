@@ -19,7 +19,6 @@ use crate::channel::ChannelType;
 use crate::profile::{DeviceProfile, InputSpec, OutputPairSpec};
 
 pub const PROFILE: DeviceProfile = DeviceProfile {
-    card_substring: "Fireface UCX",
     model_name: "Fireface UCX",
     inputs: &[
         InputSpec {

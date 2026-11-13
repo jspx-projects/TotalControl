@@ -11,7 +11,6 @@ use crate::profile::{DeviceProfile, OutputPairSpec};
 use super::ucx;
 
 pub const PROFILE: DeviceProfile = DeviceProfile {
-    card_substring: "Fireface UC",
     model_name: "Fireface UC",
     // The channel names and TotalMix row order are shared with the UCX.
     // Only the DSP/FX feature set differs, and that lives in the backend.
