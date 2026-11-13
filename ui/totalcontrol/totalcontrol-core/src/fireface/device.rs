@@ -341,6 +341,10 @@ struct UcMeterBank {
     /// Device output RMS (the flag page's truncated power bank); only
     /// channels 0..3 carry device RMS, all others default 0.
     output_rms: [f32; 18],
+    /// Device-side consecutive-over sample counts per channel, decoded
+    /// from each data page's OVR word.
+    playback_over: [u8; 18],
+    output_over: [u8; 18],
     playback_ovr: [bool; 18],
     output_ovr: [bool; 18],
 }
@@ -353,6 +357,8 @@ impl Default for UcMeterBank {
             playback_rms: [0.0; 18],
             output: [f32::NEG_INFINITY; 18],
             output_rms: [0.0; 18],
+            playback_over: [0; 18],
+            output_over: [0; 18],
             playback_ovr: [false; 18],
             output_ovr: [false; 18],
         }
@@ -410,6 +416,8 @@ impl UcMeterBank {
             let record = packet.output(channel);
             Self::set_peak(&mut self.output, channel, record);
             self.output_ovr[channel] = packet.output_ovr(channel);
+            self.playback_over[channel] = packet.playback_over_run(channel);
+            self.output_over[channel] = packet.output_over_run(channel);
         }
     }
 
@@ -458,6 +466,10 @@ impl UcMeterBank {
         }
     }
 
+    fn output_over_run(&self, channel: usize) -> u8 {
+        self.output_over[channel]
+    }
+
     /// The record is the detector's held level per channel, so the peak
     /// lines mirror the level until the page's own peak word is decoded.
     fn input_peak(&self, channel: usize) -> f32 {
@@ -470,6 +482,10 @@ impl UcMeterBank {
 
     fn playback_ovr(&self, channel: usize) -> bool {
         self.playback_ovr[channel]
+    }
+
+    fn playback_over_run(&self, channel: usize) -> u8 {
+        self.playback_over[channel]
     }
 
     fn output_peak(&self, channel: usize) -> f32 {
@@ -3284,7 +3300,49 @@ impl Fireface {
         }
     }
 
-    /// Per-playback OVR flags from the UC meter page.
+    /// Per-playback consecutive-over counts from the UC meter page.  The
+    /// device counts the samples above full scale itself; the LED gate is
+    /// the device's count against the global OVR sample preference
+    /// (default three), not a host-side count.
+    pub fn playback_over_runs(&self) -> Option<Vec<u8>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.playbacks.len())
+                    .map(|i| self.uc_meters.playback_over_run(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
+        }
+    }
+
+    /// Per-output consecutive-over counts from the UC meter page.
+    pub fn output_over_runs(&self) -> Option<Vec<u8>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.outputs.len())
+                    .map(|i| self.uc_meters.output_over_run(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
+        }
+    }
+
+    /// Per-output OVR flags from the UC meter page.  The LED gate moves to
+    /// the device's own counter (`over_runs`); this flag is the record's
+    /// over event per data page.
+    pub fn output_ovr(&self) -> Option<Vec<bool>> {
+        match self.model {
+            Model::Uc => Some(
+                (0..self.outputs.len())
+                    .map(|i| self.uc_meters.output_ovr(i))
+                    .collect(),
+            ),
+            Model::Ucx => None,
+        }
+    }
+
+    /// Per-playback OVR flags from the UC meter page (the record's over
+    /// event; the meter gate lives in `playback_over_runs`).
     pub fn playback_ovr(&self) -> Option<Vec<bool>> {
         match self.model {
             Model::Uc => Some(
@@ -3296,16 +3354,11 @@ impl Fireface {
         }
     }
 
-    /// Per-output OVR flags from the UC meter page.
-    pub fn output_ovr(&self) -> Option<Vec<bool>> {
-        match self.model {
-            Model::Uc => Some(
-                (0..self.outputs.len())
-                    .map(|i| self.uc_meters.output_ovr(i))
-                    .collect(),
-            ),
-            Model::Ucx => None,
-        }
+    /// Device-side consecutive-over sample counts per playback channel.
+    /// The LED gate is the device's count against FSCntOVR (default 3);
+    /// no host-side sample counting is done.
+    pub fn over_runs(&self, playback: bool) -> Option<Vec<u8>> {
+        if playback { self.playback_over_runs() } else { self.output_over_runs() }
     }
 
     pub fn output_peaks(&self, post: bool) -> Option<Vec<f32>> {

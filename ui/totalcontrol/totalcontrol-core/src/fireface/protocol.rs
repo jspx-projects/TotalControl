@@ -261,11 +261,35 @@ impl UcMeterPacket {
         (ovr >> 8) as u8 == 0xff && (ovr & 0xff) != 0
     }
 
+    /// Consecutive full-scale samples at or above 0 dBFS for a software
+    /// playback channel, per the record's OVR word.  The device counts the
+    /// run since the last sample below full scale; it saturates at 255
+    /// (both nibbles) once the run passes the record's window and carries
+    /// the count into `0x0f..0xff` for heavier over-drive.  `0` covers the
+    /// `0xff00`/`0x0000` no-over fillers.  Verified against a sin/square
+    /// staircase: the square at +0.05 dB over lights `0xff` (100%), the
+    /// sine's measured runs 4/8/11/13/15 match `run = frac*cycle/2`.
+    pub fn playback_over_run(&self, channel: usize) -> u8 {
+        if !self.playback_ovr(channel) {
+            return 0;
+        }
+        (self.playback(channel) & 0xff) as u8
+    }
+
     /// Whether a hardware-output channel carries the first word's OVR
     /// marker.  The output bank uses the same layout as playback.
     pub fn output_ovr(&self, channel: usize) -> bool {
         let ovr = self.output(channel) & 0xffff;
         (ovr >> 8) as u8 == 0xff && (ovr & 0xff) != 0
+    }
+
+    /// Consecutive full-scale samples at or above 0 dBFS for one hardware
+    /// output channel; same OVR-word semantics as `playback_over_run`.
+    pub fn output_over_run(&self, channel: usize) -> u8 {
+        if !self.output_ovr(channel) {
+            return 0;
+        }
+        (self.output(channel) & 0xff) as u8
     }
 }
 
