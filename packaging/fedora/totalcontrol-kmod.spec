@@ -8,6 +8,7 @@
 %global kmod_name     snd-fireface-uc
 %global kmod_version  0.1
 %{!?app_version:%global app_version 0.1.0}
+%{!?commit:%global commit unknown}
 
 Name:           totalcontrol-kmod
 Version:        %{kmod_version}
@@ -15,6 +16,7 @@ Release:        1%{?dist}
 Summary:        DKMS kernel transport for RME Fireface UC/UCX
 License:        GPL-2.0-only
 URL:            https://github.com/jspx-projects/TotalControl
+VCS:            git:https://github.com/jspx-projects/TotalControl.git@%{commit}
 Source0:        TotalControl-%{app_version}.tar.gz
 
 BuildArch:      noarch
