@@ -16,6 +16,7 @@ specification per device, an OSC specification and a user manual.
 | [`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md) | OSC 1.96 and Global OSC transport, address spaces, scales and feedback |
 | [`TOTALCONTROL-Manual.md`](TOTALCONTROL-Manual.md) | installation, setup, use and troubleshooting |
 | [`DEVELOPMENT-TOOLS.md`](DEVELOPMENT-TOOLS.md) | development backends, capture and probe tools |
+| [`CONTRIBUTING-NEW-DEVICE.md`](CONTRIBUTING-NEW-DEVICE.md) | minimum device integration, evidence, registration and hardware tests |
 
 ## Device protocol specifications
 
