@@ -1296,6 +1296,10 @@ pub struct MeterSnapshot {
     pub input_peaks: [f32; 18],
     pub playback_peaks: [f32; 18],
     pub output_peaks: [f32; 18],
+/// Device-backed input OVR flags: the analog low-word event or the digital
+/// over tag.  `None` means the backend has no input OVR word; the fader
+/// falls back to its peak threshold.
+pub input_ovr: Option<[bool; 18]>,
 /// Device-backed playback OVR flags, gated per the record's own
 /// consecutive-over count (the device counts the samples above full
 /// scale itself).  `None` means the backend has no OVR word; the fader
@@ -1578,7 +1582,9 @@ fn run(
             let now = Instant::now();
             let connected = device.is_connected();
             let inputs = if connected {
-                device.input_meters()
+                device
+                    .device_input_meters()
+                    .unwrap_or_else(|| device.input_meters())
             } else {
                 vec![0.0; 18]
             };
@@ -1613,6 +1619,11 @@ fn run(
             };
             let output_over_runs = if connected {
                 device.device_output_over_runs()
+            } else {
+                None
+            };
+            let input_ovr = if connected {
+                device.device_input_ovr()
             } else {
                 None
             };
@@ -1663,6 +1674,13 @@ fn run(
             hold_peaks(&mut m.input_peaks, &input_peaks, &mut peak_at[0], now);
             hold_peaks(&mut m.playback_peaks, &playback_peaks, &mut peak_at[1], now);
             hold_peaks(&mut m.output_peaks, &output_peaks, &mut peak_at[2], now);
+            m.input_ovr = input_ovr.map(|flags| {
+                let mut out = [false; 18];
+                for (i, flag) in out.iter_mut().enumerate() {
+                    *flag = flags.get(i).copied().unwrap_or(false);
+                }
+                out
+            });
             over_flags(&mut m.playback_ovr, playback_over_runs.as_deref());
             over_flags(&mut m.output_ovr, output_over_runs.as_deref());
             m.fx = fx;

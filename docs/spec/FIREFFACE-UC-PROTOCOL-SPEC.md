@@ -380,8 +380,8 @@ Data page (either page kind that sets word 6; 4-byte records, two
 | Words (bytes) | Contents |
 |---|---|
 | 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), everything else Unknown.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
-| 54..69 (108..139) | AN1..AN8 input records: high halfword = level (0 dBFS at 6800, 0.12745 dB per unit), low halfword = junk |
-| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = 24-bit log level, bits 0..7 = overload ratio, `0x00001fff` filler before the first sample |
+| 54..69 (108..139) | AN1..AN8 input records: high halfword = linear 16-bit peak, low halfword = OVR word when over |
+| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = linear 24-bit peak, bits 0..7 = overload ratio, `0x00001fff` filler before the first sample |
 | 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit Peak |
 | 126..161 (252..323) | hardware outputs AN1..8, S/PDIF and ADAT 1..8 records: OVR word + linear 16-bit Peak |
 
@@ -391,13 +391,13 @@ Flag page (the non-data page of the alternation, word 6 reads zero):
 
 | Words (bytes) | Contents |
 |---|---|
-| 0..71 (0..143) | header/status: Unknown |
+| 0..71 (0..143) | input RMS bank: four 16-bit words per input, power word at slot offset 3 (`3 + 4c` for input `c`); the other three words are status/junk |
 | 72..143 (144..287) | SW playback 1..18 RMS bank: four 16-bit words per channel with the power word at slot offset 3 |
 | 144..159 (288..319) | hardware output RMS bank: the power words at 147, 151, 155, 159 = AN1, AN2, AN3, AN4; the other twelve words are junk |
 | 160..161 (320..323) | truncated head of output channel 4's own slot: Unknown |
 
-Unknown bytes on the flag page: 172 of 324 (the header/status region, the
-junk words of the output bank and the truncation tail).
+Unknown bytes on the flag page: the status/junk words inside the RMS
+slots and the truncation tail.
 
 ### Playback and output Peak/OVR words
 
@@ -486,17 +486,57 @@ this setting; it is a host preference.
 
 ### Analog input records
 
-The analog inputs carry their level in the upper halfword of the data-page
-record on a coarser scale with 0 dBFS at 6800 and about 0.127 dB per unit:
+The input peak law is linear in both personalities.  The analog inputs
+carry a linear 16-bit peak in the upper halfword of the data-page record;
+the digital inputs carry a linear 24-bit peak in bits 8..31.  Playback and
+hardware-output records use the linear 16-bit Peak word as well.
+
+For an analog input the lower halfword is the OVR word when the input is
+over: high byte `0xff`, low byte the device's consecutive-over count, with
+`0xff00` the no-over filler:
 
 ```text
 u == 0                  -> below range
-dBFS = (6800 - u) * 0.12745,  u = record >> 16
+dBFS = 20 × log10(u / 32768),  u = record >> 16
 ```
 
-The law also covers the over zone: the record continues past 0 dBFS and its
-reach bottoms at +6.02 dBFS.  The analog meter settles slowly, so a reading
-is the detector's hold value, not an instantaneous level.
+The word is the same linear scale as the playback and output Peak words.
+The analog detector settles slowly, so a reading is its hold value, not an
+instantaneous level.  The input reference and gain are applied before the
+meter.
+
+### Digital input records
+
+The digital input carries a linear 24-bit peak in bits 8..31; the low byte
+is the overload ratio:
+
+```text
+level = record >> 8 & 0xffffff
+level == 0              -> below range
+dBFS  = 20 × log10(level / 0x800000)
+```
+
+At saturation the level field is `0x7fffff`; the low nibble is `0x0f` and
+the high nibble counts the over in half-dB steps.  The `0x00001fff` filler
+has a level below the meter's floor and is no data, not a level.
+
+### Input RMS words
+
+The flag page carries an input RMS power word at `3 + 4c` for input `c`
+(`0..17`), on the same scale as the playback and output RMS banks:
+
+```text
+RMS amplitude = sqrt(word / 32768)
+RMS dBFS      = 10 × log10(word / 32768)
+```
+
+The other three words in each input slot are status/junk.
+
+The data-page peak and flag-page RMS input words are taken after the
+channel gain.  TotalControl uses them directly and does not add the gain
+again.  The RMS word is one power LSB, so a very low signal can read
+zero; the bar then uses the peak word's sine equivalent
+(`peak / sqrt(2)`).
 
 ### TotalControl behaviour
 
@@ -514,11 +554,15 @@ is the detector's hold value, not an instantaneous level.
   inside the device's resolvable range; beyond it the hardware output
   rows continue on the row's written `0x1a` fader and routed matrix
   state.
-- Analog inputs: the data-page analog law.
-- Digital input records are mapped and held silent until their channel
-  identity is verified.
-- Ballistics are host side: a 10 dB/s release (measured against the
-  reference application) and a 2 s peak hold.
+- Input lower VU bar: the flag-page input RMS bank (`3 + 4c`).  When
+  the power word is zero for a very low signal, the bar uses the peak
+  word's sine equivalent (`peak / sqrt(2)`).
+- Input peak line: the data-page input peak word (linear 16-bit analog /
+  24-bit digital).
+- Input OVR LED: the analog low-word over event, gated by the global OVR
+  sample preference; the digital saturated 24-bit level with the over
+  tag.
+- Ballistics are host side: a 10 dB/s release and a 2 s peak hold.
 Input meters measure the physical input before loopback.  A
 loopback-enabled output replaces the input's record signal, but does not
 change the input meter or the input bank in the `0x85` page.
