@@ -796,6 +796,9 @@ pub struct Fireface {
     dim_amount_db: f32,
     /// Speaker B follows Main Out level changes.
     speaker_b_linked: bool,
+    /// UC matrix cells saved by a Control Room runtime action.  The UC uses
+    /// direct `0x12` cells instead of the UCX register/FX-return shape.
+    uc_monitor_saved: Option<Vec<(usize, usize, f32)>>,
     /// Register words replaced by the current Talkback activation, in write
     /// order.  Restored when Talkback is released.
     talkback_saved: Option<Vec<(u16, u16)>>,
@@ -1307,6 +1310,7 @@ impl Fireface {
             dim_saved: Vec::new(),
             dim_amount_db: -20.0,
             speaker_b_linked: false,
+            uc_monitor_saved: None,
             talkback_saved: None,
             talkback_active: false,
             talkback_config: TalkbackConfig::default(),
@@ -1755,6 +1759,248 @@ impl Fireface {
             value = !value;
         }
         self.vendor_out(protocol::req::MIXER, value, index)
+    }
+
+    /// Save every UC matrix cell of one output pair.  Used by the shared
+    /// Control Room runtime for temporary monitor rewrites.
+    fn uc_monitor_save_pair(&self, pair: usize) -> Vec<(usize, usize, f32)> {
+        let mut saved = Vec::with_capacity(2 * 36);
+        for block in [pair * 2, pair * 2 + 1] {
+            for source in 0..36 {
+                let Some(channel) = Self::matrix_source_channel(source) else {
+                    continue;
+                };
+                let gain = self.cell_gain(channel, block).unwrap_or(0.0);
+                saved.push((block, source, gain));
+            }
+        }
+        saved
+    }
+
+    fn uc_monitor_restore(&self, saved: &[(usize, usize, f32)]) -> Result<(), Error> {
+        for &(block, source, gain) in saved {
+            self.uc_write_matrix(block, source, gain)?;
+        }
+        Ok(())
+    }
+
+    fn uc_monitor_clear_pair(&self, pair: usize) -> Result<(), Error> {
+        for block in [pair * 2, pair * 2 + 1] {
+            for source in 0..36 {
+                self.uc_write_matrix(block, source, 0.0)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn uc_set_talkback_with(
+        &mut self,
+        on: bool,
+        config: &TalkbackConfig,
+    ) -> Result<(), Error> {
+        if on == self.talkback_active {
+            return Ok(());
+        }
+        if !on {
+            if let Some(saved) = self.uc_monitor_saved.take() {
+                self.uc_monitor_restore(&saved)?;
+            }
+            self.talkback_active = false;
+            return Ok(());
+        }
+        self.talkback_config = *config;
+        let Some(source) = config.source else {
+            self.talkback_active = true;
+            return Ok(());
+        };
+        if source >= self.inputs.len() {
+            return Err(Error::InvalidChannel(format!("talkback input {source}")));
+        }
+        let receivers: Vec<usize> = self
+            .outputs
+            .chunks(2)
+            .enumerate()
+            .filter(|(_, pair)| pair.iter().any(|output| output.talkback))
+            .map(|(pair, _)| pair)
+            .collect();
+        let main = self.settings.main_out;
+        let mut pairs = receivers.clone();
+        if let Some(main) = main {
+            if !pairs.contains(&main) {
+                pairs.push(main);
+            }
+        }
+        if pairs.is_empty() {
+            self.talkback_active = true;
+            return Ok(());
+        }
+        let mut saved = Vec::new();
+        for &pair in &pairs {
+            saved.extend(self.uc_monitor_save_pair(pair));
+        }
+        for &pair in &pairs {
+            let dim = if Some(pair) == main {
+                config.listenback_dim_db
+            } else {
+                config.dim_db
+            };
+            let factor = 10f32.powf(dim.clamp(-65.0, 0.0) / 20.0);
+            for source_index in 0..36 {
+                let Some(channel) = Self::matrix_source_channel(source_index) else {
+                    continue;
+                };
+                let old = self.cell_gain(channel, pair * 2).unwrap_or(0.0);
+                let old_right = self.cell_gain(channel, pair * 2 + 1).unwrap_or(0.0);
+                self.uc_write_matrix(pair * 2, source_index, old * factor)?;
+                self.uc_write_matrix(pair * 2 + 1, source_index, old_right * factor)?;
+            }
+            self.uc_write_matrix(pair * 2, source, 0.7)?;
+            if let Some(listen) = config.listenback.filter(|listen| *listen != source && Some(pair) == main) {
+                self.uc_write_matrix(pair * 2 + 1, listen, 0.7)?;
+            }
+        }
+        self.uc_monitor_saved = Some(saved);
+        self.talkback_active = true;
+        Ok(())
+    }
+
+    fn uc_set_cue(&mut self, idx: usize, on: bool) -> Result<(), Error> {
+        if !on {
+            if self.cue_state.as_ref().is_some_and(|(source, _, _)| *source == idx) {
+                self.uc_release_cue()?;
+            }
+            return Ok(());
+        }
+        if self.cue_state.is_some() {
+            self.uc_release_cue()?;
+        }
+        let target = self
+            .pfl_target
+            .ok_or_else(|| Error::InvalidChannel("Cue needs a Cue/PFL target".into()))?;
+        if target == idx {
+            for output in &mut self.outputs {
+                output.cue = false;
+            }
+            return Ok(());
+        }
+        let saved = self.uc_monitor_save_pair(target);
+        for source in 0..36 {
+            let left = self.cell_gain(
+                Self::matrix_source_channel(source)
+                    .ok_or_else(|| Error::InvalidChannel("cue source".into()))?,
+                idx * 2,
+            )
+            .unwrap_or(0.0);
+            let right = self.cell_gain(
+                Self::matrix_source_channel(source)
+                    .ok_or_else(|| Error::InvalidChannel("cue source".into()))?,
+                idx * 2 + 1,
+            )
+            .unwrap_or(0.0);
+            self.uc_write_matrix(target * 2, source, left)?;
+            self.uc_write_matrix(target * 2 + 1, source, right)?;
+        }
+        self.uc_monitor_saved = Some(saved);
+        self.cue_state = Some((idx, target, Vec::new()));
+        Ok(())
+    }
+
+    fn uc_release_cue(&mut self) -> Result<(), Error> {
+        if let Some(saved) = self.uc_monitor_saved.take() {
+            self.uc_monitor_restore(&saved)?;
+        }
+        if let Some((_, _, _)) = self.cue_state.take() {
+            for output in &mut self.outputs {
+                output.cue = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn uc_set_mono(&mut self, on: bool) -> Result<(), Error> {
+        let Some(main) = self.settings.main_out else {
+            return Err(Error::InvalidChannel(
+                "Mono needs an assigned Main Out".into(),
+            ));
+        };
+        if on == self.settings.mono {
+            return Ok(());
+        }
+        if !on {
+            if let Some(saved) = self.uc_monitor_saved.take() {
+                self.uc_monitor_restore(&saved)?;
+            }
+            self.settings.mono = false;
+            return Ok(());
+        }
+        let saved = self.uc_monitor_save_pair(main);
+        for source in 0..36 {
+            let left = self.cell_gain(
+                Self::matrix_source_channel(source)
+                    .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
+                main * 2,
+            )
+            .unwrap_or(0.0);
+            let right = self.cell_gain(
+                Self::matrix_source_channel(source)
+                    .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
+                main * 2 + 1,
+            )
+            .unwrap_or(0.0);
+            // Feed both monitor sides from both source sides: the two
+            // contributions sum in the monitor pair.
+            self.uc_write_matrix(main * 2, source, left + right)?;
+            self.uc_write_matrix(main * 2 + 1, source, left + right)?;
+        }
+        self.uc_monitor_saved = Some(saved);
+        self.settings.mono = true;
+        Ok(())
+    }
+
+    fn uc_set_external_input(
+        &mut self,
+        on: bool,
+        source: Option<usize>,
+        gain_db: f32,
+    ) -> Result<(), Error> {
+        if let Some(saved) = self.uc_monitor_saved.take() {
+            self.uc_monitor_restore(&saved)?;
+        }
+        self.settings.external_input = false;
+        if !on {
+            return Ok(());
+        }
+        let Some(main) = self.settings.main_out else {
+            return Err(Error::InvalidChannel(
+                "External Input needs an assigned Main Out".into(),
+            ));
+        };
+        let source = source
+            .ok_or_else(|| Error::InvalidChannel("External Input needs a source pair".into()))?;
+        if source * 2 + 1 >= self.inputs.len() {
+            return Err(Error::InvalidChannel(format!(
+                "External Input source pair {source}"
+            )));
+        }
+        let gain = 10f32.powf(gain_db.clamp(-65.0, 0.0) / 20.0).clamp(0.0, 1.0);
+        let mut pairs = vec![main];
+        if let Some(b) = self.settings.main_b_out {
+            if b != main {
+                pairs.push(b);
+            }
+        }
+        let mut saved = Vec::new();
+        for &pair in &pairs {
+            saved.extend(self.uc_monitor_save_pair(pair));
+            self.uc_monitor_clear_pair(pair)?;
+        }
+        for &pair in &pairs {
+            self.uc_write_matrix(pair * 2, source * 2, gain)?;
+            self.uc_write_matrix(pair * 2 + 1, source * 2 + 1, gain)?;
+        }
+        self.uc_monitor_saved = Some(saved);
+        self.settings.external_input = true;
+        Ok(())
     }
 
     /// Rewrite every cell routed to one output after its phase changes.
@@ -2998,9 +3244,7 @@ impl Fireface {
     /// replaced by the activation is saved and written back on release.
     pub fn set_talkback_with(&mut self, on: bool, config: &TalkbackConfig) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Talkback is not mapped on the UC".into(),
-            ));
+            return self.uc_set_talkback_with(on, config);
         }
         if on == self.talkback_active {
             return Ok(());
@@ -4158,6 +4402,9 @@ impl Fireface {
     }
 
     fn release_cue(&mut self) -> Result<(), Error> {
+        if self.is_uc() {
+            return self.uc_release_cue();
+        }
         let Some((_, target, fx)) = self.cue_state.take() else {
             return Ok(());
         };
@@ -4173,6 +4420,13 @@ impl Fireface {
     }
 
     fn release_external_input(&mut self) -> Result<(), Error> {
+        if self.is_uc() {
+            if let Some(saved) = self.uc_monitor_saved.take() {
+                self.uc_monitor_restore(&saved)?;
+            }
+            self.settings.external_input = false;
+            return Ok(());
+        }
         let Some((pairs, fx)) = self.external_input_saved.take() else {
             self.settings.external_input = false;
             return Ok(());
@@ -5604,9 +5858,7 @@ impl RmeDevice for Fireface {
         gain_db: f32,
     ) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "External Input is not decoded on the UC".into(),
-            ));
+            return self.uc_set_external_input(on, source, gain_db);
         }
         let _batch = self.begin_write_batch();
         if self.settings.external_input {
@@ -5832,9 +6084,10 @@ impl RmeDevice for Fireface {
 
     fn set_mono(&mut self, on: bool) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Mono does not exist on the UC".into(),
-            ));
+            if on && self.cue_state.is_some() {
+                self.uc_release_cue()?;
+            }
+            return self.uc_set_mono(on);
         }
         // Monitor flags: bit 0 Talkback, bit 1 Mono Main Out.  The mask
         // word is 0x83ff while Mono is active and 0xffff when it is idle.
@@ -5921,6 +6174,9 @@ impl RmeDevice for Fireface {
     fn set_cue(&mut self, idx: usize, on: bool) -> Result<(), Error> {
         if idx >= BLOCKS / 2 {
             return Err(Error::InvalidChannel(format!("output {idx}")));
+        }
+        if self.is_uc() {
+            return self.uc_set_cue(idx, on);
         }
         if !on {
             if self

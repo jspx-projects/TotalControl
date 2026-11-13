@@ -18360,7 +18360,8 @@ fn control_room_panel(
                 state.talkback_on,
                 state
                     .device
-                    .is_ucx_model()
+                    .capabilities()
+                    .talkback
                     .then_some(Message::TalkbackChanged(!state.talkback_on)),
             ),
             cell(
@@ -18378,7 +18379,8 @@ fn control_room_panel(
                 settings.mute_fx,
                 state
                     .device
-                    .is_uc_family()
+                    .capabilities()
+                    .fx
                     .then_some(Message::ControlRoomMuteFx(!settings.mute_fx)),
             ),
         ]),
