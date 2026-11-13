@@ -41,6 +41,16 @@ impl Personality {
             Personality::UcxIf5 => "UCX IF5 (interrupt)",
         }
     }
+
+    /// Short form shown in the device chip.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Personality::UcPc => "PC",
+            Personality::UcAp => "AP",
+            Personality::UcxIso => "ISO",
+            Personality::UcxIf5 => "IF5",
+        }
+    }
 }
 
 /// Select the profile for one reported personality.
@@ -76,6 +86,14 @@ mod tests {
             Personality::from_model(Model::Ucx, false),
             Some(Personality::UcxIf5)
         );
+    }
+
+    #[test]
+    fn personality_short_labels_match_the_device_display() {
+        assert_eq!(Personality::UcPc.short_label(), "PC");
+        assert_eq!(Personality::UcAp.short_label(), "AP");
+        assert_eq!(Personality::UcxIso.short_label(), "ISO");
+        assert_eq!(Personality::UcxIf5.short_label(), "IF5");
     }
 
     #[test]

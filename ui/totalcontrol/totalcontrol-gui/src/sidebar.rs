@@ -433,15 +433,20 @@ fn panel<'a>(content: Element<'a, Message>, scale: f32) -> Element<'a, Message> 
 /// "Simulated" would otherwise mask a mock-side disconnect. Pure, so the
 /// mapping is pinned by a test (`app`'s own, where states are easy to
 /// build).
-pub(crate) fn device_state(state: &TotalControl) -> (Color, &'static str) {
+pub(crate) fn device_state(state: &TotalControl) -> (Color, String) {
     if !state.connected {
-        (theme::mred(), "Disconnected")
+        (theme::mred(), "Disconnected".to_string())
     } else if state.device.is_mock() {
-        (theme::ysim(), "Simulated")
+        (theme::ysim(), "Simulated".to_string())
     } else if state.device.class_compliant() {
-        (theme::ysim(), "Class Compliant")
+        (theme::ysim(), "Class Compliant".to_string())
+    } else if let Some(personality) = state.device.personality() {
+        (
+            theme::GCONN,
+            format!("Proprietary · {}", personality.short_label()),
+        )
     } else {
-        (theme::GCONN, "Proprietary")
+        (theme::GCONN, "Proprietary".to_string())
     }
 }
 
