@@ -36,6 +36,12 @@ A new device needs a descriptor and hwdep node in this repository's kernel
 module. Backends that depend on a driver outside this repository, or that speak
 USB directly, are not part of the supported set.
 
+Read [`docs/CONTRIBUTING-NEW-DEVICE.md`](../../docs/CONTRIBUTING-NEW-DEVICE.md)
+before starting. It defines the minimum first integration, the required
+protocol evidence, the profile registration steps and the hardware test matrix.
+
+At a high level:
+
 1. Add the kernel descriptor and its hwdep transport in `kernel/`.
 2. Add a `DeviceProfile` under `totalcontrol-core/src/profiles/` with the
    channel names, counts and output display order.

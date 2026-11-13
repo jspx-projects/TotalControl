@@ -186,6 +186,11 @@ Missing protocol details and hardware follow-ups belong in a tracking issue.
 They do not block maintainer progress on other devices. Do not include personal
 data or captured device state in a pull request or issue.
 
+For a new device, start with
+[`docs/CONTRIBUTING-NEW-DEVICE.md`](docs/CONTRIBUTING-NEW-DEVICE.md): it
+describes the minimum first integration, the protocol evidence we need, the
+registration steps and the hardware test matrix.
+
 See [`AGENTS.md`](AGENTS.md) and the
 [pull request template](.github/pull_request_template.md) for the repository
 rules.
