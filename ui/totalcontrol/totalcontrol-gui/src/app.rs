@@ -12450,8 +12450,9 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     popover(state, body.into(), Message::ToggleDevicePanel, 520.0)
 }
 
-/// The card of a left-side inspector docked beside the sidebar, closing on
-/// `close` when a click lands outside it.
+/// The card of the Audio Configuration inspector, docked immediately left
+/// of the CONTROLS sidebar and closing on `close` when a click lands outside
+/// it.
 fn popover<'a>(
     state: &'a TotalControl,
     body: Element<'a, Message>,
@@ -12488,13 +12489,12 @@ fn popover<'a>(
     opaque(
         mouse_area(
             container(card)
-                .align_x(iced::Alignment::Start)
+                .align_x(iced::Alignment::End)
                 .padding(iced::Padding {
                     top: POPOVER_TOP * scale,
-                    // Beside the device card that opens it, just off the
-                    // sidebar's edge.
-                    left: sidebar_px(state) + theme::SPACE_MD * scale,
-                    right: 0.0,
+                    // Glued to the left edge of the CONTROLS sidebar.
+                    right: sidebar_px(state),
+                    left: 0.0,
                     bottom: 0.0,
                 })
                 .width(Length::Fill)

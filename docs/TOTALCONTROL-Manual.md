@@ -264,7 +264,7 @@ When the channels do not all fit, one slider at the lower right scrolls all
 three rows together, so the routing picture stays aligned.
 
 The device card in the sidebar reads `Internal, <sample rate>, <buffer>` and
-opens the Audio Configuration panel beside the mixer, which carries clock
+opens the Audio Configuration panel immediately left of the CONTROLS sidebar, which carries clock
 source, sample rate, the digital input formats and firmware and serial
 information.
 
