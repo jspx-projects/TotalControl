@@ -379,7 +379,7 @@ Data page (either page kind that sets word 6; 4-byte records, two
 
 | Words (bytes) | Contents |
 |---|---|
-| 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), plus seven 16-byte output-pair RMS groups at bytes 0, 16, 32, 48, 64, 80 and 96.  Each group is `+0` left RMS power (u32), `+4` left status, `+8` right RMS power (u32), `+12` right status.  The last group is truncated after its right RMS word at byte 104.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
+| 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), plus seven 16-byte output-pair RMS groups at bytes 0, 16, 32, 48, 64, 80 and 96.  Each group is `+0` left RMS power (u32), `+4` left status, `+8` right RMS power (u32), `+12` right status.  The last group ends after its right RMS word at byte 104.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
 | 54..69 (108..139) | AN1..AN8 input records: high halfword = linear 16-bit peak, low halfword = OVR word when over |
 | 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = linear 24-bit peak, bits 0..7 = full-scale-sample count, `0x00001fff` filler before the first sample |
 | 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit Peak |
@@ -388,7 +388,7 @@ Data page (either page kind that sets word 6; 4-byte records, two
 Unknown bytes on the data page: 48 of 324.  The 52 status bytes are the
 two status words of the six full output-pair groups plus the last group's
 left status word; four bytes are the page discriminator and the remaining
-48 are status/filler.  They carry no audio level, RMS, Peak or OVR.
+48 are status/filler.
 
 Flag page (the non-data page of the alternation, word 6 reads zero):
 
@@ -495,8 +495,7 @@ RMS dBFS      = 10 × log10(word / 0x80000000)
 A full-scale sine has word `0x40000000` and reads −3.01 dBFS RMS.  The
 header and flag-page output RMS words are measured before the row's `0x1a`
 output fader; TotalControl applies that fader for the displayed post-fader
-output meter.  The over band is supplied by the output record's OVR word,
-not by the RMS word.
+output meter.  The over band comes from the output record's OVR word.
 
 ### OVR trigger
 
@@ -539,20 +538,18 @@ is a full-scale-sample count:
 level = record >> 8 & 0xffffff
 level == 0              -> below range
 dBFS  = 20 × log10(level / 0x800000)
-over  = record & 0xff
+over  = record & 0x0f
 ```
 
-The over byte is not a half-dB value and not a fixed nibble tag.  Its low
-nibble is a full-scale-sample count (0..15).  A controlled S/PDIF loop
-with 1, 2, 4, 8 and 12 full-scale samples per 48-sample period read
-`0x01`, `0x02`, `0x04`, `0x08` and `0x0c`; repeating the widths at a
-96-sample period gave the same low nibbles.  The low nibble saturates at
-15.  The upper nibble is a separate status/overflow field whose packing is
-still being mapped; it is not a simple count carry, a polarity field or a
-0..6 dB / 12-step value.  The 24-bit level saturates at `0x7fffff`, and
-the over LED uses the low-nibble count against the global **Full scale
-samples for OVR** preference.  The `0x00001fff` filler has a level below
-the meter's floor and is no data, not a level.
+The low nibble is a full-scale-sample count (0..15).  A controlled
+S/PDIF loop with 1, 2, 4, 8 and 12 full-scale samples per 48-sample
+period read `0x01`, `0x02`, `0x04`, `0x08` and `0x0c`; repeating the
+widths at a 96-sample period gave the same low nibbles.  The low nibble
+saturates at 15.  The upper nibble is a status/overflow field; its packing
+is not yet clear.  The 24-bit level saturates at `0x7fffff`, and the over
+LED uses the low-nibble count against the global **Full scale samples for
+OVR** preference.  The `0x00001fff` filler has a level below the meter's
+floor and is no data.
 
 ### Input RMS words
 
@@ -578,7 +575,7 @@ zero; the bar then uses the peak word's sine equivalent
 - Hardware output lower VU bar: the flag-page bank for AN1..AN4 and the
   data-page header for AN5..ADAT8.  The device words are pre-fader;
   TotalControl applies the row's `0x1a` output fader and mute for the
-  displayed post-fader meter.  No host-side level estimate is used.
+  displayed post-fader meter.
 - Playback and output peak line: the data-page Peak word.
 - Playback and output OVR LED: the device's consecutive-over count in the
   record's OVR word, compared with the global OVR sample preference

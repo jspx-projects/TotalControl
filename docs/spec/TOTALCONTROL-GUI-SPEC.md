@@ -493,8 +493,8 @@ UCX take both the RMS bar and the peak line from their hardware meter
 pages. The UC's device RMS words are pre-fader: AN1..AN4 use the flag-page
 bank and AN5/6 through ADAT7/8 use the data-page header. TotalControl
 applies the row's output fader and mute for the displayed post-fader
-output meter. No host-side output level estimate is used; the peak line
-and OVR block come from the device's output record for all output rows.
+output meter. The peak line and OVR block come from the device's output
+record for all output rows.
 
 #### 2.7.2 Fader scale
 
