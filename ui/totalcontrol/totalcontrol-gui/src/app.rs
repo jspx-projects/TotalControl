@@ -18280,6 +18280,22 @@ fn control_room_panel(
         .on_press_maybe(msg)
         .into()
     };
+    // An unavailable control keeps its grid slot but draws no button, so the
+    // controls around it never move.
+    let slot = |label: &'static str,
+                size: f32,
+                active: bool,
+                msg: Option<Message>|
+     -> Element<'static, Message> {
+        if msg.is_some() {
+            cell(label, size, active, msg)
+        } else {
+            iced::widget::Space::new()
+                .width(Length::Fixed(btn_w))
+                .height(Length::Fixed(btn_h))
+                .into()
+        }
+    };
     // The Assign button opens the menu card beside the panel. It uses the
     // same compact selector decoration as a strip's output-bus trigger.
     let assign = iced::widget::button(
@@ -18323,24 +18339,22 @@ fn control_room_panel(
     // Mute FX; then a gap and Assign at the bottom.
     let body = column![
         group(vec![
-            cell(
+            slot(
                 "dim",
                 theme::TEXT_MD,
                 settings.dim,
-                Some(Message::Dim(!settings.dim))
+                Some(Message::Dim(!settings.dim)),
             ),
-            cell(
+            slot(
                 "recall",
                 theme::TEXT_MD,
                 false,
-                Some(Message::ControlRoomRecall)
+                Some(Message::ControlRoomRecall),
             ),
-            cell(
+            slot(
                 "speaker B",
                 theme::TEXT_SM,
                 settings.speaker_b,
-                // Speaker B is a UC/UCX register; other units show it
-                // dimmed instead of failing on press.
                 state
                     .device
                     .is_uc_family()
@@ -18348,13 +18362,13 @@ fn control_room_panel(
             ),
         ]),
         group(vec![
-            cell(
+            slot(
                 "mono",
                 theme::TEXT_MD,
                 settings.mono,
                 Some(Message::ControlRoomMono(!settings.mono)),
             ),
-            cell(
+            slot(
                 "talkback",
                 theme::TEXT_MD,
                 state.talkback_on,
@@ -18364,7 +18378,7 @@ fn control_room_panel(
                     .talkback
                     .then_some(Message::TalkbackChanged(!state.talkback_on)),
             ),
-            cell(
+            slot(
                 "ext. input",
                 theme::TEXT_SM,
                 settings.external_input,
@@ -18373,7 +18387,7 @@ fn control_room_panel(
                     .external_input
                     .map(|_| Message::ExternalInput(!settings.external_input)),
             ),
-            cell(
+            slot(
                 "mute FX",
                 theme::TEXT_MD,
                 settings.mute_fx,

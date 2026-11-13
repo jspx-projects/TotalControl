@@ -1521,8 +1521,8 @@ Room is always linked and never splits.
 
 ## 12. Control Room
 
-The Control Room is shown for models with a mapped monitoring path; the UC and
-Babyface-classic omit the section and the Options entry until their host-side
+The Control Room is shown for models with a mapped monitoring path; the
+Babyface-classic omits the section and the Options entry until its host-side
 Control Room writes are implemented. On a mapped model the panel is flush with
 the mixer's right edge beside the FX column. Its button stack is one channel wide; every button in the stack has
 the same width and height, and its label is centred. Long labels use the next
@@ -1533,6 +1533,10 @@ smaller type tier. The stack runs, top to bottom:
 | dim / recall / speaker B | Dim, Recall, Speaker B |
 | mono / talkback / ext. input / mute FX | Mono, Talkback, Ext. input, Mute FX |
 | bottom | Settings, immediately above Assign |
+
+A control the active backend cannot drive is hidden. Its button-sized slot
+stays empty, so the controls around it do not move. `mute FX` occupies the
+slot after `ext. input`; hiding it leaves that slot blank.
 
 Engaged monitoring buttons use the dark face, orange text and 1 px orange
 outline. Recall has no latched state and uses the normal press feedback;

@@ -695,9 +695,9 @@ views of one value. The echo block also shows the FX bus level meters.
 
 ## 10. Control Room
 
-On the UCX the Control Room section sits at the right of the Hardware Outputs
-row. The UC and Babyface-classic currently omit it until their host-side
-Control Room writes are mapped. It turns ordinary hardware outputs into
+On the UCX and UC the Control Room section sits at the right of the Hardware
+Outputs row. The Babyface-classic omits it until its host-side Control Room
+writes are mapped. It turns ordinary hardware outputs into
 monitoring destinations with fixed names: `Main`, `Speaker B` and `Phones 1–4`. Every hardware output is either
 assigned in the Control Room or remains an ordinary output in the Hardware
 Outputs row; there are no empty slots.
