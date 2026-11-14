@@ -673,28 +673,27 @@ Input meters measure the physical input before loopback.  A
 loopback-enabled output replaces the input's record signal, but does not
 change the input meter or the input bank in the `0x85` page.
 
+The input, playback and output RMS banks publish per channel when the
+channel carries signal.  A zero power word is a level below one power LSB,
+or silence.  The input path uses the peak/√2 fallback at that floor.  The
+header value slots publish output RMS when the output carries signal; a
+word above the matching output peak is status and is ignored.
+
 ### Open metering items
 
-1. The engine condition under which the RMS banks publish.  Sessions
-   have been observed where input and playback banks were zero on every
-   page, including states with active routed tonal monitoring; the
-   output bank's publishing condition is likewise not mapped.
-2. Which engine state makes the header's value slots publish output
-   levels (see "Output RMS bank"); the publication is engine-state
-   dependent.
-3. The beat words' (bytes 4..8) semantics.  Observed formats include a
+1. The beat words' (bytes 4..8) semantics.  Observed formats include a
    steady `0x00001fff`/zero pair, two independent counter/timestamp
    pairs, and an all-zero state; one session changed its format
    mid-stream.  No session-level value carries page identity, and the
    words have no role in synchronisation.
-4. Pair ordering under the UC's Mac (ISO) personality.  Alternation is
+2. Pair ordering under the UC's Mac (ISO) personality.  Alternation is
    verified in that mode; the RMS-then-peak pair order is verified live
    in the interrupt personality and is carried by the same DSP firmware.
-5. Full inventory of the header's status-slot values and of the RMS
+3. Full inventory of the header's status-slot values and of the RMS
    banks' slot-internal engine fields.  These fields drift within a
    session and do not track the input signal under first-difference
    correlation, but no law has been published for them.
-6. `0x1fff` appears in three roles: as the no-update sentinel in meter
+4. `0x1fff` appears in three roles: as the no-update sentinel in meter
    records and RMS bank power words, and as a beat-word value in some
    sessions.  Whether the DSP uses one code for all three roles on
    purpose is unknown; the roles are distinct field positions.
