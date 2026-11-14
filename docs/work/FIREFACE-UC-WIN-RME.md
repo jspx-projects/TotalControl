@@ -27,6 +27,100 @@ signals a period (`ffuc_period_elapsed()`).  The isochronous transport
 (UCX, AP personalities) still signals only its own direction; whether it shows
 the same dropouts has not been tested.
 
+## Quantum-48 capture-side dropouts
+
+The following observations use the PC personality, firmware 127, the interrupt
+transport, and an internal ADAT 5/6 loopback.  The test plays a stereo noise
+file and records the loopback at 18 channels, 48 kHz, S32.  Captures and raw
+state remain outside the repository.
+
+### Reproduction
+
+- At quantum 48, four runs produced three to five internal zero runs per run.
+  Each zero run is exactly one quantum long.
+- At quantum 64, three of four runs had a zero run.
+- At quantum 80, one of four runs had a zero run.
+- At quantum 96, three of eight runs had a zero run.
+- The quantum change alters the failure rate; it does not remove the error.
+
+These results rule out a quantum choice as a fix.
+
+### PipeWire and WirePlumber settings
+
+The Fireface Pro nodes use `api.alsa.disable-tsched = true`,
+`api.alsa.period-num = 2`, and `api.alsa.headroom = 0`.
+At quantum 48, each of these alternatives still produced zero runs:
+
+- `api.alsa.period-num = 4`;
+- `api.alsa.headroom = 96`;
+- `api.alsa.disable-tsched = false`.
+
+The settings are not the root cause.
+
+### Driver timing trace
+
+A bpftrace trace at quantum 48 recorded every capture and playback URB and
+every `ffuc_period_elapsed()` call.
+
+- Every URB carried 3456 bytes, which is 48 frames of 18 channels at four
+  bytes per sample.
+- Period signals for both directions were present at about one-millisecond
+  intervals.
+- The largest observed interval between period signals was about 1.44 ms.
+  A missing 48-frame period would produce an interval of about 2 ms.  No such
+  gap was present at a zero run.
+- At every playback-boundary signal, the capture count was one URB behind.
+- At every capture-boundary signal, the playback count was current.
+
+The driver is not losing a period signal or a URB at the zero-run positions.
+
+### Buffer-content trace
+
+A second trace sampled the playback and capture copies at quantum 48.  The
+checksum covered the 48-frame URB on playback channel 1 and capture channel
+15 in the one-based channel labels.
+
+- At the later internal zero runs, the playback copy and the capture copy
+  both contained nonzero signal.  The recorded WAV still contained zeros.
+  Those zeros were inserted after `ffuc_capture_copy()`.
+- At the first three internal zero runs, the capture copy checksum was zero
+  while the playback copy was nonzero.  This is a separate capture-content
+  mode and is still open.
+
+The content-present zeros are therefore in the host capture path: the
+PipeWire capture follower or the recording client.  They are not explained by
+a driver period-signalling defect.
+
+### Tested driver variant
+
+A test variant signalled only the direction whose URB had completed and
+removed the cross-direction signal.  At quantum 48 it made the result worse.
+One four-run batch contained a run with forty zero runs.  A later eight-run
+batch produced between three and fourteen zero runs per run.  The variant was
+reverted and not merged.
+
+This is evidence against the cross-direction signal being the whole error.
+It does not explain the content-present zeros.
+
+### Why a period-signalling patch does not fix this mode
+
+The period signal can only wake an ALSA reader.  It cannot remove a zero that
+is inserted after the driver has copied nonzero samples into the capture ring.
+A patch that changes the signal boundary or its order can help a unit where the
+loss occurs at the driver wake.  It cannot fix the content-present mode on this
+unit.
+
+### Open items
+
+1. Distinguish a PipeWire capture-follower resync from a `pw-record` client
+   xrun at the exact zero positions.
+2. Explain the early capture-content mode, where the capture copy is zero and
+   playback is nonzero.
+3. Repeat the quantum-128 control enough times to state its failure rate.
+   The quantum sweep is not a fix.
+4. Determine whether the zeros affect the device output, or only the captured
+   and monitored streams.
+
 ## Endpoints that differ from the original UC
 
 The descriptor is copied from the original UC.  On the test unit interface 1
