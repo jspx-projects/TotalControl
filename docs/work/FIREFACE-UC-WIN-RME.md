@@ -365,6 +365,42 @@ through the loopback, counters zero, both `bad_length` counters zero);
 the bit-exact check needs the session's own routing and stays open as a
 bench item for PR #167.
 
+### Gate arm, measured (2026-11-14)
+
+4-minute q48 arm, same protocol and fixture as the earlier A/B/C
+measurement, daemon xrun logging active:
+
+| Metric | Reference (main, #132) | Gate |
+|---|---|---|
+| xrun log lines | 63 | **0** |
+| skipped cycles (negative `process`) | 13 | **0** |
+| audible zero runs | 0 | 0 |
+| `delta_zero` (kernel counter) | n/a | 0 |
+| ring/instrument counters | 0 | 0 |
+
+`delta_zero = 0` proves the gate's own claim: no signal ever announced
+zero completed periods. The follower xrun count collapsing from 63 to
+0 in the same setup is a further, larger effect than predicted: by
+deferring the graph wake to the later boundary, the follower is never
+woken before both directions have completed, so its deadline lag has
+no space to occur. A single 4-minute arm cannot separate this from
+luck for the audible rate, but on the skipped-cycle metric the
+difference is far beyond the noise floor (0 vs 13, Poisson one-sided
+p below 1e-5).
+
+Consequences:
+
+- The gate lands on contract-correctness grounds and carries a large
+  measured improvement in follower timing on this unit.
+- PR #160 becomes genuinely superseded: the gate keeps its
+  capture-boundary benefit while removing the hardcoded phase and the
+  three-period stall gap, and additionally removes the spurious-call
+  class. Closing #160 with its measurement credited is the right
+  disposition.
+- The quantum guidance (96 or above for low-latency use) remains
+  recorded; with the gate the minimum safe quantum may drop, which is
+  a follow-up measurement, not a blocker.
+
 ## Endpoints that differ from the original UC
 
 

@@ -1489,6 +1489,12 @@ channels to a DAW.
 The buffer-size picker in TotalControl sets the graph quantum. The driver adds
 its own USB queue and device lead; the latency display explains the result.
 
+The quantum is also what keeps capture steady at very low latency. At a
+quantum equal to one millisecond (48 frames at 48 kHz) the graph has no slack
+between the device's period and the reader's deadline, and PipeWire may
+replace a missed period with silence. Use 96 frames or more for low-latency
+recording with the UC; the default of 256 is unaffected.
+
 The WirePlumber rule in
 [`ui/totalcontrol/tools/alsa/wireplumber-uc.conf`](../ui/totalcontrol/tools/alsa/wireplumber-uc.conf)
 selects polled scheduling and the 18-channel Pro Audio profile.
