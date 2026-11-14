@@ -352,41 +352,46 @@ matrix and output state produced by the host mixer.
 ## 10. Metering
 
 The `0x85` bulk stream carries 324-byte pages: 162 little-endian 16-bit
-U16 words (U16 word N = bytes 2N..2N+2).  The pages strictly alternate,
-forming a **meter heartbeat**: one peak page followed by one RMS page.
-Each 32-bit U32 field is little-endian unless stated otherwise.
+U16 words (U16 word N = bytes 2N..2N+2).  The pages strictly alternate in
+a **meter heartbeat**: one peak page followed by one RMS page, repeating
+at roughly 190 pages per second.  Page identity is positional, not
+byte-encoded: the host knows which half of the heartbeat a page is by
+its place in the transfer order, not by reading one of its fields.  Each
+U32 field is little-endian unless stated otherwise.
 
 | Term | Definition |
 |---|---|
-| **Meter heartbeat** | Two consecutive pages of different identity: one peak page and one RMS page, in that order. |
-| **Page tag** | The identity field of a page: the U32 read from bytes 4..8 (U16 words 2 and 3; word 2 = low half). |
-| **Peak page** | The page whose record table carries peak/OVR meter records. Page tag `0x00001fff` (word 2 = `0x1fff`, word 3 = `0`). |
-| **RMS page** | The page carrying the RMS banks. Engine-defined page tag (observed: `0x00000000`, and counter/timestamp pairs in one firmware session). |
-| **Record table** | Bytes 108..323 (U32 words 54..161): 54 × U32 meter records. Both page kinds carry the same address range; only the peak page's record table is meter content. |
+| **Meter heartbeat** | Two consecutive pages of different role: one peak page and one RMS page, in that order. |
+| **Peak page** | The heartbeat half whose record table carries the peak/OVR meter records. |
+| **RMS page** | The heartbeat half carrying the RMS banks, or its idle-state words when the engine publishes nothing. |
+| **Beat words** | Bytes 4..8 of every page, read as a U32: one U16 inside the peak page's header and one U16 inside the RMS page's input bank. Their values are engine fields; their format is session-dependent; they carry no identity. |
+| **Record table** | Bytes 108..323 (U32 words 54..161): 54 × U32 meter records. Both halves carry this address range; only the peak half's record table is meter content. |
 | **Meter record** | One U32 in the record table; layout and law per record class below. |
 | **RMS banks** | The power-word banks of the RMS page: input bank, playback bank, output bank. |
 | **No-update sentinel** | `0x1fff`. In a meter record: the channel's detector did not refresh. In an RMS bank word: no value published. Never audio level data. |
 | **Header** | Bytes 0..107 of every page: seven 16-byte groups at byte offsets 0, 16, 32, 48, 64, 80, 96; the last group is truncated after its second value slot at byte 104. |
-| **Value slot / status slot** | The two U32 positions of a header group: +0 and +8 are value slots, +4 and +12 are status slots. |
+| **Value slot / status slot** | The two U32 positions of a header group: +0 and +8 are value slots, +4 and +12 are status slots. On the peak page the header carries output RMS groups and their status. On the RMS page the same range spans the input bank's slots. |
 | **Peak word** | The level halfword of a meter record (16-bit analog/playback/output; 24-bit in bits 8..31 for digital). Linear scale, `0x8000`/`0x800000` full scale. |
 | **OVR word** | The over halfword (low byte/nibble) of a meter record: the `0xff` event byte plus the device's consecutive full-scale-sample count; carries no level data. |
 
-| Page identity | Page tag (U32 at bytes 4..8) |
-|---|---|
-| Peak page | `0x00001fff` |
-| RMS page | engine-defined, no level data |
+### Heartbeat synchronisation
 
-Page identity is determined by the page tag alone; a host must not infer
-it from stream position.  Word 6 (byte 12..13) does not carry page
-identity — it is the third U16 of input slot 1 in the input RMS bank
-(words 0..71) and follows that slot's content, so it may read non-zero
-and counter-like values within a whole session's identity class.
+1. The driver delivers pages in order. The host counts the beat phase
+   and toggles it per page. Identity is the phase, never a field value.
+2. A transport gap of exactly one page flips the phase once. The host
+   detects it from the page sequence counter, repairs the phase, and
+   logs the drop.
+3. Two consecutive peak phases mean a double drop or a re-order; the
+   host logs it and re-anchors phase at the next clean pair.
+4. Volatile format changes of the beat words (counter, timestamp, zero)
+   never affect identity. They are health data only.
+5. Only one meter reader may drain the stream at a time. Concurrent
+   readers each receive a sample of pages and break the phase model.
 
-A page tag other than the two values above is not meter content and must
-be ignored.  A peak page must never be applied to the RMS banks, and an
-RMS page must never be applied to the record table: applying the RMS
-page's record region at the record-table addresses turns input/peak data
-into huge phantom RMS values.
+A page must therefore never be classified by reading any of its fields.
+Verified across eight captured sessions: the phase alternation is exact
+except at transport gaps, and no session carries a byte field that
+identifies the page kind in every engine state.
 
 ### Page map
 
@@ -394,7 +399,7 @@ Peak page (4-byte records, two 16-bit words per record):
 
 | Words (bytes) | Contents |
 |---|---|
-| 0..53 (0..107) | header: the page tag (words 2..3, bytes 4..8), plus seven 16-byte output-pair RMS groups at bytes 0, 16, 32, 48, 64, 80 and 96.  Each group is `+0` left RMS power (U32), `+4` left status, `+8` right RMS power (U32), `+12` right status; the last group ends after its right RMS word at byte 104.  The header's value-slot publication is engine-state dependent; see "Output RMS bank" |
+| 0..53 (0..107) | header: seven 16-byte output-pair RMS groups at bytes 0, 16, 32, 48, 64, 80 and 96.  Each group is `+0` left RMS power (U32), `+4` left status, `+8` right RMS power (U32), `+12` right status; the last group ends after its right RMS word at byte 104.  The header's value-slot publication is engine-state dependent; see "Output RMS bank" |
 | 54..69 (108..139) | AN1..AN8 input records: high halfword = linear 16-bit peak, low halfword = OVR word when over |
 | 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = linear 24-bit peak, bits 0..7 = full-scale-sample count, `0x00001fff` sentinel before the first sample |
 | 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit peak |
@@ -402,22 +407,23 @@ Peak page (4-byte records, two 16-bit words per record):
 
 Unknown bytes on the peak page: 48 of 324.  The 52 status bytes are the
 two status words of the six full output-pair groups plus the last group's
-left status word; four bytes are the page tag and the remaining 48 are
-status/filler.
+left status word; four bytes are engine fields of header group 0 and the
+remaining 48 are status/filler.
 
 RMS page:
 
 | Words (bytes) | Contents |
 |---|---|
-| 0..71 (0..143) | input RMS bank: four 16-bit words per input, power word at slot offset 3 (`3 + 4c` for input `c`); the other three words are status/junk |
+| 0..71 (0..143) | input RMS bank: four 16-bit words per input, power word at slot offset 3 (`3 + 4c` for input `c`); the other three words are slot-internal engine fields, not meters |
 | 72..143 (144..287) | SW playback 1..18 RMS bank: four 16-bit words per channel with the power word at slot offset 3 |
-| 144..159 (288..319) | hardware output RMS bank: the power words at 147, 151, 155, 159 = AN1, AN2, AN3, AN4; the other twelve words are junk |
+| 144..159 (288..319) | hardware output RMS bank: the power words at 147, 151, 155, 159 = AN1, AN2, AN3, AN4; the other twelve words are slot-internal engine fields |
 | 160..161 (320..323) | truncated head of output channel 4's own slot: Unknown |
 
-Unknown bytes on the RMS page: the status/junk words inside the RMS
-slots and the truncation tail.  Any page whose word 2 is not `0x1fff` is
-an RMS page, whatever its tag value; the tag value range is an open item
-(see "Open metering items").
+Unknown bytes on the RMS page: the slot-internal engine fields inside the
+RMS banks and the truncation tail.  The seven header groups' value slots
+carry output levels only when the engine publishes them (see "Output RMS
+bank"); the status slots and the RMS page's engine fields never carry
+meter data.
 
 ### Playback and output Peak/OVR words
 
@@ -584,7 +590,10 @@ RMS amplitude = sqrt(word / 32768)
 RMS dBFS      = 10 × log10(word / 32768)
 ```
 
-The other three words in each input slot are status/junk.
+The other three words in each input slot are slot-internal engine fields
+and are not meters.  Their values drift within a session and do not track
+the input signal (first-difference correlation against a known input peak
+is zero); their semantics are an open item.
 
 The data-page peak and flag-page RMS input words are taken after the
 channel gain.  TotalControl uses them directly and does not add the gain
@@ -629,12 +638,20 @@ change the input meter or the input bank in the `0x85` page.
    output bank's publishing condition is likewise not mapped.
 2. Which engine state makes the header's value slots publish output
    levels (see "Output RMS bank"); the publication is engine-state
-   dependent, not page-kind dependent.
-3. The RMS page's page-tag values beyond the two states observed
-   (`0x00000000` and one counter/timestamp session).
+   dependent.
+3. The beat words' (bytes 4..8) semantics.  Observed formats include a
+   steady `0x00001fff`/zero pair, two independent counter/timestamp
+   pairs, and an all-zero state; one session changed its format
+   mid-stream.  No session-level value carries page identity.
 4. The hardware-output record-slot ↔ display-pair mapping in the current
    firmware.  In one session, output record slots 0/1 byte-matched the
    input record slots 0/1; that has not been reconciled with the display
    mapping of the header groups.
-5. Full inventory of DSP status-slot values (header + input RMS banks'
-   slot-internal fields).
+5. Full inventory of the header's status-slot values and of the RMS
+   banks' slot-internal engine fields.  These fields drift within a
+   session and do not track the input signal under first-difference
+   correlation, but no law has been published for them.
+6. `0x1fff` appears in three roles: as the no-update sentinel in meter
+   records and RMS bank power words, and as a beat-word value in some
+   sessions.  Whether the DSP uses one code for all three roles on
+   purpose is unknown; the roles are distinct field positions.
