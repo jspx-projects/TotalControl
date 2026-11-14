@@ -22,10 +22,16 @@ PipeWire drops out at quanta of 512 and above when capture drives the graph
 and playback follows on the same card: it reads the follower with
 `snd_pcm_avail_update()`, which returns the follower's hw_ptr as of its last
 period, and the two directions' periods end within one URB of each other.
-The interrupt transport now updates the other direction's hw_ptr before it
-signals a period (`ffuc_period_elapsed()`).  The isochronous transport
-(UCX, AP personalities) still signals only its own direction; whether it shows
-the same dropouts has not been tested.
+While capture runs, the interrupt transport signals both directions together
+at the capture period boundary, playback first, and playback's own boundary
+signals nothing (`ffuc_period_elapsed()`); playback signals itself while
+capture is stopped.  Signalling both directions at both boundaries also
+cures the dropouts, but on a firmware 133 unit at 48 kHz (48-frame URBs, so
+one URB per period at a quantum of 48) it lost whole periods at a quantum of
+48: 3 silent periods in the output loopback over four 30 s runs, against none
+with the capture boundary signalling both.  The isochronous transport (UCX,
+AP personalities) still signals only its own direction; whether it shows the
+same dropouts has not been tested.
 
 ## Quantum-48 capture-side dropouts
 

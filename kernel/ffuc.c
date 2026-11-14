@@ -937,15 +937,23 @@ static void ffuc_ring_event(struct ffuc *chip, struct snd_pcm_substream *subs,
  * the first one dmesg-logs the two values. */
 static void ffuc_ptr_mismatch(struct ffuc *chip,
 			      struct snd_pcm_substream *subs,
-			      atomic_t *counter)
+			      const struct ffuc_stream *s)
 {
-	if (!atomic_inc_return(counter) - 1) {
+	atomic_inc(&chip->hw_ptr_mismatch);
+	if (!(chip->hw_ptr_logged++)) {
 		struct snd_pcm_runtime *rt = subs->runtime;
 
 		dev_info(&chip->dev->dev,
-			 "%s status hw_ptr %lu boundary %lu: core pointer diverged\n",
+			 "%s status hw_ptr %lu driver hw_ptr %lu (buffer %lu period %lu): core pointer diverged\n",
 			 subs->stream ? "capture" : "playback",
-			 rt->status->hw_ptr, rt->boundary);
+			 rt->status->hw_ptr, s->hw_ptr,
+			 rt->buffer_size, rt->period_size);
+	} else {
+		dev_info_ratelimited(&chip->dev->dev,
+				     "%s mismatch #%u status %lu driver %lu\n",
+				     subs->stream ? "capture" : "playback",
+				     chip->hw_ptr_logged,
+				     subs->runtime->status->hw_ptr, s->hw_ptr);
 	}
 }
 
@@ -1086,49 +1094,67 @@ static bool ffuc_stream_advance(struct ffuc *chip, struct ffuc_stream *s,
 }
 
 /*
- * Signal a period on @dir, after bringing the other running direction's ALSA
- * hw_ptr up to date.  PipeWire in IRQ mode wakes on one direction's period
- * and reads the other direction of the same card with snd_pcm_avail_update(),
- * which returns the hw_ptr as of that direction's last period.  Both
- * directions' periods end within one URB of each other, so whether the other
- * side has already been updated depends on URB completion order: the reader
- * sees the other side's fill jump by a whole period from cycle to cycle and
- * resyncs (inserts silence or drops a period).  Below a quantum of ~256 the
- * jump stays under PipeWire's resync threshold.
+ * Playback periods that may pass without a signal from the capture boundary
+ * before playback signals itself (capture running but stalled).
+ */
+#define FFUC_SIGNAL_STALL	3
+
+static void ffuc_signal_period(struct ffuc *chip, struct ffuc_stream *s)
+{
+	unsigned long flags;
+
+	if (!s->substream)
+		return;
+	snd_pcm_stream_lock_irqsave(s->substream, flags);
+	if (s->running) {
+		s->signalled = s->period;
+		snd_pcm_period_elapsed_under_stream_lock(s->substream);
+		/* Instrumentation: the core refreshes the shared status
+		 * pointer from .pointer inside the period-elapsed call.
+		 * It must re-read the same value this driver maintains;
+		 * a difference means the core moved hw_base by itself. */
+		if (s->substream->runtime->status->hw_ptr !=
+		    s->hw_ptr % s->substream->runtime->boundary)
+			ffuc_ptr_mismatch(chip, s->substream, s);
+	}
+	snd_pcm_stream_unlock_irqrestore(s->substream, flags);
+}
+
+/*
+ * Signal a period on @dir.  PipeWire in IRQ mode wakes on one direction's
+ * period and reads the other direction of the same card with
+ * snd_pcm_avail_update(), which returns the hw_ptr as of that direction's last
+ * period.  Both directions' periods end within one URB of each other, so if
+ * each direction signalled only itself, the reader would see the other side's
+ * fill jump by a whole period from cycle to cycle, depending on URB completion
+ * order, and resync (insert silence or drop a period) at quanta of ~256 and
+ * above.
+ *
+ * So while capture runs, its period boundary signals both directions together,
+ * playback first, and playback's own boundary signals nothing (see
+ * ffuc_playback_urb()).  Each direction gets one period signal per period, and
+ * both pointers are current when the reader wakes.  Signalling both directions
+ * at both boundaries instead loses whole periods at a quantum of 48.
  */
 static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 {
-	struct ffuc_stream *other = &chip->streams[!dir];
-	struct ffuc_stream *s = &chip->streams[dir];
-	unsigned long flags;
+	if (dir == SNDRV_PCM_STREAM_CAPTURE)
+		ffuc_signal_period(chip,
+				   &chip->streams[SNDRV_PCM_STREAM_PLAYBACK]);
+	ffuc_signal_period(chip, &chip->streams[dir]);
+}
 
-	if (other->substream) {
-		snd_pcm_stream_lock_irqsave(other->substream, flags);
-		if (other->running) {
-			snd_pcm_period_elapsed_under_stream_lock(other->substream);
-			/* The core refreshes the shared status pointer from
-			 * .pointer inside the period-elapsed call.  It must
-			 * re-read the same value the driver maintains.  Any
-			 * difference means the core moved hw_base by itself
-			 * (the double-interrupt jiffies heuristic), which
-			 * would present the reader a pointer ahead of the
-			 * committed data.  Counted; one fired trace line. */
-			if (other->substream->runtime->status->hw_ptr !=
-			    other->hw_ptr % other->substream->runtime->boundary)
-				ffuc_ptr_mismatch(chip, other->substream,
-						  &chip->hw_ptr_mismatch);
-		}
-		snd_pcm_stream_unlock_irqrestore(other->substream, flags);
-	}
-	snd_pcm_stream_lock_irqsave(s->substream, flags);
-	if (s->running) {
-		snd_pcm_period_elapsed_under_stream_lock(s->substream);
-		if (s->substream->runtime->status->hw_ptr !=
-		    s->hw_ptr % s->substream->runtime->boundary)
-			ffuc_ptr_mismatch(chip, s->substream,
-					  &chip->hw_ptr_mismatch);
-	}
-	snd_pcm_stream_unlock_irqrestore(s->substream, flags);
+/*
+ * Whether playback's own period boundary signals it: only while capture is
+ * stopped, or when the capture boundary has not signalled it for
+ * FFUC_SIGNAL_STALL periods.  Called with the playback stream lock held.
+ */
+static bool ffuc_playback_signals_itself(struct ffuc *chip,
+					 const struct ffuc_stream *s)
+{
+	if (!READ_ONCE(chip->streams[SNDRV_PCM_STREAM_CAPTURE].running))
+		return true;
+	return s->period - s->signalled >= FFUC_SIGNAL_STALL;
 }
 
 /* Interrupt transport: one URB of interleaved frames. */
@@ -1222,7 +1248,8 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 					   urb->transfer_buffer, frames, words,
 					   ep->index * words, words);
 		elapsed = ffuc_stream_advance(chip, s, subs->runtime,
-					      ep->index, frames);
+					      ep->index, frames) &&
+			  ffuc_playback_signals_itself(chip, s);
 	} else {
 		memset(urb->transfer_buffer, 0, urb->transfer_buffer_length);
 	}
@@ -2240,6 +2267,7 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	memset(s->pos, 0, sizeof(s->pos));
 	s->hw_ptr = 0;
 	s->period = 0;
+	s->signalled = 0;
 	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		subs->runtime->delay = chip->nurbs * chip->urb_frames;
 	/* Preparation never zeroed the ring; inherit the last session's
@@ -2267,6 +2295,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		memset(s->pos, 0, sizeof(s->pos));
 		s->hw_ptr = 0;
 		s->period = 0;
+		s->signalled = 0;
 		s->running = true;
 		/* q48 diagnostics: log the negotiated geometry once per
 		 * start so a capture session can be matched to it. */
@@ -2294,6 +2323,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		memset(s->pos, 0, sizeof(s->pos));
 		s->hw_ptr = 0;
 		s->period = 0;
+		s->signalled = 0;
 		s->running = true;
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:

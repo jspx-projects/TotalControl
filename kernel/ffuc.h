@@ -185,6 +185,7 @@ struct ffuc_stream {
 	snd_pcm_uframes_t pos[FFUC_MAX_EPS];
 	snd_pcm_uframes_t hw_ptr;
 	snd_pcm_uframes_t period;
+	snd_pcm_uframes_t signalled;	/* period at the last period signal */
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must
@@ -387,6 +388,7 @@ struct ffuc {
 	atomic_t out_underruns;
 	atomic_t in_bad_length;
 	atomic_t hw_ptr_mismatch;
+	unsigned int hw_ptr_logged;
 	ktime_t last_out_complete;
 	unsigned long engine_stopped_at;	/* jiffies; 0 = never stopped */
 	ktime_t last_in_complete;
