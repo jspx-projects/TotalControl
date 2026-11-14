@@ -549,6 +549,42 @@ ISO path; the shared constant-delay question (reported delay is the peak
 of a sawtooth, so it over-reports by 0..1 ms at every transport) remains
 open pending a check of whether PipeWire reads `snd_pcm_delay`.
 
+## ISO gate arms (A/B interleaved, 2026-11-14)
+
+Own-direction-only signalling versus the gated both-pending wake, ISO
+transport, q48 at 48 kHz (URB = period = quantum = 1 ms, the same
+geometry as the PC case). Three pairs, 4 minutes per arm, interleaved
+on one boot. Metric: daemon xrun log lines and skipped cycles
+(negative `process`).
+
+| Pair | Own-direction xruns / skips | Gated xruns / skips |
+|---|---|---|
+| 1 | 36 / 2 | 7 / 0 |
+| 2 | 2 / 0 | 0 / 0 |
+| 3 | 4 / 1 | 1 / 0 |
+| total | 42 / 3 | 8 / 0 |
+
+The gate is better in every pair. Pooled counts give a two-sided
+binomial p of about 5.8e-7 on xrun lines and P(0 of 3 skipped cycles)
+of 0.05; the per-pair sign test alone gives p = 0.125. The first
+own-direction arm carries most of the difference (36 of 42), so the
+stronger pooled figure overstates the evidence; the honest summary is
+that the direction is consistent and the mechanism metric is
+favourable, not that the size is established.
+
+No audible zero runs appeared in any arm. All arms: cadence 48000 Hz,
+`rate_mismatch` 0, `fb` priming 24 with ahead/stale 0, capacity and
+status-0 packet errors 0, lag band 8036..8079 (unchanged across arms).
+
+Interpretation: the gate's benefit transfers to the ISO transport, as
+the shared-core principle predicts. The remaining ISO lag contribution
+from the feedback dependency is not visible at this quantum; it would
+need the finer-grained arms (q48 at 2x/4x) to expose.
+
+Claims scope: scheduling metrics are sound on the dither substrate.
+Audio-content regression (pitch, level, channel mapping under load) is
+unverified on the ISO path until a physical loopback exists.
+
 ## Endpoints that differ from the original UC
 
 
