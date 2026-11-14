@@ -39,6 +39,7 @@ static bool ffuc_poison = true;
  * first two valid packets of a run.  Settles the body layout (planar vs
  * frame-major) and the wire format by measurement. */
 static bool ffuc_dump_iso = true;
+static bool ffuc_dump_out = true;
 
 static DEFINE_MUTEX(devices_mutex);
 static unsigned long devices_used;
@@ -47,6 +48,7 @@ static struct usb_driver ffuc_driver;
 
 module_param(ffuc_poison, bool, 0644);
 module_param(ffuc_dump_iso, bool, 0644);
+module_param(ffuc_dump_out, bool, 0644);
 MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
 
 module_param_array(index, int, NULL, 0444);
@@ -1386,6 +1388,12 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 			ffuc_fb_put_nominal(chip);
 			continue;
 		}
+		if (d->actual_length == FFUC_ISO_IN_HEADER) {
+			atomic_inc(&chip->in_hdr_only);
+			frames[i] = 0;
+			ffuc_fb_put(chip, 0, 0, 0);
+			continue;
+		}
 		if (d->actual_length < FFUC_ISO_IN_HEADER) {
 			atomic_inc(&chip->in_short);
 			frames[i] = 0;
@@ -1498,8 +1506,12 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		const struct usb_iso_packet_descriptor *d =
 			&urb->iso_frame_desc[i];
 
-		if (d->length && d->actual_length != d->length)
-			atomic_inc(&chip->out_pkt_len_err);
+		if (d->length && d->actual_length != d->length) {
+			if (d->status)
+				atomic_inc(&chip->out_pkt_status);
+			else
+				atomic_inc(&chip->out_pkt_len_err);
+		}
 	}
 
 	spin_lock_irqsave(&chip->fb_lock, flags);
@@ -1509,10 +1521,12 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 
 		phase[i] = 0;
 		if (!ffuc_fb_get(chip, k, &pos[i], &frames[i], &phase[i])) {
-			if (k >= chip->fb_delay && src >= chip->in_pkts)
-				atomic_inc(&chip->out_fb_miss_delay);
+			if (k < chip->fb_delay)
+				atomic_inc(&chip->out_fb_priming);
+			else if (src >= chip->in_pkts)
+				atomic_inc(&chip->out_fb_ahead);
 			else
-				atomic_inc(&chip->out_fb_miss_ring);
+				atomic_inc(&chip->out_fb_stale);
 			frames[i] = 0;
 		}
 	}
@@ -1561,6 +1575,31 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 				dst[0] = cpu_to_le32(base);
 			}
 			s->out_counter += frames[i];
+			if (ffuc_dump_out && chip->dump_out_count < 2 &&
+			    chip->out_pkts > 300 && frames[i]) {
+				unsigned int q, nq = frames[i] * fwords;
+
+				chip->dump_out_count++;
+				dev_info(&chip->dev->dev,
+					 "iso out dump pkt%d frames %u words %u lead %08x:",
+					 i, frames[i], nch, le32_to_cpu(dst[0]));
+				for (q = 0; q < nq; q++) {
+					if ((q % 10) == 0)
+						pr_info("\n");
+					pr_info(" %08x", le32_to_cpu(dst[q]));
+				}
+				pr_info("\n");
+			}
+			{
+				unsigned int wrap = ffuc_iso_wrap(chip);
+				int lag = (int)((chip->in_end + wrap -
+						 s->out_counter) % wrap);
+
+				if (lag < chip->out_lag_min)
+					chip->out_lag_min = lag;
+				if (lag > chip->out_lag_max)
+					chip->out_lag_max = lag;
+			}
 		}
 		off += len;
 	}
@@ -1665,12 +1704,13 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "in_shorts %d\n", atomic_read(&chip->in_shorts));
 	seq_printf(m, "in_status_errors %d\n",
 		   atomic_read(&chip->in_status_errors));
-	seq_printf(m, "iso_out capacity_err %d pkt_len_err %d fb_miss_delay %d fb_miss_ring %d nominal %d fb_only_urbs %d\n",
+	seq_printf(m, "iso_out capacity_err %d pkt_len_err %d pkt_status %d fb_priming %d fb_ahead %d fb_stale %d fb_only_urbs %d\n",
 		   atomic_read(&chip->out_capacity_err),
 		   atomic_read(&chip->out_pkt_len_err),
-		   atomic_read(&chip->out_fb_miss_delay),
-		   atomic_read(&chip->out_fb_miss_ring),
-		   atomic_read(&chip->out_fb_nominal),
+		   atomic_read(&chip->out_pkt_status),
+		   atomic_read(&chip->out_fb_priming),
+		   atomic_read(&chip->out_fb_ahead),
+		   atomic_read(&chip->out_fb_stale),
 		   atomic_read(&chip->fb_only_urbs));
 	seq_printf(m, "iso_in status_err %d short %d misaligned %d frames_mismatch %d pos_gap %d\n",
 		   atomic_read(&chip->in_status_err),
@@ -1963,6 +2003,8 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->in_end = 0;
 	chip->fb_acc = 0;
 	chip->fb_delay = (chip->nurbs + 1) * chip->iso_packets;
+	chip->out_lag_min = 0x7fffffff;
+	chip->out_lag_max = -0x7fffffff;
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
 	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin. */
@@ -2048,6 +2090,8 @@ static int ffuc_engine_start(struct ffuc *chip)
 		}
 	if (READ_ONCE(chip->disconnected))
 		return -ENODEV;
+	for (e = 0; e < 2; e++)
+		WARN_ON_ONCE(!chip->eps[e][0].buf_size);
 
 	chip->urb_frames = ffuc_urb_frames(chip, chip->rate);
 	if (chip->iso)
@@ -2531,7 +2575,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
 			 chip->iso_frames_hist[8]);
 		dev_info(&chip->dev->dev,
-			 "%s stop: delta_zero %d mismatch %d overruns %d/%d bad_length %d/%d fb_only %d fb_miss %d/%d cap %d pktlen %d\n",
+			 "%s stop: delta_zero %d mismatch %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d\n",
 			 subs->stream ? "capture" : "playback",
 			 atomic_read(&chip->delta_zero),
 			 atomic_read(&chip->hw_ptr_mismatch),
@@ -2540,10 +2584,14 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 atomic_read(&chip->in_bad_length),
 			 atomic_read(&chip->out_bad_length),
 			 atomic_read(&chip->fb_only_urbs),
-			 atomic_read(&chip->out_fb_miss_delay),
-			 atomic_read(&chip->out_fb_miss_ring),
+			 atomic_read(&chip->out_fb_priming),
+			 atomic_read(&chip->out_fb_ahead),
+			 atomic_read(&chip->out_fb_stale),
 			 atomic_read(&chip->out_capacity_err),
-			 atomic_read(&chip->out_pkt_len_err));
+			 atomic_read(&chip->out_pkt_len_err),
+			 atomic_read(&chip->out_pkt_status),
+			 atomic_read(&chip->in_hdr_only),
+			 chip->out_lag_min, chip->out_lag_max);
 		return 0;
 	default:
 		return -EINVAL;

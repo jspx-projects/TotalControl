@@ -316,6 +316,7 @@ struct ffuc {
 	u64 in_pkts, out_pkts;
 	unsigned int dump_count;
 	u32 iso_frames_hist[9];
+	unsigned int dump_out_count;
 	unsigned int in_end;
 	unsigned int fb_acc;
 	unsigned int fb_delay;
@@ -398,10 +399,15 @@ struct ffuc {
 	atomic_t in_pos_gap;
 	atomic_t out_capacity_err;
 	atomic_t out_pkt_len_err;
-	atomic_t out_fb_miss_delay;
-	atomic_t out_fb_miss_ring;
+	atomic_t out_fb_priming;
+	atomic_t out_fb_ahead;
+	atomic_t out_fb_stale;
 	atomic_t out_fb_nominal;
 	atomic_t fb_only_urbs;
+	atomic_t in_hdr_only;      /* status 0, header-only packet (0 frames) */
+	atomic_t out_pkt_status;   /* per-packet completion with non-zero status */
+	int out_lag_min, out_lag_max;   /* (in_end - out_counter) mod wrap */
+	atomic_t out_resync;
 	/* q48 instrumentation: ring pressure and core-pointer coherence.
 	 * in_overruns: capture completions that overwrote unread frames.
 	 * out_underruns: playback completions that sent non-written data.
