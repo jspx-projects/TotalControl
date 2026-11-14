@@ -174,6 +174,8 @@ struct ffuc_ep {
 	int dir;
 	unsigned int index;
 	int next_start;
+	unsigned int buf_size;      /* allocated bytes for one URB */
+	int last_start;             /* diagnostic: previous start_frame */
 	struct ffuc_urb urbs[FFUC_MAX_URBS];
 };
 
@@ -310,8 +312,6 @@ struct ffuc {
 	u64 in_pkts, out_pkts;
 	unsigned int dump_count;
 	u32 iso_frames_hist[9];
-	int iso_last_start;
-	unsigned int iso_start_logged;
 	unsigned int in_end;
 	unsigned int fb_acc;
 	unsigned int fb_delay;
@@ -392,6 +392,12 @@ struct ffuc {
 	atomic_t in_misaligned;
 	atomic_t in_frames_mismatch;
 	atomic_t in_pos_gap;
+	atomic_t out_capacity_err;
+	atomic_t out_pkt_len_err;
+	atomic_t out_fb_miss_delay;
+	atomic_t out_fb_miss_ring;
+	atomic_t out_fb_nominal;
+	atomic_t fb_only_urbs;
 	/* q48 instrumentation: ring pressure and core-pointer coherence.
 	 * in_overruns: capture completions that overwrote unread frames.
 	 * out_underruns: playback completions that sent non-written data.

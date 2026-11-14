@@ -1430,8 +1430,11 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 
-	if (!subs)
-		return;	/* feedback-only capture: no PCM attached */
+	if (!subs) {
+		/* Feedback-only capture: no PCM attached. */
+		atomic_inc(&chip->fb_only_urbs);
+		return;
+	}
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
 		for (i = 0; i < urb->number_of_packets; i++) {
@@ -1476,12 +1479,28 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	bool elapsed = false;
 	int i;
 
+	/* Per-packet delivery check from the previous submission. */
+	for (i = 0; i < urb->number_of_packets; i++) {
+		const struct usb_iso_packet_descriptor *d =
+			&urb->iso_frame_desc[i];
+
+		if (d->length && d->actual_length != d->length)
+			atomic_inc(&chip->out_pkt_len_err);
+	}
+
 	spin_lock_irqsave(&chip->fb_lock, flags);
 	for (i = 0; i < urb->number_of_packets; i++) {
+		u64 k = chip->out_pkts++;
+		u64 src = k - chip->fb_delay;
+
 		phase[i] = 0;
-		if (!ffuc_fb_get(chip, chip->out_pkts++, &pos[i], &frames[i],
-				 &phase[i]))
+		if (!ffuc_fb_get(chip, k, &pos[i], &frames[i], &phase[i])) {
+			if (k >= chip->fb_delay && src >= chip->in_pkts)
+				atomic_inc(&chip->out_fb_miss_delay);
+			else
+				atomic_inc(&chip->out_fb_miss_ring);
 			frames[i] = 0;
+		}
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 
@@ -1500,6 +1519,12 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		unsigned int len = frames[i] * fwords * FFUC_SAMPLE_BYTES;
 		unsigned int f;
 
+		if (off + len > ep->buf_size) {
+			/* Never truncate mid-frame: drop the packet. */
+			atomic_inc(&chip->out_capacity_err);
+			frames[i] = 0;
+			len = 0;
+		}
 		urb->iso_frame_desc[i].offset = off;
 		urb->iso_frame_desc[i].length = len;
 		if (s->running && frames[i]) {
@@ -1541,14 +1566,18 @@ static bool ffuc_iso_contiguous(struct ffuc_ep *ep, struct urb *urb)
 {
 	int expected = ep->next_start;
 
-	if (ep->chip->iso_start_logged < 12) {
-		ep->chip->iso_start_logged++;
-		dev_info(&ep->chip->dev->dev,
-			 "iso ep%d: start_frame %u packets %u delta %d\n",
-			 ep->index, urb->start_frame, urb->number_of_packets,
-			 ep->chip->iso_last_start < 0 ? -1 :
-			 (int)(urb->start_frame - ep->chip->iso_last_start));
-		ep->chip->iso_last_start = urb->start_frame;
+	{
+		static unsigned int start_logged;
+		if (start_logged < 12) {
+			start_logged++;
+			dev_info(&ep->chip->dev->dev,
+				 "iso %s ep%d: start_frame %u packets %u delta %d\n",
+				 ep->dir ? "cap" : "play", ep->index,
+				 urb->start_frame, urb->number_of_packets,
+				 ep->last_start < 0 ? -1 :
+				 (int)(urb->start_frame - ep->last_start));
+			ep->last_start = urb->start_frame;
+		}
 	}
 	ep->next_start = (urb->start_frame + urb->number_of_packets) &
 			 FFUC_ISO_FRAME_MASK;
@@ -1622,6 +1651,13 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "in_shorts %d\n", atomic_read(&chip->in_shorts));
 	seq_printf(m, "in_status_errors %d\n",
 		   atomic_read(&chip->in_status_errors));
+	seq_printf(m, "iso_out capacity_err %d pkt_len_err %d fb_miss_delay %d fb_miss_ring %d nominal %d fb_only_urbs %d\n",
+		   atomic_read(&chip->out_capacity_err),
+		   atomic_read(&chip->out_pkt_len_err),
+		   atomic_read(&chip->out_fb_miss_delay),
+		   atomic_read(&chip->out_fb_miss_ring),
+		   atomic_read(&chip->out_fb_nominal),
+		   atomic_read(&chip->fb_only_urbs));
 	seq_printf(m, "iso_in status_err %d short %d misaligned %d frames_mismatch %d pos_gap %d\n",
 		   atomic_read(&chip->in_status_err),
 		   atomic_read(&chip->in_short),
@@ -1840,8 +1876,9 @@ static void ffuc_engine_stop(struct ffuc *chip)
 	for (i = 0; i < 2; i++)
 		for (j = 0; j < FFUC_MAX_EPS; j++)
 			chip->eps[i][j].next_start = -1;
-	chip->iso_start_logged = 0;
-	chip->iso_last_start = -1;
+	for (i = 0; i < 2; i++)
+		for (j = 0; j < FFUC_MAX_EPS; j++)
+			chip->eps[i][j].last_start = -1;
 	dev_info(&chip->dev->dev,
 		 "engine stop: rate=%u session=%d\n",
 		 chip->rate, chip->session_reopen);
@@ -1879,6 +1916,7 @@ static void ffuc_int_setup_urbs(struct ffuc *chip, unsigned int bytes)
 			unsigned int pipe;
 			unsigned int len;
 
+			ep->buf_size = chip->urb_bytes_max;
 			if (dir == SNDRV_PCM_STREAM_PLAYBACK)
 				pipe = usb_sndintpipe(chip->dev, 1 + 2 * e);
 			else
@@ -1989,8 +2027,10 @@ static int ffuc_engine_start(struct ffuc *chip)
 		return 0;
 	/* Fresh continuity expectation for a fresh engine. */
 	for (e = 0; e < 2; e++)
-		for (i = 0; i < FFUC_MAX_EPS; i++)
+		for (i = 0; i < FFUC_MAX_EPS; i++) {
 			chip->eps[e][i].next_start = -1;
+			chip->eps[e][i].last_start = -1;
+		}
 	if (READ_ONCE(chip->disconnected))
 		return -ENODEV;
 
@@ -2462,11 +2502,12 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		 * that would have announced zero completed periods, the
 		 * published-pointer divergences, and the ring anomalies. */
 		dev_info(&chip->dev->dev,
-			 "iso frames histogram [1..8]: %u %u %u %u %u %u %u %u\n",
-			 chip->iso_frames_hist[1], chip->iso_frames_hist[2],
+			 "iso frames histogram [0..8]: %u %u %u %u %u %u %u %u %u\n",
+			 chip->iso_frames_hist[0], chip->iso_frames_hist[1],
 			 chip->iso_frames_hist[3], chip->iso_frames_hist[4],
 			 chip->iso_frames_hist[5], chip->iso_frames_hist[6],
-			 chip->iso_frames_hist[7], chip->iso_frames_hist[8]);
+			 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
+			 chip->iso_frames_hist[8]);
 		dev_info(&chip->dev->dev,
 			 "%s stop: delta_zero %d hw_ptr_mismatch %d in_overruns %d out_underruns %d bad_length %d/%d\n",
 			 subs->stream ? "capture" : "playback",
