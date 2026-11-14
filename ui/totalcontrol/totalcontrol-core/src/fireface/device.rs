@@ -10487,6 +10487,24 @@ mod tests {
     }
 
     #[test]
+    fn uc_clearing_speaker_b_while_active_restores_main() {
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, 0.5).unwrap();
+        let main_before = (dev.outputs()[2].volume, dev.outputs()[3].volume);
+        dev.set_speaker_b(true).unwrap();
+        assert!(dev.outputs()[2].mute);
+
+        dev.set_main_out_b(None).unwrap();
+        assert!(!dev.settings().speaker_b);
+        assert!(!dev.outputs()[2].mute);
+        assert!(!dev.outputs()[3].mute);
+        assert!((dev.outputs()[2].volume - main_before.0).abs() < 1e-6);
+        assert!((dev.outputs()[3].volume - main_before.1).abs() < 1e-6);
+    }
+
+    #[test]
     fn uc_mono_uses_the_active_speaker_b_pair() {
         let (mut dev, writes) = open(Model::Uc);
         dev.set_main_out(Some(1)).unwrap();
