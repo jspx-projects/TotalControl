@@ -2093,6 +2093,93 @@ impl Fireface {
         Ok(())
     }
 
+    fn set_external_input_inner(
+        &mut self,
+        on: bool,
+        source: Option<usize>,
+        gain_db: f32,
+    ) -> Result<(), Error> {
+        if self.is_uc() {
+            return self.uc_set_external_input(on, source, gain_db);
+        }
+        let _batch = self.begin_write_batch();
+        if self.settings.external_input {
+            self.release_external_input()?;
+        }
+        if !on {
+            return Ok(());
+        }
+        let Some(main) = self.settings.main_out else {
+            return Err(Error::InvalidChannel(
+                "External Input needs an assigned Main Out".into(),
+            ));
+        };
+        let source = source
+            .ok_or_else(|| Error::InvalidChannel("External Input needs a source pair".into()))?;
+        let left = source * 2;
+        let right = left + 1;
+        if right >= self.inputs.len() {
+            return Err(Error::InvalidChannel(format!(
+                "External Input source pair {source}"
+            )));
+        }
+        if self.settings.mute_fx {
+            self.set_mute_fx(false)?;
+        }
+        // External Input replaces the Main Out mix only.  Speaker B and
+        // Phones keep their own submixes.
+        let pairs = vec![main];
+        let gain = 10f32.powf(gain_db.clamp(-65.0, 0.0) / 20.0).clamp(0.0, 1.0);
+        let mut writes = Vec::new();
+        let mut fx_saved = Vec::new();
+        for pair in &pairs {
+            let dsp = ucx::output_pair_dsp(*pair)
+                .ok_or_else(|| Error::InvalidChannel(format!("output pair {pair}")))?;
+            let sources = self.inputs.len() + self.playbacks.len();
+            for source in 0..sources {
+                let Some(channel) = Self::matrix_source_channel(source) else {
+                    continue;
+                };
+                let source = match channel {
+                    ChannelId::Input(i) => Source::Input(i),
+                    ChannelId::Playback(p) => Source::Playback(p),
+                    ChannelId::Output(_) => continue,
+                };
+                for block in [dsp, dsp + 1] {
+                    writes.push((ucx::matrix_reg(block as u8, source), 0));
+                }
+            }
+            writes.push((
+                ucx::matrix_reg(dsp as u8, Source::Input(left)),
+                ucx::matrix_gain(gain as f64),
+            ));
+            writes.push((
+                ucx::matrix_reg((dsp + 1) as u8, Source::Input(right)),
+                ucx::matrix_gain(gain as f64),
+            ));
+            for side in 0..2 {
+                let idx = pair * 2 + side;
+                if let Some(out) = self.outputs.get(idx) {
+                    fx_saved.push((idx, out.fx_return_db));
+                }
+            }
+        }
+        for (idx, _) in &fx_saved {
+            let dsp = ucx::output_pair_dsp(idx / 2)
+                .ok_or_else(|| Error::InvalidChannel(format!("output {idx}")))?;
+            writes.push((
+                ucx::channel_reg(ucx::output_channel(dsp + idx % 2), ucx::offset::FX_RETURN),
+                0xfd76,
+            ));
+        }
+        self.settings.external_input = true;
+        writes.push((0x3f9e, self.monitor_flags()));
+        self.write_words(&writes)?;
+        self.external_input_saved = Some((pairs, fx_saved));
+        Ok(())
+    }
+
+
     /// Rewrite every cell routed to one output after its phase changes.
     fn uc_rewrite_output_block(&self, internal_idx: usize) -> Result<(), Error> {
         let block = uc::matrix_block(internal_idx, self.output_order());
@@ -6006,84 +6093,18 @@ impl RmeDevice for Fireface {
         source: Option<usize>,
         gain_db: f32,
     ) -> Result<(), Error> {
-        if self.is_uc() {
-            return self.uc_set_external_input(on, source, gain_db);
+        // Mono is part of the active monitor path.  External Input replaces
+        // that path, so release Mono before the replacement and reapply it
+        // to the new mix afterwards.
+        let mono_active = self.settings.mono;
+        if mono_active {
+            self.set_mono(false)?;
         }
-        let _batch = self.begin_write_batch();
-        if self.settings.external_input {
-            self.release_external_input()?;
+        let result = self.set_external_input_inner(on, source, gain_db);
+        if mono_active {
+            self.set_mono(true)?;
         }
-        if !on {
-            return Ok(());
-        }
-        let Some(main) = self.settings.main_out else {
-            return Err(Error::InvalidChannel(
-                "External Input needs an assigned Main Out".into(),
-            ));
-        };
-        let source = source
-            .ok_or_else(|| Error::InvalidChannel("External Input needs a source pair".into()))?;
-        let left = source * 2;
-        let right = left + 1;
-        if right >= self.inputs.len() {
-            return Err(Error::InvalidChannel(format!(
-                "External Input source pair {source}"
-            )));
-        }
-        if self.settings.mute_fx {
-            self.set_mute_fx(false)?;
-        }
-        // External Input replaces the Main Out mix only.  Speaker B and
-        // Phones keep their own submixes.
-        let pairs = vec![main];
-        let gain = 10f32.powf(gain_db.clamp(-65.0, 0.0) / 20.0).clamp(0.0, 1.0);
-        let mut writes = Vec::new();
-        let mut fx_saved = Vec::new();
-        for pair in &pairs {
-            let dsp = ucx::output_pair_dsp(*pair)
-                .ok_or_else(|| Error::InvalidChannel(format!("output pair {pair}")))?;
-            let sources = self.inputs.len() + self.playbacks.len();
-            for source in 0..sources {
-                let Some(channel) = Self::matrix_source_channel(source) else {
-                    continue;
-                };
-                let source = match channel {
-                    ChannelId::Input(i) => Source::Input(i),
-                    ChannelId::Playback(p) => Source::Playback(p),
-                    ChannelId::Output(_) => continue,
-                };
-                for block in [dsp, dsp + 1] {
-                    writes.push((ucx::matrix_reg(block as u8, source), 0));
-                }
-            }
-            writes.push((
-                ucx::matrix_reg(dsp as u8, Source::Input(left)),
-                ucx::matrix_gain(gain as f64),
-            ));
-            writes.push((
-                ucx::matrix_reg((dsp + 1) as u8, Source::Input(right)),
-                ucx::matrix_gain(gain as f64),
-            ));
-            for side in 0..2 {
-                let idx = pair * 2 + side;
-                if let Some(out) = self.outputs.get(idx) {
-                    fx_saved.push((idx, out.fx_return_db));
-                }
-            }
-        }
-        for (idx, _) in &fx_saved {
-            let dsp = ucx::output_pair_dsp(idx / 2)
-                .ok_or_else(|| Error::InvalidChannel(format!("output {idx}")))?;
-            writes.push((
-                ucx::channel_reg(ucx::output_channel(dsp + idx % 2), ucx::offset::FX_RETURN),
-                0xfd76,
-            ));
-        }
-        self.settings.external_input = true;
-        writes.push((0x3f9e, self.monitor_flags()));
-        self.write_words(&writes)?;
-        self.external_input_saved = Some((pairs, fx_saved));
-        Ok(())
+        result
     }
 
     fn set_cue_target(&mut self, pair: Option<usize>) -> Result<(), Error> {
@@ -6195,12 +6216,21 @@ impl RmeDevice for Fireface {
             }
             return Ok(());
         }
+        // Mono belongs to the active monitor output.  Release it from the
+        // old pair before switching, then apply it to the new active pair.
+        let mono_active = self.settings.mono;
+        if mono_active {
+            self.set_mono(false)?;
+        }
         if main != b {
             self.control_room_set_monitor_muted(main, on)?;
             self.control_room_set_monitor_muted(b, !on)?;
         }
         self.settings.speaker_b = on;
         self.control_room_write_speaker_b_state(on)?;
+        if mono_active {
+            self.set_mono(true)?;
+        }
         Ok(())
     }
 
