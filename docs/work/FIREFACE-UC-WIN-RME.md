@@ -217,6 +217,48 @@ instruments rather than inference.
    margin, but no longer carries the diagnosis; the ring counters say
    the margin has never been at risk in this session.
 
+## Driver defects carried out of the instrumentation review
+
+Two defects in the streaming handlers are real regardless of which
+owner the zero runs get. They are tracked here until they land.
+
+### Playback advances by the configured frame count, not the transferred count
+
+`ffuc_playback_urb()` derives its frame count from
+`chip->urb_frames` and ignores `urb->actual_length`. On a short OUT
+completion the driver advances the ring by frames that never left the
+wire and publishes a `hw_ptr` ahead of the transmitted data: a silent,
+permanent audio loss with nothing reported to any counter that existed
+before this session (`out_shorts` counted the completion, but nothing
+read it against the advance). The capture handler already derives its
+count from `actual_length`; the playback handler must do the same, and
+must zero the count when `actual_length` is not a whole-frame multiple,
+so the ring position and the wire cannot drift apart. Work in flight:
+PR #167. Bench validation (bit-exact output loopback before and after)
+is still open.
+
+### No alignment or bound check on a status-0 capture payload
+
+`ffuc_capture_urb()` computes `frames` from `urb->actual_length` and
+copies whatever it computes, without checking that the length is a
+whole-frame multiple or within the configured URB size. A truncated
+remainder silently shifts every later frame by one channel for the rest
+of the stream: a permanent channel-order corruption with no visible
+error. The `in_bad_length` counter added in PR #166 closes the
+observability gap; the corrective branch itself (reject the payload,
+count, resubmit) is still open and should ride with the same change as
+the playback fix.
+
+### Session state for both
+
+Both counters (`out_shorts`, `in_bad_length`) stayed zero in the
+instrumented session, so neither defect fired during these captures.
+That is evidence the defects are latent, not evidence they are
+harmless: the failure modes are cumulative (dropped audio, channel
+shift), and a single trigger produces permanent damage for the rest of
+the stream.
+
+
 
 
 ## Endpoints that differ from the original UC
