@@ -1556,22 +1556,20 @@ monitoring button: it uses the same compact row and white drop decoration as a
 strip's output-bus trigger, and its row stays lit while the menu is open.
 
 Recall acts on the assigned Main Out pair. Dim attenuates the assigned Main
-Out and Speaker B pairs; the Phones outputs are not affected. Without an
-assigned Main Out both controls leave the mix unchanged and never fall back
-to a Phones pair.
+Out pair. The Phones outputs are not affected. Without an assigned Main Out
+both controls leave the mix unchanged and never fall back to a Phones pair.
 
-Dim saves the current Main Out and Speaker B levels, lowers both speaker
-pairs by the configured Dim amount and engages the device Dim state. Turning
-Dim off restores the saved levels. A speaker fader move while Dim is engaged
-changes the audible level but not the saved pre-Dim levels; turning Dim off
-returns to the saved levels. Dim attenuates both speaker pairs, Main Out and
-Speaker B, and does not touch the Phones outputs. Changing the Main Dim
-amount while Dim is engaged re-applies the new amount to the saved levels.
-Reassigning or clearing the Main Out or Speaker B releases Dim first.
+Dim saves the current Main Out level, lowers Main Out by the configured Dim
+amount and engages the device Dim state. Turning Dim off restores the saved
+level. A Main fader move while Dim is engaged changes the audible level but
+not the saved pre-Dim level; turning Dim off returns to the saved level.
+Changing the Main Dim amount while Dim is engaged re-applies the new amount
+to the saved level. Reassigning or clearing the Main Out or Speaker B releases
+Dim first.
 
 Recall sets the underlying Main Out level to the configured listening volume
 once; it does not latch. When Dim is engaged, Recall updates the saved pre-Dim
-levels and the current dimmed levels together.
+level and the current dimmed level together.
 
 Dim and Speaker B are part of the current mix, snapshot and workspace. A
 scene captured while Dim is active stores the pre-Dim speaker levels and the
@@ -1580,25 +1578,22 @@ keeps its saved monitor path and is applied after the saved assignments.
 Speaker B requires assigned Main and Speaker B outputs; its button switches
 the monitor routing between those pairs, and clearing the Speaker B
 assignment also clears Speaker B. The `Link to Main` setting makes Speaker B
-follow Main fader and Recall changes; Dim attenuates both speaker pairs
-whether linked or not, while the Phones
-outputs are unaffected.
+follow Main fader, Dim and Recall changes. Without the link, Speaker B keeps
+its own level and the Phones outputs remain unaffected.
 
-Mono is a latching monitor check: it mixes the assigned Main Out and Speaker
-B pairs to mono and feeds the same signal to both sides of each pair. It does
-not mix the Phones outputs. Mono is stored in the device scene.
+Mono is a latching monitor check: it mixes the active monitor output, Main
+Out or Speaker B, to mono and feeds the same signal to both sides of that
+pair. It does not mix the Phones outputs. Mono is stored in the device scene.
 
-Mute FX is a latching scene control. It saves the FX-return levels of the
-assigned Main Out and Speaker B pairs, writes `-65 dB`, and restores the
-exact saved levels; it does not switch the Reverb or Echo processors off.
-Phones is not modified.
+Mute FX is a latching scene control. It saves the FX-return levels of Main
+Out, writes `-65 dB`, and restores the exact saved levels; it does not switch
+the Reverb or Echo processors off. Speaker B and Phones are not modified.
 
-Ext. input is a latching runtime control. It replaces the Main Out and
-Speaker B submixes with the stereo hardware-input pair selected in Control
-Room Settings at the configured gain, mutes those pairs' FX returns, and
-sets monitor flag bit 5. Releasing restores the normal submix and the saved
-FX returns. The button is disabled until a source pair is configured.
-Changing the source or gain while active re-engages the path.
+Ext. input is a latching runtime control. It replaces the Main Out submix
+with the stereo hardware-input pair selected in Control Room Settings at the
+configured gain. Releasing restores the normal Main Out submix. Speaker B
+and Phones keep their own mixes. The button is disabled until a source pair
+is configured. Changing the source or gain while active re-engages the path.
 
 With `PFL replaces Solo`, each input strip's Solo button is labelled `PFL`
 and routes the input pre-fader at unity to the Cue/PFL target, with the
