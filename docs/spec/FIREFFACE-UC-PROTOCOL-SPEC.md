@@ -376,20 +376,22 @@ The monitor actions write these addresses:
 |---|---|
 | Dim | `0x1a` Main output-level pair; Speaker B pair only while linked |
 | Recall | `0x1a` Main output-level pair; Speaker B pair only while linked |
-| Speaker B | `0x1a` Main output-level pair to zero while on, restore while off; no Speaker B pair write |
+| Speaker B | `0x1a` Main and Speaker B output-level pairs; mute the inactive pair |
 | Mono | `0x12` sends into the active monitor matrix pair, left and right summed |
 | External Input | `0x12` Main matrix pair; clear the pair, then copy the selected input pair |
 | Talkback | `0x12` receiver matrix pairs and Main for Listenback |
 | Cue | `0x12` target matrix pair |
 
 Dim saves and restores the exact output levels.  Recall writes a new Main
-output level.  Mono, External Input, Talkback and Cue save and restore the
-exact matrix cells.
+output level.  Speaker B saves the inactive pair's level and restores it when
+that pair is selected.  Mono, External Input, Talkback and Cue save and
+restore the exact matrix cells.
 
 The implemented model was verified against the saved Windows captures for
 Dim, Recall, Speaker B with an assigned pair, External Input, Talkback,
-Listenback, Main Mono and Cue.  Audio loopback verification of the linked
-Speaker B and Mono-on-Speaker-B paths remains open.
+Listenback, Main Mono and Cue.  The internal loopback measured the Dim and
+Recall level changes.  Audio loopback verification of linked Speaker B and
+Mono on Speaker B remains open.
 
 ## 10. Metering
 

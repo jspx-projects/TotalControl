@@ -5861,6 +5861,15 @@ impl RmeDevice for Fireface {
                 self.set_speaker_b(false)?;
             }
             self.settings.main_b_out = pair;
+            if let Some(b) = pair {
+                if !self.settings.speaker_b {
+                    // An assigned but inactive Speaker B pair must not
+                    // remain audible.  Its level is saved by set_mute and
+                    // restored when Speaker B is switched on.
+                    self.set_mute(ChannelId::Output(b * 2), true)?;
+                    self.set_mute(ChannelId::Output(b * 2 + 1), true)?;
+                }
+            }
             if pair.is_none() {
                 self.settings.speaker_b = false;
             }
@@ -6134,7 +6143,18 @@ impl RmeDevice for Fireface {
 
     fn set_speaker_b(&mut self, on: bool) -> Result<(), Error> {
         if self.is_uc() {
-            if on == self.settings.speaker_b {
+            if on != self.settings.speaker_b {
+                // Switch below.
+            } else if !on {
+                // Assignment/scene restore can leave an inactive B pair
+                // unmuted.  Enforce the inactive state without touching
+                // Main.
+                if let Some(b) = self.settings.main_b_out {
+                    self.set_mute(ChannelId::Output(b * 2), true)?;
+                    self.set_mute(ChannelId::Output(b * 2 + 1), true)?;
+                }
+                return Ok(());
+            } else {
                 return Ok(());
             }
             let Some(main) = self.settings.main_out else {
@@ -6147,13 +6167,15 @@ impl RmeDevice for Fireface {
                     "Speaker B needs an assigned output".into(),
                 ));
             };
-            // The UC has no monitor-mute register.  TotalMix switches
-            // Speaker B by muting the Main pair; the B pair keeps its own
-            // level and mute state.  Captured buttons write only the Main
-            // output levels, not the B pair.
+            // The UC has no monitor-mute register.  Speaker B is switched
+            // by muting the pair that is not active: Main when Speaker B is
+            // on, B when Speaker B is off.  `set_mute` saves and restores
+            // each pair's level.
             if main != b {
                 self.set_mute(ChannelId::Output(main * 2), on)?;
                 self.set_mute(ChannelId::Output(main * 2 + 1), on)?;
+                self.set_mute(ChannelId::Output(b * 2), !on)?;
+                self.set_mute(ChannelId::Output(b * 2 + 1), !on)?;
             }
             self.settings.speaker_b = on;
             return Ok(());
@@ -10458,7 +10480,7 @@ mod tests {
     }
 
     #[test]
-    fn uc_speaker_b_mutes_main_and_leaves_the_b_pair_alone() {
+    fn uc_speaker_b_mutes_the_inactive_pair() {
         let (mut dev, _writes) = open(Model::Uc);
         dev.set_main_out(Some(1)).unwrap();
         dev.set_main_out_b(Some(2)).unwrap();
@@ -10480,6 +10502,8 @@ mod tests {
         assert!(!dev.settings().speaker_b);
         assert!(!dev.outputs()[2].mute);
         assert!(!dev.outputs()[3].mute);
+        assert!(dev.outputs()[4].mute);
+        assert!(dev.outputs()[5].mute);
         assert!((dev.outputs()[2].volume - main_before.0).abs() < 1e-6);
         assert!((dev.outputs()[3].volume - main_before.1).abs() < 1e-6);
         assert!((dev.outputs()[4].volume - b_before.0).abs() < 1e-6);
