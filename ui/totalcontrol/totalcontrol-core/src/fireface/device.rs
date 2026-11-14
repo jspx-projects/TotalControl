@@ -1960,10 +1960,20 @@ impl Fireface {
         Ok(())
     }
 
+    /// The monitor output affected by Monitor actions.  Speaker B is the
+    /// active path while it is switched on; otherwise Main Out is.
+    fn uc_active_monitor_pair(&self) -> Option<usize> {
+        if self.settings.speaker_b {
+            self.settings.main_b_out.or(self.settings.main_out)
+        } else {
+            self.settings.main_out
+        }
+    }
+
     fn uc_set_mono(&mut self, on: bool) -> Result<(), Error> {
-        let Some(main) = self.settings.main_out else {
+        let Some(monitor) = self.uc_active_monitor_pair() else {
             return Err(Error::InvalidChannel(
-                "Mono needs an assigned Main Out".into(),
+                "Mono needs an assigned monitor output".into(),
             ));
         };
         if on == self.settings.mono {
@@ -1976,24 +1986,24 @@ impl Fireface {
             self.settings.mono = false;
             return Ok(());
         }
-        let saved = self.uc_monitor_save_pair(main);
+        let saved = self.uc_monitor_save_pair(monitor);
         for source in 0..36 {
             let left = self.cell_gain(
                 Self::matrix_source_channel(source)
                     .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
-                main * 2,
+                monitor * 2,
             )
             .unwrap_or(0.0);
             let right = self.cell_gain(
                 Self::matrix_source_channel(source)
                     .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
-                main * 2 + 1,
+                monitor * 2 + 1,
             )
             .unwrap_or(0.0);
             // Feed both monitor sides from both source sides: the two
             // contributions sum in the monitor pair.
-            self.uc_write_matrix(main * 2, source, left + right)?;
-            self.uc_write_matrix(main * 2 + 1, source, left + right)?;
+            self.uc_write_matrix(monitor * 2, source, left + right)?;
+            self.uc_write_matrix(monitor * 2 + 1, source, left + right)?;
         }
         self.uc_monitor_saved = Some(saved);
         self.settings.mono = true;
@@ -2026,21 +2036,13 @@ impl Fireface {
             )));
         }
         let gain = 10f32.powf(gain_db.clamp(-65.0, 0.0) / 20.0).clamp(0.0, 1.0);
-        let mut pairs = vec![main];
-        if let Some(b) = self.settings.main_b_out {
-            if b != main {
-                pairs.push(b);
-            }
-        }
-        let mut saved = Vec::new();
-        for &pair in &pairs {
-            saved.extend(self.uc_monitor_save_pair(pair));
-            self.uc_monitor_clear_pair(pair)?;
-        }
-        for &pair in &pairs {
-            self.uc_write_matrix(pair * 2, source * 2, gain)?;
-            self.uc_write_matrix(pair * 2 + 1, source * 2 + 1, gain)?;
-        }
+        // External Input replaces the Main Out mix only.  Speaker B and
+        // Phones keep their own submixes.
+        let pair = main;
+        let saved = self.uc_monitor_save_pair(pair);
+        self.uc_monitor_clear_pair(pair)?;
+        self.uc_write_matrix(pair * 2, source * 2, gain)?;
+        self.uc_write_matrix(pair * 2 + 1, source * 2 + 1, gain)?;
         self.uc_monitor_saved = Some(saved);
         self.settings.external_input = true;
         Ok(())
@@ -5692,9 +5694,13 @@ impl RmeDevice for Fireface {
             ));
         };
         let mut pairs = vec![pair];
-        if let Some(b) = self.settings.main_b_out {
-            if b != pair {
-                pairs.push(b);
+        // The UC Dim button acts on Main Out.  Speaker B follows only while
+        // Link to Main is on, so an unlinked B pair keeps its own level.
+        if !self.is_uc() || self.speaker_b_linked {
+            if let Some(b) = self.settings.main_b_out {
+                if b != pair {
+                    pairs.push(b);
+                }
             }
         }
         let mut saved = Vec::with_capacity(pairs.len());
@@ -5782,6 +5788,30 @@ impl RmeDevice for Fireface {
             }
         }
         if self.is_uc() {
+            if self.settings.main_out == pair {
+                return Ok(());
+            }
+            // Release live monitor actions before their target moves.  The
+            // saved matrix/levels belong to the old pair.
+            if self.talkback_active {
+                let config = self.talkback_config;
+                self.uc_set_talkback_with(false, &config)?;
+            }
+            if self.cue_state.is_some() {
+                self.uc_release_cue()?;
+            }
+            if self.settings.mono {
+                self.set_mono(false)?;
+            }
+            if self.settings.external_input {
+                self.set_external_input(false, None, 0.0)?;
+            }
+            if self.settings.dim {
+                self.set_dim(false)?;
+            }
+            if self.settings.speaker_b {
+                self.set_speaker_b(false)?;
+            }
             self.settings.main_out = pair;
             return Ok(());
         }
@@ -5824,6 +5854,12 @@ impl RmeDevice for Fireface {
             }
         }
         if self.is_uc() {
+            if self.settings.main_b_out == pair {
+                return Ok(());
+            }
+            if self.settings.speaker_b {
+                self.set_speaker_b(false)?;
+            }
             self.settings.main_b_out = pair;
             if pair.is_none() {
                 self.settings.speaker_b = false;
@@ -6111,11 +6147,13 @@ impl RmeDevice for Fireface {
                     "Speaker B needs an assigned output".into(),
                 ));
             };
+            // The UC has no monitor-mute register.  TotalMix switches
+            // Speaker B by muting the Main pair; the B pair keeps its own
+            // level and mute state.  Captured buttons write only the Main
+            // output levels, not the B pair.
             if main != b {
                 self.set_mute(ChannelId::Output(main * 2), on)?;
                 self.set_mute(ChannelId::Output(main * 2 + 1), on)?;
-                self.set_mute(ChannelId::Output(b * 2), !on)?;
-                self.set_mute(ChannelId::Output(b * 2 + 1), !on)?;
             }
             self.settings.speaker_b = on;
             return Ok(());
@@ -10371,6 +10409,102 @@ mod tests {
         }
         assert!(dev.outputs()[4].loopback);
         assert!(!dev.outputs()[5].loopback);
+    }
+
+    #[test]
+    fn uc_dim_affects_an_unlinked_speaker_b_only_when_linked() {
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, 0.5).unwrap();
+        dev.set_output_volume(2, 0, 0.5).unwrap();
+        let main_before = dev.outputs()[2].volume;
+        let b_before = dev.outputs()[4].volume;
+
+        dev.set_dim_with(true, -20.0).unwrap();
+        assert!(dev.outputs()[2].volume < main_before);
+        assert!((dev.outputs()[4].volume - b_before).abs() < 1e-6);
+        dev.set_dim(false).unwrap();
+
+        dev.set_speaker_b_linked(true).unwrap();
+        let linked_b = dev.outputs()[4].volume;
+        dev.set_dim_with(true, -20.0).unwrap();
+        assert!(dev.outputs()[2].volume < main_before);
+        assert!(dev.outputs()[4].volume < linked_b);
+        dev.set_dim(false).unwrap();
+        assert!((dev.outputs()[4].volume - linked_b).abs() < 1e-6);
+    }
+
+    #[test]
+    fn uc_external_input_replaces_main_only() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        let main_block = uc::matrix_block(2, dev.output_order());
+        let b_block = uc::matrix_block(4, dev.output_order());
+
+        writes.lock().unwrap().clear();
+        dev.set_external_input(true, Some(0), 0.0).unwrap();
+        assert!(dev.settings().external_input);
+        let w = writes.lock().unwrap();
+        let touched = |block: usize| {
+            w.iter().any(|write| {
+                matches!(write, Write::Vendor(protocol::req::MIXER, _, idx)
+                    if ((*idx & 0x3fff) as usize / 36) == block)
+            })
+        };
+        assert!(touched(main_block), "External Input must replace Main Out");
+        assert!(!touched(b_block), "External Input must leave Speaker B alone");
+    }
+
+    #[test]
+    fn uc_speaker_b_mutes_main_and_leaves_the_b_pair_alone() {
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, 0.5).unwrap();
+        dev.set_output_volume(2, 0, 0.5).unwrap();
+        let main_before = (dev.outputs()[2].volume, dev.outputs()[3].volume);
+        let b_before = (dev.outputs()[4].volume, dev.outputs()[5].volume);
+
+        dev.set_speaker_b(true).unwrap();
+        assert!(dev.settings().speaker_b);
+        assert!(dev.outputs()[2].mute);
+        assert!(dev.outputs()[3].mute);
+        assert!(!dev.outputs()[4].mute);
+        assert!(!dev.outputs()[5].mute);
+        assert!((dev.outputs()[4].volume - b_before.0).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - b_before.1).abs() < 1e-6);
+
+        dev.set_speaker_b(false).unwrap();
+        assert!(!dev.settings().speaker_b);
+        assert!(!dev.outputs()[2].mute);
+        assert!(!dev.outputs()[3].mute);
+        assert!((dev.outputs()[2].volume - main_before.0).abs() < 1e-6);
+        assert!((dev.outputs()[3].volume - main_before.1).abs() < 1e-6);
+        assert!((dev.outputs()[4].volume - b_before.0).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - b_before.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn uc_mono_uses_the_active_speaker_b_pair() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.settings.speaker_b = true;
+        let b_block = uc::matrix_block(4, dev.output_order());
+
+        writes.lock().unwrap().clear();
+        dev.set_mono(true).unwrap();
+        assert!(dev.settings().mono);
+        let w = writes.lock().unwrap();
+        assert!(
+            w.iter().any(|write| {
+                matches!(write, Write::Vendor(protocol::req::MIXER, _, idx)
+                    if ((*idx & 0x3fff) as usize / 36) == b_block)
+            }),
+            "Mono must follow the active Speaker B pair"
+        );
     }
 
     #[test]

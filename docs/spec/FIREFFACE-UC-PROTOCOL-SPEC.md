@@ -356,6 +356,41 @@ resulting cross-feed coefficients as `0x12` cells.
 Talkback is a host-side operation.  The UC control stream carries the normal
 matrix and output state produced by the host mixer.
 
+### Control Room monitor actions
+
+| Term | Address or shape | Definition |
+|---|---|---|
+| Main pair | Host assignment | Output pair assigned as Main Out. |
+| Speaker B pair | Host assignment | Output pair assigned as Speaker B. |
+| Active monitor pair | Host state | Main pair while Speaker B is off; Speaker B pair while it is on. |
+| Speaker B link | Host setting | Makes the Speaker B pair follow Main fader, Dim and Recall. |
+| Monitor matrix pair | `0x12` blocks `2p`, `2p+1` | The two matrix blocks for output pair `p`. |
+| Output-level pair | `0x1a` encoder channels | The two output levels for output pair `p`. |
+
+The assignment words and the link setting are host-side.  They produce no
+EP0 write.
+
+The monitor actions write these addresses:
+
+| Action | Write |
+|---|---|
+| Dim | `0x1a` Main output-level pair; Speaker B pair only while linked |
+| Recall | `0x1a` Main output-level pair; Speaker B pair only while linked |
+| Speaker B | `0x1a` Main output-level pair to zero while on, restore while off; no Speaker B pair write |
+| Mono | `0x12` sends into the active monitor matrix pair, left and right summed |
+| External Input | `0x12` Main matrix pair; clear the pair, then copy the selected input pair |
+| Talkback | `0x12` receiver matrix pairs and Main for Listenback |
+| Cue | `0x12` target matrix pair |
+
+Dim saves and restores the exact output levels.  Recall writes a new Main
+output level.  Mono, External Input, Talkback and Cue save and restore the
+exact matrix cells.
+
+The implemented model was verified against the saved Windows captures for
+Dim, Recall, Speaker B with an assigned pair, External Input, Talkback,
+Listenback, Main Mono and Cue.  Audio loopback verification of the linked
+Speaker B and Mono-on-Speaker-B paths remains open.
+
 ## 10. Metering
 
 The `0x85` bulk stream carries 324-byte pages: 162 little-endian 16-bit
