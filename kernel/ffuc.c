@@ -543,13 +543,16 @@ static const struct ffuc_ops ffuc_ucx_ops = {
 };
 
 /* Effective quirks for this unit: static descriptor quirks plus runtime
- * rules that depend on the firmware revision. */
+ * rules that depend on the firmware revision.  Only a descriptor that
+ * carries FFUC_QUIRK_INT32_BY_FIRMWARE changes its format with the
+ * firmware; every other descriptor keeps its declared format. */
 static inline u32 ffuc_effective_quirks(const struct ffuc *chip)
 {
 	u32 quirks = chip->desc->quirks;
 
-	if (chip->model == FFUC_MODEL_UC && chip->firmware >= FFUC_UC_S32_FIRMWARE)
-		quirks |= FFUC_QUIRK_INT32_SAMPLES;
+	if ((quirks & FFUC_QUIRK_INT32_BY_FIRMWARE) &&
+	    chip->firmware && chip->firmware < FFUC_UC_S32_FIRMWARE)
+		quirks &= ~FFUC_QUIRK_INT32_SAMPLES;
 	return quirks;
 }
 
@@ -811,6 +814,7 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		 * alt 0 -> alt N reselect, as on the UCX. */
 		.quirks = FFUC_QUIRK_STATUS_LATCH |
 			  FFUC_QUIRK_INT32_SAMPLES |
+			  FFUC_QUIRK_INT32_BY_FIRMWARE |
 			  FFUC_QUIRK_ALT_RESELECT,
 		.model = FFUC_MODEL_UC,
 		.modes = ffuc_pc_modes,
@@ -2501,6 +2505,10 @@ static int ffuc_probe(struct usb_interface *intf,
 	}
 
 	ffuc_read_identity(chip);
+	dev_info(&intf->dev, "firmware %u, %s samples on the wire\n",
+		 chip->firmware,
+		 (ffuc_effective_quirks(chip) & FFUC_QUIRK_INT32_SAMPLES) ?
+			 "S32" : "float");
 	{
 		u32 st = 0;
 
