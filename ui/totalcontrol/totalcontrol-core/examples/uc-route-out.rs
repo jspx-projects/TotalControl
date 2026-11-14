@@ -64,7 +64,7 @@ fn main() {
         .expect("global unmute");
 
     let mut dev = Fireface::open_uc().expect("UC hwdep");
-    let order = totalcontrol_core::profiles::uc::PROFILE.output_order;
+    let order = totalcontrol_core::profiles::uc::CHANNELS.output_order;
     let pair = (out / 2) as usize;
     let Some(internal_pair) = order.iter().position(|&p| p == pair) else {
         panic!("matrix channel {out} has no internal pair");
