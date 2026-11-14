@@ -937,15 +937,23 @@ static void ffuc_ring_event(struct ffuc *chip, struct snd_pcm_substream *subs,
  * the first one dmesg-logs the two values. */
 static void ffuc_ptr_mismatch(struct ffuc *chip,
 			      struct snd_pcm_substream *subs,
-			      atomic_t *counter)
+			      const struct ffuc_stream *s)
 {
-	if (!atomic_inc_return(counter) - 1) {
+	atomic_inc(&chip->hw_ptr_mismatch);
+	if (!(chip->hw_ptr_logged++)) {
 		struct snd_pcm_runtime *rt = subs->runtime;
 
 		dev_info(&chip->dev->dev,
-			 "%s status hw_ptr %lu boundary %lu: core pointer diverged\n",
+			 "%s status hw_ptr %lu driver hw_ptr %lu (buffer %lu period %lu): core pointer diverged\n",
 			 subs->stream ? "capture" : "playback",
-			 rt->status->hw_ptr, rt->boundary);
+			 rt->status->hw_ptr, s->hw_ptr,
+			 rt->buffer_size, rt->period_size);
+	} else {
+		dev_info_ratelimited(&chip->dev->dev,
+				     "%s mismatch #%u status %lu driver %lu\n",
+				     subs->stream ? "capture" : "playback",
+				     chip->hw_ptr_logged,
+				     subs->runtime->status->hw_ptr, s->hw_ptr);
 	}
 }
 
@@ -1116,7 +1124,7 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 			if (other->substream->runtime->status->hw_ptr !=
 			    other->hw_ptr % other->substream->runtime->boundary)
 				ffuc_ptr_mismatch(chip, other->substream,
-						  &chip->hw_ptr_mismatch);
+						  other);
 		}
 		snd_pcm_stream_unlock_irqrestore(other->substream, flags);
 	}
@@ -1125,8 +1133,7 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 		snd_pcm_period_elapsed_under_stream_lock(s->substream);
 		if (s->substream->runtime->status->hw_ptr !=
 		    s->hw_ptr % s->substream->runtime->boundary)
-			ffuc_ptr_mismatch(chip, s->substream,
-					  &chip->hw_ptr_mismatch);
+			ffuc_ptr_mismatch(chip, s->substream, s);
 	}
 	snd_pcm_stream_unlock_irqrestore(s->substream, flags);
 }
@@ -1193,9 +1200,17 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	struct ffuc_stream *s = &chip->streams[SNDRV_PCM_STREAM_PLAYBACK];
 	struct snd_pcm_substream *subs = s->substream;
 	const unsigned int words = ffuc_mode_out_words(chip->mode);
-	const unsigned int frames = chip->urb_frames;
+	unsigned int frames = urb->actual_length / (words * FFUC_SAMPLE_BYTES);
 	unsigned long flags;
 	bool elapsed = false;
+
+	/* The engine submitted this OUT URB with urb_frames frames, so the
+	 * nominal case equals it.  A short completion means the controller
+	 * sent less; advancing the ring by the configured size would skip
+	 * frames that were never transmitted and over-run hw_ptr.  Copy
+	 * exactly what left the wire. */
+	if (urb->actual_length % (words * FFUC_SAMPLE_BYTES))
+		frames = 0;
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {

@@ -387,6 +387,7 @@ struct ffuc {
 	atomic_t out_underruns;
 	atomic_t in_bad_length;
 	atomic_t hw_ptr_mismatch;
+	unsigned int hw_ptr_logged;
 	ktime_t last_out_complete;
 	unsigned long engine_stopped_at;	/* jiffies; 0 = never stopped */
 	ktime_t last_in_complete;
