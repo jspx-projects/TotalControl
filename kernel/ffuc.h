@@ -192,6 +192,10 @@ struct ffuc_stream {
 	 * `period` to detect a signal that announces no completed period
 	 * (a delta-0 call). */
 	snd_pcm_uframes_t signalled;
+	/* Consecutive wakes withheld while this direction had a completed
+	 * period.  Bounds the gate's added latency to about one URB at any
+	 * period size; reset on every signal and at stream start. */
+	u32 deferrals;
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must

@@ -1166,12 +1166,24 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 	if (ffuc_pending(p) && ffuc_pending(c)) {
 		ffuc_signal_period(chip, p);
 		ffuc_signal_period(chip, c);
+		WRITE_ONCE(p->deferrals, 0);
+		WRITE_ONCE(c->deferrals, 0);
 		return;
 	}
-	if (p->period - p->signalled >= 2)
+	/* One direction is behind: withhold the wake until the later
+	 * boundary, but never longer than two completions.  Counting
+	 * deferrals instead of periods bounds the wait to about one URB at
+	 * every period size. */
+	if (ffuc_pending(p) &&
+	    ++p->deferrals >= 2) {
 		ffuc_signal_period(chip, p);
-	if (c->period - c->signalled >= 2)
+		WRITE_ONCE(p->deferrals, 0);
+	}
+	if (ffuc_pending(c) &&
+	    ++c->deferrals >= 2) {
 		ffuc_signal_period(chip, c);
+		WRITE_ONCE(c->deferrals, 0);
+	}
 }
 
 /* Interrupt transport: one URB of interleaved frames. */
@@ -1435,6 +1447,8 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		atomic_inc(&chip->fb_only_urbs);
 		return;
 	}
+	if (!s->running)
+		atomic_inc(&chip->fb_only_urbs);
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
 		for (i = 0; i < urb->number_of_packets; i++) {
@@ -1449,10 +1463,10 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 			elapsed |= ffuc_stream_advance(chip, s, subs->runtime, 0,
 						       frames[i]);
 		}
-		if (elapsed)
-			snd_pcm_period_elapsed_under_stream_lock(subs);
 	}
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	if (elapsed)
+		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_CAPTURE);
 }
 
 /*
@@ -1551,9 +1565,9 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		off += len;
 	}
 	urb->transfer_buffer_length = off;
-	if (elapsed)
-		snd_pcm_period_elapsed_under_stream_lock(subs);
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	if (elapsed)
+		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_PLAYBACK);
 }
 
 /*
@@ -1961,6 +1975,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 		struct ffuc_ep *ep = &chip->eps[dir][0];
 
 		ep->next_start = -1;
+		ep->buf_size = chip->urb_bytes_max;
 		for (i = 0; i < chip->nurbs; i++) {
 			struct urb *urb = ep->urbs[i].urb;
 
@@ -2437,8 +2452,11 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	s->hw_ptr = 0;
 	s->period = 0;
 	s->signalled = 0;
-	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK)
+	s->deferrals = 0;
+	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		s->out_counter_valid = false;
 		subs->runtime->delay = chip->nurbs * chip->urb_frames;
+	}
 	/* Preparation never zeroed the ring; inherit the last session's
 	 * (or the allocator's) bytes.  Poison so that a recorded zero can
 	 * never be confused with never-written memory.  Safe amplitude in
@@ -2465,6 +2483,8 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->hw_ptr = 0;
 		s->period = 0;
 		s->signalled = 0;
+		s->deferrals = 0;
+		s->out_counter_valid = false;
 		s->running = true;
 		/* q48 diagnostics: log the negotiated geometry once per
 		 * start so a capture session can be matched to it. */
@@ -2493,6 +2513,8 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->hw_ptr = 0;
 		s->period = 0;
 		s->signalled = 0;
+		s->deferrals = 0;
+		s->out_counter_valid = false;
 		s->running = true;
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:
