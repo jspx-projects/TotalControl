@@ -1582,9 +1582,9 @@ follow Main fader, Dim and Recall changes. Without the link, Speaker B keeps
 its own level and the Phones outputs remain unaffected.
 
 Mono is a latching monitor check: it attenuates the active monitor output's
-left and right sides by 3 dB, sums them and feeds the result to both sides of
-that pair. It does not mix the Phones outputs. Mono is stored in the device
-scene.
+left and right sides by 6 dB, sums them and feeds the result to both sides of
+that pair. It does not raise a centred signal. It does not mix the Phones
+outputs. Mono is stored in the device scene.
 
 Mute FX is a latching scene control. It saves the FX-return levels of Main
 Out, writes `-65 dB`, and restores the exact saved levels; it does not switch

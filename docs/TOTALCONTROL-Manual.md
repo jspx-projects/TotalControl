@@ -831,14 +831,14 @@ while it is on.
 While Mono is active:
 
 - the left and right signals of the active monitor output are each
-  attenuated by 3 dB and then summed;
+  attenuated by 6 dB and then summed;
 - the sum is fed to both sides of that output;
 - the inactive monitor output keeps its normal stereo mix;
 - the Phones outputs and every other hardware output keep their normal stereo
   signal.
 
-A centred signal therefore rises by 3 dB when Mono is engaged, rather than
-6 dB. This is the same -3 dB-per-side sum used for manual mono summing.
+A centred signal therefore keeps the same level when Mono is engaged. The
+6 dB attenuation on each side prevents the level rise of a direct L+R sum.
 
 The Mono state belongs to the monitor path, not to one assigned pair. If
 Speaker B is switched on while Mono is active, Main Out returns to its normal
