@@ -16,6 +16,8 @@ the UC control surface implemented by TotalControl.
 - [8. State ownership](#8-state-ownership)
 - [9. Host-side mixer operations](#9-host-side-mixer-operations)
 - [10. Metering](#10-metering)
+- [11. Device model and USB transport](#11-device-model-and-usb-transport)
+- [12. Code map](#12-code-map)
 
 ## 1. Device and control paths
 
@@ -698,3 +700,255 @@ change the input meter or the input bank in the `0x85` page.
    records and RMS bank power words, and as a beat-word value in some
    sessions.  Whether the DSP uses one code for all three roles on
    purpose is unknown; the roles are distinct field positions.
+
+## 11. Device model and USB transport
+
+This section defines the device model and the USB transport that the earlier
+sections use.
+
+### 11.1 Terms
+
+| Term | Address or shape | Meaning |
+|---|---|---|
+| Personality | — | The USB variant: PC with interrupt audio, or AP with isochronous audio. |
+| Interface | number | A numbered USB interface in the active configuration. |
+| Alternate setting | number | A numbered setting of one interface; it selects an audio packet size. |
+| Endpoint | address and direction | A USB endpoint address and direction. |
+| Packet | — | One USB transfer unit on an endpoint. |
+| Sample frame | — | One sample for every active channel at one instant. |
+| Sample word | 4 bytes | One 32-bit little-endian audio value. |
+| URB | — | A USB request block; one host transfer. |
+| Meter page | 324 bytes | One meter packet. |
+| Meter heartbeat | two pages | The RMS page followed by the peak page. |
+| Status frame | 4 bytes | The frame on the status endpoint. |
+| Control request | EP0 | A vendor request. |
+| Profile | — | The `uc_pc` or `uc_ap` entry in the profile table. |
+| Playback endpoint 0 | OUT `0x01` | Carries software playback sample frames at every rate class. |
+| Playback endpoint 1 | OUT `0x03`, IF0 alt 3 | Carries the second half of the playback words at 4x on the PC personality. |
+| Capture endpoint 0 | IN `0x82` | Carries input sample frames at every rate class. |
+| Capture endpoint 1 | IN `0x84`, IF0 alt 3 | Carries the second half of the input words at 4x on the PC personality. |
+| Meter endpoint | IF1 IN `0x85` | Carries meter pages. |
+| Status endpoint | IF5 IN `0x8b` on PC; IF4 IN `0x8b` on AP | Carries status frames. |
+
+### 11.2 Device model
+
+| Property | Value |
+|---|---|
+| Model | `uc` |
+| Profiles | `uc_pc` (interrupt), `uc_ap` (isochronous) |
+| Logical inputs | 18 |
+| Logical outputs | 18 |
+| Software playback channels | 18 |
+| 1x rates | 32, 44.1, 48 kHz |
+| 2x rates | 64, 88.2, 96 kHz |
+| 4x rates | 128, 176.4, 192 kHz |
+| ALSA PCM channels | 18 at every rate |
+| Maximum rate | 192 kHz |
+| Meter page | 324 bytes |
+| Connection mode | vendor only |
+
+The profile table in
+[`TOTALCONTROL-DEVICE-PROFILE-SPEC.md`](TOTALCONTROL-DEVICE-PROFILE-SPEC.md)
+selects one profile for each connection.  This document owns the wire formats,
+registers and transport sequences.  The profile owns channel names, order,
+ranges and operations.  The front panel is in "Front-panel events" and
+"Front-panel display".
+
+| Profile | Transport | Audio interface | Meter endpoint |
+|---|---|---|---|
+| `uc_pc` | interrupt | IF0 | IF1 IN `0x85` |
+| `uc_ap` | isochronous | IF0 | IF1 IN `0x85` |
+
+### 11.3 PC configuration
+
+The PC personality enumerates as one vendor-specific configuration with six
+interfaces.
+
+| Property | Value |
+|---|---|
+| Device class | vendor-specific |
+| Interface class | vendor-specific |
+| Configurations | 1 |
+| Interfaces | 6 |
+| EP0 maximum packet | 64 bytes |
+| Power | self-powered, 100 mA |
+
+The interface map is:
+
+| Interface | Alt | Purpose | Endpoints |
+|---|---|---|---|
+| 0 | 0 | idle | `0x01` OUT interrupt, 64; `0x82` IN interrupt, 64; `0x03` OUT bulk, 512; `0x84` IN bulk, 512 |
+| 0 | 1 | 1x audio | `0x01` OUT interrupt, 576; `0x82` IN interrupt, 576; `0x03` OUT bulk, 512; `0x84` IN bulk, 512 |
+| 0 | 2 | 2x audio | `0x01` OUT interrupt, 896; `0x82` IN interrupt, 896; `0x03` OUT bulk, 512; `0x84` IN bulk, 512 |
+| 0 | 3 | 4x audio | `0x01` OUT interrupt, 768; `0x82` IN interrupt, 768; `0x03` OUT interrupt, 768; `0x84` IN interrupt, 768 |
+| 1 | 0 | meter | `0x85` IN bulk, 512 |
+| 2 | 0 | not claimed | `0x86` IN bulk, 512; `0x07` OUT bulk, 512 |
+| 3 | 0 | not claimed | `0x88` IN bulk, 512; `0x09` OUT bulk, 512 |
+| 4 | 0 | not claimed | `0x8a` IN bulk, 512 |
+| 5 | 0 | status | `0x8b` IN interrupt, 4 |
+
+The audio engine uses the playback and capture endpoints.  At 1x and 2x that
+is playback endpoint 0 and capture endpoint 0.  At 4x it adds playback
+endpoint 1 and capture endpoint 1.  The interrupt endpoints use a
+one-microframe interval.
+
+### 11.4 AP personality
+
+The AP personality uses isochronous interface 0 and the same meter
+interface.  It uses playback endpoint 0 and capture endpoint 0 at every rate
+class.  These rows are the mapping the driver uses.
+
+| Interface | Alt | Purpose | Endpoints |
+|---|---|---|---|
+| 0 | 1 | 1x audio | `0x01` OUT isochronous; `0x82` IN isochronous |
+| 0 | 2 | 2x audio | `0x01` OUT isochronous; `0x82` IN isochronous |
+| 0 | 3 | 4x audio | `0x01` OUT isochronous; `0x82` IN isochronous |
+| 1 | 0 | meter | `0x85` IN bulk |
+| 4 | 0 | status | `0x8b` IN bulk |
+
+### 11.5 Control requests
+
+Mixer and setting writes use EP0 control requests.  The request number selects
+the target register or bank.
+
+| Direction | `bmRequestType` | Data stage |
+|---|---|---|
+| Host to device | `0x40` | none |
+| Device to host | `0xC0` | 2 or 4 bytes |
+
+The request numbers and values are in "EP0 request map".  The host reads
+`0x11` and `0x1c` as four bytes and `0x17` as two bytes.  All other requests
+it sends are writes.
+
+### 11.6 PC audio packets
+
+| Alt | Rate class | Sample words per endpoint | Endpoints | Maximum frames per packet | Maximum packet bytes |
+|---|---|---|---|---|---|
+| 1 | 1x | 18 | 1 | 8 | 576 |
+| 2 | 2x | 14 | 1 | 16 | 896 |
+| 3 | 4x | 6 | 2 | 32 | 768 |
+
+The IN packet and the OUT packet have the same size.  A sample frame carries
+one sample word per active channel.  The PCM stream has 18 logical inputs and
+18 software playback channels.  A packet carries the first 18, 14 or 12 words
+of that stream.
+
+At 1x, sample words `0..17` carry logical channels `1..18`.  At 2x, sample
+words `0..13` carry channels `1..14`.  At 4x, playback endpoint 0 and capture
+endpoint 0 carry words `0..5` for channels `1..6`.  Playback endpoint 1 and
+capture endpoint 1 carry words `0..5` for channels `7..12`.
+
+The sample word is float32 on the PC and PC RME variants below firmware 138.
+It is S32 on the Win RME variant and on every PC variant from firmware 138.
+Sample words are little-endian.
+
+One URB carries 48 sample frames at 1x, 96 at 2x and 192 at 4x.  That is six
+maximum-size packets.  Two URBs are in flight per endpoint.  The IN URBs are
+submitted at stream start.  The OUT URBs are filled from the PCM ring and
+resubmitted at completion.  An interrupt packet starts with the first sample
+word.  The four-byte header and the lead word belong to the AP packets.
+
+### 11.7 AP audio packets
+
+| Alt | Rate class | Sample words per frame | Maximum frames per packet | IN maximum packet | OUT maximum packet |
+|---|---|---|---|---|---|
+| 1 | 1x | 18 | 7 | 508 | 532 |
+| 2 | 2x | 14 | 13 | 732 | 780 |
+| 3 | 4x | 12 | 25 | 1208 | 1304 |
+
+The IN packet is a four-byte header followed by `frames × sample words × 4`
+bytes.  The OUT packet is `frames × (1 + sample words) × 4` bytes.  The
+maximum packet columns are the descriptor allocation sizes.
+
+The IN header is a four-byte little-endian value.  The driver reads the
+position from bits 5..17 and the phase from bits 18..31.  It derives the frame
+count from the packet length.
+
+Every OUT sample frame starts with a lead word.  The UC uses the first lead
+word in a packet; the remaining lead words are padding.  The first lead word
+is the stream position modulo 8192.
+
+One ISO URB carries up to eight packets, one per USB microframe.  Two URBs are
+in flight.  The AP sample word is float32.
+
+### 11.8 ALSA PCM
+
+The driver exposes one duplex PCM.
+
+| Property | Value |
+|---|---|
+| Channels | 18 playback and 18 capture |
+| Formats | `FLOAT_LE` and `S32_LE` |
+| Rates | 32 kHz to 192 kHz |
+| Buffer | managed vmalloc buffer |
+
+Capture sample word `n` maps to ALSA capture channel `n`.  Playback sample
+word `n` maps from ALSA playback channel `n`.  The profile maps each ALSA
+channel to a named input or playback row.
+
+The driver converts between the device sample word and the ALSA format.
+
+| Device word | `FLOAT_LE` | `S32_LE` |
+|---|---|---|
+| float32 | unchanged | converted |
+| S32 | converted | unchanged |
+
+At 2x and 4x, channels outside the carried sample words are silent on
+capture and ignored on playback.
+
+### 11.9 Meter and status
+
+The meter endpoint is IF1 IN `0x85` bulk.  The driver requests one 324-byte
+page per URB.  A request for two pages returns one page, so the driver pairs
+pages in the kernel.  Meter URBs run while a hwdep reader has the node open.
+The page and heartbeat rules are in "Metering".
+
+The status endpoint is IF5 IN `0x8b` interrupt, four bytes on the PC
+personality.  It is IF4 IN `0x8b` bulk on the AP personality.  The frame
+layout is in "Front-panel events".  The driver keeps the status URB armed
+while the device is connected.
+
+### 11.10 Alternate settings
+
+| Rate class | Alt |
+|---|---|
+| 1x | 1 |
+| 2x | 2 |
+| 4x | 3 |
+
+The PC personality selects the alt for the rate class.  The Win RME variant
+selects alt 0 and then alt N on every stream start.  The other PC variants
+select alt N on a rate-class change.  The AP personality selects alt N for the
+rate class.
+
+### 11.11 Open transport items
+
+1. The AP descriptor.  The AP interface and packet rows are the implemented
+   mapping; the descriptor has not been captured.
+2. Interfaces 2, 3 and 4 on the PC personality.  The endpoints are present;
+   the driver does not claim them and their roles are not decoded.
+3. MIDI.  Interface 2 has a bulk IN/OUT pair on the PC descriptor; the
+   driver creates no rawmidi port for the UC and the protocol is not decoded.
+4. The read form of `0x10`.  "EP0 request map" lists it as write or read;
+   the implemented host only writes it.
+5. The PC interrupt URB size.  The 48/96/192 sample-frame size is the host's
+   choice; the device contract is the packet size and the rate class.
+6. The AP header phase field.  The driver decodes it; it has not been checked
+   against a capture.
+7. Status bytes 0 and 1.  "Front-panel events" uses bytes 2 and 3; the roles
+   of bytes 0 and 1 are not decoded.
+8. The bulk endpoints on interface 0 at 1x and 2x.  `0x03` and `0x84` are
+   bulk there and interrupt at 4x; the bulk role is not decoded.
+
+## 12. Code map
+
+| Concern | Source |
+|---|---|
+| EP0 requests and device sequences | `kernel/ffuc.c` |
+| PCM, URBs and sample conversion | `kernel/ffuc.c` |
+| Meter pairing, status and hwdep events | `kernel/ffuc-hwdep.c` |
+| hwdep ABI | `kernel/ffuc-uapi.h` |
+| UC control and meter decode | `ui/totalcontrol/totalcontrol-core/src/fireface/device.rs` |
+| UC protocol constants and parsers | `ui/totalcontrol/totalcontrol-core/src/fireface/protocol.rs` |
+| UC profile data | `ui/totalcontrol/totalcontrol-core/src/profiles/uc.rs` |
+| Profile selection and ownership | `docs/spec/TOTALCONTROL-DEVICE-PROFILE-SPEC.md` |
