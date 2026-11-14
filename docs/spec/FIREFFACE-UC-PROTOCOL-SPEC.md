@@ -408,7 +408,10 @@ U32 field is little-endian unless stated otherwise.
    the driver publishes the pair in arrival order and keeps the
    `PHASE_LOST` flag set. It retries on every following pair; a decidable
    pair fixes the order and clears the flag. The flag marks the roles as
-   unverified.
+   unverified.  The peak half carries nonzero AN record words even when
+   the analog inputs are silent, so the cue decided the first pair in
+   every tested session; the fallback is the safety net for a state where
+   both halves read zero.
 8. Only one meter reader may drain the stream at a time. Concurrent
    readers each receive a sample of pages and break the phase model.
 
