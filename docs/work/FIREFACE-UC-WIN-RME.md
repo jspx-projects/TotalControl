@@ -379,6 +379,48 @@ transport keeps its own packet loop (interrupt = one block; ISO =
 per-packet descriptors with headers and feedback); the invariants are
 shared, the packet formats are delegated.
 
+## PR #160 tested on the capture-side repro (2026-11-14, healthy card)
+
+This session is the rerun on the verified card; the signalling under
+test is PR #160 as merged onto the instrumentation build
+(`test/uc-pr160-on-instrumentation`): both directions together at the
+capture period boundary, playback self-signalling only while capture
+is stopped or has stalled for three periods. The pointer-divergence
+instrument moved into the new `ffuc_signal_period()` so it reports on
+this scheme's own signal path.
+
+| Configuration | Runs | Zero runs |
+|---|---|---|
+| q48, playback joins first | 3 x 30 s | 1 (48 frames, quantum-aligned) |
+| q48, capture leads 4 s | 3 x 36 s | 0 |
+| q96, capture leads 4 s (the phase prediction) | 2 x 36 s | 0 |
+| q96, playback joins first | 2 x 30 s | 0 |
+
+All kernel instruments silent for the whole window, including at the
+zero position. Comparison with today's baseline on the reference
+signalling (2 zero runs in about 5 minutes of q48, one under load, all
+instrument-silent): the rates are indistinguishable at today's base
+rate of roughly one event per 2-4 minutes. Conclusions:
+
+- The failure persists under PR #160's scheme, with the same
+  attribution as on the reference signalling: the zero is inserted
+  above ALSA while the driver's ring, payload and pointer checks are
+  all clean.
+- The scheme is safe on this unit at q48 (no whole-period costs, unlike
+  both-at-both-boundaries) and produced no regression at q96 or in the
+  lead phase.
+- The specific prediction that spurious signals return when the phase
+  inverts (q96 lead) did not produce an observable artefact here. Note
+  the instrument's reach: it counts core pointer divergence, not the
+  spurious signal call itself, and the call is the thing the prediction
+  is about. A dedicated delta-zero counter on the signalling path is
+  the missing instrument for that test.
+- One external validity caveat: the card dropped off the bus once
+  today during testing, with no kernel journal entry, and re-bound
+  only after a module reload. Until that drop is understood (power
+  management? USB hub event?), long unattended batteries should poll
+  the card's presence between runs.
+
 ## Invalid session: device drop during the PR #160 battery
 
 The first PR #160 battery ran against a device that had already left
