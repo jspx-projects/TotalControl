@@ -391,6 +391,37 @@ The vendor path and the class-compliant path are mutually exclusive device
 personalities. In class-compliant mode the stock `snd-usb-audio` driver drives
 audio and the vendor mixer is unavailable.
 
+### Stream position and period signalling
+
+The PCM position and the period signal are the driver's contract with the
+ALSA core and with every reader above it. Four rules define the shipped
+behaviour.
+
+| Rule | Behaviour |
+|---|---|
+| Advance | The ring advances by exactly the whole frames the transport transferred (`urb->actual_length`). A remainder shorter than one frame is discarded; a payload larger than one URB is clamped. Each anomaly increments `in_bad_length` or `out_bad_length`. |
+| Signal ownership | A direction is signalled only when its period index advanced since its last signal. A signal always announces exactly one completed period. |
+| Wake order | While both directions run, the graph is woken when both have an unannounced completed period, whenever that later boundary falls. A direction two or more periods overdue is signalled alone. While one direction runs, it signals at its own boundary. |
+| Pointer coherence | After each signal the driver compares the core's published `status->hw_ptr` with its own position. A divergence increments `hw_ptr_mismatch`. |
+
+The wake rule derives the later boundary every cycle; it does not assume an
+URB completion order. The ring holds at least two periods, and the playback
+direction reports `nurbs * urb_frames` frames of delay until the stream
+starts.
+
+The gate makes a false availability report impossible: a reader can never be
+told that a period completed when no period did. A follower direction whose
+period signal arrives late therefore sees a position that never exceeds the
+committed frames.
+
+The host-side timing limits are separate from the driver contract. A graph
+quantum equal to one period leaves no slack between a direction's period and
+the follower's deadline; the daemon substitutes silence when its follower
+cycle misses by about one period. A quantum of 96 frames or more at 48 kHz
+gives the follower one period of slack, and the default quantum of 256 is
+outside the window. This is a host tuning property, not a driver property.
+
+
 ## 11. Development tools
 
 Everything except the kernel driver plus hwdep is a development tool:
