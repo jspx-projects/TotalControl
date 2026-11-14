@@ -1960,6 +1960,11 @@ impl Fireface {
         Ok(())
     }
 
+    /// Equal-level mono summing: attenuate each side by 3 dB before the
+    /// sum.  This avoids the 6 dB rise of a direct L+R sum for centred
+    /// material and matches RME's recommended manual mono-sum practice.
+    const CONTROL_ROOM_MONO_SIDE_GAIN: f32 = 0.707_945_8;
+
     /// The monitor output affected by monitor actions.  Speaker B is the
     /// active path while it is switched on; otherwise Main Out is.
     fn control_room_active_monitor_pair(&self) -> Option<usize> {
@@ -2045,10 +2050,12 @@ impl Fireface {
                 monitor * 2 + 1,
             )
             .unwrap_or(0.0);
-            // Feed both monitor sides from both source sides: the two
-            // contributions sum in the monitor pair.
-            self.uc_write_matrix(monitor * 2, source, left + right)?;
-            self.uc_write_matrix(monitor * 2 + 1, source, left + right)?;
+            // Feed both monitor sides from both source sides.  Each side
+            // is attenuated by 3 dB before the sum; the two contributions
+            // then meet in the monitor pair.
+            let mono = (left + right) * Self::CONTROL_ROOM_MONO_SIDE_GAIN;
+            self.uc_write_matrix(monitor * 2, source, mono)?;
+            self.uc_write_matrix(monitor * 2 + 1, source, mono)?;
         }
         self.uc_monitor_saved = Some(saved);
         self.settings.mono = true;
@@ -10581,9 +10588,10 @@ mod tests {
         let w = writes.lock().unwrap();
         // Each source keeps its own level and is fed to both sides; the
         // device sums the contributions of sources 18 and 19.
-        let (value, index) = uc::matrix_word(0.1, 4 * 36 + 18);
+        let gain = 0.1 * Fireface::CONTROL_ROOM_MONO_SIDE_GAIN;
+        let (value, index) = uc::matrix_word(gain, 4 * 36 + 18);
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
-        let (value, index) = uc::matrix_word(0.1, 4 * 36 + 19);
+        let (value, index) = uc::matrix_word(gain, 4 * 36 + 19);
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
     }
 
