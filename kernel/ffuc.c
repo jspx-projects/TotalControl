@@ -1396,6 +1396,9 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "urb_errors %d\n", atomic_read(&chip->urb_errors));
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
 	seq_printf(m, "events_dropped %d\n", atomic_read(&chip->events_dropped));
+	seq_printf(m, "meter_urbs %d\n", atomic_read(&chip->meter_urbs));
+	seq_printf(m, "meter_paused %u\nmeter_pairs %u\n",
+		   chip->meter_paused, chip->meter_pairs);
 	seq_printf(m, "urb_frames %u\nnurbs %u\n", chip->urb_frames,
 		   chip->nurbs);
 	return 0;
@@ -2410,13 +2413,9 @@ static int ffuc_probe(struct usb_interface *intf,
 	chip->in_ep = desc->in_ep;
 	chip->modes = desc->modes;
 	chip->debugfs = debugfs_create_dir(dev_name(&intf->dev), NULL);
-	if (!IS_ERR_OR_NULL(chip->debugfs)) {
+	if (!IS_ERR_OR_NULL(chip->debugfs))
 		debugfs_create_file("stats", 0444, chip->debugfs, chip,
 				    &ffuc_stats_fops);
-		/* Meter phase is unknown until the device anchors it at
-		 * power-up; the flag marks the first heartbeat. */
-		WRITE_ONCE(chip->meter_phase_lost, true);
-	}
 	mutex_init(&chip->mutex);
 	mutex_init(&chip->ctl_lock);
 	spin_lock_init(&chip->fb_lock);
@@ -2426,6 +2425,9 @@ static int ffuc_probe(struct usb_interface *intf,
 	atomic_set(&chip->event_seq, 0);
 	atomic_set(&chip->events_dropped, 0);
 	atomic_set(&chip->meter_urbs, 0);
+	/* Meter phase is unknown until the device anchors it at power-up;
+	 * the flag marks the first heartbeat of the session. */
+	WRITE_ONCE(chip->meter_phase_lost, true);
 	atomic_set(&chip->state_urbs, 0);
 	atomic_set(&chip->hwdep_users, 0);
 	if (kfifo_alloc(&chip->event_fifo, FFUC_EVENT_FIFO_SIZE, GFP_KERNEL)) {

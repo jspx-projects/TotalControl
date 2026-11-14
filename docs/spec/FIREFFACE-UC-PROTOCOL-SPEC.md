@@ -399,12 +399,34 @@ U32 field is little-endian unless stated otherwise.
    page on a UC device. The event flag `METER_PAIR` marks the payload.
 6. A normal transport stop completes a held half before stopping, so the
    phase survives reader attachment and detachment.
-7. If a session begins after a fresh probe, or if the stop drain fails,
-   the driver flags the first heartbeat `PHASE_LOST`. The meters still
-   alternate, but the two halves may be swapped until the next device
-   power-up. The flag is reported, never guessed away.
+7. If the phase is not anchored for a session (a fresh probe while the
+   unit kept running, or a failed stop drain), the driver orders the
+   first pair by the record-table shape: the peak half publishes the
+   eight AN records, the RMS half does not. If that check cannot decide,
+   the driver publishes the pair in arrival order and keeps the
+   `PHASE_LOST` flag set. It retries on every following pair; a decidable
+   pair fixes the order and clears the flag. The flag marks the roles as
+   unverified.
 8. Only one meter reader may drain the stream at a time. Concurrent
    readers each receive a sample of pages and break the phase model.
+
+### Driver feed
+
+1. Meter transfer is reader-triggered: with no reader the driver submits
+   no meter transfers and the device sends nothing.
+2. The pump consumes in pairs. The driver emits one event per complete
+   heartbeat and never exposes a single page of a UC heartbeat.
+3. The feed is backpressured: the driver submits the first page of the
+   next pair only while the event FIFO is below its high-water mark.
+   When the FIFO is full it stops at a pair boundary; the device then
+   holds its next page.
+4. A reader read that drains the FIFO below the low-water mark resumes
+   the pump at the next pair boundary.
+5. The last reader closing stops the pump at a pair boundary and drops
+   unread meter events, so the next reader starts from current data.
+6. The high-water mark covers one slow consumer period: sixteen
+   heartbeats. The service consumer normally keeps occupancy near one
+   pair, so the mark only matters when the consumer stalls.
 
 The heartbeat pairing is a property of the UC model. The UCX and
 Babyface-classic meter packets are self-describing and pass through

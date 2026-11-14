@@ -443,8 +443,13 @@ impl UcMeterBank {
         // The data-page header publishes the remaining output RMS bank.
         // Channels 0..3 stay on the flag page.
         for channel in protocol::UC_OUTPUT_RMS_CHANNELS..18 {
-            self.output_rms[channel] =
-                protocol::uc_output_header_rms_linear(packet.output_header_rms(channel));
+            let word = packet.output_header_rms(channel);
+            // A value above the full-scale sine power is status, not a
+            // level; keep the previous bar instead of pegging it.
+            if word > 0x4000_0000 {
+                continue;
+            }
+            self.output_rms[channel] = protocol::uc_output_header_rms_linear(word);
         }
     }
 
@@ -4039,6 +4044,10 @@ impl Fireface {
                             // RMS half first, the peak half second.  Role is
                             // positional, never a word inside a page.
                             if event.flags & EV_FLAG_METER_PAIR != 0 {
+                                // A pair whose order the driver could not
+                                // resolve is still applied in arrival order,
+                                // so the meters never stop; the flag records
+                                // that the roles are unverified.
                                 self.uc_meters.apply_heartbeat(&event.data);
                                 self.uc_meter_phase_lost =
                                     event.flags & EV_FLAG_PHASE_LOST != 0;

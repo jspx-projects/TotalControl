@@ -75,11 +75,52 @@ redraw presents the whole surface and the compositor recomposites the window.
 The cost of a frame therefore follows the window area, not the part that
 changed, and the window is another client on the same GPU as the compositor.
 
-Canvas metering drives its own frames from the shared `MeterSnapshot`: at most
-one frame per `METER_FRAME_MS` (20 fps) while a level moves, a 10 Hz poll while
-a live level is steady, and none while the bus is idle. The `Tick`
-subscription (250 ms readout, 40 ms metered, 33 ms during drags) rebuilds the
-view.
+Canvas metering drives its own frames from the shared `MeterSnapshot`: a
+meter-only frame every 67 ms (15 fps) while a live level moves, a 10 Hz poll
+while a live level is steady, no frame while the bus is idle, and the 33 ms
+interaction tick while a control is dragged or an animation runs.  The `Tick` subscription (250 ms readout,
+67 ms metered, 33 ms during drags, 4 Hz hidden, 10 Hz at rest) rebuilds the
+view.  Ballistics and animations are time-based, so their speed does not
+depend on the tick.
+
+## 2.1 Meter data path
+
+The meter feed has two consumer modes.
+
+- **Service mode (default).** The device handle moves onto the service
+  thread.  The service is the only reader: it drains every heartbeat at
+  device rate, keeps the ballistics, peak holds and OVR latches, and
+  publishes a `MeterSnapshot` under a mutex.  The GUI, OSC feedback and
+  any other client read that snapshot.  The GUI's tick never paces the
+  device.
+- **Direct mode (`TOTALCONTROL_DEVICE_SERVICE=0`).** The GUI owns the
+  device handle and is the only reader.  It drains all pending
+  heartbeats on each tick and folds them into the meter state before
+  drawing the newest.  This mode is a diagnostic and test path.
+
+Per heartbeat the data moves as: USB DMA into a coherent URB page
+buffer, copy into the driver's 648-byte pair buffer, `kfifo_in` of the
+event record under the event lock, reader `read()` (kfifo-out copy and
+copy-to-user), and a `to_vec` copy in the service.  The snapshot into
+the GUI is one mutex-protected struct copy.  There is no zero-copy
+path.
+
+The event FIFO is 64 KiB, which holds about 98 heartbeats.  The driver
+pauses at sixteen heartbeats (158 ms) and resumes below four, always at
+a pair boundary.  The service keeps occupancy near one pair, so the
+marks are a stall guard, not an operating point.  In direct mode the
+15 Hz consumer sees about seven heartbeats per frame, which the marks
+cover with jitter margin.
+
+Rates measured on the desk: the UC publishes about 187-195 pages per
+second, so about 93-97 heartbeats per second after pairing.  The UCX
+packet is self-describing and is requested every 4 ms, up to about 250
+packets per second; its actual rate is unmeasured.
+
+Display latency: pairing adds at most one page interval, about 5 ms.
+The 15 Hz frame adds 0-67 ms of sample age, and rendering adds at most
+one frame.  The FIFO adds nothing, because the consumer drains it and
+draws the newest state.
 
 Antialiasing is off (`Settings::antialiasing`): iced maps it to MSAAx4, which
 renders and resolves every canvas layer and multiplies the per-frame GPU cost.

@@ -95,6 +95,11 @@
 #define FFUC_STATE_BUF_SIZE	1024
 #define FFUC_EVENT_FIFO_SIZE	(64 * 1024)
 #define FFUC_METER_PAIR_MAX	648
+/* Backpressure marks for the UC heartbeat feed, in events.  The high mark
+ * covers one slow 15 Hz consumer period with jitter; the low mark gives
+ * hysteresis. */
+#define FFUC_METER_HIGH_WATER	16
+#define FFUC_METER_LOW_WATER	4
 #define FFUC_EVENT_BUF_SIZE	(sizeof(struct ffuc_hwdep_event_hdr) + \
 				 FFUC_EVENT_MAX)
 
@@ -336,6 +341,9 @@ struct ffuc {
 	 * probe, or a failed drain).  The next heartbeat carries the
 	 * phase-lost flag. */
 	bool meter_phase_lost;
+	/* Pair pump state for the reader backpressure. */
+	bool meter_paused;
+	u32 meter_pairs;
 	atomic_t state_urbs;
 
 	/* USB-MIDI streaming interface (bulk OUT / bulk IN) */
