@@ -379,6 +379,21 @@ transport keeps its own packet loop (interrupt = one block; ISO =
 per-packet descriptors with headers and feedback); the invariants are
 shared, the packet formats are delegated.
 
+## Invalid session: device drop during the PR #160 battery
+
+The first PR #160 battery ran against a device that had already left
+the bus: the user-session journal shows a continuous
+`snd_pcm_status: No such device` flood from 20:19:53, the kernel
+journal's last engine entry is at 20:17:13, the q48 and phase-lead
+recordings are truncated (10 s and 12 s instead of 30 s and 36 s), and
+afterwards the card was absent from `/proc/asound/cards` with its USB
+interface unbound while the module stayed loaded. The stale hwdep
+holder (TotalControl holding the deleted node) blocked the re-probe
+until it was stopped, after which the reload path re-bound the unit and
+a health check confirmed the tone loopback on capture channels 1-8.
+The card's last known-good state was restored with the PR #160
+instrumentation build still loaded. No data from that battery is used.
+
 ## Endpoints that differ from the original UC
 
 
