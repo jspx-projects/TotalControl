@@ -5903,7 +5903,14 @@ impl RmeDevice for Fireface {
             }
         }
         self.set_volume(ChannelId::Output(left), 0, level)?;
-        self.set_volume(ChannelId::Output(right), 0, level)
+        self.set_volume(ChannelId::Output(right), 0, level)?;
+        if self.speaker_b_linked {
+            if let Some(b) = self.settings.main_b_out.filter(|b| *b != pair) {
+                self.set_volume(ChannelId::Output(b * 2), 0, level)?;
+                self.set_volume(ChannelId::Output(b * 2 + 1), 0, level)?;
+            }
+        }
+        Ok(())
     }
 
     /// Control Room Assign: Main Out is a host-side monitor assignment on
@@ -10557,6 +10564,21 @@ mod tests {
         assert!(!dev.outputs()[3].mute);
         assert!((dev.outputs()[2].volume - main_before.0).abs() < 1e-6);
         assert!((dev.outputs()[3].volume - main_before.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn linked_recall_reaches_speaker_b_while_main_is_muted() {
+        for model in [Model::Uc, Model::Ucx] {
+            let (mut dev, _writes) = open(model);
+            dev.set_main_out(Some(1)).unwrap();
+            dev.set_main_out_b(Some(2)).unwrap();
+            dev.set_speaker_b(true).unwrap();
+            dev.set_speaker_b_linked(true).unwrap();
+            dev.set_main_recall(-10.0).unwrap();
+            let level = db_to_linear(-10.0);
+            assert!((dev.outputs()[4].volume - level).abs() < 1e-6);
+            assert!((dev.outputs()[5].volume - level).abs() < 1e-6);
+        }
     }
 
     #[test]
