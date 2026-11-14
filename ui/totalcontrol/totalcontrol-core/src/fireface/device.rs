@@ -3785,7 +3785,18 @@ impl Fireface {
             ),
             Model::Uc => Some(
                 (0..self.outputs.len())
-                    .map(|i| self.uc_meters.output_peak(i))
+                    .map(|i| {
+                        let peak = self.uc_meters.output_peak(i);
+                        if post {
+                            if self.outputs[i].mute {
+                                0.0
+                            } else {
+                                peak * self.outputs[i].volume
+                            }
+                        } else {
+                            peak
+                        }
+                    })
                     .collect(),
             ),
         }
@@ -9775,6 +9786,22 @@ mod tests {
         let w = writes.lock().unwrap();
         let (value, index) = uc::matrix_word(0.5, 2 * 36 + 18);
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+    }
+
+    #[test]
+    fn uc_output_peak_line_follows_the_row_fader() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut data = [0u8; UcMeterPacket::LEN];
+        data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // AN5 output record: low OVR 0, high peak 0x4000 = -6.02 dBFS.
+        data[268..272].copy_from_slice(&0x4000_0000u32.to_le_bytes());
+        dev.uc_meters
+            .apply(&UcMeterPacket::parse(&data).expect("data page"));
+        dev.set_volume(ChannelId::Output(4), 0, 0.5).unwrap();
+        let raw = dev.output_peaks_internal(false).expect("raw peak line");
+        assert!((raw[4] - 0.5).abs() < 1e-6, "raw AN5 peak {raw:?}");
+        let post = dev.output_peaks_internal(true).expect("post peak line");
+        assert!((post[4] - 0.25).abs() < 1e-6, "post AN5 peak {post:?}");
     }
 
     #[test]
