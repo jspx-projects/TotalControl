@@ -738,6 +738,12 @@ Speaker B keeps its own level and Dim and Recall act on Main Out only.
 Phones 1–4 are not monitor outputs. Dim, Recall, Mono, External Input and
 Mute FX do not affect them. Talkback uses its own Phones Dim amount.
 
+Every Control Room output is a stereo pair. An assigned pair is linked and
+cannot be unlinked; assigning a split pair links it. The Settings panel's
+`STEREO` control stays engaged for Control Room pairs, and `Set all channels
+mono` does not split them. This stereo pair link is separate from
+`Speaker B → Link to Main`, which links the Speaker B volume to Main.
+
 ### What the destinations mean
 
 - **Main** is normally the engineer’s monitor output: the speakers in the
