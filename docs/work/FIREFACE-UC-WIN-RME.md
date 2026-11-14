@@ -261,7 +261,45 @@ the stream.
 
 
 
+## Tooling promotion plan
+
+The bench tooling built for this session is reusable across units and
+should be promoted into the repository once PR #166 and PR #167 settle,
+in one follow-up PR:
+
+- generalise the battery, phase-lead and loopback procedures from their
+  session-local copies into parameterised `scripts/` (card, node,
+  quantum, duration, load command); document each in
+  `docs/DEVELOPMENT-TOOLS.md`;
+- move the WAV arithmetic (zero-run scan, offset search, bit-exact
+  window comparison) into `tools/` next to `ffuc-counters.c`;
+- append the new counters (`in_overruns`, `out_underruns`,
+  `in_bad_length`, `out_bad_length`, `hw_ptr_mismatch`) to the
+  `ffuc_hwdep_counters` UAPI struct and extend `ffuc-counters`, so a
+  reader without root sees them; debugfs `stats` needs root today;
+- decide the counters' shipping posture in review: counters always on
+  (a few atomic increments per URB), poison fill behind a module
+  parameter;
+- keep all session-specific artifacts (tone files, captures, session
+  scripts) outside the repository; `scripts/make_test_wav.py` stays the
+  canonical fixture generator.
+
+Thomas's unit (firmware 133/138) is the first external consumer: the
+counters answer whether the ALSA-core pointer heuristic fires on a
+newer unit, which PR #160 cannot answer on its own.
+
+### Bench limitation recorded for the validation protocol
+
+The bit-exact bar could not be met through the PipeWire path: the
+monitor routing that feeds the capture channels is scene-dependent and
+did not carry the tone under a bare `aplay`/`arecord` loop. The
+nominal-path validation stands on the instrumented sessions (tone
+through the loopback, counters zero, both `bad_length` counters zero);
+the bit-exact check needs the session's own routing and stays open as a
+bench item for PR #167.
+
 ## Endpoints that differ from the original UC
+
 
 The descriptor is copied from the original UC.  On the test unit interface 1
 has only bulk IN `0x85`; there is no `0x0c` OUT or `0x8d` IN.  Interface 3
