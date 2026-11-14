@@ -164,6 +164,60 @@ the transport counters.
   underrun detection is disabled; silent ring corruption is then expected
   core behaviour, not a driver defect.
 
+## First instrumented session (2026-11-14)
+
+Findings from the first session on the firmware 127 bench unit. Captures
+and session state stay outside the repository.
+
+Negotiated geometry, from the per-start log line. Both directions at a
+quantum of 48 run `buffer 192, period 48, stop_threshold 192, avail_min
+144 playback / 48 capture, delay 96`; `stop_threshold` is therefore
+`buffer_size`, not `boundary`, and the core's own overrun and underrun
+detection is enabled. The reviewer's q48 geometry premise (a 96-frame
+ring) does not hold; the standing fill target stays at about one period
+regardless of ring size.
+
+- Ring pressure: `in_overruns` and `out_underruns` stayed at zero through
+  roughly 13 runs (18-channel and stereo tone, quanta 48/64/96/256, with
+  and without a concurrent full-tree `cargo build` on processors 0-15).
+  The ring margins never went bad in any run.
+- Payload integrity: `in_bad_length` stayed zero.
+- Pointer divergence: the `hw_ptr_mismatch` instrument fired twice, both
+  on the playback direction at a quantum of 256 (`buffer 512`). The first
+  event reported `status 3680240` against `driver 3679728`: the ALSA
+  core's period-elapsed heuristic injected exactly one `buffer_size`
+  into the published pointer. The mechanism is real. In the observed
+  instance the injected pointer produced no zero run in the recording.
+
+### The zero run reproduced once, above ALSA
+
+One capture run reproduced the failure: a 4-second phase lead — capture
+started first, playback joined later, quantum 48, 18 channels, S32,
+capture driving the graph. One interior zero run of exactly 48 frames
+appeared at stream frame 738960 (about 15.4 s in, `offset % 48 == 0`).
+At that position all four driver instruments stayed silent:
+`in_overruns` did not rise, `out_underruns` did not rise,
+`in_bad_length` stayed zero, and no `hw_ptr_mismatch` was logged in the
+window. The zero was therefore inserted above ALSA by the PipeWire
+capture follower, while the driver's ring stayed healthy throughout —
+the mode-1 attribution the work notes asked for, now evidenced by
+instruments rather than inference.
+
+### Next discriminations
+
+1. Re-run the phase-lead variant several times with the per-second
+   `pw-top` ERR column alongside; the zero positions should line up with
+   ERR movements on the capture node if PipeWire's follower deadline
+   misses.
+2. Comment on PR #160 with the session result: the wake-ordering
+   mechanism is not the sole owner; its capture-boundary signalling may
+   still be the right fix, but the bench now shows a healthy-driver
+   instance where the follower still produced a quantum of silence.
+3. `urb_frames`/`nurbs` sweep stays useful to bound the driver-side
+   margin, but no longer carries the diagnosis; the ring counters say
+   the margin has never been at risk in this session.
+
+
 
 ## Endpoints that differ from the original UC
 
