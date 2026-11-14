@@ -2037,6 +2037,10 @@ pub enum Message {
     GainLeft(usize, u32),
     /// Raw preamp gain for the right readout only, even on a linked pair.
     GainRight(usize, u32),
+    /// Requested knob position for the linked input gain knob.  The position
+    /// is the higher gain.  The handler applies the difference from the
+    /// current position to both gains.
+    GainKnobPosition(usize, u32),
     /// `true` = +4dBu, `false` = -10dBV.
     Sensitivity(usize, bool),
     /// Trim in dB (-65..+6, see `RmeDevice::set_trim`) — `usize` is the
@@ -3073,9 +3077,10 @@ fn undo_gesture(message: &Message) -> Option<UndoGesture> {
             UndoGesture::Volume(*cid, *out)
         }
         Message::PanChanged(cid, out, _) => UndoGesture::Pan(*cid, *out),
-        Message::Gain(idx, _) | Message::GainLeft(idx, _) | Message::GainRight(idx, _) => {
-            UndoGesture::Gain(*idx)
-        }
+        Message::Gain(idx, _)
+        | Message::GainLeft(idx, _)
+        | Message::GainRight(idx, _)
+        | Message::GainKnobPosition(idx, _) => UndoGesture::Gain(*idx),
         Message::TrimChanged(cid, _) => UndoGesture::Trim(*cid),
         Message::EqBandFreq(cid, band, _)
         | Message::EqBandQ(cid, band, _)
@@ -9740,6 +9745,67 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 fail(state, "set_input_gain_right", &e);
             }
         }
+        Message::GainKnobPosition(idx, position) => {
+            // The knob position is the higher gain.  A whole-knob step moves
+            // each preamp by the difference from that position, and each
+            // preamp clamps at its own range limit.  The readout wheels use
+            // GainLeft/GainRight and stay independent.
+            let linked = idx % 2 == 0 && state.device.input_pair_linked(idx / 2);
+            let max = state
+                .device
+                .inputs()
+                .get(idx)
+                .and_then(|c| c.gain_max)
+                .unwrap_or(65);
+            let left = state
+                .device
+                .inputs()
+                .get(idx)
+                .and_then(|c| c.gain)
+                .unwrap_or(position);
+            let right = state
+                .device
+                .inputs()
+                .get(idx)
+                .and_then(|c| c.gain_right)
+                .or_else(|| state.device.inputs().get(idx + 1).and_then(|c| c.gain))
+                .unwrap_or(left);
+            if linked {
+                let current_position = left.max(right);
+                let delta = position as i64 - current_position as i64;
+                let left = (left as i64 + delta).clamp(0, max as i64) as u32;
+                let right = (right as i64 + delta).clamp(0, max as i64) as u32;
+                if let Err(e) = state.device.set_input_gain(idx, left) {
+                    fail(state, "set_input_gain", &e);
+                }
+                if state.device.set_input_gain_right(idx, right).is_err() {
+                    if let Err(e) = state.device.set_input_gain(idx + 1, right) {
+                        fail(state, "set_input_gain_right", &e);
+                    }
+                }
+                let actual = state
+                    .device
+                    .inputs()
+                    .get(idx)
+                    .and_then(|c| c.gain)
+                    .unwrap_or(left);
+                notify_osc_raw(
+                    state,
+                    format!("/input/{idx}/gain"),
+                    vec![OscType::Float(actual as f32)],
+                );
+            } else {
+                let gain = position.min(max);
+                if let Err(e) = state.device.set_input_gain(idx, gain) {
+                    fail(state, "set_input_gain", &e);
+                }
+                notify_osc_raw(
+                    state,
+                    format!("/input/{idx}/gain"),
+                    vec![OscType::Float(gain as f32)],
+                );
+            }
+        }
         Message::RmeToggle(target) => {
             if let Some(message) = rme_toggle_message(state, target) {
                 return update(state, message);
@@ -15667,10 +15733,10 @@ fn settings_popover(
                     range: (0.0, gain_max as f32),
                     // Gain is tracked in raw device units (whole dB on
                     // inputs 1/2, half-dB units on 3/4).  A linked pair
-                    // always shows both values, left above right, even when
-                    // they are equal.  The wheel over one printed value
-                    // adjusts only that preamp; the rest of the knob keeps
-                    // the pair's same-step movement.
+                    // always shows both values, left above right.  Its knob
+                    // position is the higher gain, so the whole knob stops
+                    // when that gain reaches a limit.  The wheel over one
+                    // printed value still adjusts only that preamp.
                     label,
                     secondary_value: linked_left.then_some(right_gain as f32),
                     on_readout_change: linked_left.then(|| {
@@ -15690,9 +15756,20 @@ fn settings_popover(
                     modifiers: p.modifiers,
                     scale,
                     on_change: Box::new(move |v| {
-                        Message::Gain(idx, (v.round() as u32).min(gain_max))
+                        let raw = (v.round() as u32).min(gain_max);
+                        if linked_left {
+                            Message::GainKnobPosition(idx, raw)
+                        } else {
+                            Message::Gain(idx, raw)
+                        }
                     }),
-                    on_reset: Box::new(move || Message::Gain(idx, 0)),
+                    on_reset: Box::new(move || {
+                        if linked_left {
+                            Message::GainKnobPosition(idx, 0)
+                        } else {
+                            Message::Gain(idx, 0)
+                        }
+                    }),
                 })
                 .into(),
             )
@@ -23735,6 +23812,81 @@ mod tests {
             state.device.input_pair_linked(0),
             "adjusting one readout must not split the pair"
         );
+    }
+
+    #[test]
+    fn linked_gain_knob_position_moves_both_gains_by_the_same_step() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        state.device.set_input_gain(0, 20).unwrap();
+        state.device.set_input_gain_right(0, 30).unwrap();
+
+        let _ = update(&mut state, Message::GainKnobPosition(0, 31));
+        assert_eq!(state.device.inputs()[0].gain, Some(21));
+        assert_eq!(state.device.inputs()[0].gain_right, Some(31));
+
+        state.device.set_input_gain(0, 30).unwrap();
+        state.device.set_input_gain_right(0, 20).unwrap();
+        let _ = update(&mut state, Message::GainKnobPosition(0, 31));
+        assert_eq!(state.device.inputs()[0].gain, Some(31));
+        assert_eq!(state.device.inputs()[0].gain_right, Some(21));
+    }
+
+    #[test]
+    fn linked_gain_knob_position_stops_at_the_higher_limit() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        state.device.set_input_gain(0, 65).unwrap();
+        state.device.set_input_gain_right(0, 40).unwrap();
+
+        let _ = update(&mut state, Message::GainKnobPosition(0, 65));
+        assert_eq!(state.device.inputs()[0].gain, Some(65));
+        assert_eq!(
+            state.device.inputs()[0].gain_right,
+            Some(40),
+            "the whole knob must stop when the higher gain is at maximum"
+        );
+
+        let _ = update(&mut state, Message::GainRight(0, 41));
+        assert_eq!(
+            state.device.inputs()[0].gain_right,
+            Some(41),
+            "the readout wheel must still move the lower gain"
+        );
+
+        state.device.set_input_gain(0, 40).unwrap();
+        state.device.set_input_gain_right(0, 65).unwrap();
+        let _ = update(&mut state, Message::GainKnobPosition(0, 65));
+        assert_eq!(state.device.inputs()[0].gain, Some(40));
+        assert_eq!(
+            state.device.inputs()[0].gain_right,
+            Some(65),
+            "the whole knob must stop when the right gain is the higher one"
+        );
+    }
+
+    #[test]
+    fn linked_gain_knob_position_reset_clears_both_gains() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        state.device.set_input_gain(0, 20).unwrap();
+        state.device.set_input_gain_right(0, 30).unwrap();
+
+        let _ = update(&mut state, Message::GainKnobPosition(0, 0));
+        assert_eq!(state.device.inputs()[0].gain, Some(0));
+        assert_eq!(state.device.inputs()[0].gain_right, Some(0));
+    }
+
+    #[test]
+    fn linked_gain_knob_position_clamps_each_gain_at_its_own_minimum() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        state.device.set_input_gain(0, 0).unwrap();
+        state.device.set_input_gain_right(0, 10).unwrap();
+
+        let _ = update(&mut state, Message::GainKnobPosition(0, 9));
+        assert_eq!(state.device.inputs()[0].gain, Some(0));
+        assert_eq!(state.device.inputs()[0].gain_right, Some(9));
     }
 
     #[test]

@@ -1016,6 +1016,9 @@ continues while the knob position stays inside its range. The offset between
 the gains is preserved while both gains take the step. The offset changes when
 one gain reaches a range limit before the other.
 
+Double-click is a whole-knob gesture to the range minimum. Both gains reach
+the minimum.
+
 The pair remains linked during both gestures. The link state does not change.
 
 The examples use a gain range of 0 to 65. The rules use the input's own gain
@@ -1032,6 +1035,7 @@ range.
 | 65 / 40 | whole-knob step, +1 | 65 / 40 | 65 |
 | 0 / 10 | whole-knob step, -1 | 0 / 9 | 9 |
 | 65 / 65 | whole-knob step, +1 | 65 / 65 | 65 |
+| 20 / 30 | double-click | 0 / 0 | 0 |
 
 #### 3.2.2 Open items
 
