@@ -322,9 +322,9 @@ cell drag is in progress.
 #### 2.1.1 Knob readouts
 
 A knob prints one or two values in its face. The primary value is the top (or
-left) one; the knob angle and tick follow it. A colored value arc follows the
-higher of the two readouts. A knob with two readouts keeps both visible at
-every value, including when the values are equal or both at a range limit.
+left) one. The primary value is the default knob position. A knob with two
+readouts keeps both values visible at every value, including when the values
+are equal or both at a range limit.
 
 Hovering a knob brightens its rim to the strip hover silver. The value arc and
 tick keep their functional colour. With two readouts, each printed line is its
@@ -342,16 +342,11 @@ whole-knob target.
 | secondary readout | only the secondary value |
 
 The wheel keeps its existing step, limits and Shift+fine behaviour for the
-targeted value. The angle and tick keep following the primary value while the
-secondary is adjusted; the arc follows whichever readout is higher. Dragging,
-clicking and double-clicking remain
-whole-knob gestures and never act on one readout. A one-readout knob has no
-readout distinction: the whole knob is the target.
-
-The linked input-pair gain knob is the two-readout control. Over the knob the
-wheel moves both preamps by the same step; over the top or bottom number it
-moves only that preamp, so the two gains can be set individually. The pair
-stays linked and the face keeps both values.
+targeted value. The knob position drives the angle, tick and value arc. A
+channel element can define another position; §3.2.1 defines the linked input
+gain knob. Dragging, clicking and double-clicking remain whole-knob gestures
+and never act on one readout. A one-readout knob has no readout distinction:
+the whole knob is the target.
 
 ### 2.2 On/off controls
 
@@ -981,12 +976,68 @@ arrives before the scene is applied does not override it. On the UCX the knob
 then follows physical encoder moves, which the unit reports in the IF1 state
 stream.
 
-A linked input pair always shows both values, left above right, even when
-they are equal. This mirrors the device, which always treats inputs 1–4 as
-unlinked. An unlinked input shows one value. The wheel over the whole knob
-moves both preamps by the same step; the wheel over the top or bottom number
-moves only that preamp, as described in §2.1.1. The orange arc follows the
-higher of the two gains.
+A linked input pair uses the dual-readout gain knob defined in §3.2.1. An
+unlinked input shows one value and the knob writes only that channel. The
+device treats inputs 1–4 as unlinked; the pair exists only in TotalControl.
+
+#### 3.2.1 Linked input gain knob
+
+| Term | Form | Definition |
+|---|---|---|
+| left gain | gain value | The gain of the left input of the linked pair. |
+| right gain | gain value | The gain of the right input of the linked pair. |
+| higher gain | gain value | The greater of the left gain and the right gain. |
+| knob position | gain value | The higher gain. |
+| readout | two printed values | The left gain printed above the right gain. |
+| readout wheel | wheel over one printed value | A knob step applied to one gain. |
+| whole-knob gesture | drag or wheel outside a readout | A sequence of knob steps applied to both gains. |
+| knob step | signed gain value | The change requested by one wheel notch or one drag update. |
+| range limit | minimum or maximum | The lowest or highest value in the input's gain range. |
+
+The linked input gain knob has two readouts. The left gain is printed above
+the right gain. Both readouts remain visible at every value, including when
+the gains are equal or both at a range limit.
+
+The knob position is the higher gain. The angle, tick and value arc follow the
+knob position. A change to the lower gain does not move them. When the lower
+gain passes the higher gain, the knob position moves to the new higher gain.
+
+A readout wheel applies its knob step to the gain under the pointer only. It
+does not change the other gain. It remains available while the other gain is
+at a range limit.
+
+A whole-knob gesture applies one knob step to both gains. The gesture
+continues only while the knob position is inside its range. The whole-knob
+gesture stops when the knob position reaches a range limit.
+
+A gain that reaches a range limit stops at that limit. The other gain
+continues while the knob position stays inside its range. The offset between
+the gains is preserved while both gains take the step. The offset changes when
+one gain reaches a range limit before the other.
+
+The pair remains linked during both gestures. The link state does not change.
+
+The examples use a gain range of 0 to 65. Inputs 3/4 use the same rules with
+their own gain range.
+
+| Starting left / right | Gesture | Resulting left / right | Knob position |
+|---|---|---|---|
+| 20 / 30 | readout wheel on left, +1 | 21 / 30 | 30 |
+| 20 / 30 | readout wheel on right, +1 | 20 / 31 | 31 |
+| 20 / 20 | readout wheel on right, +1 | 20 / 21 | 21 |
+| 20 / 30 | whole-knob step, +1 | 21 / 31 | 31 |
+| 30 / 20 | whole-knob step, +1 | 31 / 21 | 31 |
+| 65 / 40 | readout wheel on right, +1 | 65 / 41 | 65 |
+| 65 / 40 | whole-knob step, +1 | 65 / 40 | 65 |
+| 0 / 10 | whole-knob step, -1 | 0 / 9 | 9 |
+| 65 / 65 | whole-knob step, +1 | 65 / 65 | 65 |
+
+#### 3.2.2 Open items
+
+- RME indicator rule for unequal gains: verify whether the front-panel
+  indicator follows the higher gain.
+- RME range-limit behaviour: verify whether the front-panel control stops
+  when the higher gain reaches a range limit.
 
 ### 3.3 Audio Configuration panel
 
@@ -1499,10 +1550,7 @@ not animate.
 Linking an input pair uses the left channel as the reference for mute, solo,
 phantom, Inst, Level, reference level and AutoSet. It also copies the left
 channel's FX send, low cut, EQ, dynamics and AutoLevel settings to the
-right. The linked gain knob moves both preamps by the same step and preserves
-their offset; the knob shows both values. The wheel over one readout moves
-that preamp alone; the wheel over the rest of the knob moves both. The gain
-arc follows the higher of the two values. Phase remains per-channel.
+right. The linked gain knob follows §3.2.1. Phase remains per-channel.
 
 Linking does not copy or flatten the two channel volumes: the linked fader
 displays the louder channel, and moving it shifts both channels by the same
