@@ -365,6 +365,86 @@ through the loopback, counters zero, both `bad_length` counters zero);
 the bit-exact check needs the session's own routing and stays open as a
 bench item for PR #167.
 
+## PipeWire follower attribution (2026-11-14, restart-cycling session)
+
+Twelve ~76 s q48 rounds with fresh streams per round, alternating
+phase, stereo fixture, `PIPEWIRE_DEBUG=3` on the pipewire daemon.
+Two WAV-visible zero runs (exactly 48 frames each: round 3 at stream
+frame 90720, round 12 at frame 3081312) and 125 xrun log entries from
+the daemon over the 15 minutes.
+
+Field decoding, verified per event against the log's own fields: the
+`process` value is a nanosecond duration printed as an unsigned 64-bit
+integer. Signed, both visible events read `process` = -1014961 ns and
+-1038826 ns, and in both cases the magnitude equals `a - f` (the
+difference between the graph driver timestamp and the node's scheduled
+deadline) exactly. The `waiting` field is +21.5 us and +31.4 us: the
+node was awakened on time. The correct reading is therefore:
+
+- The follower's scheduled deadline sat one period (1.015 ms and
+  1.039 ms) behind the graph driver clock when the node ran.
+- The node was activated and did not complete a process cycle: the
+  recorded finish timestamp predates this activation by one quantum.
+  One cycle was skipped, and the substitution produced the recorded
+  zero run.
+
+Partition of the 125 xrun log entries by the sign of the signed
+`process` value: 25 negative, 100 positive. The negative values cluster
+at about -1 quantum (-0.95 to -1.04 ms) with several at -1.6 to
+-2.0 ms (consistent with two consecutive skipped cycles). The positive
+values are late-but-completed cycles with no audible consequence.
+Suppressed counts add no further events: 125 total.
+
+The escalation question is therefore bounded but not closed: 25
+skipped or short cycles produced 2 audible zero runs (about 8%). What
+separates the audible 2 from the silent 23 is open. The startup-
+transient reading is weakened: the round-12 event sits at 64 s into
+its round, and the daemon's startup handoff lines (`change driver`,
+`sync group`) make startup a plausible aggravator but not the only
+one.
+
+Attribution: the follower missed its deadline by about one period,
+skipped one process cycle, and PipeWire's substitution produced the
+silence. The driver's instruments were silent at both events; the
+driver is not the owner of the insertion. Two driver-side
+contributor questions remain open before the mechanism is fully
+decomposed, because the driver owns three of the daemon's inputs
+(wake timing, pointer granularity, reported delay):
+
+- The constant `runtime->delay` (`nurbs * urb_frames`, set once at
+  prepare) over-reports by up to one URB when read at an arbitrary
+  phase. At q48 one URB is one period, which matches the observed
+  1.015 ms lag. A one-line experiment (`delay = (nurbs - 1) *
+  urb_frames`) is pending.
+- The granted geometry per configuration arm must be read from the
+  per-start log rather than assumed: the `period-num = 4, headroom
+  96` arm above granted the same 192-frame ring as the baseline, so
+  that arm was partially a no-op; the `period-num = 8` arm granted
+  384 frames.
+
+Consequences for the fix decision:
+
+- A driver-side configuration or signalling change can narrow the
+  window but cannot prevent a scheduling lag inside the daemon.
+  Mitigation, not a solve. The guarantee lives in PipeWire's follower
+  scheduling; an upstream report should lead with "one skipped
+  process cycle, process = -1 quantum, at a node whose deadline
+  equals the ALSA period and the URB size", state the ring separately
+  (4 periods of ring slack, zero schedule slack), carry the decoded
+  log lines and the 25-versus-2 escalation bound, and keep the
+  driver-side delay question open rather than asserting the driver
+  cannot influence the lag.
+- The primary bench metric changes from the xrun-log rate (mostly
+  benign lateness, ~8/min) to the skipped-cycle count (negative
+  `process` lines, ~1.7/min), which tracks the mechanism.
+- Driver-side mitigations to measure: quantum 96 (one period of
+  follower slack), and finer URBs (`urb_frames = 8`, queue 8 x 8,
+  delay 64). An arm with `urb_frames = 8, nurbs = 12` keeps the
+  reported delay at 96 frames so the granularity effect is not
+  confounded with the latency target. The gated both-pending scheme
+  should be measured together with fine URBs, since its deferred wake
+  costs up to one URB (1 ms at 48-frame URBs, 167 us at 8-frame).
+
 ## Endpoints that differ from the original UC
 
 
