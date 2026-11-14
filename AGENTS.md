@@ -143,6 +143,27 @@ request; do not commit or push directly to `main`.
   quantum, test evidence, and confirmation that the user scene and
   `~/.config/totalcontrol/gui.json` were preserved.
 
+## Shared behaviour and device delegation
+
+The Control Room is one device-independent feature. Shared code owns the
+monitor model, assignments, action validation, state transitions, restoration,
+persistence, GUI and OSC mapping. Device code supplies only the operations
+that differ: matrix or register addresses, output-level writes, monitor-mute
+mechanism, FX returns and unsupported controls.
+
+- Keep a Control Room action in one shared flow. Delegate the device write to
+  a narrow method instead of duplicating the action for each model.
+- Add a device-specific branch only when the model genuinely lacks the control
+  or its protocol implements a different model. Keep that branch small and
+  state the limitation at the branch.
+- Check every Control Room change against every mapped model. When the
+  behaviour is common, change the shared flow; do not leave one model with the
+  old rule.
+- Test the shared semantics across profiles and the device-specific writes
+  separately.
+- Apply the same split to other shared mixer features: share orchestration and
+  state, delegate protocol differences.
+
 ## Working rules
 
 - Use the NAS coordination mailbox for Windows/oracle questions and

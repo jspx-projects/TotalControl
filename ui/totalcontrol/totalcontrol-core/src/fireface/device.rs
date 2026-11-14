@@ -1960,9 +1960,9 @@ impl Fireface {
         Ok(())
     }
 
-    /// The monitor output affected by Monitor actions.  Speaker B is the
+    /// The monitor output affected by monitor actions.  Speaker B is the
     /// active path while it is switched on; otherwise Main Out is.
-    fn uc_active_monitor_pair(&self) -> Option<usize> {
+    fn control_room_active_monitor_pair(&self) -> Option<usize> {
         if self.settings.speaker_b {
             self.settings.main_b_out.or(self.settings.main_out)
         } else {
@@ -1970,8 +1970,53 @@ impl Fireface {
         }
     }
 
+    /// Pairs changed by Dim and Recall.  Speaker B follows only while the
+    /// link is enabled.
+    fn control_room_dim_pairs(&self) -> Vec<usize> {
+        let Some(main) = self.settings.main_out else {
+            return Vec::new();
+        };
+        let mut pairs = vec![main];
+        if self.speaker_b_linked {
+            if let Some(b) = self.settings.main_b_out.filter(|b| *b != main) {
+                pairs.push(b);
+            }
+        }
+        pairs
+    }
+
+    /// Monitor-mute one assigned pair.  The UC has no monitor-mute word, so
+    /// it uses the output mute; the UCX carries monitor-muted in `NN02` bit 1
+    /// and preserves the output-mute bit.
+    fn control_room_set_monitor_muted(&mut self, pair: usize, muted: bool) -> Result<(), Error> {
+        let left = pair * 2;
+        let right = left + 1;
+        if right >= self.outputs.len() {
+            return Err(Error::InvalidChannel(format!("monitor pair {pair}")));
+        }
+        if self.is_uc() {
+            self.set_mute(ChannelId::Output(left), muted)?;
+            self.set_mute(ChannelId::Output(right), muted)?;
+        } else {
+            for idx in [left, right] {
+                let mute = self.outputs.get(idx).is_some_and(|output| output.mute);
+                self.ucx_write_output_mode_value(idx, mute as u16 | if muted { 2 } else { 0 })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Write the device-specific Speaker B active word.  The UC keeps this
+    /// state host-side.
+    fn control_room_write_speaker_b_state(&mut self, on: bool) -> Result<(), Error> {
+        if !self.is_uc() {
+            self.write_word(0x3d00, on as u16)?;
+        }
+        Ok(())
+    }
+
     fn uc_set_mono(&mut self, on: bool) -> Result<(), Error> {
-        let Some(monitor) = self.uc_active_monitor_pair() else {
+        let Some(monitor) = self.control_room_active_monitor_pair() else {
             return Err(Error::InvalidChannel(
                 "Mono needs an assigned monitor output".into(),
             ));
@@ -5688,20 +5733,11 @@ impl RmeDevice for Fireface {
             self.settings.dim_saved.clear();
             return Ok(());
         }
-        let Some(pair) = self.settings.main_out else {
+        let pairs = self.control_room_dim_pairs();
+        if pairs.is_empty() {
             return Err(Error::InvalidChannel(
                 "Dim needs an assigned Main Out".into(),
             ));
-        };
-        let mut pairs = vec![pair];
-        // Dim acts on Main Out.  Speaker B follows only while Link to Main
-        // is on, so an unlinked B pair keeps its own level.
-        if self.speaker_b_linked {
-            if let Some(b) = self.settings.main_b_out {
-                if b != pair {
-                    pairs.push(b);
-                }
-            }
         }
         let mut saved = Vec::with_capacity(pairs.len());
         for pair in pairs {
@@ -5860,14 +5896,13 @@ impl RmeDevice for Fireface {
             if self.settings.speaker_b {
                 self.set_speaker_b(false)?;
             }
+            if let Some(old) = self.settings.main_b_out {
+                self.control_room_set_monitor_muted(old, false)?;
+            }
             self.settings.main_b_out = pair;
             if let Some(b) = pair {
                 if !self.settings.speaker_b {
-                    // An assigned but inactive Speaker B pair must not
-                    // remain audible.  Its level is saved by set_mute and
-                    // restored when Speaker B is switched on.
-                    self.set_mute(ChannelId::Output(b * 2), true)?;
-                    self.set_mute(ChannelId::Output(b * 2 + 1), true)?;
+                    self.control_room_set_monitor_muted(b, true)?;
                 }
             }
             if pair.is_none() {
@@ -5892,21 +5927,12 @@ impl RmeDevice for Fireface {
             self.set_dim(false)?;
         }
         if let Some(old) = previous {
-            // Clearing or moving the assignment releases the old pair's
-            // monitor-mute bit and restores its normal mode.
-            for idx in [old * 2, old * 2 + 1] {
-                let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
-                self.ucx_write_output_mode_value(idx, mute as u16)?;
-            }
+            self.control_room_set_monitor_muted(old, false)?;
         }
         self.settings.main_b_out = pair;
         if let Some(b) = pair {
             if !self.settings.speaker_b {
-                // An assigned but inactive Speaker B pair is monitor-muted.
-                for idx in [b * 2, b * 2 + 1] {
-                    let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
-                    self.ucx_write_output_mode_value(idx, mute as u16 | 2)?;
-                }
+                self.control_room_set_monitor_muted(b, true)?;
             }
         }
         if pair.is_none() {
@@ -6150,44 +6176,6 @@ impl RmeDevice for Fireface {
     }
 
     fn set_speaker_b(&mut self, on: bool) -> Result<(), Error> {
-        if self.is_uc() {
-            if on != self.settings.speaker_b {
-                // Switch below.
-            } else if !on {
-                // Assignment/scene restore can leave an inactive B pair
-                // unmuted.  Enforce the inactive state without touching
-                // Main.
-                if let Some(b) = self.settings.main_b_out {
-                    self.set_mute(ChannelId::Output(b * 2), true)?;
-                    self.set_mute(ChannelId::Output(b * 2 + 1), true)?;
-                }
-                return Ok(());
-            } else {
-                return Ok(());
-            }
-            let Some(main) = self.settings.main_out else {
-                return Err(Error::InvalidChannel(
-                    "Speaker B needs an assigned Main Out".into(),
-                ));
-            };
-            let Some(b) = self.settings.main_b_out else {
-                return Err(Error::InvalidChannel(
-                    "Speaker B needs an assigned output".into(),
-                ));
-            };
-            // The UC has no monitor-mute register.  Speaker B is switched
-            // by muting the pair that is not active: Main when Speaker B is
-            // on, B when Speaker B is off.  `set_mute` saves and restores
-            // each pair's level.
-            if main != b {
-                self.set_mute(ChannelId::Output(main * 2), on)?;
-                self.set_mute(ChannelId::Output(main * 2 + 1), on)?;
-                self.set_mute(ChannelId::Output(b * 2), !on)?;
-                self.set_mute(ChannelId::Output(b * 2 + 1), !on)?;
-            }
-            self.settings.speaker_b = on;
-            return Ok(());
-        }
         let Some(main) = self.settings.main_out else {
             return Err(Error::InvalidChannel(
                 "Speaker B needs an assigned Main Out".into(),
@@ -6198,21 +6186,21 @@ impl RmeDevice for Fireface {
                 "Speaker B needs an assigned output".into(),
             ));
         };
-        // The mode word carries mute in bit 0 and monitor-muted in bit 1.
-        // Exactly one monitor pair is active: the inactive pair carries
-        // bit 1 and keeps its own output-mute bit.
-        for idx in [main * 2, main * 2 + 1] {
-            let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
-            self.ucx_write_output_mode_value(idx, mute as u16 | if on { 2 } else { 0 })?;
-        }
-        if b != main {
-            for idx in [b * 2, b * 2 + 1] {
-                let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
-                self.ucx_write_output_mode_value(idx, mute as u16 | if on { 0 } else { 2 })?;
+        if on == self.settings.speaker_b {
+            // An inactive assignment can be left unmuted by a scene restore
+            // or an older session.  Enforce the inactive monitor pair.
+            if !on && main != b {
+                self.control_room_set_monitor_muted(main, false)?;
+                self.control_room_set_monitor_muted(b, true)?;
             }
+            return Ok(());
         }
-        self.write_word(0x3d00, if on { 1 } else { 0 })?;
+        if main != b {
+            self.control_room_set_monitor_muted(main, on)?;
+            self.control_room_set_monitor_muted(b, !on)?;
+        }
         self.settings.speaker_b = on;
+        self.control_room_write_speaker_b_state(on)?;
         Ok(())
     }
 
