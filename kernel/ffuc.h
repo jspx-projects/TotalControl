@@ -386,6 +386,7 @@ struct ffuc {
 	atomic_t in_overruns;
 	atomic_t out_underruns;
 	atomic_t in_bad_length;
+	atomic_t out_bad_length;
 	atomic_t hw_ptr_mismatch;
 	unsigned int hw_ptr_logged;
 	ktime_t last_out_complete;

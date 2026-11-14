@@ -237,29 +237,53 @@ so the ring position and the wire cannot drift apart. Work in flight:
 PR #167. Bench validation (bit-exact output loopback before and after)
 is still open.
 
+## Driver defects carried out of the instrumentation review
+
+Two defects in the streaming handlers are real regardless of which
+owner the zero runs get. They are the same defect mirrored across the
+two directions: the ring must advance by exactly the whole frames that
+were transmitted, and each handler validated only half of that
+invariant. The capture handler derived its count from
+`urb->actual_length` but trusted it blindly; the playback handler
+ignored `actual_length` entirely. The fix is one shared derivation with
+validation, used by both directions.
+
+### Playback advances by the configured frame count, not the transferred count
+
+`ffuc_playback_urb()` derived its frame count from `chip->urb_frames`
+and ignored `urb->actual_length`. On a short OUT completion the driver
+advanced the ring by frames that never left the wire and published a
+`hw_ptr` ahead of the transmitted data: a silent, permanent audio loss
+with nothing reported to any counter that existed before this session
+(`out_shorts` counted the completion, but nothing read it against the
+advance). The handler now derives the count from `actual_length`,
+copies the whole frames it contains, clamps to one URB's worth, and
+counts the anomaly in `out_bad_length`. Work in flight: PR #167. Bench
+validation (bit-exact output loopback before and after) is still open.
+
 ### No alignment or bound check on a status-0 capture payload
 
-`ffuc_capture_urb()` computes `frames` from `urb->actual_length` and
-copies whatever it computes, without checking that the length is a
-whole-frame multiple or within the configured URB size. A truncated
-remainder silently shifts every later frame by one channel for the rest
-of the stream: a permanent channel-order corruption with no visible
-error. The `in_bad_length` counter added in PR #166 closes the
-observability gap; the corrective branch itself (reject the payload,
-count, resubmit) is still open and should ride with the same change as
-the playback fix.
+`ffuc_capture_urb()` computed `frames` from `urb->actual_length` and
+copied whatever it computed. A truncated remainder is not a whole
+channel set; copying it shifts the channel order for the rest of the
+stream. The handler now copies the whole-frame floor, clamps to one
+URB's worth, discards the remainder, and counts the anomaly in
+`in_bad_length` (the counter PR #166 added; the corrective branch rides
+with PR #167 so both directions share one rule).
 
 ### Session state for both
 
-Both counters (`out_shorts`, `in_bad_length`) stayed zero in the
-instrumented session, so neither defect fired during these captures.
-That is evidence the defects are latent, not evidence they are
-harmless: the failure modes are cumulative (dropped audio, channel
-shift), and a single trigger produces permanent damage for the rest of
-the stream.
-
-
-
+Both counters stayed zero in the instrumented session, so neither
+defect fired during these captures. That is evidence the defects are
+latent, not evidence they are harmless: the failure modes are
+cumulative (dropped audio, channel shift), and a single trigger
+produces permanent damage for the rest of the stream. They are also the
+only two driver-side failure modes that could produce artifacts
+resembling the quantum-48 zero runs: a channel shift reads as silence
+on the monitored channels, and an over-advanced playback pointer reads
+as output blocks that were never in the stream. Neither fired, so they
+are not the owner of the recorded zero runs. They are carried as
+robustness fixes so a future trigger cannot masquerade as one.
 
 ## Endpoints that differ from the original UC
 

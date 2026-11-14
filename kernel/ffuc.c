@@ -1149,10 +1149,22 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 	unsigned int frames = urb->actual_length / (words * FFUC_SAMPLE_BYTES);
 	unsigned long flags;
 	bool elapsed = false;
+	bool bad = false;
 
-	if (urb->actual_length % (words * FFUC_SAMPLE_BYTES) ||
-	    urb->actual_length > urb->transfer_buffer_length ||
-	    frames > chip->urb_frames)
+	/* A remainder shorter than one frame carries no complete channel
+	 * set; copying it would shift the channel order for the rest of
+	 * the stream.  An overlong payload cannot exceed the buffer.  The
+	 * floor is copied and the remainder discarded, so the ring and
+	 * the wire stay frame-aligned; the anomaly is counted, like the
+	 * playback side. */
+	if (urb->actual_length % (words * FFUC_SAMPLE_BYTES))
+		bad = true;
+	if (urb->actual_length > urb->transfer_buffer_length ||
+	    frames > chip->urb_frames) {
+		frames = chip->urb_frames;
+		bad = true;
+	}
+	if (bad)
 		atomic_inc(&chip->in_bad_length);
 
 	if (!frames)
@@ -1203,14 +1215,24 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	unsigned int frames = urb->actual_length / (words * FFUC_SAMPLE_BYTES);
 	unsigned long flags;
 	bool elapsed = false;
+	bool bad = false;
 
 	/* The engine submitted this OUT URB with urb_frames frames, so the
-	 * nominal case equals it.  A short completion means the controller
-	 * sent less; advancing the ring by the configured size would skip
-	 * frames that were never transmitted and over-run hw_ptr.  Copy
-	 * exactly what left the wire. */
+	 * nominal case equals it.  Copy exactly what left the wire, and
+	 * never more than one URB holds: a remainder shorter than one
+	 * frame carries no complete channel set and must not shift the
+	 * ring; an overlong payload cannot exceed the buffer.  Both
+	 * anomalies are counted, like the capture side. */
 	if (urb->actual_length % (words * FFUC_SAMPLE_BYTES))
-		frames = 0;
+		bad = true;
+	if (frames > chip->urb_frames) {
+		frames = chip->urb_frames;
+		bad = true;
+	}
+	if (bad)
+		atomic_inc(&chip->out_bad_length);
+	if (!frames)
+		return;
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
@@ -1506,8 +1528,10 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "in_overruns %d\nout_underruns %d\n",
 		   atomic_read(&chip->in_overruns),
 		   atomic_read(&chip->out_underruns));
-	seq_printf(m, "in_bad_length %d\nhw_ptr_mismatch %d\n",
+	seq_printf(m, "in_bad_length %d\nout_bad_length %d\n",
 		   atomic_read(&chip->in_bad_length),
+		   atomic_read(&chip->out_bad_length));
+	seq_printf(m, "hw_ptr_mismatch %d\n",
 		   atomic_read(&chip->hw_ptr_mismatch));
 	seq_printf(m, "urb_errors %d\n", atomic_read(&chip->urb_errors));
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
