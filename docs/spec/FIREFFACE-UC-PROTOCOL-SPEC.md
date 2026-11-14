@@ -690,7 +690,7 @@ change the input meter or the input bank in the `0x85` page.
 4. Pair ordering under the UC's Mac (ISO) personality.  Alternation is
    verified in that mode; the RMS-then-peak pair order is verified live
    in the interrupt personality and is carried by the same DSP firmware.
-4. Full inventory of the header's status-slot values and of the RMS
+5. Full inventory of the header's status-slot values and of the RMS
    banks' slot-internal engine fields.  These fields drift within a
    session and do not track the input signal under first-difference
    correlation, but no law has been published for them.
