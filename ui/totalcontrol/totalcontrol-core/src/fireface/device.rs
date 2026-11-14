@@ -10524,6 +10524,23 @@ mod tests {
     }
 
     #[test]
+    fn uc_mono_sums_the_source_sides_into_the_active_pair() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_main_out(Some(2)).unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 4, 0.1).unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(1), 5, 0.1).unwrap();
+        writes.lock().unwrap().clear();
+        dev.set_mono(true).unwrap();
+        let w = writes.lock().unwrap();
+        // Each source keeps its own level and is fed to both sides; the
+        // device sums the contributions of sources 18 and 19.
+        let (value, index) = uc::matrix_word(0.1, 4 * 36 + 18);
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+        let (value, index) = uc::matrix_word(0.1, 4 * 36 + 19);
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+    }
+
+    #[test]
     fn uc_mono_uses_the_active_speaker_b_pair() {
         let (mut dev, writes) = open(Model::Uc);
         dev.set_main_out(Some(1)).unwrap();
