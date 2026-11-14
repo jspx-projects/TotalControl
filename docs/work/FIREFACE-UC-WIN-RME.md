@@ -382,10 +382,39 @@ measurement, daemon xrun logging active:
 implemented as specified. The "by construction" claim belongs to the
 predicate's code review, and the two are kept separate here.
 
-The follower xrun collapse is a larger effect than predicted: deferring
-the graph wake to the later boundary means the follower is never woken
-before both directions have completed. How far the improvement reaches
-needs the scoped comparison below.
+### Interleaved comparison (final, 2026-11-14)
+
+Reference and gate alternated in 4-minute q48 arms on one boot and one
+session. Each arm ran the same protocol and fixture:
+
+| Pair | Reference xruns / skips | Gate xruns / skips |
+|---|---|---|
+| 1 | 41 / 7 | 41 / 8 |
+| 2 | 31 / 5 | 46 / 6 |
+| 3 | 44 / 4 | 46 / 4 |
+
+The gate shows no reduction in follower xruns or skipped cycles in the
+interleaved comparison. The earlier sequential observation of 63-to-0
+did not replicate and is treated as confounded. Gate counters across
+the arms: `delta_zero` 0, `overdue` 0, `max_pending` 1, `deferred`
+about one per cycle; the gate is implemented as specified and does not
+under-signal.
+
+Audible zero runs across the six q48 arms: one in reference arm 1,
+none in the gate arms. With one event the audible comparison carries
+no information.
+
+q256 arms (3 minutes each, both builds): no xrun log entries and no
+audible zero runs in either build. The pointer-divergence check did
+not reproduce within these short arms; the three earlier divergences
+were observed in a longer q256 session. The reference-build `delta_zero`
+dose could not be read: that build carries the counter but not the
+stop-line print. Its expected order of magnitude, from one spurious
+call per direction per period, is about 4.8e5 per 4-minute arm.
+
+Verdict carried into the record: the gate is a contract-correctness
+fix. Its measured effect on follower timing on this bench is none.
+
 
 ### Statistics that the gate arm supports
 
