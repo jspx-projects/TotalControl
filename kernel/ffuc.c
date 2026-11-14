@@ -1443,10 +1443,16 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 
 			chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
 			if (mm) {
-				atomic_inc(&chip->rate_mismatch);
-				dev_warn_ratelimited(&chip->dev->dev,
-						     "ISO cadence %u Hz vs rate %u Hz\n",
-						     chip->iso_cadence, chip->rate);
+				if (++chip->rate_mismatch_windows >= 2) {
+					atomic_inc(&chip->rate_mismatch);
+					dev_warn_ratelimited(&chip->dev->dev,
+							     "ISO cadence %u Hz vs rate %u Hz\n",
+							     chip->iso_cadence,
+							     chip->rate);
+					chip->rate_mismatch_windows = 0;
+				}
+			} else {
+				chip->rate_mismatch_windows = 0;
 			}
 		}
 		if (ffuc_dump_iso && chip->dump_count < 20 && frames[i]) {
@@ -2060,6 +2066,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	atomic_set(&chip->fb_only_urbs, 0);
 	chip->dump_count = 0;
 	chip->dump_out_count = 0;
+	chip->rate_mismatch_windows = 0;
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
 	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin. */
@@ -2653,7 +2660,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
 			 chip->iso_frames_hist[8]);
 		dev_info(&chip->dev->dev,
-			 "%s stop: delta_zero %d mismatch %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d cadence %uHz err %d delay %u lead %u\n",
+			 "%s stop: delta_zero(cum) %d mismatch(cum) %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d cadence %uHz err(cum) %d delay %u lead %u\n",
 			 subs->stream ? "capture" : "playback",
 			 atomic_read(&chip->delta_zero),
 			 atomic_read(&chip->hw_ptr_mismatch),
