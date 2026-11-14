@@ -375,18 +375,113 @@ measurement, daemon xrun logging active:
 | xrun log lines | 63 | **0** |
 | skipped cycles (negative `process`) | 13 | **0** |
 | audible zero runs | 0 | 0 |
-| `delta_zero` (kernel counter) | n/a | 0 |
+| `delta_zero` (kernel counter) | n/a in that arm | 0 |
 | ring/instrument counters | 0 | 0 |
 
-`delta_zero = 0` proves the gate's own claim: no signal ever announced
-zero completed periods. The follower xrun count collapsing from 63 to
-0 in the same setup is a further, larger effect than predicted: by
-deferring the graph wake to the later boundary, the follower is never
-woken before both directions have completed, so its deadline lag has
-no space to occur. A single 4-minute arm cannot separate this from
-luck for the audible rate, but on the skipped-cycle metric the
-difference is far beyond the noise floor (0 vs 13, Poisson one-sided
-p below 1e-5).
+`delta_zero = 0` is empirical confirmation that the gate predicate was
+implemented as specified. The "by construction" claim belongs to the
+predicate's code review, and the two are kept separate here.
+
+### Interleaved comparison (final, 2026-11-14)
+
+Reference and gate alternated in 4-minute q48 arms on one boot and one
+session. Each arm ran the same protocol and fixture:
+
+| Pair | Reference xruns / skips | Gate xruns / skips |
+|---|---|---|
+| 1 | 41 / 7 | 41 / 8 |
+| 2 | 31 / 5 | 46 / 6 |
+| 3 | 44 / 4 | 46 / 4 |
+
+The gate shows no reduction in follower xruns or skipped cycles in the
+interleaved comparison. The earlier sequential observation of 63-to-0
+did not replicate and is treated as confounded. Gate counters across
+the arms: `delta_zero` 0, `overdue` 0, `max_pending` 1, `deferred`
+about one per cycle; the gate is implemented as specified and does not
+under-signal.
+
+Audible zero runs across the six q48 arms: one in reference arm 1,
+none in the gate arms. With one event the audible comparison carries
+no information.
+
+q256 arms (3 minutes each, both builds): no xrun log entries and no
+audible zero runs in either build. The pointer-divergence check did
+not reproduce within these short arms; the three earlier divergences
+were observed in a longer q256 session. The reference-build `delta_zero`
+dose could not be read: that build carries the counter but not the
+stop-line print. Its expected order of magnitude, from one spurious
+call per direction per period, is about 4.8e5 per 4-minute arm.
+
+Verdict carried into the record: the gate is a contract-correctness
+fix. Its measured effect on follower timing on this bench is none.
+
+
+### Statistics that the gate arm supports
+
+- xrun lines, 63 vs 0 over equal exposure: conditional two-sample
+  Poisson p = 2^-63, about 1.1e-19 treating the baseline as known.
+- skipped cycles, 13 vs 0: p = 2^-13, about 1.2e-4. This is the
+  mechanism-relevant metric and the weaker one.
+- Zero skipped cycles in 4 minutes against a 3.25/min baseline gives a
+  95% upper bound of 0.75/min, so the pair supports **at least a 4.3x
+  reduction**, not a 100% reduction. The 100% figure is the point
+  estimate. A 10x bound needs about 9 clean minutes; 20x needs about
+  19.
+
+Sequential arms on a bench whose rate drifted about 20x during the day
+cannot separate a treatment effect from drift. The comparison therefore
+runs interleaved: reference and gate alternating in 4-minute arms on
+one boot and one session, three pairs, with the q256 contract check on
+both builds.
+
+### Retraction: the driver owns part of the lag
+
+An earlier note in this file concluded that no driver change could
+prevent the follower's scheduling lag. The gate arm falsifies that:
+the driver was emitting early, invalid wakes, and removing them removed
+the follower misses in the measured arm. The driver owns the wake it
+schedules; it does not own the daemon's scheduling, which is why the
+gate cannot guarantee prevention on every machine, but the distinction
+is now stated correctly.
+
+This also reframes the upstream material: the observation is a driver
+bug that manifested as follower xruns, with the daemon's behaviour
+reasonable given the schedule it was handed. The report is
+informational, with a soft robustness suggestion for the case where
+quantum, ALSA period and URB size coincide. It is not a bug report
+against PipeWire.
+
+### Gate under-signalling instruments
+
+`delta_zero` measures over-signalling only. The gate can fail in the
+opposite direction: a completed period that is never announced. Three
+counters make that visible, all printed at stream stop:
+`signal_deferred` (wake withheld because one direction was behind),
+`signal_overdue` (the two-period fallback fired) and `max_pending`
+(worst completed-but-unannounced periods). Healthy values: overdue 0,
+max_pending at most 1.
+
+### Arm C verdict and the URB default
+
+Arm C (8-frame URBs) measured 12 skipped cycles against the baseline's
+13. That matches the early-wake explanation: `ffuc_stream_advance()`
+returns true only at 48-frame period crossings, so the cross-signal
+pattern at boundaries is unchanged by granularity. Granularity was
+never the dominant factor. The `urb_frames = 8` setting stays a
+diagnostic knob and does not become a default; it costs about 6000
+completions/s for no measured benefit.
+
+### Escalation experiment (open)
+
+Thirteen skipped cycles with zero audible runs falsifies the earlier
+1:1 assumption: a skipped cycle is necessary but not sufficient. Today
+shows a higher xrun rate and a lower audible rate than the notes'
+session, so the aggravator affects escalation, not the miss rate. That
+points at client-side buffering. The experiment: shrink the recording
+client's buffer deliberately and check whether the same skip rate
+escalates into audible runs. That gives a powered audible-event test in
+minutes instead of waiting for a rare event, and it is the cleanest
+remaining path to closing the escalation item.
 
 Consequences:
 
