@@ -1113,7 +1113,15 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 	if (other->substream) {
 		snd_pcm_stream_lock_irqsave(other->substream, flags);
 		if (other->running) {
+			/* Spurious-call counter: a period-elapsed message for
+			 * a direction whose period index has not moved since
+			 * its last signal.  Counted, not gated, on this
+			 * reference build; the gated scheme removes the
+			 * call outright. */
+			if (other->period == other->signalled)
+				atomic_inc(&chip->delta_zero);
 			snd_pcm_period_elapsed_under_stream_lock(other->substream);
+			other->signalled = other->period;
 			/* The core refreshes the shared status pointer from
 			 * .pointer inside the period-elapsed call.  It must
 			 * re-read the same value the driver maintains.  Any
@@ -1130,7 +1138,10 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 	}
 	snd_pcm_stream_lock_irqsave(s->substream, flags);
 	if (s->running) {
+		if (s->period == s->signalled)
+			atomic_inc(&chip->delta_zero);
 		snd_pcm_period_elapsed_under_stream_lock(s->substream);
+		s->signalled = s->period;
 		if (s->substream->runtime->status->hw_ptr !=
 		    s->hw_ptr % s->substream->runtime->boundary)
 			ffuc_ptr_mismatch(chip, s->substream, s);
@@ -1531,8 +1542,9 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "in_bad_length %d\nout_bad_length %d\n",
 		   atomic_read(&chip->in_bad_length),
 		   atomic_read(&chip->out_bad_length));
-	seq_printf(m, "hw_ptr_mismatch %d\n",
-		   atomic_read(&chip->hw_ptr_mismatch));
+	seq_printf(m, "hw_ptr_mismatch %d\ndelta_zero %d\n",
+		   atomic_read(&chip->hw_ptr_mismatch),
+		   atomic_read(&chip->delta_zero));
 	seq_printf(m, "urb_errors %d\n", atomic_read(&chip->urb_errors));
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
 	seq_printf(m, "events_dropped %d\n", atomic_read(&chip->events_dropped));
@@ -2279,6 +2291,7 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	memset(s->pos, 0, sizeof(s->pos));
 	s->hw_ptr = 0;
 	s->period = 0;
+	s->signalled = 0;
 	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		subs->runtime->delay = chip->nurbs * chip->urb_frames;
 	/* Preparation never zeroed the ring; inherit the last session's

@@ -185,6 +185,11 @@ struct ffuc_stream {
 	snd_pcm_uframes_t pos[FFUC_MAX_EPS];
 	snd_pcm_uframes_t hw_ptr;
 	snd_pcm_uframes_t period;
+	/* Period index at this stream's last period signal.  Reset at
+	 * prepare and trigger; updated at every signal.  Compared against
+	 * `period` to detect a signal that announces no completed period
+	 * (a delta-0 call). */
+	snd_pcm_uframes_t signalled;
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must
@@ -388,6 +393,7 @@ struct ffuc {
 	atomic_t in_bad_length;
 	atomic_t out_bad_length;
 	atomic_t hw_ptr_mismatch;
+	atomic_t delta_zero;
 	unsigned int hw_ptr_logged;
 	ktime_t last_out_complete;
 	unsigned long engine_stopped_at;	/* jiffies; 0 = never stopped */
