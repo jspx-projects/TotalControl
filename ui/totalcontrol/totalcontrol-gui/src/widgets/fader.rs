@@ -475,9 +475,20 @@ fn bus_levels(
     (level(index), peak(index), ovr_at(index), right)
 }
 
-/// Advance a bus-driven meter by one canvas frame.  Rising levels follow the
-/// device immediately; falling levels and a disconnected device use
+/// The meter release: how fast a falling bar and a peak line past its hold
+/// come down, in dB per second.
+pub(crate) const METER_RELEASE_DB_PER_S: f32 = 10.0;
+
+/// Advance a bus-driven meter by one canvas frame.  Rising levels are drawn
+/// on the frame they arrive; falling levels and a disconnected device use
 /// TotalMix's 10 dB/s release instead of freezing or snapping to zero.
+///
+/// The bus already carries the device's own RMS integrator, so a bus frame
+/// is not eased (`prev == value`): the release runs from the level drawn on
+/// the previous frame over the time since then, which keeps it at
+/// `METER_RELEASE_DB_PER_S` whatever the frame rate.  Easing on top of it
+/// restarted every frame and slowed the fall to 1.3 dB/s at 16 ms frames
+/// and 5.3 dB/s at `METER_FRAME_MS`.
 fn advance_bus(
     old: MeterFrame,
     value: f32,
@@ -485,19 +496,19 @@ fn advance_bus(
     connected: bool,
     now: Instant,
 ) -> MeterFrame {
-    let current = old.at(now);
+    let current = old.value;
     let target = if connected { value } else { 0.0 };
     let value = if target >= current {
         target
     } else {
         let elapsed = now.duration_since(old.since).as_secs_f32();
-        let fall = 10f32.powf(-10.0 * elapsed / 20.0);
+        let fall = 10f32.powf(-METER_RELEASE_DB_PER_S * elapsed / 20.0);
         (current * fall).max(target)
     };
     let peak = peak.max(value);
     let peak_since = if peak > old.peak { now } else { old.peak_since };
     MeterFrame {
-        prev: current,
+        prev: value,
         value,
         peak,
         peak_since,
@@ -2069,8 +2080,49 @@ mod tests {
         );
     }
 
+    /// Drive a bus meter the way the canvas does: one `advance_bus` per
+    /// frame, then draw what `shown` returns at that frame.
+    fn drive_bus(level: f32, to: f32, frame_ms: u64, secs: f32) -> (f32, f32) {
+        let start = Instant::now();
+        let mut frame = MeterFrame {
+            prev: level,
+            value: level,
+            peak: level,
+            peak_since: start,
+            since: start,
+        };
+        let mut now = start;
+        while now.duration_since(start).as_secs_f32() < secs {
+            now += Duration::from_millis(frame_ms);
+            frame = advance_bus(frame, to, to, true, now);
+        }
+        (frame.shown(now), now.duration_since(start).as_secs_f32())
+    }
+
     #[test]
-    fn a_disconnected_bus_falls_at_twenty_db_per_second() {
+    fn a_falling_bus_meter_releases_ten_db_per_second_at_any_frame_rate() {
+        for frame_ms in [16, 33, METER_FRAME_MS, METER_STILL_POLL_MS] {
+            let (shown, elapsed) = drive_bus(1.0, 0.0, frame_ms, 1.0);
+            let db = 20.0 * shown.log10();
+            assert!(
+                (db + 10.0 * elapsed).abs() < 0.2,
+                "{frame_ms} ms frames: {db:.2} dB after {elapsed:.3} s, want {:.2}",
+                -10.0 * elapsed
+            );
+        }
+    }
+
+    #[test]
+    fn a_rising_bus_level_is_drawn_on_the_frame_it_arrives() {
+        let (shown, _) = drive_bus(0.01, 0.5, METER_FRAME_MS, 0.001);
+        assert!(
+            (shown - 0.5).abs() < 1e-6,
+            "drew {shown}, the device says 0.5"
+        );
+    }
+
+    #[test]
+    fn a_disconnected_bus_falls_at_the_release_rate() {
         let start = Instant::now();
         let old = MeterFrame {
             prev: 1.0,
@@ -2086,7 +2138,7 @@ mod tests {
             false,
             start + Duration::from_millis(50),
         );
-        let expected = 10f32.powf(-10.0 * 0.05 / 20.0);
+        let expected = 10f32.powf(-METER_RELEASE_DB_PER_S * 0.05 / 20.0);
         assert!(
             (next.value - expected).abs() < 1e-4,
             "disconnected meter should release 10 dB/s: {} vs {expected}",

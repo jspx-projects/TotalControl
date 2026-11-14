@@ -30,6 +30,7 @@ use totalcontrol_core::channel::{EqBandType, InputEq};
 use tokio::sync::Notify;
 
 use crate::app::DeviceHandle;
+use crate::widgets::fader::METER_RELEASE_DB_PER_S;
 
 /// Wakes the UI subscription when a model snapshot is published.  The
 /// snapshot itself travels through the `std` channel on `DeviceService`;
@@ -1555,7 +1556,7 @@ fn run(
     let mut last_meter_active = false;
     let mut last_overload = [false; 2];
     let mut last_counters = Instant::now() - Duration::from_secs(1);
-    let mut peak_at = [[Instant::now(); 18]; 3];
+    let mut peak_at = [[(Instant::now(), 0.0); 18]; 3];
 
     loop {
         // The timeout paces the polling loop at about 120 Hz while still
@@ -1755,25 +1756,29 @@ where
     }
 }
 
-/// Hold each channel's peak for two seconds, then fall at 10 dB/s.  The
-/// service sees every device packet, so a transient shorter than a canvas
-/// frame still reaches the needle.
-fn hold_peaks(
-    peaks: &mut [f32; 18],
-    fresh: &[f32],
-    peak_at: &mut [Instant; 18],
-    now: Instant,
-) {
+/// How long a peak line holds before it falls.
+const PEAK_HOLD_S: f32 = 2.0;
+
+/// Hold each channel's peak for two seconds, then fall at the meter
+/// release rate.  The service sees every device packet, so a transient
+/// shorter than a canvas frame still reaches the needle.
+///
+/// `held` keeps when each peak was caught and its level then.  The fall is
+/// computed from that level, not from the last published one: this runs on
+/// every ~8 ms poll, and decaying the published value by the whole time
+/// since the hold compounded to about 600 dB in the first second.
+fn hold_peaks(peaks: &mut [f32; 18], fresh: &[f32], held: &mut [(Instant, f32); 18], now: Instant) {
     for (i, slot) in peaks.iter_mut().enumerate() {
         let value = fresh.get(i).copied().unwrap_or(0.0).max(0.0);
         if value >= *slot {
             *slot = value;
-            peak_at[i] = now;
+            held[i] = (now, value);
         } else {
-            let held = now.duration_since(peak_at[i]).as_secs_f32();
-            if held > 2.0 {
-                let decayed = *slot * 10f32.powf(-(held - 2.0) / 2.0);
-                *slot = decayed.max(value);
+            let (since, level) = held[i];
+            let past = now.duration_since(since).as_secs_f32() - PEAK_HOLD_S;
+            if past > 0.0 {
+                let fall = 10f32.powf(-METER_RELEASE_DB_PER_S * past / 20.0);
+                *slot = (level * fall).max(value);
             }
         }
     }
@@ -1958,10 +1963,32 @@ mod tests {
     }
 
     #[test]
+    fn a_held_peak_falls_ten_db_per_second_at_the_service_poll_rate() {
+        // The service calls `hold_peaks` on every ~8 ms poll; the fall
+        // after the hold must not depend on how often it is called.
+        let start = Instant::now();
+        let mut peaks = [0.0; 18];
+        let mut at = [(start, 0.0); 18];
+        super::hold_peaks(&mut peaks, &[0.8], &mut at, start);
+        let mut now = start;
+        while now.duration_since(start) < Duration::from_millis(3000) {
+            now += Duration::from_millis(8);
+            super::hold_peaks(&mut peaks, &[0.0], &mut at, now);
+        }
+        let fell = now.duration_since(start).as_secs_f32() - 2.0;
+        let db = 20.0 * (peaks[0] / 0.8).log10();
+        assert!(
+            (db + 10.0 * fell).abs() < 0.2,
+            "{db:.2} dB {fell:.3} s after the hold, want {:.2}",
+            -10.0 * fell
+        );
+    }
+
+    #[test]
     fn peak_hold_keeps_a_transient_and_then_falls() {
         let start = Instant::now();
         let mut peaks = [0.0; 18];
-        let mut at = [start; 18];
+        let mut at = [(start, 0.0); 18];
         super::hold_peaks(&mut peaks, &[0.8], &mut at, start);
         assert!((peaks[0] - 0.8).abs() < 1e-6);
 
