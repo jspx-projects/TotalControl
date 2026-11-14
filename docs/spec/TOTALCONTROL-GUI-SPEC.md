@@ -447,6 +447,17 @@ away.
 
 ### 2.7 Meters
 
+#### 2.7.0 Update rate
+
+A meter-only frame runs at 15 Hz (67 ms) while a level moves and at 10 Hz
+while a live level is steady.  Drags and slideout animations keep the 33 ms
+interaction tick, so their motion stays as smooth as before.  The tick while the window is hidden is 4 Hz, at rest 10 Hz, and
+the numeric strength readouts refresh at 4 Hz.
+
+The meter ballistics are time-based: 10 dB/s release and a 2 s peak hold,
+independent of the tick.  Slideout and flyout animations are time-based
+too, so their speed does not depend on the refresh rate.
+
 #### 2.7.1 VU meter element
 
 The VU meter is one element.  Its channel spans the complete element height.

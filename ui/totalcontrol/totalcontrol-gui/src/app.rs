@@ -11749,10 +11749,10 @@ fn panel_fingerprint(state: &TotalControl) -> f64 {
 
 /// The tick while something is being dragged or animated: 30 Hz.
 const TICK_ACTIVE: Duration = Duration::from_millis(33);
-/// The tick while only live meters are moving: 25 Hz.  The full view is
-/// rebuilt on every tick, so this is the difference between ~37 % and ~25 %
-/// of a core on a busy mixer; 25 Hz still reads as smooth VU motion.
-const TICK_METERS: Duration = Duration::from_millis(40);
+/// The tick while only live meters are moving: 15 Hz.  The full view is
+/// rebuilt on every tick, so a slower meter tick keeps a busy mixer cheap;
+/// 15 Hz still reads as smooth VU motion.
+const TICK_METERS: Duration = Duration::from_millis(67);
 /// The tick while the window is hidden in the tray: 4 Hz.  Nothing on
 /// screen can change, but the front panel, connection probe and autosave
 /// still need to run.

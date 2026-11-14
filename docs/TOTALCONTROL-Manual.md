@@ -301,8 +301,9 @@ TotalControl draws the mixer window on the GPU. A redraw updates the whole
 window, so the window's size sets the cost of a frame rather than the part
 that changed.
 
-The VU meters animate at up to 20 frames per second and fall back to a slower
-poll while a level is steady; a held peak still appears. Channel strips,
+The VU meters animate at 15 frames per second while a level moves; the
+window redraws at twice that rate while you drag a control or a panel is
+animating, so interaction stays smooth.  A held peak still appears. Channel strips,
 faders, knobs and meters are drawn with crisp edges rather than multisampling,
 which keeps the window's share of the GPU small enough for the desktop
 compositor to keep its frame rate on a shared or integrated GPU. Text is
