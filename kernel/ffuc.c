@@ -1363,6 +1363,30 @@ static bool ffuc_fb_get(struct ffuc *chip, u64 k, unsigned int *pos,
 	return true;
 }
 
+/*
+ * Cadence check: the mean frames per packet times 8000 is the device
+ * clock the packets reveal.  A disagreement with chip->rate means the
+ * rate write did not take effect (or the device was reprogrammed).
+ */
+static unsigned int ffuc_iso_cadence(struct ffuc *chip, int *mismatch)
+{
+	u64 frames = 0, pkts = 0;
+	unsigned int i, mean;
+
+	for (i = 0; i < ARRAY_SIZE(chip->iso_frames_hist); i++) {
+		frames += (u64)i * chip->iso_frames_hist[i];
+		pkts += chip->iso_frames_hist[i];
+	}
+	if (!pkts)
+		return 0;
+	mean = (unsigned int)((frames * 8000) / pkts);
+	if (mismatch && chip->rate &&
+	    (mean > chip->rate + chip->rate / 100 ||
+	     (mean + chip->rate / 100 < chip->rate)))
+		*mismatch = 1;
+	return mean;
+}
+
 static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 {
 	struct ffuc *chip = ep->chip;
@@ -1411,6 +1435,20 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 				(nch * FFUC_SAMPLE_BYTES), m->max_frames);
 		if (frames[i] < ARRAY_SIZE(chip->iso_frames_hist))
 			chip->iso_frames_hist[frames[i]]++;
+		/* Periodic cadence guard: the packets reveal the device
+		 * clock; a mismatch means the rate write did not take
+		 * effect or the device was reprogrammed externally. */
+		if ((chip->in_pkts % 8000) == 0) {
+			int mm = 0;
+
+			chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
+			if (mm) {
+				atomic_inc(&chip->rate_mismatch);
+				dev_warn_ratelimited(&chip->dev->dev,
+						     "ISO cadence %u Hz vs rate %u Hz\n",
+						     chip->iso_cadence, chip->rate);
+			}
+		}
 		if (ffuc_dump_iso && chip->dump_count < 20 && frames[i]) {
 			const __le32 *w = (const __le32 *)(pkt + FFUC_ISO_IN_HEADER);
 			unsigned int k, n = frames[i] * nch;
@@ -2005,6 +2043,23 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->fb_delay = (chip->nurbs + 1) * chip->iso_packets;
 	chip->out_lag_min = 0x7fffffff;
 	chip->out_lag_max = -0x7fffffff;
+	/* Per-run diagnostics: a stop line describes this stream only. */
+	memset(chip->iso_frames_hist, 0, sizeof(chip->iso_frames_hist));
+	atomic_set(&chip->in_hdr_only, 0);
+	atomic_set(&chip->in_short, 0);
+	atomic_set(&chip->in_misaligned, 0);
+	atomic_set(&chip->in_status_err, 0);
+	atomic_set(&chip->in_frames_mismatch, 0);
+	atomic_set(&chip->in_pos_gap, 0);
+	atomic_set(&chip->out_fb_priming, 0);
+	atomic_set(&chip->out_fb_ahead, 0);
+	atomic_set(&chip->out_fb_stale, 0);
+	atomic_set(&chip->out_capacity_err, 0);
+	atomic_set(&chip->out_pkt_len_err, 0);
+	atomic_set(&chip->out_pkt_status, 0);
+	atomic_set(&chip->fb_only_urbs, 0);
+	chip->dump_count = 0;
+	chip->dump_out_count = 0;
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
 	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin. */
@@ -2093,6 +2148,18 @@ static int ffuc_engine_start(struct ffuc *chip)
 	for (e = 0; e < 2; e++)
 		WARN_ON_ONCE(!chip->eps[e][0].buf_size);
 
+	/* Cold start: re-assert the rate.  The device keeps its own rate
+	 * across personality switches and prior sessions, so a cached
+	 * value cannot be trusted; a commit on every prepare would glitch
+	 * a running stream, and this point is reached only with nothing
+	 * running. */
+	if (chip->desc->ops && chip->desc->ops->set_rate && chip->rate) {
+		int rret = chip->desc->ops->set_rate(chip, chip->rate);
+
+		dev_info(&chip->dev->dev,
+			 "engine start: rate commit %u Hz ret=%d\n",
+			 chip->rate, rret);
+	}
 	chip->urb_frames = ffuc_urb_frames(chip, chip->rate);
 	if (chip->iso)
 		bytes = chip->iso_packets * max(m->in_mps, m->out_mps);
@@ -2567,6 +2634,17 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		/* Gate proof, visible without root: the number of signals
 		 * that would have announced zero completed periods, the
 		 * published-pointer divergences, and the ring anomalies. */
+		{
+			int mm = 0;
+
+			chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
+			if (mm) {
+				atomic_inc(&chip->rate_mismatch);
+				dev_warn(&chip->dev->dev,
+					 "ISO cadence %u Hz disagrees with rate %u Hz\n",
+					 chip->iso_cadence, chip->rate);
+			}
+		}
 		dev_info(&chip->dev->dev,
 			 "iso frames histogram [0..8]: %u %u %u %u %u %u %u %u %u\n",
 			 chip->iso_frames_hist[0], chip->iso_frames_hist[1],
@@ -2575,7 +2653,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
 			 chip->iso_frames_hist[8]);
 		dev_info(&chip->dev->dev,
-			 "%s stop: delta_zero %d mismatch %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d\n",
+			 "%s stop: delta_zero %d mismatch %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d cadence %uHz err %d delay %u lead %u\n",
 			 subs->stream ? "capture" : "playback",
 			 atomic_read(&chip->delta_zero),
 			 atomic_read(&chip->hw_ptr_mismatch),
@@ -2591,7 +2669,10 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 atomic_read(&chip->out_pkt_len_err),
 			 atomic_read(&chip->out_pkt_status),
 			 atomic_read(&chip->in_hdr_only),
-			 chip->out_lag_min, chip->out_lag_max);
+			 chip->out_lag_min, chip->out_lag_max,
+			 chip->iso_cadence,
+			 atomic_read(&chip->rate_mismatch),
+			 chip->fb_delay, chip->out_lead);
 		return 0;
 	default:
 		return -EINVAL;

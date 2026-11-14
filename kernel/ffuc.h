@@ -408,6 +408,8 @@ struct ffuc {
 	atomic_t out_pkt_status;   /* per-packet completion with non-zero status */
 	int out_lag_min, out_lag_max;   /* (in_end - out_counter) mod wrap */
 	atomic_t out_resync;
+	atomic_t rate_mismatch;   /* cadence disagrees with chip->rate */
+	unsigned int iso_cadence; /* measured device clock, Hz */
 	/* q48 instrumentation: ring pressure and core-pointer coherence.
 	 * in_overruns: capture completions that overwrote unread frames.
 	 * out_underruns: playback completions that sent non-written data.
