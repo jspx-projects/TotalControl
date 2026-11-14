@@ -824,13 +824,31 @@ changes. Unlinked, it keeps its own fader level.
 
 ### Mono
 
-**Mono** is a latching monitor check. It sums the active monitor output to
-mono and feeds the same signal to both sides of that pair. The active monitor
-output is Main Out while Speaker B is off and Speaker B while it is on. Mono
-is useful for checking mono compatibility and phase problems. The Phones
-outputs are not mixed by this button; they keep their own stereo signal.
+**Mono** is a latching monitor check. It acts on exactly one output: the
+active monitor output. That is Main Out while Speaker B is off and Speaker B
+while it is on.
 
-Mono is part of the current mix, so it is saved in a snapshot and restored with it.
+While Mono is active:
+
+- the left and right signals of the active monitor output are summed;
+- the sum is fed to both sides of that output;
+- the inactive monitor output keeps its normal stereo mix;
+- the Phones outputs and every other hardware output keep their normal stereo
+  signal.
+
+The Mono state belongs to the monitor path, not to one assigned pair. If
+Speaker B is switched on while Mono is active, Main Out returns to its normal
+stereo mix and Speaker B becomes mono. Switching back makes Main Out mono
+again and restores Speaker B. Mono stays active until it is switched off.
+
+Mono applies to the signal currently monitored on the active output,
+including the External Input pair while External Input is active. It does not
+change the Cue/PFL target, Talkback routing or any source levels outside that
+monitor output.
+
+Mono is part of the current mix, so it is saved in a snapshot and restored
+with it. Without an assigned Main Out there is no active monitor output and
+Mono has no effect.
 
 ### Talkback and Listenback
 
