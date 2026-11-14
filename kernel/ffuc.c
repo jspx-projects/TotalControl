@@ -2509,14 +2509,19 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
 			 chip->iso_frames_hist[8]);
 		dev_info(&chip->dev->dev,
-			 "%s stop: delta_zero %d hw_ptr_mismatch %d in_overruns %d out_underruns %d bad_length %d/%d\n",
+			 "%s stop: delta_zero %d mismatch %d overruns %d/%d bad_length %d/%d fb_only %d fb_miss %d/%d cap %d pktlen %d\n",
 			 subs->stream ? "capture" : "playback",
 			 atomic_read(&chip->delta_zero),
 			 atomic_read(&chip->hw_ptr_mismatch),
 			 atomic_read(&chip->in_overruns),
 			 atomic_read(&chip->out_underruns),
 			 atomic_read(&chip->in_bad_length),
-			 atomic_read(&chip->out_bad_length));
+			 atomic_read(&chip->out_bad_length),
+			 atomic_read(&chip->fb_only_urbs),
+			 atomic_read(&chip->out_fb_miss_delay),
+			 atomic_read(&chip->out_fb_miss_ring),
+			 atomic_read(&chip->out_capacity_err),
+			 atomic_read(&chip->out_pkt_len_err));
 		return 0;
 	default:
 		return -EINVAL;
