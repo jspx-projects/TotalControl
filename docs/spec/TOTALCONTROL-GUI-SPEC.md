@@ -977,10 +977,11 @@ then follows physical encoder moves, which the unit reports in the IF1 state
 stream.
 
 A linked input pair uses the dual-readout gain knob defined in §3.2.1. An
-unlinked input shows one value and the knob writes only that channel. The
-device treats inputs 1–4 as unlinked; the pair exists only in TotalControl.
+unlinked input shows one value and the knob writes only that channel.
 
 #### 3.2.1 Linked input gain knob
+
+This element applies to every device model with input gain.
 
 | Term | Form | Definition |
 |---|---|---|
@@ -1017,8 +1018,8 @@ one gain reaches a range limit before the other.
 
 The pair remains linked during both gestures. The link state does not change.
 
-The examples use a gain range of 0 to 65. Inputs 3/4 use the same rules with
-their own gain range.
+The examples use a gain range of 0 to 65. The rules use the input's own gain
+range.
 
 | Starting left / right | Gesture | Resulting left / right | Knob position |
 |---|---|---|---|
