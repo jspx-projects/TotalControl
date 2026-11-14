@@ -394,7 +394,7 @@ value.
 | `0x3c24` | Echo high cut | 0 Off, 1 16k, 2 12k, 3 8k, 4 4k, 5 2k |
 | `0x3c25` | Echo volume | 0.1 dB, signed |
 | `0x3c26` | Echo width | 0..100 |
-| `NN02` | output mode word | bit 0 mute; bit 1 monitor-muted (Main pair while Speaker B is active) |
+| `NN02` | output mode word | bit 0 mute; bit 1 monitor-muted (the inactive Main/Speaker B pair) |
 | `0x3d00` | Speaker B active | 0/1 |
 | `0x3d01` | Mute Enable flag | 0/1; writable, audio effect not measured |
 | `0x3d02` | Main Dim amount | 0.1 dB, signed |
@@ -423,32 +423,34 @@ Mono Main Out writes `0x3f9e` bit 1 and `0x3f98 = 0x83ff`; switching it off
 writes `0x3f9e` bit 1 clear and `0x3f98 = 0xffff`. It mixes the assigned
 Main Out and Speaker B pairs; the Phones pairs keep their stereo signal.
 
-Dim attenuates the assigned Main and Speaker B output fader values and sets
-`0x3d03 = 1`. The Phones output fader values are not changed. Releasing Dim
-restores the saved fader values and writes `0x3d03 = 0`.
+Dim attenuates the assigned Main output fader values and sets `0x3d03 = 1`.
+Speaker B follows only while Link to Main is enabled. The Phones output fader
+values are not changed. Releasing Dim restores the saved fader values and
+writes `0x3d03 = 0`.
 
 Main Out and Speaker B assignment are host-side monitor bookkeeping. They
 write no `NN02` mode word. `0x3d20` reports the Main pair and `0x3d21` the
 Speaker B pair; neither assignment changes the physical output's normal
 submix.
 
-Switching Speaker B on writes `NN02` bit 1 on the Main pair and
-`0x3d00 = 1`. Switching it off clears bit 1 on the Main pair and writes
-`0x3d00 = 0`; the assigned Speaker B pair keeps its normal mode. Bit 0 is the
-output mute and is preserved in every mode-word write.
+Switching Speaker B on writes `NN02` bit 1 on the Main pair and clears it on
+the Speaker B pair, then writes `0x3d00 = 1`. Switching it off clears bit 1 on
+the Main pair and sets it on the Speaker B pair, then writes `0x3d00 = 0`.
+Assigning Speaker B while inactive sets bit 1 on the new pair. Clearing or
+moving the assignment clears bit 1 on the old pair. Bit 0 is the output mute
+and is preserved in every mode-word write.
 
 Mute FX is host-driven. It saves the FX-return levels (`NN03`) of both sides
-of the assigned Main Out and Speaker B pairs, writes `0xFD76` (−65 dB) to
-them, and restores the saved levels when released. Phones is not part of the
-monitor-speaker pair and is not modified.
+of the assigned Main Out pair, writes `0xFD76` (−65 dB) to them, and restores
+the saved levels when released. Speaker B and Phones keep their FX returns.
 
-External Input replaces the Main Out and Speaker B submixes with a hardware
-input pair. For each target pair it zeroes every input and playback
-crosspoint, routes the selected input pair's left and right sources at the
-configured gain, writes `0xFD76` to both FX returns, and sets `0x3f9e` bit 5.
-Releasing restores the submix from the channel model, restores the saved
-FX-return levels and clears bit 5. The source is a stereo hardware-input
-pair; playback sources are not eligible.
+External Input replaces the Main Out submix with a hardware input pair. It
+zeroes every Main input and playback crosspoint, routes the selected input
+pair's left and right sources at the configured gain, writes `0xFD76` to both
+Main FX returns, and sets `0x3f9e` bit 5. Releasing restores the Main submix
+from the channel model, restores the saved FX-return levels and clears bit 5.
+Speaker B and Phones keep their own mixes. The source is a stereo
+hardware-input pair; playback sources are not eligible.
 
 PFL is a host-driven alternative to Solo for input channels. The selected
 Cue/PFL output pair is rewritten to contain only the active PFL inputs at
