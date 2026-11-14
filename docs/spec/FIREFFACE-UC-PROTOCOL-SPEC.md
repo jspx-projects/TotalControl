@@ -31,12 +31,12 @@ The PC personalities differ in the interrupt transport:
 | PC product | Sample words | Engine start |
 |---|---|---|
 | `UC_PC`, `UC_PC_RME` | float32 | alt N; alt reselect only on a rate-band change |
-| `UC_WIN_RME` | S32 | alt 0, then alt N, on every start |
+| `UC_WIN_RME`, firmware 138 and later | S32 | alt 0, then alt N, on every start |
+| `UC_WIN_RME`, firmware below 138 | float32 | alt 0, then alt N, on every start |
 
-The S32 sample format arrived with the firmware-138 UC revision.  Every
-UC unit with firmware 138 or newer uses S32 sample words, whichever PC
-descriptor it enumerates under.  Units below firmware 138 use the
-format of their descriptor in the table.
+The `UC_WIN_RME` descriptor selects S32 from firmware 138.  Below 138 it
+carries float32.  An unread firmware follows the descriptor.  Every other
+UC descriptor uses the format in the table.
 
 On `UC_WIN_RME` the output latch clears only on the alt 0 → alt N reselect.
 Every UC engine start follows the previous engine stop by at least
@@ -838,9 +838,9 @@ words `0..13` carry channels `1..14`.  At 4x, playback endpoint 0 and capture
 endpoint 0 carry words `0..5` for channels `1..6`.  Playback endpoint 1 and
 capture endpoint 1 carry words `0..5` for channels `7..12`.
 
-The sample word is float32 on the PC and PC RME variants below firmware 138.
-It is S32 on the Win RME variant and on every PC variant from firmware 138.
-Sample words are little-endian.
+The sample word is float32 on the PC and PC RME variants, and on
+`UC_WIN_RME` below firmware 138.  It is S32 on `UC_WIN_RME` from firmware
+138.  Sample words are little-endian.
 
 One URB carries 48 sample frames at 1x, 96 at 2x and 192 at 4x.  That is six
 maximum-size packets.  Two URBs are in flight per endpoint.  The IN URBs are

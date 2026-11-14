@@ -542,15 +542,17 @@ static const struct ffuc_ops ffuc_ucx_ops = {
 	.hw_mute = ffuc_ucx_hw_mute,
 };
 
-/* Effective quirks for this unit: static descriptor quirks plus runtime
- * rules that depend on the firmware revision. */
-static inline u32 ffuc_effective_quirks(const struct ffuc *chip)
+/* Resolve the wire sample format once at probe.  The descriptor declares
+ * whether the format is firmware dependent; only that descriptor changes
+ * with the firmware revision.  An unread firmware follows the descriptor. */
+static bool ffuc_wire_s32(const struct ffuc *chip)
 {
-	u32 quirks = chip->desc->quirks;
-
-	if (chip->model == FFUC_MODEL_UC && chip->firmware >= FFUC_UC_S32_FIRMWARE)
-		quirks |= FFUC_QUIRK_INT32_SAMPLES;
-	return quirks;
+	if (!(chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES))
+		return false;
+	if ((chip->desc->quirks & FFUC_QUIRK_INT32_BY_FIRMWARE) &&
+	    chip->firmware && chip->firmware < FFUC_UC_S32_FIRMWARE)
+		return false;
+	return true;
 }
 
 /* -- per-device descriptors ------------------------------------------ */
@@ -811,6 +813,7 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		 * alt 0 -> alt N reselect, as on the UCX. */
 		.quirks = FFUC_QUIRK_STATUS_LATCH |
 			  FFUC_QUIRK_INT32_SAMPLES |
+			  FFUC_QUIRK_INT32_BY_FIRMWARE |
 			  FFUC_QUIRK_ALT_RESELECT,
 		.model = FFUC_MODEL_UC,
 		.modes = ffuc_pc_modes,
@@ -1089,7 +1092,7 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
-		if (ffuc_effective_quirks(chip) & FFUC_QUIRK_INT32_SAMPLES)
+		if (chip->s32_samples)
 			ffuc_capture_copy_int32(subs->runtime, s->pos[ep->index],
 						urb->transfer_buffer, frames, words,
 						ep->index * words, words, 1, total);
@@ -1117,7 +1120,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
-		if (ffuc_effective_quirks(chip) & FFUC_QUIRK_INT32_SAMPLES)
+		if (chip->s32_samples)
 			ffuc_playback_copy_int32(subs->runtime, s->pos[ep->index],
 						 urb->transfer_buffer, frames,
 						 words, ep->index * words,
@@ -2501,6 +2504,9 @@ static int ffuc_probe(struct usb_interface *intf,
 	}
 
 	ffuc_read_identity(chip);
+	chip->s32_samples = ffuc_wire_s32(chip);
+	dev_info(&intf->dev, "firmware %u, %s samples on the wire\n",
+		 chip->firmware, chip->s32_samples ? "S32" : "float");
 	{
 		u32 st = 0;
 

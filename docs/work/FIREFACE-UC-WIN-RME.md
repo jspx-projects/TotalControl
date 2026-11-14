@@ -1,7 +1,20 @@
 # Fireface UC, UC_WIN_RME: open questions
 
 Working notes for the PC personality matched as `FFUC_PRODUCT_UC_WIN_RME`
-(firmware 138 on the test unit).  Not part of the specification.
+(firmware 133 and 138 on the test units).  Not part of the specification.
+
+## Sample format and hardware revision
+
+The RME Flash Update Tool maps the two UC hardware revisions to firmware
+127 (Hw Rev 3) and 138 (Hw Rev 6).  Firmware 133 on `UC_WIN_RME` carries
+float32; firmware 138 carries S32.  Firmware 134 to 137 is unmeasured and
+treated as float32.
+
+The `UC_WIN_RME` descriptor therefore carries the S32 format from firmware
+138 upward and float32 below it.  Other UC descriptors keep their declared
+float32 format; the firmware revision does not override them.  The driver
+resolves the choice once at probe into `chip->s32_samples`; the capture and
+playback handlers only read that field.
 
 ## Period signalling on the isochronous transport
 
