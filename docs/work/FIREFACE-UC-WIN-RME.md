@@ -217,6 +217,49 @@ instruments rather than inference.
    margin, but no longer carries the diagnosis; the ring counters say
    the margin has never been at risk in this session.
 
+## Standing-fill and URB-granularity sweep (2026-11-14, with the handler fixes)
+
+All runs at quantum 48, firmware 127, seeded tone, instrumented build
+with the transferred-frame-count fixes. Two runs of 30 s per
+configuration unless noted.
+
+| Configuration | URB queue | Ring | Zero runs |
+|---|---|---|---|
+| default (`urb_frames` 48, `period-num` 2) | 2 x 48 | 192 | 2 in the battery (one under full-tree `cargo build`) |
+| `period-num` 4, `headroom` 96 | 2 x 48 | 192 | 1 |
+| `period-num` 8, `headroom` 192 | 2 x 48 | 384 | 0 |
+| `urb_frames` 16 (`MIN_QUEUE` bump) | 4 x 16 | 96 | 0 |
+| `urb_frames` 8 (`MIN_QUEUE` bump) | 8 x 8 | 96 | 0 |
+
+Kernel instruments stayed silent in every configuration, including at
+both reproduced zero positions: `in_overruns`, `out_underruns`,
+`in_bad_length`, `out_bad_length` and the `hw_ptr_mismatch` log never
+fired in a window that contained a zero run.
+
+Interpretation, with the sample size stated: 60 s per configuration
+cannot separate a zero from a low rate (the base rate today is about
+one event per 2-4 minutes of quantum-48 capture), so single-zero rows
+are weak evidence. What the sweep does establish:
+
+- Raising the standing fill did not remove the error at the first
+  variant; the second (a 384-frame ring) did not produce one, but two
+  runs are not a rate.
+- Smaller URBs at the same latency did not produce an event, and the
+  per-completion ring requirement drops from 48 frames to 8/16 — the
+  margin-per-completion reasoning the sweep was built to test. The
+  8-frame configuration also deepens the queue to 8 URBs through the
+  `MIN_QUEUE` bump and cuts the reported playback `delay` from 96 to
+  64 frames.
+- Neither the pointer heuristic nor any ring condition fired during the
+  sweep, so the driver side remains clean under every configuration
+  tested. The sweep bounds the driver-side margin; it does not own the
+  failure.
+
+Remaining from the review's priority order: PR #160 on the capture-side
+repro, and q96 with capture started before playback (its phase
+prediction). The `urb_frames` variants are built from a one-line
+default change; the shipped default stays 48.
+
 ## Driver defects carried out of the instrumentation review
 
 Two defects in the streaming handlers are real regardless of which
