@@ -121,6 +121,50 @@ unit.
 4. Determine whether the zeros affect the device output, or only the captured
    and monitored streams.
 
+## q48 instrumentation build (branch `test/uc-q48-instrumentation`)
+
+A diagnostics-only driver build for the quantum-48 zero runs. No logic
+change: it counts and logs, everything else is identical to the reference
+signalling. The counters appear in the existing debugfs `stats` file next to
+the transport counters.
+
+- `in_overruns`: capture completions that overwrote ring frames the reader
+  had not consumed yet (`[appl_ptr, hw_ptr)` span plus the new payload past
+  `buffer_size`, compared modulo `runtime->boundary`).
+- `out_underruns`: playback completions that transmitted from a ring span
+  the application never wrote.
+- `in_bad_length`: status-0 IN URBs whose `actual_length` is not a whole
+  frame multiple or exceeds the configured URB size.
+- `hw_ptr_mismatch`: `snd_pcm_period_elapsed` refreshes where the ALSA
+  core's published `status->hw_ptr` differs from this driver's pointer;
+  the first occurrence prints both.
+- Poison fill: `prepare` fills the PCM ring with `0x00005A5A` (near-silent
+  in float32 and S32) under the `ffuc_poison` module parameter. A recorded
+  zero therefore means explicit silence, never inherited memory.
+- Each stream start logs rate, the URB queue (`nurbs` x `urb_frames`), the
+  granted `buffer_size`, `period_size`, `stop_threshold`, `start_threshold`,
+  `avail_min` and `delay`.
+- The payload-format question is closed by arithmetic: a wire-format
+  misread of a streaming payload yields continuous noise or full-scale
+  bursts, not clean audio with isolated one-quantum zero runs. Both
+  conversion paths are reviewed and unit-correct. Firmware 127 carries
+  float32.
+
+### What one capture session discriminates
+
+- `in_overruns` rising at zero positions: the ring margin is the owner.
+  Test standing fill next (`period-num` 4 or 8 together with a headroom of
+  about one period; the earlier knob matrix never raised the standing
+  fill), then the `urb_frames` sweep 8/16/48 through the module parameter.
+- `in_overruns` and `out_underruns` at zero with `hw_ptr_mismatch` rising:
+  the core's pointer heuristic is the owner.
+- Both counters at zero: the zeros are inserted above ALSA, and PR #160's
+  wake ordering is the mechanism. The capture-side repro decides it.
+- `stop_threshold` equal to `boundary`: the ALSA core's own overrun and
+  underrun detection is disabled; silent ring corruption is then expected
+  core behaviour, not a driver defect.
+
+
 ## Endpoints that differ from the original UC
 
 The descriptor is copied from the original UC.  On the test unit interface 1
