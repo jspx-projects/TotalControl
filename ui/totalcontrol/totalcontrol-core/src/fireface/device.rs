@@ -9796,6 +9796,10 @@ mod tests {
             .apply(&UcMeterPacket::parse(&data).expect("data page"));
         let level = dev.meters().expect("UC input meters")[8];
         assert!((level - 0.1).abs() < 1e-3, "S/PDIF at -20 dBFS, got {level}");
+        // A record page always co-publishes other channels' records; keep
+        // one outside the S/PDIF bank so page validity does not hinge on
+        // this record going to a no-data filler.
+        data[228..232].copy_from_slice(&1u32.to_le_bytes());
         // The 0x1fff filler is no data, not a level: hold the last value.
         data[140..144].copy_from_slice(&0x00001fffu32.to_le_bytes());
         dev.uc_meters

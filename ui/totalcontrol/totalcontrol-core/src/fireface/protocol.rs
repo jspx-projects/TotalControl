@@ -189,6 +189,15 @@ fn uc_is_data_page(b: &[u8]) -> bool {
     marker == 0x1fff || uc_word(b, 6) != 0
 }
 
+/// Whether a raw Peak/OVR record at the record region carries a level.
+/// `0` is true silence and `0x1fff` is the stream's no-data filler (the
+/// device publishes a record only when the detector refreshed it).  Every
+/// level decode returns `None` for the filler, so it can never be a
+/// valid reading on input, playback or output records.
+fn valid_record(record: u32) -> bool {
+    record != 0 && record != 0x0000_1fff
+}
+
 impl Default for UcMeterPacket {
     fn default() -> Self {
         Self {
@@ -230,6 +239,14 @@ impl UcMeterPacket {
         let mut records = [0u32; Self::RECORD_COUNT];
         for (i, r) in records.iter_mut().enumerate() {
             *r = u32::from_le_bytes(b[108 + i * 4..108 + i * 4 + 4].try_into().unwrap());
+        }
+        // A page whose whole record region is silence plus no-data fillers
+        // is the stream's status/flag page, not a meter record page.  Its
+        // header words are DSP status, not output RMS; accepting it painted
+        // the status values onto the output rows (the meter-hold release in
+        // `UcMeterBank::apply` keeps previous levels until a real page).
+        if !records.iter().any(|r| valid_record(*r)) {
+            return None;
         }
         let mut output_rms = [0u32; UC_HEADER_OUTPUT_RMS_CHANNELS];
         for group in 0..7 {
@@ -1288,6 +1305,54 @@ mod tests {
         assert_eq!(p.output_header_rms(17), 0x2000_0000);
         assert_eq!(p.output_header_rms(0), 0, "AN1 is on the flag page");
         assert!((uc_output_header_rms_linear(0x4000_0000) - 0.70710677).abs() < 1e-5);
+    }
+
+    /// The stream's status/flag page: marker words are small counters, the
+    /// header carries DSP status and the record region is silence plus
+    /// `0x1fff` no-data fillers.  It must not reach the meter bank: its
+    /// header words are not output RMS.  Verified live on the ISO stream,
+    /// `docs/captures/uc/` live-mic capture.
+    #[test]
+    fn uc_status_page_is_not_a_meter_page() {
+        let mut b = [0u8; UcMeterPacket::LEN];
+        // Status page counters instead of the 0x1fff record marker.
+        b[4..6].copy_from_slice(&2u16.to_le_bytes());
+        b[12..14].copy_from_slice(&1u16.to_le_bytes());
+        // Status header words where the output RMS decode looks.
+        b[0..4].copy_from_slice(&0x3042_f1f8u32.to_le_bytes());
+        b[8..12].copy_from_slice(&0x91e7_c4f5u32.to_le_bytes());
+        // The record region is silence plus a no-data playback filler.
+        b[212..216].copy_from_slice(&0x0000_1fffu32.to_le_bytes());
+        assert!(UcMeterPacket::parse(&b).is_none(), "status page rejected");
+        // The same shape must stay rejected when the header words look
+        // like a plausible RMS sine.
+        b[0..4].copy_from_slice(&0x4000_0000u32.to_le_bytes());
+        assert!(UcMeterPacket::parse(&b).is_none(), "filler-only page");
+    }
+
+    /// A record page with one valid input record is a meter page even when
+    /// the rest of the record region is silence and no-data fillers.
+    #[test]
+    fn uc_record_page_with_one_real_record_is_a_meter_page() {
+        let mut b = [0u8; UcMeterPacket::LEN];
+        b[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // AN1 carries a small but valid linear peak; the playback bank is
+        // no-data fillers.
+        b[108..112].copy_from_slice(&0x0001_1000u32.to_le_bytes());
+        for slot in (180..324).step_by(4) {
+            b[slot..slot + 4].copy_from_slice(&0x0000_1fffu32.to_le_bytes());
+        }
+        let p = UcMeterPacket::parse(&b).expect("record page accepted");
+        assert_eq!(p.analog_input(0), 0x0001_1000);
+        assert!(p.output_header_rms(4) == 0, "record page header stays empty");
+    }
+
+    #[test]
+    fn valid_record_law() {
+        assert!(!valid_record(0), "zero record is silence");
+        assert!(!valid_record(0x1fff), "no-data filler carries no level");
+        assert!(valid_record(0x0001_1000), "small real peak");
+        assert!(valid_record(0x7fff_ffcf), "over event record");
     }
 
 }
