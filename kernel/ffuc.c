@@ -30,11 +30,19 @@ static unsigned int nurbs = 2;
 static bool ucx_if5 = false;
 static unsigned int ucx_if5_frames = 1024;
 static unsigned int fixed_rate;
+/* q48 instrumentation (test/uc-q48-instrumentation).  Poison the PCM rings
+ * with 0x00005A5A instead of the inherited memory so that a reader's
+ * preserved zero can be distinguished from never-written memory.  Values
+ * are near-silent in both formats: float32 denormal and s32 DC null. */
+static bool ffuc_poison = true;
 
 static DEFINE_MUTEX(devices_mutex);
 static unsigned long devices_used;
 
 static struct usb_driver ffuc_driver;
+
+module_param(ffuc_poison, bool, 0644);
+MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for the Fireface sound card.");
@@ -910,6 +918,37 @@ static s32 ffuc_f32_to_s32(u32 f)
 
 /* -- streaming engine ------------------------------------------------ */
 
+/* Ring-pressure attribution: the first event says new; later events are
+ * rate-limited so a run stays readable in the journal. */
+static void ffuc_ring_event(struct ffuc *chip, struct snd_pcm_substream *subs,
+			    atomic_t *counter, const char *what,
+			    unsigned long appl, unsigned long own)
+{
+	atomic_inc(counter);
+	dev_info_ratelimited(&chip->dev->dev,
+			     "%s: %s #%d appl %lu hw %lu (buffer %lu)\n",
+			     subs->stream ? "capture" : "playback", what,
+			     atomic_read(counter), appl, own,
+			     subs->runtime->buffer_size);
+}
+
+/* The core's shared status pointer diverged from this stream's driver
+ * pointer right after a period-elapsed refresh.  Count every occurrence;
+ * the first one dmesg-logs the two values. */
+static void ffuc_ptr_mismatch(struct ffuc *chip,
+			      struct snd_pcm_substream *subs,
+			      atomic_t *counter)
+{
+	if (!atomic_inc_return(counter) - 1) {
+		struct snd_pcm_runtime *rt = subs->runtime;
+
+		dev_info(&chip->dev->dev,
+			 "%s status hw_ptr %lu boundary %lu: core pointer diverged\n",
+			 subs->stream ? "capture" : "playback",
+			 rt->status->hw_ptr, rt->boundary);
+	}
+}
+
 /*
  * At 4x the interrupt transport has two capture endpoints: endpoint 0
  * carries words 0..words-1, endpoint 1 carries the next slice.  Each
@@ -1065,13 +1104,30 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 
 	if (other->substream) {
 		snd_pcm_stream_lock_irqsave(other->substream, flags);
-		if (other->running)
+		if (other->running) {
 			snd_pcm_period_elapsed_under_stream_lock(other->substream);
+			/* The core refreshes the shared status pointer from
+			 * .pointer inside the period-elapsed call.  It must
+			 * re-read the same value the driver maintains.  Any
+			 * difference means the core moved hw_base by itself
+			 * (the double-interrupt jiffies heuristic), which
+			 * would present the reader a pointer ahead of the
+			 * committed data.  Counted; one fired trace line. */
+			if (other->substream->runtime->status->hw_ptr !=
+			    other->hw_ptr % other->substream->runtime->boundary)
+				ffuc_ptr_mismatch(chip, other->substream,
+						  &chip->hw_ptr_mismatch);
+		}
 		snd_pcm_stream_unlock_irqrestore(other->substream, flags);
 	}
 	snd_pcm_stream_lock_irqsave(s->substream, flags);
-	if (s->running)
+	if (s->running) {
 		snd_pcm_period_elapsed_under_stream_lock(s->substream);
+		if (s->substream->runtime->status->hw_ptr !=
+		    s->hw_ptr % s->substream->runtime->boundary)
+			ffuc_ptr_mismatch(chip, s->substream,
+					  &chip->hw_ptr_mismatch);
+	}
 	snd_pcm_stream_unlock_irqrestore(s->substream, flags);
 }
 
@@ -1086,12 +1142,47 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 	unsigned int frames = urb->actual_length / (words * FFUC_SAMPLE_BYTES);
 	unsigned long flags;
 	bool elapsed = false;
+	bool bad = false;
+
+	/* A remainder shorter than one frame carries no complete channel
+	 * set; copying it would shift the channel order for the rest of
+	 * the stream.  An overlong payload cannot exceed the buffer.  The
+	 * floor is copied and the remainder discarded, so the ring and
+	 * the wire stay frame-aligned; the anomaly is counted, like the
+	 * playback side. */
+	if (urb->actual_length % (words * FFUC_SAMPLE_BYTES))
+		bad = true;
+	if (urb->actual_length > urb->transfer_buffer_length ||
+	    frames > chip->urb_frames) {
+		frames = chip->urb_frames;
+		bad = true;
+	}
+	if (bad)
+		atomic_inc(&chip->in_bad_length);
 
 	if (!frames)
 		return;
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
+		struct snd_pcm_runtime *rt = subs->runtime;
+		/* A completion that overwrites unread frames means the
+		 * reader lagged the device by more than the ring minus
+		 * this payload.  Counted, not prevented: the goal is to
+		 * attribute the q48 zero runs.  Unread bytes are the ring
+		 * span [appl_ptr, hw_ptr); a write at [hw_ptr,
+		 * hw_ptr + frames) collides with unread data when it
+		 * passes appl_ptr + buffer_size.  ALSA compares pointers
+		 * modulo runtime->boundary, so the span length is taken
+		 * modularly, not by plain subtraction. */
+		unsigned long appl = READ_ONCE(rt->control->appl_ptr);
+		unsigned long own = READ_ONCE(rt->status->hw_ptr);
+		unsigned long unread = (own + rt->boundary - appl) %
+				       rt->boundary;
+
+		if (unread + frames > rt->buffer_size)
+			ffuc_ring_event(chip, subs, &chip->in_overruns,
+					"capture overwrite", appl, own);
 		if (chip->s32_samples)
 			ffuc_capture_copy_int32(subs->runtime, s->pos[ep->index],
 						urb->transfer_buffer, frames, words,
@@ -1114,12 +1205,43 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	struct ffuc_stream *s = &chip->streams[SNDRV_PCM_STREAM_PLAYBACK];
 	struct snd_pcm_substream *subs = s->substream;
 	const unsigned int words = ffuc_mode_out_words(chip->mode);
-	const unsigned int frames = chip->urb_frames;
+	unsigned int frames = urb->actual_length / (words * FFUC_SAMPLE_BYTES);
 	unsigned long flags;
 	bool elapsed = false;
+	bool bad = false;
+
+	/* The engine submitted this OUT URB with urb_frames frames, so the
+	 * nominal case equals it.  Copy exactly what left the wire, and
+	 * never more than one URB holds: a remainder shorter than one
+	 * frame carries no complete channel set and must not shift the
+	 * ring; an overlong payload cannot exceed the buffer.  Both
+	 * anomalies are counted, like the capture side. */
+	if (urb->actual_length % (words * FFUC_SAMPLE_BYTES))
+		bad = true;
+	if (frames > chip->urb_frames) {
+		frames = chip->urb_frames;
+		bad = true;
+	}
+	if (bad)
+		atomic_inc(&chip->out_bad_length);
+	if (!frames)
+		return;
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
+		struct snd_pcm_runtime *rt = subs->runtime;
+		/* A completion that sends frames the application never
+		 * wrote is a literal underrun with no error reported by
+		 * anyone: the ring holds whatever was written last cycle
+		 * at that position.  Counted, not prevented. */
+		unsigned long appl = READ_ONCE(rt->control->appl_ptr);
+		unsigned long own = READ_ONCE(rt->status->hw_ptr);
+		unsigned long filled = (appl + rt->boundary - own) %
+				       rt->boundary;
+
+		if (frames > filled)
+			ffuc_ring_event(chip, subs, &chip->out_underruns,
+					"playback underrun", appl, own);
 		if (chip->s32_samples)
 			ffuc_playback_copy_int32(subs->runtime, s->pos[ep->index],
 						 urb->transfer_buffer, frames,
@@ -1396,6 +1518,14 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "in_shorts %d\n", atomic_read(&chip->in_shorts));
 	seq_printf(m, "in_status_errors %d\n",
 		   atomic_read(&chip->in_status_errors));
+	seq_printf(m, "in_overruns %d\nout_underruns %d\n",
+		   atomic_read(&chip->in_overruns),
+		   atomic_read(&chip->out_underruns));
+	seq_printf(m, "in_bad_length %d\nout_bad_length %d\n",
+		   atomic_read(&chip->in_bad_length),
+		   atomic_read(&chip->out_bad_length));
+	seq_printf(m, "hw_ptr_mismatch %d\n",
+		   atomic_read(&chip->hw_ptr_mismatch));
 	seq_printf(m, "urb_errors %d\n", atomic_read(&chip->urb_errors));
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
 	seq_printf(m, "events_dropped %d\n", atomic_read(&chip->events_dropped));
@@ -2144,6 +2274,13 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	s->period = 0;
 	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		subs->runtime->delay = chip->nurbs * chip->urb_frames;
+	/* Preparation never zeroed the ring; inherit the last session's
+	 * (or the allocator's) bytes.  Poison so that a recorded zero can
+	 * never be confused with never-written memory.  Safe amplitude in
+	 * both formats. */
+	if (ffuc_poison && subs->runtime && subs->runtime->dma_area)
+		memset32((u32 *)subs->runtime->dma_area, 0x00005A5AU,
+			 subs->runtime->dma_bytes / 4);
 	snd_pcm_stream_unlock_irq(subs);
 	return 0;
 }
@@ -2163,6 +2300,17 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->hw_ptr = 0;
 		s->period = 0;
 		s->running = true;
+		/* q48 diagnostics: log the negotiated geometry once per
+		 * start so a capture session can be matched to it. */
+		dev_info(&chip->dev->dev,
+			 "%s start: rate %u, urbs %u x %u frames, buffer %lu, period %lu, stop_threshold %lu, start_threshold %lu, avail_min %lu, delay %lu\n",
+			 subs->stream ? "capture" : "playback", chip->rate,
+			 chip->nurbs, chip->urb_frames,
+			 subs->runtime->buffer_size, subs->runtime->period_size,
+			 subs->runtime->stop_threshold,
+			 subs->runtime->start_threshold,
+			 subs->runtime->control->avail_min,
+			 (unsigned long)subs->runtime->delay);
 		return 0;
 	case SNDRV_PCM_TRIGGER_RESUME:
 		/*
