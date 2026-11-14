@@ -3583,8 +3583,10 @@ impl Fireface {
                 (0..self.outputs.len())
                     .map(|i| {
                         let rms = self.uc_meters.output_rms[i];
-                        if post {
-                            if self.outputs[i].mute { 0.0 } else { rms * self.outputs[i].volume }
+                        // The device RMS word already includes the row fader.
+                        // A muted row reads silence in the display.
+                        if post && self.outputs[i].mute {
+                            0.0
                         } else {
                             rms
                         }
@@ -3787,12 +3789,10 @@ impl Fireface {
                 (0..self.outputs.len())
                     .map(|i| {
                         let peak = self.uc_meters.output_peak(i);
-                        if post {
-                            if self.outputs[i].mute {
-                                0.0
-                            } else {
-                                peak * self.outputs[i].volume
-                            }
+                        // The device peak word already includes the row fader.
+                        // A muted row reads silence in the display.
+                        if post && self.outputs[i].mute {
+                            0.0
                         } else {
                             peak
                         }
@@ -9766,16 +9766,16 @@ mod tests {
         data[252..256].copy_from_slice(&0x0100_0000u32.to_le_bytes());
         let packet = UcMeterPacket::parse(&data).expect("data page");
         dev.uc_meters.apply(&packet);
-        // Put the AN5 row fader at -6 dB to check that the displayed output
-        // meter applies the device's own fader.
+        // The device output words are already post-fader.  Moving the row
+        // fader must not scale the meter a second time.
         dev.set_volume(ChannelId::Output(4), 0, 0.5).unwrap();
         dev.set_volume(ChannelId::Output(5), 0, 0.5).unwrap();
         let bars = dev.output_meters_internal(true).expect("UC output bars");
         assert!((bars[0] - 0.5).abs() < 1e-3, "AN1 flag RMS {:?}", bars);
-        assert!((bars[4] - 0.25).abs() < 1e-3, "AN5 header RMS x fader");
-        assert!((bars[5] - 0.125).abs() < 1e-3, "AN6 header RMS x fader");
-        assert!((bars[6] - 0.125).abs() < 1e-3, "AN7 header RMS x fader");
-        assert!((bars[7] - 0.0625).abs() < 1e-3, "AN8 header RMS x fader");
+        assert!((bars[4] - 0.5).abs() < 1e-3, "output 4 header RMS");
+        assert!((bars[5] - 0.25).abs() < 1e-3, "output 5 header RMS");
+        assert!((bars[6] - 0.125).abs() < 1e-3, "output 6 header RMS");
+        assert!((bars[7] - 0.0625).abs() < 1e-3, "output 7 header RMS");
     }
 
     #[test]
@@ -9789,7 +9789,7 @@ mod tests {
     }
 
     #[test]
-    fn uc_output_peak_line_follows_the_row_fader() {
+    fn uc_output_meters_do_not_reapply_the_row_fader() {
         let (mut dev, _writes) = open(Model::Uc);
         let mut data = [0u8; UcMeterPacket::LEN];
         data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
@@ -9801,7 +9801,11 @@ mod tests {
         let raw = dev.output_peaks_internal(false).expect("raw peak line");
         assert!((raw[4] - 0.5).abs() < 1e-6, "raw AN5 peak {raw:?}");
         let post = dev.output_peaks_internal(true).expect("post peak line");
-        assert!((post[4] - 0.25).abs() < 1e-6, "post AN5 peak {post:?}");
+        assert!((post[4] - 0.5).abs() < 1e-6, "post AN5 peak {post:?}");
+
+        dev.set_mute(ChannelId::Output(4), true).unwrap();
+        let muted = dev.output_peaks_internal(true).expect("muted peak line");
+        assert_eq!(muted[4], 0.0);
     }
 
     #[test]

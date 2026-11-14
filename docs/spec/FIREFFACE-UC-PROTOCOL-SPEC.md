@@ -487,9 +487,8 @@ A peak word is a linear 16-bit value:
 Peak dBFS = 20 × log10(word / 32768)
 ```
 
-The word clamps at `0x7fff` (0 dBFS): the record is measured upstream of the
-row's `0x1a` output fader, so pushing that fader alone into the over band
-keeps this word at its ceiling.
+The word clamps at `0x7fff` (0 dBFS).  The peak word follows the row's `0x1a`
+output fader: lowering the fader lowers the word.  The OVR word is separate.
 
 The OVR word is two bytes:
 
@@ -562,10 +561,9 @@ RMS dBFS      = 10 × log10(word / 0x80000000)
 ```
 
 A full-scale sine has word `0x40000000` and reads −3.01 dBFS RMS.  The
-header and RMS-page output RMS words are measured before the row's `0x1a`
-output fader; TotalControl applies that fader for the displayed
-post-fader output meter.  The over band comes from the output record's
-OVR word.
+header and RMS-page output RMS words follow the row's `0x1a` output fader.
+TotalControl writes the fader to the device and does not apply it again.
+The over band comes from the output record's OVR word.
 
 ### OVR trigger
 
@@ -647,8 +645,9 @@ zero; the bar then uses the peak word's sine equivalent
 - Playback lower VU bar: the RMS-page playback bank (all 18 playbacks).
 - Hardware output lower VU bar: the RMS-page output bank for AN1..AN4 and
   the peak-page header for AN5..ADAT8, where the engine publishes it.
-  The device words are pre-fader; TotalControl applies the row's `0x1a`
-  output fader and mute for the displayed post-fader meter.
+  The device words are post-fader; TotalControl writes the row's `0x1a`
+  output fader and does not apply it again.  It applies the row mute for
+  the display.
 - Playback and output peak line: the peak-page peak word.
 - Playback and output OVR LED: the device's consecutive-over count in the
   record's OVR word, compared with the global OVR sample preference
