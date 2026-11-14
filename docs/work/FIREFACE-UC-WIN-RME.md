@@ -496,6 +496,59 @@ Consequences:
   recorded; with the gate the minimum safe quantum may drop, which is
   a follow-up measurement, not a blocker.
 
+## ISO transport findings (2026-11-14, UC Mac personality)
+
+The unit switches to the AP/Mac personality (`2a39:3fc6`), interface 0
+ISO endpoints, firmware 127. Findings recorded from measurement:
+
+- **IN body layout: planar (channel-major).** A packet with ten silent
+  channels shows one contiguous zero block of 60 words (10 channels x 6
+  frames) at body indices 48..107. Frame-major would place ten zeros at
+  stride 18 per frame, never a contiguous 60-word run. The OUT layout is
+  frame-major with one lead word per frame, which is spec-defined for
+  that direction; the asymmetry is not a contradiction.
+- **Wire format float32, measured.** Body words decode as floats around
+  2e-6 full scale; S32 at that level would be 0x00000xxx, not 0x36xxxxxx.
+  An OUT dump with S32 0x20000000 confirms the conversion both ways: the
+  wire word is exactly 0x3E800000, the lead word advances by the frame
+  count (0x6f0 -> 0x6f6), and the sample stride is words+1 (19).
+- **start_frame units are microframes.** Consecutive URBs of one
+  endpoint differ by exactly the packet count (8), matching
+  number_of_packets. The continuity watchdog arithmetic is correct.
+- **Reported playback delay was ~9% high at 44.1 kHz.** It was
+  `nurbs * urb_frames` for every transport; the ISO queue is
+  `nurbs * iso_packets * rate / 8000`, i.e. 88 frames at 44.1 kHz, not
+  96. The reported value now uses the exact cadence (96 at 48 kHz,
+  88 at 44.1 kHz), visible in the start line.
+- **Device rate is not preserved across sessions.** A 48 kHz start did
+  not reprogram a device left at 44.1 kHz; the driver cached the
+  requested rate. The engine start now commits the rate on every cold
+  start (nothing running), logs the result, and a cadence guard
+  (mean frames per packet x 8000, checked every 8000 packets and at
+  stop, two consecutive bad windows, 1% tolerance) counts
+  `rate_mismatch`. Transition test: 48k -> 44.1k -> 48k gives cadence
+  48000, 44100, 48000 with a commit line on each start.
+- **Feedback health.** Misses are split into priming, playback-ahead and
+  stale buckets; priming equals `fb_delay` (24) exactly per run, ahead
+  and stale are zero in steady state. Header-only packets are counted
+  separately and never inject nominal feedback. Per-packet OUT
+  delivery mismatches are split by completion status, so teardown never
+  pollutes the anomaly counter.
+- **No drift.** With packet-0-of-every-OUT-URB sampling, a 60-second run
+  at 48 kHz and another at 44.1 kHz each report a slope of
+  0.000 frames per 1000 URBs (n = 60,000) with zero driver and zero
+  client underruns when the client buffer is explicit. The earlier
+  4-vs-1 underrun reading was startup flake at aplay's default start
+  threshold.
+- **Padding lead words (UC branch) are not written.** The spec permits
+  them as padding; the hardening (write every lead word) is not
+  implemented and is recorded as such rather than claimed.
+
+Open: a physical loopback for an audio-content (bit-exact) check on the
+ISO path; the shared constant-delay question (reported delay is the peak
+of a sawtooth, so it over-reports by 0..1 ms at every transport) remains
+open pending a check of whether PipeWire reads `snd_pcm_delay`.
+
 ## Endpoints that differ from the original UC
 
 

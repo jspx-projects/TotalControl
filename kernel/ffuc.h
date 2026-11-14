@@ -412,6 +412,7 @@ struct ffuc {
 	unsigned int iso_cadence; /* measured device clock, Hz */
 	unsigned int rate_mismatch_windows; /* consecutive bad windows */
 	u64 lag_n, lag_sx, lag_sy, lag_sxx, lag_sxy;
+	s64 lag_syy;
 	/* q48 instrumentation: ring pressure and core-pointer coherence.
 	 * in_overruns: capture completions that overwrote unread frames.
 	 * out_underruns: playback completions that sent non-written data.

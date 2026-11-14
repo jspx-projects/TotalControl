@@ -1651,6 +1651,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 					chip->lag_sy += lag;
 					chip->lag_sxx += x * x;
 					chip->lag_sxy += x * lag;
+					chip->lag_syy += (s64)lag * lag;
 				}
 			}
 		}
@@ -2697,20 +2698,12 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 chip->iso_cadence,
 			 atomic_read(&chip->rate_mismatch),
 			 chip->fb_delay, chip->out_lead);
-		{
-			s64 den = (s64)chip->lag_n * (s64)chip->lag_sxx -
-				  (s64)chip->lag_sx * (s64)chip->lag_sx;
-			s64 num = (s64)chip->lag_n * (s64)chip->lag_sxy -
-				  (s64)chip->lag_sx * (s64)chip->lag_sy;
-			long slope_milli = den ? (long)(num * 1000 / den) : 0;
-
-			dev_info(&chip->dev->dev,
-				 "iso lag drift: %ld.%03ld frames per 1000 packets (n %llu)\n",
-				 slope_milli / 1000,
-				 (slope_milli % 1000) < 0 ? -(slope_milli % 1000) :
-				 (slope_milli % 1000),
-				 (unsigned long long)chip->lag_n);
-		}
+		dev_info(&chip->dev->dev,
+			 "iso lag samples (one per OUT URB): n %llu sx %lld sy %lld sxx %lld sxy %lld syy %lld\n",
+			 (unsigned long long)chip->lag_n,
+			 (long long)chip->lag_sx, (long long)chip->lag_sy,
+			 (long long)chip->lag_sxx, (long long)chip->lag_sxy,
+			 (long long)chip->lag_syy);
 		return 0;
 	default:
 		return -EINVAL;
