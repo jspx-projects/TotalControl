@@ -58,10 +58,12 @@ enum HoverTarget {
 }
 
 pub struct Knob<Message> {
+    /// The primary readout value.
     pub value: f32,
     /// The secondary value printed under the primary one, when the label has
     /// two lines.  Wheel input over the secondary readout starts from this
-    /// value instead of the primary one.
+    /// value instead of the primary one.  The knob position is the higher of
+    /// the two values.
     pub secondary_value: Option<f32>,
     pub range: (f32, f32),
     /// Printed centered inside the knob face — the reference design has no
@@ -108,8 +110,9 @@ pub struct Knob<Message> {
     pub log_scale: bool,
     pub modifiers: Modifiers,
     pub scale: f32,
-    /// Whole-knob value changes: drag, click, double-click and wheel input
-    /// outside a readout.
+    /// Whole-knob changes: drag, click, double-click and wheel input outside
+    /// a readout.  The callback receives the knob position, which is the
+    /// primary value or the higher value when a secondary value is present.
     pub on_change: Box<dyn Fn(f32) -> Message>,
     /// Wheel input over one printed readout.  `true` is the secondary line.
     /// When absent, a wheel over either line uses `on_change`.
@@ -178,9 +181,9 @@ impl<Message> Knob<Message> {
         }
     }
 
-    /// The value the colored arc follows.  A two-readout knob shows the
-    /// higher value so the arc never sits below a visible number.
-    fn arc_value(&self, primary: f32) -> f32 {
+    /// The knob position.  A two-readout knob follows the higher value so
+    /// the tick and arc never sit below a visible number.
+    fn position_value(&self, primary: f32) -> f32 {
         self.secondary_value
             .map_or(primary, |secondary| primary.max(secondary))
     }
@@ -324,7 +327,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 state.last_click = Some(now);
                 state.dragging = true;
                 state.drag_pos = Some(pos.y);
-                state.drag_t = Some(self.value_to_t(self.value));
+                state.drag_t = Some(self.value_to_t(self.position_value(self.value)));
                 Some(canvas::Action::capture())
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
@@ -344,7 +347,9 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 } else {
                     1.0
                 };
-                let base_t = state.drag_t.unwrap_or_else(|| self.value_to_t(self.value));
+                let base_t = state
+                    .drag_t
+                    .unwrap_or_else(|| self.value_to_t(self.position_value(self.value)));
                 let t = (base_t + screen_dt * mult).clamp(0.0, 1.0);
                 state.drag_pos = Some(pos.y);
                 state.drag_t = Some(t);
@@ -364,11 +369,15 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 let released = state
                     .drag_t
                     .map(|t| self.t_to_value(t))
-                    .unwrap_or(self.value);
+                    .unwrap_or_else(|| self.position_value(self.value));
                 state.dragging = false;
                 state.drag_pos = None;
                 state.drag_t = None;
-                state.display = Some(MeterFrame::still(released));
+                state.display = if self.secondary_value.is_some() {
+                    None
+                } else {
+                    Some(MeterFrame::still(released))
+                };
                 None
             }
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -399,7 +408,8 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 };
                 let value = match target {
                     Some(true) => self.secondary_value.unwrap_or(self.value),
-                    _ => self.value,
+                    Some(false) => self.value,
+                    None => self.position_value(self.value),
                 };
                 let mult = if self.modifiers.shift() { 0.25 } else { 1.0 };
                 let now = Instant::now();
@@ -462,13 +472,18 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let display_value = if state.dragging {
+        let position_display = if state.dragging {
             state
                 .drag_t
                 .map(|t| self.t_to_value(t))
-                .unwrap_or(self.value)
+                .unwrap_or_else(|| self.position_value(self.value))
         } else {
-            state.display.map(|d| d.at(Instant::now())).unwrap_or(self.value)
+            self.position_value(
+                state
+                    .display
+                    .map(|d| d.at(Instant::now()))
+                    .unwrap_or(self.value),
+            )
         };
         // Everything below is a pure function of these: so the geometry is
         // built once and reused until one of them changes. A mixer has
@@ -477,7 +492,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            display_value.to_bits().hash(&mut h);
+            position_display.to_bits().hash(&mut h);
             self.secondary_value.map(f32::to_bits).hash(&mut h);
             self.label.hash(&mut h);
             self.scale.to_bits().hash(&mut h);
@@ -501,8 +516,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             let border_w = BORDER_WIDTH * self.scale;
             let tick_len = TICK_LEN * self.scale;
 
-            let t = self.value_to_t(display_value);
-            let arc_t = self.value_to_t(self.arc_value(display_value));
+            let t = self.value_to_t(position_display);
             // Dims everything but the face (which is already dark enough not
             // to need it) when `!interactive` — a faded knob reads as "not
             // applicable here" at a glance, without a second visual language
@@ -567,9 +581,9 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             // A centered arc (balance/pan) uses the same color but starts at
             // 12 o'clock, so the minimum-to-value arc is skipped there.
             if let Some(color) = self.level_arc_color {
-                if self.interactive && !self.arc_from_center && arc_t > 0.0 {
+                if self.interactive && !self.arc_from_center && t > 0.0 {
                     let start_angle = angle_of(0.0).0;
-                    let end_angle = angle_of(arc_t).0;
+                    let end_angle = angle_of(t).0;
                     frame.stroke(
                         &Path::new(|b| {
                             b.arc(canvas::path::Arc {
@@ -594,7 +608,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             // arc implies a live reading a dimmed, inert knob shouldn't.
             if self.arc_from_center && self.interactive {
                 let center_angle = angle_of(0.5).0;
-                let value_angle = angle_of(arc_t).0;
+                let value_angle = angle_of(t).0;
                 let (start_angle, end_angle) = if center_angle <= value_angle {
                     (center_angle, value_angle)
                 } else {
@@ -742,7 +756,7 @@ mod tests {
         }
     }
 
-    fn wheel_at(knob: &Knob<&'static str>, position: iced::Point) -> &'static str {
+    fn wheel_at<Message>(knob: &Knob<Message>, position: iced::Point) -> Message {
         let mut state = State::default();
         let bounds = Rectangle {
             x: 100.0,
@@ -791,14 +805,38 @@ mod tests {
     }
 
     #[test]
-    fn arc_follows_the_higher_readout() {
+    fn knob_position_follows_the_higher_readout() {
         let knob = readout_knob("20\n40");
-        assert_eq!(knob.arc_value(20.0), 40.0);
-        assert_eq!(knob.arc_value(40.0), 40.0);
-        assert_eq!(knob.arc_value(50.0), 50.0);
+        assert_eq!(knob.position_value(20.0), 40.0);
+        assert_eq!(knob.position_value(40.0), 40.0);
+        assert_eq!(knob.position_value(50.0), 50.0);
 
         let single = readout_knob("20");
-        assert_eq!(single.arc_value(20.0), 20.0);
+        assert_eq!(single.position_value(20.0), 20.0);
+    }
+
+    #[test]
+    fn whole_knob_wheel_starts_from_the_knob_position() {
+        let knob = Knob {
+            value: 20.0,
+            range: (0.0, 65.0),
+            label: "20\n40".into(),
+            secondary_value: Some(40.0),
+            on_readout_change: None,
+            arc_from_center: false,
+            level_arc_color: None,
+            interactive: true,
+            log_scale: false,
+            modifiers: Modifiers::default(),
+            scale: 1.0,
+            on_change: Box::new(|v| v),
+            on_reset: Box::new(|| 0.0),
+        };
+        let next = wheel_at(&knob, iced::Point::new(101.0, 51.0));
+        assert!(
+            next > 40.0,
+            "whole-knob wheel must start from the higher readout, got {next}"
+        );
     }
 
     #[test]

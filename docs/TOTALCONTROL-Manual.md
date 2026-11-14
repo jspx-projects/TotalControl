@@ -533,9 +533,10 @@ Input and playback pairs can be linked. When linked:
   channels together, preserving their level difference;
 - the pair's balance is visible and adjustable from one knob, and keeps its
   setting at any fader level;
-- the gain knob moves both preamps by the same step, preserving any offset
-  between them, and shows both values; turning the wheel with the pointer
-  over the top or bottom value moves only that preamp;
+- the gain knob shows both values, and its position and orange arc follow the
+  higher gain;
+- the knob moves both preamps by the same step while the higher gain has
+  range left; the wheel over the top or bottom value moves only that preamp;
 - mute, solo, FX send, EQ, low cut and dynamics settings are shared from the
   left channel;
 - panel buttons split into a **linked pair**: a phase pair shows `Ø L` and
@@ -1396,14 +1397,15 @@ outputs appear only as pairs `L1`/`L3`/`L5` and `A1`/`A3`/`A5`/`A7`. The front
 knob cannot link or unlink a pair; the link state is a TotalControl setting.
 
 A linked input pair always shows both gains in the TotalControl Gain knob:
-the left gain above, the right gain below, even when they are equal. Turning
-that knob moves both preamps by the same step, preserving any offset between
-them. Turning the wheel with the pointer over the top number moves only the
-left preamp; over the bottom number it moves only the right one. The orange
-arc follows the higher of the two gains, and both values stay visible at the
-range limits. This mirrors the device's pair-adjust mode,
-which moves both channels whether or not they are linked. An unlinked input
-shows one value and moves only that channel.
+the left gain above, the right gain below, even when they are equal. The knob
+position, tick and orange arc follow the higher gain. Turning the knob moves
+both preamps by the same step while the higher gain has range left. The whole
+knob stops when the higher gain reaches a range limit. The wheel over the top
+number moves only the left preamp; over the bottom number it moves only the
+right one. The lower preamp can therefore still be moved when the higher one
+is at a limit. Double-click resets both gains to the minimum. This mirrors the
+device's pair-adjust mode, which moves both channels whether or not they are
+linked. An unlinked input shows one value and moves only that channel.
 
 ### Output level
 
