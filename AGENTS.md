@@ -85,6 +85,10 @@ the protocol or behaviour from the section alone.
 - When a concept is renamed, retire the old name everywhere in the same
   change: specification, code and comments, work notes, tests and the
   manual. Renames go through the user before the code lands.
+- One idea per sentence. Split compound statements into short sentences.
+  Never fuse qualifications, hypotheses or caveats into a single sentence;
+  each sentence expresses exactly one fact, claim or question. This applies
+  to specification text and to replies to the user alike.
 
 Authoritative files:
 
