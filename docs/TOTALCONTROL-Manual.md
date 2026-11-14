@@ -703,10 +703,48 @@ monitoring destinations with fixed names: `Main`, `Speaker B` and `Phones 1–4`
 assigned in the Control Room or remains an ordinary output in the Hardware
 Outputs row; there are no empty slots.
 
-### What the destinations mean
+### Control Room behaviour
 
-The Control Room is not another mixer bus. It gives names and monitoring
-behaviour to hardware outputs you already have:
+The Control Room assigns ordinary hardware outputs to monitoring roles. It
+does not create a new mixer bus.
+
+| Term | Meaning |
+|---|---|
+| Main Out | The primary engineer monitor output. |
+| Speaker B | The alternative engineer monitor output. |
+| Phones 1–4 | Performer headphone outputs. |
+| Monitor output | Main Out while Speaker B is off; Speaker B while it is on. |
+| Monitor action | Dim, Recall, Mono, Talkback, External Input or Mute FX. |
+| Talkback receiver | A hardware output whose Talkback receive switch is on. |
+
+The monitor actions apply as follows:
+
+| Action | Main Out | Speaker B | Phones 1–4 |
+|---|---|---|---|
+| Dim | Yes | Linked to Main only | No |
+| Recall | Yes | Linked to Main only | No |
+| Speaker B | Switches to Speaker B | Switches to Main | No |
+| Mono | Active monitor output | Active monitor output | No |
+| Talkback | Listenback path | Talkback receiver only | Talkback path |
+| External Input | Yes | No | No |
+| Mute FX | Yes | No | No |
+| Cue/PFL | Target only | Target only | Target only |
+
+Speaker B is a second playback path. When Speaker B is active, Main Out is
+muted and Speaker B is audible. The Speaker B `Link to Main` setting makes
+the Speaker B fader follow Main volume, Dim and Recall. Without the link,
+Speaker B keeps its own level and Dim and Recall act on Main Out only.
+
+Phones 1–4 are not monitor outputs. Dim, Recall, Mono, External Input and
+Mute FX do not affect them. Talkback uses its own Phones Dim amount.
+
+Every Control Room output is a stereo pair. An assigned pair is linked and
+cannot be unlinked; assigning a split pair links it. The Settings panel's
+`STEREO` control stays engaged for Control Room pairs, and `Set all channels
+mono` does not split them. This stereo pair link is separate from
+`Speaker B → Link to Main`, which links the Speaker B volume to Main.
+
+### What the destinations mean
 
 - **Main** is normally the engineer’s monitor output: the speakers in the
   control room.
@@ -731,13 +769,13 @@ The buttons are one channel wide, in TotalMix’s order:
 
 | Button | Kind | Outputs affected | In the current mix |
 |---|---|---|---|
-| `dim` | Latching | Main Out and Speaker B | Yes, snapshot and workspace |
+| `dim` | Latching | Main Out; Speaker B if linked | Yes, snapshot and workspace |
 | `recall` | Momentary | Main Out; Speaker B if linked | No, momentary |
 | `speaker B` | Latching | Switches monitoring between Main and Speaker B | Yes, snapshot and workspace |
-| `mono` | Latching | Main Out and Speaker B | Yes |
-| `talkback` | Toggle | Every output with Talkback receive, plus Main for Listenback | No, momentary; receive flags are in the current mix |
-| `ext. input` | Latching | Main Out and Speaker B | Yes, workspace |
-| `mute FX` | Latching | Reverb and Echo returns on Main Out and Speaker B | Yes |
+| `mono` | Latching | Active monitor output | Yes |
+| `talkback` | Toggle | Every Talkback receiver, plus Phones and Main for Listenback | No, momentary; receive flags are in the current mix |
+| `ext. input` | Latching | Main Out | Yes, workspace |
+| `mute FX` | Latching | Reverb and Echo returns on Main Out | Yes |
 | `settings` | Opens the dialog | — | No |
 | `assign` | Opens the menu | The monitoring assignments | No, preferences |
 
@@ -746,19 +784,18 @@ The buttons are one channel wide, in TotalMix’s order:
 Dim needs an assigned Main Out. Without one it leaves the mix unchanged and
 never acts on a Phones output.
 
-**Dim** is a latching button. Engaging it saves the current Main Out and
-Speaker B levels, lowers both speaker pairs by the configured Dim amount and
-engages the device Dim state. Turning Dim off restores those saved levels.
-Moving a speaker fader while Dim is engaged changes the level you hear, but
-not the saved pre-Dim level: turning Dim off returns to the level saved when
-Dim was engaged. Changing the Main Dim amount while Dim is engaged updates
-the current attenuation immediately. Reassigning or clearing the Main Out or
-Speaker B turns Dim off first.
+**Dim** is a latching button. Engaging it saves the current Main Out level,
+lowers Main Out by the configured Dim amount and engages the device Dim
+state. Turning Dim off restores the saved level. Moving the Main fader while
+Dim is engaged changes the level you hear, but not the saved pre-Dim level:
+turning Dim off returns to the level saved when Dim was engaged. Changing the
+Main Dim amount while Dim is engaged updates the current attenuation
+immediately. Reassigning or clearing the Main Out turns Dim off first.
 
-Dim affects only the speaker paths, **Main Out and Speaker B**. It does not
-attenuate the Phones outputs; Talkback has its own Phones Dim amount.
-`Speaker B → Link to Main` additionally makes Speaker B follow the Main fader
-and Recall; Dim attenuates both speaker pairs whether or not they are linked.
+Dim affects Main Out. With `Speaker B → Link to Main` enabled, Speaker B
+follows the Main fader, Dim and Recall. Without the link, Speaker B keeps its
+own level. Dim does not attenuate the Phones outputs; Talkback has its own
+Phones Dim amount.
 
 Dim is part of the current mix and is stored in a snapshot or workspace. The
 saved scene stores the active state, the pre-Dim speaker levels and the Dim
@@ -788,19 +825,40 @@ saved assignments are installed. Clearing the Speaker B assignment also
 clears Speaker B and turns the button off.
 
 `Speaker B → Link to Main` in Control Room Settings ties the Speaker B level
-to Main. Linked, the Speaker B pair follows Main fader and Recall changes;
-unlinked, it keeps its own fader level. Dim attenuates both speaker pairs in
-either case.
+to Main. Linked, the Speaker B pair follows Main fader, Dim and Recall
+changes. Unlinked, it keeps its own fader level.
 
 ### Mono
 
-**Mono** is a latching monitor check. It sums the assigned Main Out pair and
-the Speaker B pair to mono and feeds the same signal to both sides of each
-pair, which is useful for checking mono compatibility and phase problems.
-The Phones outputs are not mixed by this button; they keep their own stereo
-signal.
+**Mono** is a latching monitor check. It acts on exactly one output: the
+active monitor output. That is Main Out while Speaker B is off and Speaker B
+while it is on.
 
-Mono is part of the current mix, so it is saved in a snapshot and restored with it.
+While Mono is active:
+
+- the left and right signals of the active monitor output are each
+  attenuated by 6 dB and then summed;
+- the sum is fed to both sides of that output;
+- the inactive monitor output keeps its normal stereo mix;
+- the Phones outputs and every other hardware output keep their normal stereo
+  signal.
+
+A centred signal therefore keeps the same level when Mono is engaged. The
+6 dB attenuation on each side prevents the level rise of a direct L+R sum.
+
+The Mono state belongs to the monitor path, not to one assigned pair. If
+Speaker B is switched on while Mono is active, Main Out returns to its normal
+stereo mix and Speaker B becomes mono. Switching back makes Main Out mono
+again and restores Speaker B. Mono stays active until it is switched off.
+
+Mono applies to the signal currently monitored on the active output,
+including the External Input pair while External Input is active. It does not
+change the Cue/PFL target, Talkback routing or any source levels outside that
+monitor output.
+
+Mono is part of the current mix, so it is saved in a snapshot and restored
+with it. Without an assigned Main Out there is no active monitor output and
+Mono has no effect.
 
 ### Talkback and Listenback
 
@@ -822,6 +880,9 @@ While Talkback is active:
 - Listenback, when configured, sends the recording-room microphone to Main
   and attenuates Main by the Listenback Dim amount.
 
+The Phones outputs are Talkback receivers by default. Any other hardware
+output can be added with its Talkback receive switch.
+
 Talkback only rewrites active routes; silent sends are left alone. Switching
 Talkback off restores the previous sends and FX-return levels.
 
@@ -832,22 +893,21 @@ the Talkback button and the receive switches.
 
 ### Mute FX
 
-**Mute FX** is a latching control. It silences the Reverb and Echo
-returns on the monitored outputs without switching either effect off.
-Releasing it restores the previous return levels.
+**Mute FX** is a latching control. It silences the Reverb and Echo returns on
+Main Out without switching either effect off. Releasing it restores the
+previous return levels.
 
-Mute FX follows the assigned Main Out and Speaker B pairs: it saves their
-FX-return levels, writes −65 dB, and restores the exact saved levels when the
-button is released. Phones outputs are never part of this path. Mute FX is
-part of the mixer scene and a snapshot.
+Mute FX saves the Main Out FX-return levels, writes −65 dB, and restores the
+exact saved levels when the button is released. Speaker B and Phones are not
+part of this path. Mute FX is part of the mixer scene and a snapshot.
 
 ### External input
 
-**Ext. input** replaces the Main Out and Speaker B submixes with the stereo
-hardware-input pair selected in Control Room Settings. It applies the
-configured gain, silences the FX returns on those two monitor pairs, and
-latches the button. Releasing it restores the normal submix and the saved FX
-returns. The source list contains hardware inputs only.
+**Ext. input** replaces the Main Out mix with the stereo hardware-input pair
+selected in Control Room Settings. It applies the configured gain and
+latches the button. Releasing it restores the normal Main Out mix. Speaker B
+and the Phones outputs keep their own mixes. The source list contains
+hardware inputs only.
 
 The button is available when a source pair is configured and a Main Out is
 assigned. Changing the source or gain while External Input is active
