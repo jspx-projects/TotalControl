@@ -1643,6 +1643,15 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 					chip->out_lag_min = lag;
 				if (lag > chip->out_lag_max)
 					chip->out_lag_max = lag;
+				if (i == 0) {
+					u64 x = chip->out_pkts;
+
+					chip->lag_n++;
+					chip->lag_sx += x;
+					chip->lag_sy += lag;
+					chip->lag_sxx += x * x;
+					chip->lag_sxy += x * lag;
+				}
 			}
 		}
 		off += len;
@@ -2067,6 +2076,8 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->dump_count = 0;
 	chip->dump_out_count = 0;
 	chip->rate_mismatch_windows = 0;
+	chip->lag_n = chip->lag_sx = chip->lag_sy = 0;
+	chip->lag_sxx = chip->lag_sxy = 0;
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
 	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin. */
@@ -2573,7 +2584,13 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	s->deferrals = 0;
 	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		s->out_counter_valid = false;
-		subs->runtime->delay = chip->nurbs * chip->urb_frames;
+		if (chip->iso)
+			subs->runtime->delay = DIV_ROUND_CLOSEST(
+				chip->nurbs * chip->iso_packets *
+				(int)chip->rate, 8000);
+		else
+			subs->runtime->delay =
+				chip->nurbs * chip->urb_frames;
 	}
 	/* Preparation never zeroed the ring; inherit the last session's
 	 * (or the allocator's) bytes.  Poison so that a recorded zero can
@@ -2680,6 +2697,20 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 chip->iso_cadence,
 			 atomic_read(&chip->rate_mismatch),
 			 chip->fb_delay, chip->out_lead);
+		{
+			s64 den = (s64)chip->lag_n * (s64)chip->lag_sxx -
+				  (s64)chip->lag_sx * (s64)chip->lag_sx;
+			s64 num = (s64)chip->lag_n * (s64)chip->lag_sxy -
+				  (s64)chip->lag_sx * (s64)chip->lag_sy;
+			long slope_milli = den ? (long)(num * 1000 / den) : 0;
+
+			dev_info(&chip->dev->dev,
+				 "iso lag drift: %ld.%03ld frames per 1000 packets (n %llu)\n",
+				 slope_milli / 1000,
+				 (slope_milli % 1000) < 0 ? -(slope_milli % 1000) :
+				 (slope_milli % 1000),
+				 (unsigned long long)chip->lag_n);
+		}
 		return 0;
 	default:
 		return -EINVAL;
