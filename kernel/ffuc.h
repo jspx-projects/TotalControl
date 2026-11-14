@@ -308,6 +308,10 @@ struct ffuc {
 	spinlock_t fb_lock;
 	u32 fb[FFUC_FB_SIZE];
 	u64 in_pkts, out_pkts;
+	unsigned int dump_count;
+	u32 iso_frames_hist[9];
+	int iso_last_start;
+	unsigned int iso_start_logged;
 	unsigned int in_end;
 	unsigned int fb_acc;
 	unsigned int fb_delay;

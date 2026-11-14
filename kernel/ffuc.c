@@ -35,6 +35,10 @@ static unsigned int fixed_rate;
  * preserved zero can be distinguished from never-written memory.  Values
  * are near-silent in both formats: float32 denormal and s32 DC null. */
 static bool ffuc_poison = true;
+/* One-shot ISO IN packet dump: header plus the first 36 body words of the
+ * first two valid packets of a run.  Settles the body layout (planar vs
+ * frame-major) and the wire format by measurement. */
+static bool ffuc_dump_iso = true;
 
 static DEFINE_MUTEX(devices_mutex);
 static unsigned long devices_used;
@@ -42,6 +46,7 @@ static unsigned long devices_used;
 static struct usb_driver ffuc_driver;
 
 module_param(ffuc_poison, bool, 0644);
+module_param(ffuc_dump_iso, bool, 0644);
 MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
 
 module_param_array(index, int, NULL, 0444);
@@ -1384,6 +1389,24 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		}
 		frames[i] = min((d->actual_length - FFUC_ISO_IN_HEADER) /
 				(nch * FFUC_SAMPLE_BYTES), m->max_frames);
+		if (frames[i] < ARRAY_SIZE(chip->iso_frames_hist))
+			chip->iso_frames_hist[frames[i]]++;
+		if (ffuc_dump_iso && chip->dump_count < 20 && frames[i]) {
+			const __le32 *w = (const __le32 *)(pkt + FFUC_ISO_IN_HEADER);
+			unsigned int k, n = frames[i] * nch;
+			u32 hv = le32_to_cpup((const __le32 *)pkt);
+
+			chip->dump_count++;
+			dev_info(&chip->dev->dev,
+				 "iso dump pkt%d len %u hdr %08x frames %u words %u:",
+				 i, d->actual_length, hv, frames[i], nch);
+			for (k = 0; k < n; k++) {
+				if ((k % 10) == 0)
+					pr_info("\n");
+				pr_info(" %08x", le32_to_cpu(w[k]));
+			}
+			pr_info("\n");
+		}
 		hdr = le32_to_cpup((const __le32 *)pkt);
 		/* The wrap is not a power of two on the UCX (3072), so a
 		 * mask derived from it would clear payload bits: mask the
@@ -1518,10 +1541,15 @@ static bool ffuc_iso_contiguous(struct ffuc_ep *ep, struct urb *urb)
 {
 	int expected = ep->next_start;
 
-	if (expected < 0)
+	if (ep->chip->iso_start_logged < 12) {
+		ep->chip->iso_start_logged++;
 		dev_info(&ep->chip->dev->dev,
-			 "iso ep%d: first start_frame %u packets %u\n",
-			 ep->index, urb->start_frame, urb->number_of_packets);
+			 "iso ep%d: start_frame %u packets %u delta %d\n",
+			 ep->index, urb->start_frame, urb->number_of_packets,
+			 ep->chip->iso_last_start < 0 ? -1 :
+			 (int)(urb->start_frame - ep->chip->iso_last_start));
+		ep->chip->iso_last_start = urb->start_frame;
+	}
 	ep->next_start = (urb->start_frame + urb->number_of_packets) &
 			 FFUC_ISO_FRAME_MASK;
 	return expected < 0 ||
@@ -1812,6 +1840,8 @@ static void ffuc_engine_stop(struct ffuc *chip)
 	for (i = 0; i < 2; i++)
 		for (j = 0; j < FFUC_MAX_EPS; j++)
 			chip->eps[i][j].next_start = -1;
+	chip->iso_start_logged = 0;
+	chip->iso_last_start = -1;
 	dev_info(&chip->dev->dev,
 		 "engine stop: rate=%u session=%d\n",
 		 chip->rate, chip->session_reopen);
@@ -2431,6 +2461,12 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		/* Gate proof, visible without root: the number of signals
 		 * that would have announced zero completed periods, the
 		 * published-pointer divergences, and the ring anomalies. */
+		dev_info(&chip->dev->dev,
+			 "iso frames histogram [1..8]: %u %u %u %u %u %u %u %u\n",
+			 chip->iso_frames_hist[1], chip->iso_frames_hist[2],
+			 chip->iso_frames_hist[3], chip->iso_frames_hist[4],
+			 chip->iso_frames_hist[5], chip->iso_frames_hist[6],
+			 chip->iso_frames_hist[7], chip->iso_frames_hist[8]);
 		dev_info(&chip->dev->dev,
 			 "%s stop: delta_zero %d hw_ptr_mismatch %d in_overruns %d out_underruns %d bad_length %d/%d\n",
 			 subs->stream ? "capture" : "playback",
