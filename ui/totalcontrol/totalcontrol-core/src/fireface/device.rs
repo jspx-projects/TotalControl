@@ -449,7 +449,17 @@ impl UcMeterBank {
             if word > 0x4000_0000 {
                 continue;
             }
-            self.output_rms[channel] = protocol::uc_output_header_rms_linear(word);
+            let rms = protocol::uc_output_header_rms_linear(word);
+            // A status value can sit below the full-scale check.  A real
+            // RMS word cannot exceed the matching output peak word.
+            let peak = db_to_linear(
+                protocol::uc_playback_dbfs(packet.output(channel))
+                    .unwrap_or(f32::NEG_INFINITY),
+            );
+            if rms > 0.0 && (peak <= 0.0 || rms > peak * 1.01) {
+                continue;
+            }
+            self.output_rms[channel] = rms;
         }
     }
 
@@ -9764,6 +9774,12 @@ mod tests {
         data[16..20].copy_from_slice(&0x0200_0000u32.to_le_bytes());
         data[24..28].copy_from_slice(&0x0080_0000u32.to_le_bytes());
         data[252..256].copy_from_slice(&0x0100_0000u32.to_le_bytes());
+        // The header words are valid only when the matching output peak
+        // record is at least as high.
+        for channel in 4..8 {
+            let off = 252 + 4 * channel;
+            data[off..off + 4].copy_from_slice(&0x7fff_0000u32.to_le_bytes());
+        }
         let packet = UcMeterPacket::parse(&data).expect("data page");
         dev.uc_meters.apply(&packet);
         // The device output words are already post-fader.  Moving the row
@@ -9776,6 +9792,26 @@ mod tests {
         assert!((bars[5] - 0.25).abs() < 1e-3, "output 5 header RMS");
         assert!((bars[6] - 0.125).abs() < 1e-3, "output 6 header RMS");
         assert!((bars[7] - 0.0625).abs() < 1e-3, "output 7 header RMS");
+    }
+
+    #[test]
+    fn uc_header_rms_rejects_status_values() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut data = [0u8; UcMeterPacket::LEN];
+        data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // Channel 4: RMS 0.5 with a full-scale peak, a valid word.
+        data[0..4].copy_from_slice(&0x2000_0000u32.to_le_bytes());
+        data[268..272].copy_from_slice(&0x7fff_0000u32.to_le_bytes());
+        // Channel 5: RMS 0.5 with no peak, a status-like word.
+        data[8..12].copy_from_slice(&0x2000_0000u32.to_le_bytes());
+        // Channel 6: small status word with no peak.
+        data[16..20].copy_from_slice(&3u32.to_le_bytes());
+        let packet = UcMeterPacket::parse(&data).expect("data page");
+        dev.uc_meters.apply(&packet);
+        let bars = dev.output_meters_internal(true).expect("output bars");
+        assert!((bars[4] - 0.5).abs() < 1e-3, "valid header word {:?}", bars);
+        assert_eq!(bars[5], 0.0, "reject header word without a peak");
+        assert_eq!(bars[6], 0.0, "reject small status word");
     }
 
     #[test]

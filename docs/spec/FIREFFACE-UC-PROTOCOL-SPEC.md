@@ -478,8 +478,9 @@ Each peak-page stereo pair occupies four 16-bit words:
 | `w + 3` | second channel Peak |
 
 Playback pair `p` starts at `w = 90 + 4p`.  Hardware-output pair `p` starts
-at `w = 126 + 4p`.  Output pair 3 (Main 7/8) is therefore words 138..141,
-bytes 276..283.
+at `w = 126 + 4p`.  Output block `p` occupies channels `2p+1` and `2p+2` in
+display order; a left-only signal appears on `2p+1`.  Output pair 3
+(Main 7/8) is therefore words 138..141, bytes 276..283.
 
 A peak word is a linear 16-bit value:
 
@@ -563,7 +564,9 @@ RMS dBFS      = 10 × log10(word / 0x80000000)
 A full-scale sine has word `0x40000000` and reads −3.01 dBFS RMS.  The
 header and RMS-page output RMS words follow the row's `0x1a` output fader.
 TotalControl writes the fader to the device and does not apply it again.
-The over band comes from the output record's OVR word.
+The over band comes from the output record's OVR word.  A header RMS word
+whose amplitude exceeds the matching output peak word is status, not a
+level; the host ignores it and keeps the previous bar.
 
 ### OVR trigger
 
@@ -684,14 +687,10 @@ change the input meter or the input bank in the `0x85` page.
    pairs, and an all-zero state; one session changed its format
    mid-stream.  No session-level value carries page identity, and the
    words have no role in synchronisation.
-7. Pair ordering under the UC's Mac (ISO) personality.  Alternation is
+4. Pair ordering under the UC's Mac (ISO) personality.  Alternation is
    verified in that mode; the RMS-then-peak pair order is verified live
    in the interrupt personality and is carried by the same DSP firmware.
-4. The hardware-output record-slot ↔ display-pair mapping in the current
-   firmware.  In one session, output record slots 0/1 byte-matched the
-   input record slots 0/1; that has not been reconciled with the display
-   mapping of the header groups.
-5. Full inventory of the header's status-slot values and of the RMS
+4. Full inventory of the header's status-slot values and of the RMS
    banks' slot-internal engine fields.  These fields drift within a
    session and do not track the input signal under first-difference
    correlation, but no law has been published for them.
