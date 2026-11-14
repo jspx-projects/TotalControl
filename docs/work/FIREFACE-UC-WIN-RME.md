@@ -12,7 +12,9 @@ treated as float32.
 
 The `UC_WIN_RME` descriptor therefore carries the S32 format from firmware
 138 upward and float32 below it.  Other UC descriptors keep their declared
-float32 format; the firmware revision does not override them.
+float32 format; the firmware revision does not override them.  The driver
+resolves the choice once at probe into `chip->s32_samples`; the capture and
+playback handlers only read that field.
 
 ## Period signalling on the isochronous transport
 
