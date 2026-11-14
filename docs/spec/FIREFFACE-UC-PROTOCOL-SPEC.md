@@ -352,45 +352,60 @@ matrix and output state produced by the host mixer.
 ## 10. Metering
 
 The `0x85` bulk stream carries 324-byte pages: 162 little-endian 16-bit
-words.  The stream alternates a data page and a flag page.
+U16 words (U16 word N = bytes 2N..2N+2).  The pages strictly alternate,
+forming a **meter heartbeat**: one peak page followed by one RMS page.
+Each 32-bit U32 field is little-endian unless stated otherwise.
 
-| Page | Marker |
+| Term | Definition |
 |---|---|
-| Data | 32-bit word at byte 4 is `0x00001fff` |
-| Flag | 32-bit word at byte 4 is `0` or `1` |
+| **Meter heartbeat** | Two consecutive pages of different identity: one peak page and one RMS page, in that order. |
+| **Page tag** | The identity field of a page: the U32 read from bytes 4..8 (U16 words 2 and 3; word 2 = low half). |
+| **Peak page** | The page whose record table carries peak/OVR meter records. Page tag `0x00001fff` (word 2 = `0x1fff`, word 3 = `0`). |
+| **RMS page** | The page carrying the RMS banks. Engine-defined page tag (observed: `0x00000000`, and counter/timestamp pairs in one firmware session). |
+| **Record table** | Bytes 108..323 (U32 words 54..161): 54 × U32 meter records. Both page kinds carry the same address range; only the peak page's record table is meter content. |
+| **Meter record** | One U32 in the record table; layout and law per record class below. |
+| **RMS banks** | The power-word banks of the RMS page: input bank, playback bank, output bank. |
+| **No-update sentinel** | `0x1fff`. In a meter record: the channel's detector did not refresh. In an RMS bank word: no value published. Never audio level data. |
+| **Header** | Bytes 0..107 of every page: seven 16-byte groups at byte offsets 0, 16, 32, 48, 64, 80, 96; the last group is truncated after its second value slot at byte 104. |
+| **Value slot / status slot** | The two U32 positions of a header group: +0 and +8 are value slots, +4 and +12 are status slots. |
+| **Peak word** | The level halfword of a meter record (16-bit analog/playback/output; 24-bit in bits 8..31 for digital). Linear scale, `0x8000`/`0x800000` full scale. |
+| **OVR word** | The over halfword (low byte/nibble) of a meter record: the `0xff` event byte plus the device's consecutive full-scale-sample count; carries no level data. |
 
-The page kind of one mode carries marker `0x1fff` (see the table above)
-on the data page, another carries `0`.  There word 6 (byte 12..13) is the
-discriminator: the data page carries a non-zero status word there and the
-flag page carries zero.  A reader classifies the page as data when the
-marker is `0x1fff` **or** word 6 is non-zero, and as flag otherwise.
+| Page identity | Page tag (U32 at bytes 4..8) |
+|---|---|
+| Peak page | `0x00001fff` |
+| RMS page | engine-defined, no level data |
 
-The data page carries the Peak and OVR words.  The flag page carries the
-software-playback RMS words.  A reader must not apply a flag page to the
-Peak bank, and must not apply a data page to the RMS bank: in the modes
-that carry marker `0` on both page kinds, reading the data page's record
-region at the flag-page word offsets turns input/peak data into huge
-phantom RMS values.
+Page identity is determined by the page tag alone; a host must not infer
+it from stream position.  Word 6 (byte 12..13) does not carry page
+identity — it is the third U16 of input slot 1 in the input RMS bank
+(words 0..71) and follows that slot's content, so it may read non-zero
+and counter-like values within a whole session's identity class.
+
+A page tag other than the two values above is not meter content and must
+be ignored.  A peak page must never be applied to the RMS banks, and an
+RMS page must never be applied to the record table: applying the RMS
+page's record region at the record-table addresses turns input/peak data
+into huge phantom RMS values.
 
 ### Page map
 
-Data page (either page kind that sets word 6; 4-byte records, two
-16-bit words per record):
+Peak page (4-byte records, two 16-bit words per record):
 
 | Words (bytes) | Contents |
 |---|---|
-| 0..53 (0..107) | header/status: the page discriminator in word 2 (byte 4) or word 6 (byte 12..13), plus seven 16-byte output-pair RMS groups at bytes 0, 16, 32, 48, 64, 80 and 96.  Each group is `+0` left RMS power (u32), `+4` left status, `+8` right RMS power (u32), `+12` right status.  The last group ends after its right RMS word at byte 104.  Word 2 carries the `0x00001fff` marker in the one mode, `0` in the other; where it is `0`, word 6 tells the page kind: non-zero on the data page, zero on the flag page (see the classification rule above) |
+| 0..53 (0..107) | header: the page tag (words 2..3, bytes 4..8), plus seven 16-byte output-pair RMS groups at bytes 0, 16, 32, 48, 64, 80 and 96.  Each group is `+0` left RMS power (U32), `+4` left status, `+8` right RMS power (U32), `+12` right status; the last group ends after its right RMS word at byte 104.  The header's value-slot publication is engine-state dependent; see "Output RMS bank" |
 | 54..69 (108..139) | AN1..AN8 input records: high halfword = linear 16-bit peak, low halfword = OVR word when over |
-| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = linear 24-bit peak, bits 0..7 = full-scale-sample count, `0x00001fff` filler before the first sample |
-| 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit Peak |
-| 126..161 (252..323) | hardware outputs AN1..8, S/PDIF and ADAT 1..8 records: OVR word + linear 16-bit Peak |
+| 70..89 (140..179) | S/PDIF L/R and ADAT 1..8 input records: bits 8..31 = linear 24-bit peak, bits 0..7 = full-scale-sample count, `0x00001fff` sentinel before the first sample |
+| 90..125 (180..251) | SW playback 1..18 records: OVR word + linear 16-bit peak |
+| 126..161 (252..323) | hardware outputs AN1..8, S/PDIF and ADAT 1..8 records: OVR word + linear 16-bit peak |
 
-Unknown bytes on the data page: 48 of 324.  The 52 status bytes are the
+Unknown bytes on the peak page: 48 of 324.  The 52 status bytes are the
 two status words of the six full output-pair groups plus the last group's
-left status word; four bytes are the page discriminator and the remaining
-48 are status/filler.
+left status word; four bytes are the page tag and the remaining 48 are
+status/filler.
 
-Flag page (the non-data page of the alternation, word 6 reads zero):
+RMS page:
 
 | Words (bytes) | Contents |
 |---|---|
@@ -399,12 +414,14 @@ Flag page (the non-data page of the alternation, word 6 reads zero):
 | 144..159 (288..319) | hardware output RMS bank: the power words at 147, 151, 155, 159 = AN1, AN2, AN3, AN4; the other twelve words are junk |
 | 160..161 (320..323) | truncated head of output channel 4's own slot: Unknown |
 
-Unknown bytes on the flag page: the status/junk words inside the RMS
-slots and the truncation tail.
+Unknown bytes on the RMS page: the status/junk words inside the RMS
+slots and the truncation tail.  Any page whose word 2 is not `0x1fff` is
+an RMS page, whatever its tag value; the tag value range is an open item
+(see "Open metering items").
 
 ### Playback and output Peak/OVR words
 
-Each data-page stereo pair occupies four 16-bit words:
+Each peak-page stereo pair occupies four 16-bit words:
 
 | Pair words | Contents |
 |---|---|
@@ -417,7 +434,7 @@ Playback pair `p` starts at `w = 90 + 4p`.  Hardware-output pair `p` starts
 at `w = 126 + 4p`.  Output pair 3 (Main 7/8) is therefore words 138..141,
 bytes 276..283.
 
-A Peak word is a linear 16-bit value:
+A peak word is a linear 16-bit value:
 
 ```text
 Peak dBFS = 20 × log10(word / 32768)
@@ -434,7 +451,7 @@ The OVR word is two bytes:
 | 15..8 | `0xff` while the channel is at or above full scale, the over event |
 | 7..0 | consecutive samples at or above full scale, counted by the device |
 
-The low byte is the device's own consecutive-over-sample count within the
+The count is the device's own consecutive-over-sample count within the
 record's update window: it reads 0 on the `0xff00`/`0x0000` no-over
 fillers, climbs with the over fraction of the record window (4/8/11/13/15
 at sine peaks of +0.05/+0.25/+0.50/+0.75/+1.00 dB), and saturates: the
@@ -446,7 +463,7 @@ runs no sample counting of its own.
 
 ### Playback RMS words
 
-The flag page carries playback RMS for pair `p` at words `75 + 8p` (left)
+The RMS page carries playback RMS for pair `p` at words `75 + 8p` (left)
 and `79 + 8p` (right).  The word is linear power relative to full-scale
 peak squared:
 
@@ -462,16 +479,21 @@ verified with an 18-channel source: each pair's RMS appears only at
 
 ### Output RMS bank
 
-The flag page carries output RMS for channels 0..3 (AN1..AN4) in the same
+The RMS page carries output RMS for channels 0..3 (AN1..AN4) in the same
 per-channel slot shape as the playback bank, starting at word 144: four
 words per output channel with the RMS power word at `147 + 4c`.  Word
 160/161 is the truncated head of channel 4's own slot.
 
-The data page header carries the remaining output channels 4..17
+The peak page header carries the remaining output channels 4..17
 (AN5/6 through ADAT7/8) in seven 16-byte groups.  The left power word is at
 group offset 0 and the right power word at group offset 8; the words at
 offsets 4 and 12 are status.  The groups map to output pairs in display
-order:
+order.  This header publication is engine-state dependent, not
+page-kind-dependent: in firmware states where the header publishes, its
+value slots carried outgoing output levels page-consistent with the same
+channels' peak/OVR records; in other states the value slots are zero or
+DSP status, and the status slots always only carry DSP status.  Status
+slots are never level data.
 
 | Group byte | Output pair |
 |---:|---|
@@ -493,9 +515,10 @@ RMS dBFS      = 10 × log10(word / 0x80000000)
 ```
 
 A full-scale sine has word `0x40000000` and reads −3.01 dBFS RMS.  The
-header and flag-page output RMS words are measured before the row's `0x1a`
-output fader; TotalControl applies that fader for the displayed post-fader
-output meter.  The over band comes from the output record's OVR word.
+header and RMS-page output RMS words are measured before the row's `0x1a`
+output fader; TotalControl applies that fader for the displayed
+post-fader output meter.  The over band comes from the output record's
+OVR word.
 
 ### OVR trigger
 
@@ -511,9 +534,9 @@ preference.
 ### Analog input records
 
 The input peak law is linear in both personalities.  The analog inputs
-carry a linear 16-bit peak in the upper halfword of the data-page record;
+carry a linear 16-bit peak in the upper halfword of the peak-page record;
 the digital inputs carry a linear 24-bit peak in bits 8..31.  Playback and
-hardware-output records use the linear 16-bit Peak word as well.
+hardware-output records use the linear 16-bit peak word as well.
 
 For an analog input the lower halfword is the OVR word when the input is
 over: high byte `0xff`, low byte the device's consecutive-over count, with
@@ -524,7 +547,7 @@ u == 0                  -> below range
 dBFS = 20 × log10(u / 32768),  u = record >> 16
 ```
 
-The word is the same linear scale as the playback and output Peak words.
+The word is the same linear scale as the playback and output peak words.
 The analog detector settles slowly, so a reading is its hold value, not an
 instantaneous level.  The input reference and gain are applied before the
 meter.
@@ -548,12 +571,12 @@ widths at a 96-sample period gave the same low nibbles.  The low nibble
 saturates at 15.  The upper nibble is a status/overflow field; its packing
 is not yet clear.  The 24-bit level saturates at `0x7fffff`, and the over
 LED uses the low-nibble count against the global **Full scale samples for
-OVR** preference.  The `0x00001fff` filler has a level below the meter's
-floor and is no data.
+OVR** preference.  The `0x00001fff` no-update sentinel has a level below
+the meter's floor and is no data.
 
 ### Input RMS words
 
-The flag page carries an input RMS power word at `3 + 4c` for input `c`
+The RMS page carries an input RMS power word at `3 + 4c` for input `c`
 (`0..17`), on the same scale as the playback and output RMS banks:
 
 ```text
@@ -571,24 +594,24 @@ zero; the bar then uses the peak word's sine equivalent
 
 ### TotalControl behaviour
 
-- Playback lower VU bar: the flag-page RMS bank (all 18 playbacks).
-- Hardware output lower VU bar: the flag-page bank for AN1..AN4 and the
-  data-page header for AN5..ADAT8.  The device words are pre-fader;
-  TotalControl applies the row's `0x1a` output fader and mute for the
-  displayed post-fader meter.
-- Playback and output peak line: the data-page Peak word.
+- Playback lower VU bar: the RMS-page playback bank (all 18 playbacks).
+- Hardware output lower VU bar: the RMS-page output bank for AN1..AN4 and
+  the peak-page header for AN5..ADAT8, where the engine publishes it.
+  The device words are pre-fader; TotalControl applies the row's `0x1a`
+  output fader and mute for the displayed post-fader meter.
+- Playback and output peak line: the peak-page peak word.
 - Playback and output OVR LED: the device's consecutive-over count in the
   record's OVR word, compared with the global OVR sample preference
-  (default three).  The data-page output records carry OVR for all 18
+  (default three).  The peak-page output records carry OVR for all 18
   outputs.
 - Playback and output red band (0..+6 dB): the record's OVR count inverse
   inside the device's resolvable range; beyond it the hardware output
   rows continue on the row's written `0x1a` fader and routed matrix
   state.
-- Input lower VU bar: the flag-page input RMS bank (`3 + 4c`).  When
-  the power word is zero for a very low signal, the bar uses the peak
-  word's sine equivalent (`peak / sqrt(2)`).
-- Input peak line: the data-page input peak word (linear 16-bit analog /
+- Input lower VU bar: the RMS-page input bank (`3 + 4c`).  When the power
+  word is zero for a very low signal, the bar uses the peak word's sine
+  equivalent (`peak / sqrt(2)`).
+- Input peak line: the peak-page input peak word (linear 16-bit analog /
   24-bit digital).
 - Input OVR LED: the analog low-word over event, gated by the global OVR
   sample preference; the digital full-scale-sample count, gated by the
@@ -597,3 +620,21 @@ zero; the bar then uses the peak word's sine equivalent
 Input meters measure the physical input before loopback.  A
 loopback-enabled output replaces the input's record signal, but does not
 change the input meter or the input bank in the `0x85` page.
+
+### Open metering items
+
+1. The engine condition under which the RMS banks publish.  Sessions
+   have been observed where input and playback banks were zero on every
+   page, including states with active routed tonal monitoring; the
+   output bank's publishing condition is likewise not mapped.
+2. Which engine state makes the header's value slots publish output
+   levels (see "Output RMS bank"); the publication is engine-state
+   dependent, not page-kind dependent.
+3. The RMS page's page-tag values beyond the two states observed
+   (`0x00000000` and one counter/timestamp session).
+4. The hardware-output record-slot ↔ display-pair mapping in the current
+   firmware.  In one session, output record slots 0/1 byte-matched the
+   input record slots 0/1; that has not been reconciled with the display
+   mapping of the header groups.
+5. Full inventory of DSP status-slot values (header + input RMS banks'
+   slot-internal fields).
