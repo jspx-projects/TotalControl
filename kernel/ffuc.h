@@ -382,6 +382,12 @@ struct ffuc {
 	atomic_t in_gaps;
 	atomic_t in_shorts;
 	atomic_t in_status_errors;
+	/* ISO per-packet failure split and header cross-checks. */
+	atomic_t in_status_err;
+	atomic_t in_short;
+	atomic_t in_misaligned;
+	atomic_t in_frames_mismatch;
+	atomic_t in_pos_gap;
 	/* q48 instrumentation: ring pressure and core-pointer coherence.
 	 * in_overruns: capture completions that overwrote unread frames.
 	 * out_underruns: playback completions that sent non-written data.

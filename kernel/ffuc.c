@@ -1120,8 +1120,10 @@ static void ffuc_signal_period(struct ffuc *chip, struct ffuc_stream *s)
 		return;
 	snd_pcm_stream_lock_irqsave(s->substream, flags);
 	if (!ffuc_pending(s)) {
-		/* Unreachable under the gate; the counter proves it. */
-		atomic_inc(&chip->delta_zero);
+		/* A gate violation is only countable while the stream
+		 * runs; a stop racing the caller is not a violation. */
+		if (s->running)
+			atomic_inc(&chip->delta_zero);
 	} else {
 		s->signalled = s->period;
 		snd_pcm_period_elapsed_under_stream_lock(s->substream);
@@ -1361,10 +1363,21 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		const u8 *pkt = (const u8 *)urb->transfer_buffer + d->offset;
 		u32 hdr;
 
-		if (d->status || d->actual_length < FFUC_ISO_IN_HEADER ||
-		    (d->actual_length - FFUC_ISO_IN_HEADER) %
+		if (d->status) {
+			atomic_inc(&chip->in_status_err);
+			frames[i] = 0;
+			ffuc_fb_put_nominal(chip);
+			continue;
+		}
+		if (d->actual_length < FFUC_ISO_IN_HEADER) {
+			atomic_inc(&chip->in_short);
+			frames[i] = 0;
+			ffuc_fb_put_nominal(chip);
+			continue;
+		}
+		if ((d->actual_length - FFUC_ISO_IN_HEADER) %
 		    (nch * FFUC_SAMPLE_BYTES)) {
-			atomic_inc(&chip->in_shorts);
+			atomic_inc(&chip->in_misaligned);
 			frames[i] = 0;
 			ffuc_fb_put_nominal(chip);
 			continue;
@@ -1372,13 +1385,30 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		frames[i] = min((d->actual_length - FFUC_ISO_IN_HEADER) /
 				(nch * FFUC_SAMPLE_BYTES), m->max_frames);
 		hdr = le32_to_cpup((const __le32 *)pkt);
-		ffuc_fb_put(chip, (hdr >> 5) & (ffuc_iso_wrap(chip) - 1),
-			    frames[i],
-			    chip->ucx ? ((hdr >> 21) & 0x7ff) :
-					((hdr >> 18) & 0x3fff));
+		/* The wrap is not a power of two on the UCX (3072), so a
+		 * mask derived from it would clear payload bits: mask the
+		 * header field, then reduce modulo the wrap. */
+		{
+			unsigned int pos = chip->ucx ? ((hdr >> 5) & 0xfff) :
+						      ((hdr >> 5) & 0x1fff);
+			unsigned int hframes = hdr & 0x1f;
+			unsigned int wrap = ffuc_iso_wrap(chip);
+
+			pos %= wrap;
+			if (hframes != frames[i])
+				atomic_inc(&chip->in_frames_mismatch);
+			if (chip->in_pkts &&
+			    pos != chip->in_end % wrap)
+				atomic_inc(&chip->in_pos_gap);
+			ffuc_fb_put(chip, pos, frames[i],
+				    chip->ucx ? ((hdr >> 21) & 0x7ff) :
+						((hdr >> 18) & 0x3fff));
+		}
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 
+	if (!subs)
+		return;	/* feedback-only capture: no PCM attached */
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
 		for (i = 0; i < urb->number_of_packets; i++) {
@@ -1478,10 +1508,20 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
 }
 
+/*
+ * ISO URB continuity.  start_frame and number_of_packets are in the
+ * units the HCD reports; the watchdog only compares successive URBs, so
+ * any consistent unit cancels.  The first log line of a run records both
+ * values so the unit can be confirmed from the bench.
+ */
 static bool ffuc_iso_contiguous(struct ffuc_ep *ep, struct urb *urb)
 {
 	int expected = ep->next_start;
 
+	if (expected < 0)
+		dev_info(&ep->chip->dev->dev,
+			 "iso ep%d: first start_frame %u packets %u\n",
+			 ep->index, urb->start_frame, urb->number_of_packets);
 	ep->next_start = (urb->start_frame + urb->number_of_packets) &
 			 FFUC_ISO_FRAME_MASK;
 	return expected < 0 ||
@@ -1554,6 +1594,12 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "in_shorts %d\n", atomic_read(&chip->in_shorts));
 	seq_printf(m, "in_status_errors %d\n",
 		   atomic_read(&chip->in_status_errors));
+	seq_printf(m, "iso_in status_err %d short %d misaligned %d frames_mismatch %d pos_gap %d\n",
+		   atomic_read(&chip->in_status_err),
+		   atomic_read(&chip->in_short),
+		   atomic_read(&chip->in_misaligned),
+		   atomic_read(&chip->in_frames_mismatch),
+		   atomic_read(&chip->in_pos_gap));
 	seq_printf(m, "in_overruns %d\nout_underruns %d\n",
 		   atomic_read(&chip->in_overruns),
 		   atomic_read(&chip->out_underruns));
@@ -1757,8 +1803,15 @@ static void ffuc_kill_urbs(struct ffuc *chip, bool kill_status)
 
 static void ffuc_engine_stop(struct ffuc *chip)
 {
+	int i, j;
+
 	if (!chip->engine_running)
 		return;
+	/* A restarted engine has a new frame counter; the ISO continuity
+	 * watchdog must not compare across the restart. */
+	for (i = 0; i < 2; i++)
+		for (j = 0; j < FFUC_MAX_EPS; j++)
+			chip->eps[i][j].next_start = -1;
 	dev_info(&chip->dev->dev,
 		 "engine stop: rate=%u session=%d\n",
 		 chip->rate, chip->session_reopen);
@@ -1904,6 +1957,10 @@ static int ffuc_engine_start(struct ffuc *chip)
 
 	if (chip->engine_running)
 		return 0;
+	/* Fresh continuity expectation for a fresh engine. */
+	for (e = 0; e < 2; e++)
+		for (i = 0; i < FFUC_MAX_EPS; i++)
+			chip->eps[e][i].next_start = -1;
 	if (READ_ONCE(chip->disconnected))
 		return -ENODEV;
 
@@ -2672,6 +2729,23 @@ static int ffuc_probe(struct usb_interface *intf,
 				       ffuc_mode_out_words(&chip->modes[i])));
 		}
 		chip->urb_bytes_max = span * FFUC_SAMPLE_BYTES;
+		if (chip->iso) {
+			const struct ffuc_mode *im;
+			unsigned int k;
+
+			for (k = 0; k < chip->desc->n_modes; k++) {
+				im = &chip->modes[k];
+				/* The feedback frames field is 5 bits and the
+				 * packet arithmetic must stay inside it. */
+				WARN_ON(im->max_frames > 31);
+				WARN_ON(im->neps != 1);
+				WARN_ON(im->max_frames * (im->words + 1) *
+					FFUC_SAMPLE_BYTES > im->out_mps);
+				WARN_ON(FFUC_ISO_IN_HEADER +
+					im->max_frames * im->words *
+					FFUC_SAMPLE_BYTES > im->in_mps);
+			}
+		}
 	}
 	/* The Windows IF5 driver reads 73,728-byte IN URBs. */
 	if ((chip->desc->quirks & FFUC_QUIRK_IF5_PLAYBACK_MASK) &&
