@@ -377,7 +377,7 @@ The monitor actions write these addresses:
 | Dim | `0x1a` Main output-level pair; Speaker B pair only while linked |
 | Recall | `0x1a` Main output-level pair; Speaker B pair only while linked |
 | Speaker B | `0x1a` Main and Speaker B output-level pairs; mute the inactive pair |
-| Mono | `0x12` sends into the active monitor matrix pair, each side attenuated by 3 dB before summing |
+| Mono | `0x12` sends into the active monitor matrix pair, each side attenuated by 6 dB before summing |
 | External Input | `0x12` Main matrix pair; clear the pair, then copy the selected input pair |
 | Talkback | `0x12` receiver matrix pairs and Main for Listenback |
 | Cue | `0x12` target matrix pair |

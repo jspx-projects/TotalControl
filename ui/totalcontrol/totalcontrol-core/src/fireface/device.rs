@@ -1960,10 +1960,9 @@ impl Fireface {
         Ok(())
     }
 
-    /// Equal-level mono summing: attenuate each side by 3 dB before the
-    /// sum.  This avoids the 6 dB rise of a direct L+R sum for centred
-    /// material and matches RME's recommended manual mono-sum practice.
-    const CONTROL_ROOM_MONO_SIDE_GAIN: f32 = 0.707_945_8;
+    /// Level-neutral mono summing: attenuate each side by 6 dB before the
+    /// sum.  A centred signal keeps its level instead of rising by 6 dB.
+    const CONTROL_ROOM_MONO_SIDE_GAIN: f32 = 0.5;
 
     /// The monitor output affected by monitor actions.  Speaker B is the
     /// active path while it is switched on; otherwise Main Out is.
