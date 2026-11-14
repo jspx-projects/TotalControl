@@ -94,6 +94,12 @@
 
 #define FFUC_STATE_BUF_SIZE	1024
 #define FFUC_EVENT_FIFO_SIZE	(64 * 1024)
+#define FFUC_METER_PAIR_MAX	648
+/* Backpressure marks for the UC heartbeat feed, in events.  The high mark
+ * covers one slow 15 Hz consumer period with jitter; the low mark gives
+ * hysteresis. */
+#define FFUC_METER_HIGH_WATER	16
+#define FFUC_METER_LOW_WATER	4
 #define FFUC_EVENT_BUF_SIZE	(sizeof(struct ffuc_hwdep_event_hdr) + \
 				 FFUC_EVENT_MAX)
 
@@ -128,6 +134,9 @@
 /* quirks */
 #define FFUC_QUIRK_ALT_RESELECT		BIT(0)	/* alt 0 then alt N at start */
 #define FFUC_QUIRK_INT32_SAMPLES	BIT(1)	/* IF5 sends S32, not float */
+/* The S32 sample format arrived with the firmware-138 UC revision.  Newer
+ * UC units use it even when they enumerate under an older descriptor. */
+#define FFUC_UC_S32_FIRMWARE		138
 #define FFUC_QUIRK_STATUS_LATCH		BIT(2)	/* status byte 3 bit 7 */
 #define FFUC_QUIRK_IF5_PRE_START	BIT(3)	/* 0x10 0x8000 + 0x1d before audio */
 #define FFUC_QUIRK_IF5_PLAYBACK_MASK	BIT(4)	/* req 19/20 channel mask */
@@ -324,6 +333,17 @@ struct ffuc {
 	struct delayed_work meter_work;
 	atomic_t hwdep_users;
 	atomic_t meter_urbs;
+	/* One meter heartbeat under assembly: the RMS page then the peak
+	 * page.  Emitted as one event, so a reader can never see a half. */
+	u8 meter_pair[FFUC_METER_PAIR_MAX];
+	unsigned int meter_pair_len;
+	/* The device's page phase is not anchored for this session (fresh
+	 * probe, or a failed drain).  The next heartbeat carries the
+	 * phase-lost flag. */
+	bool meter_phase_lost;
+	/* Pair pump state for the reader backpressure. */
+	bool meter_paused;
+	u32 meter_pairs;
 	atomic_t state_urbs;
 
 	/* USB-MIDI streaming interface (bulk OUT / bulk IN) */

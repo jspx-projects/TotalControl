@@ -79,6 +79,7 @@ static ssize_t ffuc_hwdep_read(struct snd_hwdep *hwdep, char __user *buf,
 	u8 *tmp;
 	unsigned int len, got;
 	unsigned long flags;
+	bool was_paused;
 	int ret;
 
 	if (count < (long)sizeof(h))
@@ -110,12 +111,21 @@ static ssize_t ffuc_hwdep_read(struct snd_hwdep *hwdep, char __user *buf,
 		kfree(tmp);
 		return -EINVAL;
 	}
+	was_paused = READ_ONCE(chip->meter_paused);
 	got = kfifo_out(&chip->event_fifo, tmp, len);
+	if (was_paused &&
+	    kfifo_len(&chip->event_fifo) <
+		    FFUC_METER_LOW_WATER *
+			    (chip->desc ? chip->desc->meter_len * 2 + 16 : 16))
+		WRITE_ONCE(chip->meter_paused, false);
 	spin_unlock_irqrestore(&chip->event_lock, flags);
 	if (got != len) {
 		kfree(tmp);
 		return -EIO;
 	}
+	if (was_paused && chip->state_active &&
+	    !READ_ONCE(chip->meter_paused))
+		schedule_delayed_work(&chip->meter_work, 0);
 
 	if (copy_to_user(buf, tmp, len))
 		ret = -EFAULT;
@@ -152,8 +162,18 @@ static int ffuc_hwdep_release(struct snd_hwdep *hwdep, struct file *file)
 {
 	struct ffuc *chip = hwdep->private_data;
 
-	if (atomic_dec_and_test(&chip->hwdep_users))
+	if (atomic_dec_and_test(&chip->hwdep_users)) {
+		unsigned long flags;
+
 		ffuc_transport_stop(chip);
+		if (chip->model == FFUC_MODEL_UC) {
+			/* Unread events are stale for the next reader. */
+			spin_lock_irqsave(&chip->event_lock, flags);
+			kfifo_reset(&chip->event_fifo);
+			spin_unlock_irqrestore(&chip->event_lock, flags);
+			WRITE_ONCE(chip->meter_paused, false);
+		}
+	}
 	return 0;
 }
 
@@ -364,15 +384,97 @@ static void ffuc_state_complete(struct urb *urb)
 		schedule_delayed_work(&chip->state_work, msecs_to_jiffies(4));
 }
 
+/* Bytes currently queued in the event FIFO. */
+static unsigned int ffuc_event_bytes(struct ffuc *chip)
+{
+	unsigned long flags;
+	unsigned int len;
+
+	spin_lock_irqsave(&chip->event_lock, flags);
+	len = kfifo_len(&chip->event_fifo);
+	spin_unlock_irqrestore(&chip->event_lock, flags);
+	return len;
+}
+
+/* Number of AN input record words that are not zero.  The peak half
+ * publishes the eight analog records (idle floors included); the RMS half
+ * carries input-bank slot words in that address range, which are zero
+ * while the digital inputs are silent.  Used only to recover the phase
+ * when the session's order is unknown. */
+static unsigned int ffuc_an_record_words(const u8 *page, unsigned int len)
+{
+	unsigned int i, n = 0;
+
+	if (len < 108 + 8 * 4)
+		return 0;
+	for (i = 0; i < 8; i++) {
+		u32 record;
+
+		memcpy(&record, page + 108 + i * 4, sizeof(record));
+		if (record)
+			n++;
+	}
+	return n;
+}
+
 static void ffuc_meter_complete(struct urb *urb)
 {
 	struct ffuc *chip = urb->context;
 
 	atomic_inc(&chip->meter_urbs);
-	if (urb->status == 0 && urb->actual_length >= 4)
+	if (urb->status == 0 && chip->desc &&
+	    (chip->model == FFUC_MODEL_UC) &&
+	    urb->actual_length == chip->desc->meter_len &&
+	    2 * chip->desc->meter_len <= FFUC_EVENT_MAX) {
+		unsigned int len = chip->desc->meter_len;
+
+		if (chip->meter_pair_len == 0) {
+			memcpy(chip->meter_pair, urb->transfer_buffer, len);
+			chip->meter_pair_len = len;
+		} else {
+			unsigned int flags = FFUC_EV_FLAG_METER_PAIR;
+
+			memcpy(chip->meter_pair + len, urb->transfer_buffer, len);
+			chip->meter_pair_len = 0;
+			if (chip->meter_phase_lost) {
+				unsigned int a = ffuc_an_record_words(chip->meter_pair, len);
+				unsigned int b = ffuc_an_record_words(chip->meter_pair + len, len);
+
+				if (a >= b + 4) {
+					/* First page is the peak half: swap. */
+					u8 tmp[FFUC_METER_PAIR_MAX / 2];
+
+					memcpy(tmp, chip->meter_pair, len);
+					memcpy(chip->meter_pair, chip->meter_pair + len, len);
+					memcpy(chip->meter_pair + len, tmp, len);
+					chip->meter_phase_lost = false;
+				} else if (b >= a + 4) {
+					chip->meter_phase_lost = false;
+				} else {
+					/* The cue cannot decide this pair.  Deliver
+					 * it in arrival order and keep reporting
+					 * the order as unverified; a later pair
+					 * with a decidable cue resolves the
+					 * session. */
+					flags |= FFUC_EV_FLAG_PHASE_LOST;
+				}
+			}
+			ffuc_event_put(chip, FFUC_EV_METER, chip->meter_pair,
+				       2 * len, flags);
+			chip->meter_pairs++;
+			/* Pause only at a pair boundary. */
+			if (ffuc_event_bytes(chip) >
+			    FFUC_METER_HIGH_WATER * (2 * len + 16))
+				WRITE_ONCE(chip->meter_paused, true);
+		}
+	} else if (urb->status == 0 && urb->actual_length >= 4 &&
+		   chip->model != FFUC_MODEL_UC) {
+		/* Self-describing packet devices (UCX, Babyface) pass each
+		 * packet through unchanged. */
 		ffuc_event_put(chip, FFUC_EV_METER, urb->transfer_buffer,
 			       min_t(unsigned int, urb->actual_length,
 				     FFUC_EVENT_MAX), 0);
+	}
 
 	switch (urb->status) {
 	case -ENOENT:
@@ -383,7 +485,8 @@ static void ffuc_meter_complete(struct urb *urb)
 	default:
 		break;
 	}
-	if (chip->state_active && !READ_ONCE(chip->disconnected))
+	if (chip->state_active && !READ_ONCE(chip->disconnected) &&
+	    !chip->meter_paused)
 		schedule_delayed_work(&chip->meter_work, msecs_to_jiffies(4));
 }
 
@@ -509,7 +612,11 @@ int ffuc_transport_setup(struct ffuc *chip)
 	}
 	if (have_meter && d->meter_len && !chip->meter_urb) {
 		chip->meter_urb = usb_alloc_urb(0, GFP_KERNEL);
-		chip->meter_buf = usb_alloc_coherent(chip->dev, d->meter_len,
+		/* Debug probe: allow one transfer to ask for two pages, to
+		 * find out whether the endpoint delivers the heartbeat
+		 * atomically.  The production length stays one page. */
+		chip->meter_buf = usb_alloc_coherent(chip->dev,
+						     2 * d->meter_len,
 						     GFP_KERNEL,
 						     &chip->meter_dma);
 		if (chip->meter_urb && chip->meter_buf) {
@@ -548,6 +655,10 @@ int ffuc_transport_start(struct ffuc *chip)
 	if (chip->state_active)
 		return 0;
 	chip->state_active = true;
+	if (chip->model == FFUC_MODEL_UC) {
+		chip->meter_pair_len = 0;
+		WRITE_ONCE(chip->meter_paused, false);
+	}
 	/*
 	 * The UC 0x85 endpoint carries the hardware Peak/RMS meter pages.
 	 * Keep the meter URB running for both models; PCM capture remains
@@ -579,6 +690,29 @@ void ffuc_transport_stop(struct ffuc *chip)
 		usb_kill_urb(chip->state_urb);
 	if (chip->meter_urb)
 		usb_kill_urb(chip->meter_urb);
+	/*
+	 * A heartbeat left half-read must be completed before the transport
+	 * stops, or the device's page phase would shift for the next
+	 * session.  Consume the partner page and discard the pair.
+	 */
+	if (chip->meter_pair_len && chip->desc &&
+	    (chip->model == FFUC_MODEL_UC) &&
+	    !READ_ONCE(chip->disconnected)) {
+		u8 buf[FFUC_METER_PAIR_MAX];
+		int actual = 0;
+		int ret;
+
+		ret = usb_bulk_msg(chip->dev,
+				   usb_rcvbulkpipe(chip->dev,
+						   chip->desc->meter_in_ep),
+				   buf, chip->desc->meter_len, &actual, 50);
+		if (ret || actual != (int)chip->desc->meter_len)
+			chip->meter_phase_lost = true;
+		chip->meter_pair_len = 0;
+	} else if (chip->meter_pair_len) {
+		chip->meter_phase_lost = true;
+		chip->meter_pair_len = 0;
+	}
 	wake_up_interruptible_all(&chip->event_wait);
 }
 

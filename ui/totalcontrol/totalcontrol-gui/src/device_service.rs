@@ -8,12 +8,11 @@
 //! - the UI will read a [`Snapshot`] of the channel model;
 //! - meter canvases will read [`MeterSnapshot`] without a view rebuild.
 //!
-//! Stage 1 keeps the service off the running path (the UI still uses the
-//! device directly) so the tree stays green while the interface is wired in
-//! stage 2.  The mock tests exercise the whole boundary.
-//!
-//! Temporary switch: `TOTALCONTROL_DEVICE_SERVICE=1` is reserved for the stage-2
-//! wiring; it is deliberately not read yet.
+//! The service is the running path: the device handle is moved onto the
+//! service thread and the UI keeps a mirror.  `TOTALCONTROL_DEVICE_SERVICE=0`
+//! selects the direct path (the UI owns the device and is the meter
+//! consumer); the test suite defaults to the direct path so it can exercise
+//! the backend without a service thread.
 
 #![allow(dead_code)]
 

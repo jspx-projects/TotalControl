@@ -542,6 +542,17 @@ static const struct ffuc_ops ffuc_ucx_ops = {
 	.hw_mute = ffuc_ucx_hw_mute,
 };
 
+/* Effective quirks for this unit: static descriptor quirks plus runtime
+ * rules that depend on the firmware revision. */
+static inline u32 ffuc_effective_quirks(const struct ffuc *chip)
+{
+	u32 quirks = chip->desc->quirks;
+
+	if (chip->model == FFUC_MODEL_UC && chip->firmware >= FFUC_UC_S32_FIRMWARE)
+		quirks |= FFUC_QUIRK_INT32_SAMPLES;
+	return quirks;
+}
+
 /* -- per-device descriptors ------------------------------------------ */
 
 static const struct ffuc_device_desc ffuc_devices[] = {
@@ -1078,7 +1089,7 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
-		if (chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES)
+		if (ffuc_effective_quirks(chip) & FFUC_QUIRK_INT32_SAMPLES)
 			ffuc_capture_copy_int32(subs->runtime, s->pos[ep->index],
 						urb->transfer_buffer, frames, words,
 						ep->index * words, words, 1, total);
@@ -1106,7 +1117,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
-		if (chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES)
+		if (ffuc_effective_quirks(chip) & FFUC_QUIRK_INT32_SAMPLES)
 			ffuc_playback_copy_int32(subs->runtime, s->pos[ep->index],
 						 urb->transfer_buffer, frames,
 						 words, ep->index * words,
@@ -1385,6 +1396,9 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "urb_errors %d\n", atomic_read(&chip->urb_errors));
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
 	seq_printf(m, "events_dropped %d\n", atomic_read(&chip->events_dropped));
+	seq_printf(m, "meter_urbs %d\n", atomic_read(&chip->meter_urbs));
+	seq_printf(m, "meter_paused %u\nmeter_pairs %u\n",
+		   chip->meter_paused, chip->meter_pairs);
 	seq_printf(m, "urb_frames %u\nnurbs %u\n", chip->urb_frames,
 		   chip->nurbs);
 	return 0;
@@ -2411,6 +2425,9 @@ static int ffuc_probe(struct usb_interface *intf,
 	atomic_set(&chip->event_seq, 0);
 	atomic_set(&chip->events_dropped, 0);
 	atomic_set(&chip->meter_urbs, 0);
+	/* Meter phase is unknown until the device anchors it at power-up;
+	 * the flag marks the first heartbeat of the session. */
+	WRITE_ONCE(chip->meter_phase_lost, true);
 	atomic_set(&chip->state_urbs, 0);
 	atomic_set(&chip->hwdep_users, 0);
 	if (kfifo_alloc(&chip->event_fifo, FFUC_EVENT_FIFO_SIZE, GFP_KERNEL)) {

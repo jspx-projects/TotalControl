@@ -27,8 +27,9 @@ documents for the current implementation, not as a work log.
 
 - State **what something is** and how it behaves. Do not describe what it is
   not, what it used to be, or what went wrong before.
-- No historical notes, retractions, changelogs, capture diaries, or "oracle
-  said" narration in a specification.
+- No history in specifications: no historical notes, retractions,
+  changelogs, capture diaries, or "oracle said" narration. State the model
+  positively.
 - No personal identifying information anywhere in the repository, pull
   requests, commit messages or issues. Do not put serial numbers, USB
   vendor/product IDs, hostnames, usernames, file paths with a home directory,
@@ -50,6 +51,44 @@ documents for the current implementation, not as a work log.
   are for developers; user-facing behaviour described in them must have a
   counterpart in the manual, and how-to material belongs in the manual, not
   in a specification.
+
+## Specification writing rules
+
+How any protocol or behaviour specification is written. The test: a
+proficient designer who has never seen the code must be able to rebuild
+the protocol or behaviour from the section alone.
+
+- Define every term once, at the top of the section, in a terms table:
+  term, address/shape, one-sentence definition. Use that term, and no other
+  word, for that concept everywhere afterwards. Synonyms are defects: never
+  two names for one thing, and never one name for two things.
+- Write in plain English; use technical language only through the defined
+  terms. Write the content directly; do not dress it in framing language
+  ("in designer's words", "as the vendor would say") that is not part of
+  the model.
+- Keep byte/word layout tables: address ranges, sizes, counts and laws
+  within the section. A layout described in prose instead of a table is a
+  defect. State how much of each page/structure is decoded and what
+  remains unknown.
+- Normative text carries only verified behaviour. Everything that evidence
+  does not yet settle goes into an explicit "Open items" subsection at the
+  end of the section, listed and named (condition, observation, or
+  missing mapping) rather than being hinted at inside prose. Where a claim
+  depends on a device state, say precisely which state it was verified in.
+- An investigation must distinguish verified from assumed at every step.
+  State verified conclusions with their capture or test; label everything
+  else as hypothesis and say what evidence would decide it. No conclusion
+  before its evidence, and do not create a new structural concept (page
+  kind, field, block) without capture evidence and a user-approved name;
+  if evidence extends or contradicts an earlier claim, first establish the
+  naming impact and get that confirmed before code changes.
+- When a concept is renamed, retire the old name everywhere in the same
+  change: specification, code and comments, work notes, tests and the
+  manual. Renames go through the user before the code lands.
+- One idea per sentence. Split compound statements into short sentences.
+  Never fuse qualifications, hypotheses or caveats into a single sentence;
+  each sentence expresses exactly one fact, claim or question. This applies
+  to specification text and to replies to the user alike.
 
 Authoritative files:
 

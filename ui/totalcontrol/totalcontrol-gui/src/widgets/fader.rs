@@ -48,14 +48,14 @@ const METER_INTERP_MS: f32 = 120.0;
 /// How often a moving bus-driven meter schedules its next canvas frame.
 /// Every frame is a whole-window present: the wgpu backend has no damage
 /// tracking, so the compositor recomposites the whole screen for each one.
-/// 20 fps still reads as continuous motion for a VU, and the bus itself is
+/// 15 fps still reads as continuous motion for a VU, and the bus itself is
 /// updated at the device rate, so a frame always shows a current value.
-pub(crate) const METER_FRAME_MS: u64 = 50;
+pub(crate) const METER_FRAME_MS: u64 = 67;
 
 /// While the service reports a live signal but the drawn level did not move
 /// far enough to change a pixel (a steady tone, a held note), the canvas
 /// only re-reads the shared snapshot this often instead of asking for
-/// another 20 fps frame.
+/// another 15 fps frame.
 const METER_STILL_POLL_MS: u64 = 100;
 
 /// A level or cap change smaller than this fraction of the drawn travel is

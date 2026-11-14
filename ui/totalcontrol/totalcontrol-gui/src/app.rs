@@ -11749,10 +11749,10 @@ fn panel_fingerprint(state: &TotalControl) -> f64 {
 
 /// The tick while something is being dragged or animated: 30 Hz.
 const TICK_ACTIVE: Duration = Duration::from_millis(33);
-/// The tick while only live meters are moving: 25 Hz.  The full view is
-/// rebuilt on every tick, so this is the difference between ~37 % and ~25 %
-/// of a core on a busy mixer; 25 Hz still reads as smooth VU motion.
-const TICK_METERS: Duration = Duration::from_millis(40);
+/// The tick while only live meters are moving: 15 Hz.  The full view is
+/// rebuilt on every tick, so a slower meter tick keeps a busy mixer cheap;
+/// 15 Hz still reads as smooth VU motion.
+const TICK_METERS: Duration = Duration::from_millis(67);
 /// The tick while the window is hidden in the tray: 4 Hz.  Nothing on
 /// screen can change, but the front panel, connection probe and autosave
 /// still need to run.
@@ -12695,7 +12695,7 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
 /// keep them out of the UI until the host-side monitoring and Talkback writes
 /// are implemented. The mixer section uses the same capability gate.
 fn control_room_available(state: &TotalControl) -> bool {
-    state.device.capabilities().protocol_features
+    state.device.capabilities().talkback
 }
 
 /// The top-bar Options menu.  Root groups the device audio configuration,
@@ -18280,6 +18280,22 @@ fn control_room_panel(
         .on_press_maybe(msg)
         .into()
     };
+    // An unavailable control keeps its grid slot but draws no button, so the
+    // controls around it never move.
+    let slot = |label: &'static str,
+                size: f32,
+                active: bool,
+                msg: Option<Message>|
+     -> Element<'static, Message> {
+        if msg.is_some() {
+            cell(label, size, active, msg)
+        } else {
+            iced::widget::Space::new()
+                .width(Length::Fixed(btn_w))
+                .height(Length::Fixed(btn_h))
+                .into()
+        }
+    };
     // The Assign button opens the menu card beside the panel. It uses the
     // same compact selector decoration as a strip's output-bus trigger.
     let assign = iced::widget::button(
@@ -18323,24 +18339,22 @@ fn control_room_panel(
     // Mute FX; then a gap and Assign at the bottom.
     let body = column![
         group(vec![
-            cell(
+            slot(
                 "dim",
                 theme::TEXT_MD,
                 settings.dim,
-                Some(Message::Dim(!settings.dim))
+                Some(Message::Dim(!settings.dim)),
             ),
-            cell(
+            slot(
                 "recall",
                 theme::TEXT_MD,
                 false,
-                Some(Message::ControlRoomRecall)
+                Some(Message::ControlRoomRecall),
             ),
-            cell(
+            slot(
                 "speaker B",
                 theme::TEXT_SM,
                 settings.speaker_b,
-                // Speaker B is a UC/UCX register; other units show it
-                // dimmed instead of failing on press.
                 state
                     .device
                     .is_uc_family()
@@ -18348,22 +18362,23 @@ fn control_room_panel(
             ),
         ]),
         group(vec![
-            cell(
+            slot(
                 "mono",
                 theme::TEXT_MD,
                 settings.mono,
                 Some(Message::ControlRoomMono(!settings.mono)),
             ),
-            cell(
+            slot(
                 "talkback",
                 theme::TEXT_MD,
                 state.talkback_on,
                 state
                     .device
-                    .is_ucx_model()
+                    .capabilities()
+                    .talkback
                     .then_some(Message::TalkbackChanged(!state.talkback_on)),
             ),
-            cell(
+            slot(
                 "ext. input",
                 theme::TEXT_SM,
                 settings.external_input,
@@ -18372,13 +18387,14 @@ fn control_room_panel(
                     .external_input
                     .map(|_| Message::ExternalInput(!settings.external_input)),
             ),
-            cell(
+            slot(
                 "mute FX",
                 theme::TEXT_MD,
                 settings.mute_fx,
                 state
                     .device
-                    .is_uc_family()
+                    .capabilities()
+                    .fx
                     .then_some(Message::ControlRoomMuteFx(!settings.mute_fx)),
             ),
         ]),
@@ -18668,11 +18684,14 @@ fn control_room_settings_panel(state: &TotalControl) -> Element<'_, Message> {
                     .spacing(theme::SPACE_LG * scale)
                     .width(Length::Fill),
             )
-            .height(Length::Fixed(available))
+            // Shrink to the settings content.  The container below caps it
+            // at the available height so a long form still scrolls.
+            .height(Length::Shrink)
             .direction(scrollable::Direction::Vertical(
                 theme::thin_scrollbar(),
             )),
         )
+        .max_height(available)
         .style(theme::dialog)
         .padding(theme::SPACE_XL * scale)
         .width(Length::Fixed(content_w + 2.0 * theme::SPACE_XL * scale)),
@@ -18686,7 +18705,9 @@ fn control_room_settings_panel(state: &TotalControl) -> Element<'_, Message> {
                 .align_x(iced::Alignment::End)
                 .align_y(iced::Alignment::End)
                 .padding(iced::Padding {
-                    bottom: (strip::STRIP_H + theme::SPACE_MD) * scale,
+                    // The panel's bottom edge sits on the Control Room's top
+                    // edge, with no blank strip between them.
+                    bottom: strip::STRIP_H * scale,
                     right: theme::SPACE_MD * scale,
                     left: 0.0,
                     top: 0.0,
@@ -19084,7 +19105,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     // at the last channel instead of running into the Control Room.
     let mut strips_width = 0.0f32;
     let cr_w = control_room_visual_width(state, scale, anim_now);
-    let natural_out = if state.device.capabilities().protocol_features {
+    let natural_out = if control_room_available(state) {
         out_width + theme::SPACE_MD + cr_w
     } else {
         out_width
@@ -19106,7 +19127,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     };
     let available = main_space - reserve;
     let fx_overlay = fx_open && reserve < fx_extent;
-    let out_row: Element<'_, Message> = if state.device.capabilities().protocol_features {
+    let out_row: Element<'_, Message> = if control_room_available(state) {
         strips_width = out_width;
         out_width = natural_out.max(available);
         // The strips are the row; the Control Room rides above them, pinned
@@ -19185,7 +19206,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     };
     // Two section titles share this line: HARDWARE OUTPUTS over the channel
     // strips, `control room` starting at the section's leftmost channel.
-    let outputs_header: Element<'_, Message> = if state.device.capabilities().protocol_features {
+    let outputs_header: Element<'_, Message> = if control_room_available(state) {
         let cr_w = control_room_visual_width(state, scale, anim_now);
         // The title starts exactly at the section's left edge — the panel's
         // own left edge — so the two line up at any window width. The slack
@@ -20356,7 +20377,7 @@ mod tests {
 
         let mut uc = new(true, None, None);
         uc.device = DeviceHandle::open_mock_uc();
-        assert!(!control_room_available(&uc));
+        assert!(control_room_available(&uc));
 
         let mut babyface = new(true, None, None);
         babyface.device = DeviceHandle::open_mock_classic();

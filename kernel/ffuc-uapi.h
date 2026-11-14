@@ -18,14 +18,20 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 
-#define FFUC_ABI_VERSION	3
+#define FFUC_ABI_VERSION	4
 
 /* Largest payload in one FFUC_HWDEP_IOCTL_VENDOR request. */
 #define FFUC_HWDEP_MAX_DATA	64
 /* Largest register burst accepted by FFUC_HWDEP_IOCTL_WRITE_WORDS. */
 #define FFUC_HWDEP_MAX_WORDS	63
 /* Largest payload in one event record (state, meter or status). */
-#define FFUC_EVENT_MAX		512
+#define FFUC_EVENT_MAX		704
+
+/* Meter event flags: the heartbeat is the first after a session whose
+ * page phase could not be anchored. */
+#define FFUC_EV_FLAG_PHASE_LOST	1u
+/* Payload is one complete heartbeat (RMS half, then peak half). */
+#define FFUC_EV_FLAG_METER_PAIR	2u
 
 enum ffuc_model {
 	FFUC_MODEL_UNKNOWN	= 0,

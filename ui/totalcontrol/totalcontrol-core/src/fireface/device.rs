@@ -443,9 +443,41 @@ impl UcMeterBank {
         // The data-page header publishes the remaining output RMS bank.
         // Channels 0..3 stay on the flag page.
         for channel in protocol::UC_OUTPUT_RMS_CHANNELS..18 {
-            self.output_rms[channel] =
-                protocol::uc_output_header_rms_linear(packet.output_header_rms(channel));
+            let word = packet.output_header_rms(channel);
+            // A value above the full-scale sine power is status, not a
+            // level; keep the previous bar instead of pegging it.
+            if word > 0x4000_0000 {
+                continue;
+            }
+            let rms = protocol::uc_output_header_rms_linear(word);
+            // A status value can sit below the full-scale check.  A real
+            // RMS word cannot exceed the matching output peak word.
+            let peak = db_to_linear(
+                protocol::uc_playback_dbfs(packet.output(channel))
+                    .unwrap_or(f32::NEG_INFINITY),
+            );
+            if rms > 0.0 && (peak <= 0.0 || rms > peak * 1.01) {
+                continue;
+            }
+            self.output_rms[channel] = rms;
         }
+    }
+
+    /// Apply one complete heartbeat: the RMS half then the peak half.
+    /// Role is positional by contract with the driver.
+    fn apply_heartbeat(&mut self, data: &[u8]) -> bool {
+        let half = UcMeterPacket::LEN;
+        if data.len() != 2 * half {
+            return false;
+        }
+        let (rms, peak) = data.split_at(half);
+        if let Some(p) = UcRmsPacket::parse_rms_page(rms) {
+            self.apply_rms(&p);
+        }
+        if let Some(p) = UcMeterPacket::parse_peak_page(peak) {
+            self.apply(&p);
+        }
+        true
     }
 
     fn apply_rms(&mut self, packet: &UcRmsPacket) {
@@ -796,6 +828,12 @@ pub struct Fireface {
     dim_amount_db: f32,
     /// Speaker B follows Main Out level changes.
     speaker_b_linked: bool,
+    /// UC matrix cells saved by a Control Room runtime action.  The UC uses
+    /// direct `0x12` cells instead of the UCX register/FX-return shape.
+    uc_monitor_saved: Option<Vec<(usize, usize, f32)>>,
+    /// The first heartbeat of the current session followed a phase that the
+    /// driver could not anchor (fresh probe or failed drain).
+    uc_meter_phase_lost: bool,
     /// Register words replaced by the current Talkback activation, in write
     /// order.  Restored when Talkback is released.
     talkback_saved: Option<Vec<(u16, u16)>>,
@@ -1307,6 +1345,8 @@ impl Fireface {
             dim_saved: Vec::new(),
             dim_amount_db: -20.0,
             speaker_b_linked: false,
+            uc_monitor_saved: None,
+            uc_meter_phase_lost: false,
             talkback_saved: None,
             talkback_active: false,
             talkback_config: TalkbackConfig::default(),
@@ -1353,6 +1393,13 @@ impl Fireface {
 
     pub fn personality(&self) -> Personality {
         self.info.personality
+    }
+
+    /// True when the first heartbeat of the current session could not be
+    /// anchored to a known device phase.  The meters then still alternate,
+    /// but the two halves may be swapped until the next device power-up.
+    pub fn meter_phase_unverified(&self) -> bool {
+        self.uc_meter_phase_lost
     }
 
     pub fn profile(&self) -> &'static crate::profile::DeviceProfile {
@@ -1755,6 +1802,248 @@ impl Fireface {
             value = !value;
         }
         self.vendor_out(protocol::req::MIXER, value, index)
+    }
+
+    /// Save every UC matrix cell of one output pair.  Used by the shared
+    /// Control Room runtime for temporary monitor rewrites.
+    fn uc_monitor_save_pair(&self, pair: usize) -> Vec<(usize, usize, f32)> {
+        let mut saved = Vec::with_capacity(2 * 36);
+        for block in [pair * 2, pair * 2 + 1] {
+            for source in 0..36 {
+                let Some(channel) = Self::matrix_source_channel(source) else {
+                    continue;
+                };
+                let gain = self.cell_gain(channel, block).unwrap_or(0.0);
+                saved.push((block, source, gain));
+            }
+        }
+        saved
+    }
+
+    fn uc_monitor_restore(&self, saved: &[(usize, usize, f32)]) -> Result<(), Error> {
+        for &(block, source, gain) in saved {
+            self.uc_write_matrix(block, source, gain)?;
+        }
+        Ok(())
+    }
+
+    fn uc_monitor_clear_pair(&self, pair: usize) -> Result<(), Error> {
+        for block in [pair * 2, pair * 2 + 1] {
+            for source in 0..36 {
+                self.uc_write_matrix(block, source, 0.0)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn uc_set_talkback_with(
+        &mut self,
+        on: bool,
+        config: &TalkbackConfig,
+    ) -> Result<(), Error> {
+        if on == self.talkback_active {
+            return Ok(());
+        }
+        if !on {
+            if let Some(saved) = self.uc_monitor_saved.take() {
+                self.uc_monitor_restore(&saved)?;
+            }
+            self.talkback_active = false;
+            return Ok(());
+        }
+        self.talkback_config = *config;
+        let Some(source) = config.source else {
+            self.talkback_active = true;
+            return Ok(());
+        };
+        if source >= self.inputs.len() {
+            return Err(Error::InvalidChannel(format!("talkback input {source}")));
+        }
+        let receivers: Vec<usize> = self
+            .outputs
+            .chunks(2)
+            .enumerate()
+            .filter(|(_, pair)| pair.iter().any(|output| output.talkback))
+            .map(|(pair, _)| pair)
+            .collect();
+        let main = self.settings.main_out;
+        let mut pairs = receivers.clone();
+        if let Some(main) = main {
+            if !pairs.contains(&main) {
+                pairs.push(main);
+            }
+        }
+        if pairs.is_empty() {
+            self.talkback_active = true;
+            return Ok(());
+        }
+        let mut saved = Vec::new();
+        for &pair in &pairs {
+            saved.extend(self.uc_monitor_save_pair(pair));
+        }
+        for &pair in &pairs {
+            let dim = if Some(pair) == main {
+                config.listenback_dim_db
+            } else {
+                config.dim_db
+            };
+            let factor = 10f32.powf(dim.clamp(-65.0, 0.0) / 20.0);
+            for source_index in 0..36 {
+                let Some(channel) = Self::matrix_source_channel(source_index) else {
+                    continue;
+                };
+                let old = self.cell_gain(channel, pair * 2).unwrap_or(0.0);
+                let old_right = self.cell_gain(channel, pair * 2 + 1).unwrap_or(0.0);
+                self.uc_write_matrix(pair * 2, source_index, old * factor)?;
+                self.uc_write_matrix(pair * 2 + 1, source_index, old_right * factor)?;
+            }
+            self.uc_write_matrix(pair * 2, source, 0.7)?;
+            if let Some(listen) = config.listenback.filter(|listen| *listen != source && Some(pair) == main) {
+                self.uc_write_matrix(pair * 2 + 1, listen, 0.7)?;
+            }
+        }
+        self.uc_monitor_saved = Some(saved);
+        self.talkback_active = true;
+        Ok(())
+    }
+
+    fn uc_set_cue(&mut self, idx: usize, on: bool) -> Result<(), Error> {
+        if !on {
+            if self.cue_state.as_ref().is_some_and(|(source, _, _)| *source == idx) {
+                self.uc_release_cue()?;
+            }
+            return Ok(());
+        }
+        if self.cue_state.is_some() {
+            self.uc_release_cue()?;
+        }
+        let target = self
+            .pfl_target
+            .ok_or_else(|| Error::InvalidChannel("Cue needs a Cue/PFL target".into()))?;
+        if target == idx {
+            for output in &mut self.outputs {
+                output.cue = false;
+            }
+            return Ok(());
+        }
+        let saved = self.uc_monitor_save_pair(target);
+        for source in 0..36 {
+            let left = self.cell_gain(
+                Self::matrix_source_channel(source)
+                    .ok_or_else(|| Error::InvalidChannel("cue source".into()))?,
+                idx * 2,
+            )
+            .unwrap_or(0.0);
+            let right = self.cell_gain(
+                Self::matrix_source_channel(source)
+                    .ok_or_else(|| Error::InvalidChannel("cue source".into()))?,
+                idx * 2 + 1,
+            )
+            .unwrap_or(0.0);
+            self.uc_write_matrix(target * 2, source, left)?;
+            self.uc_write_matrix(target * 2 + 1, source, right)?;
+        }
+        self.uc_monitor_saved = Some(saved);
+        self.cue_state = Some((idx, target, Vec::new()));
+        Ok(())
+    }
+
+    fn uc_release_cue(&mut self) -> Result<(), Error> {
+        if let Some(saved) = self.uc_monitor_saved.take() {
+            self.uc_monitor_restore(&saved)?;
+        }
+        if let Some((_, _, _)) = self.cue_state.take() {
+            for output in &mut self.outputs {
+                output.cue = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn uc_set_mono(&mut self, on: bool) -> Result<(), Error> {
+        let Some(main) = self.settings.main_out else {
+            return Err(Error::InvalidChannel(
+                "Mono needs an assigned Main Out".into(),
+            ));
+        };
+        if on == self.settings.mono {
+            return Ok(());
+        }
+        if !on {
+            if let Some(saved) = self.uc_monitor_saved.take() {
+                self.uc_monitor_restore(&saved)?;
+            }
+            self.settings.mono = false;
+            return Ok(());
+        }
+        let saved = self.uc_monitor_save_pair(main);
+        for source in 0..36 {
+            let left = self.cell_gain(
+                Self::matrix_source_channel(source)
+                    .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
+                main * 2,
+            )
+            .unwrap_or(0.0);
+            let right = self.cell_gain(
+                Self::matrix_source_channel(source)
+                    .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
+                main * 2 + 1,
+            )
+            .unwrap_or(0.0);
+            // Feed both monitor sides from both source sides: the two
+            // contributions sum in the monitor pair.
+            self.uc_write_matrix(main * 2, source, left + right)?;
+            self.uc_write_matrix(main * 2 + 1, source, left + right)?;
+        }
+        self.uc_monitor_saved = Some(saved);
+        self.settings.mono = true;
+        Ok(())
+    }
+
+    fn uc_set_external_input(
+        &mut self,
+        on: bool,
+        source: Option<usize>,
+        gain_db: f32,
+    ) -> Result<(), Error> {
+        if let Some(saved) = self.uc_monitor_saved.take() {
+            self.uc_monitor_restore(&saved)?;
+        }
+        self.settings.external_input = false;
+        if !on {
+            return Ok(());
+        }
+        let Some(main) = self.settings.main_out else {
+            return Err(Error::InvalidChannel(
+                "External Input needs an assigned Main Out".into(),
+            ));
+        };
+        let source = source
+            .ok_or_else(|| Error::InvalidChannel("External Input needs a source pair".into()))?;
+        if source * 2 + 1 >= self.inputs.len() {
+            return Err(Error::InvalidChannel(format!(
+                "External Input source pair {source}"
+            )));
+        }
+        let gain = 10f32.powf(gain_db.clamp(-65.0, 0.0) / 20.0).clamp(0.0, 1.0);
+        let mut pairs = vec![main];
+        if let Some(b) = self.settings.main_b_out {
+            if b != main {
+                pairs.push(b);
+            }
+        }
+        let mut saved = Vec::new();
+        for &pair in &pairs {
+            saved.extend(self.uc_monitor_save_pair(pair));
+            self.uc_monitor_clear_pair(pair)?;
+        }
+        for &pair in &pairs {
+            self.uc_write_matrix(pair * 2, source * 2, gain)?;
+            self.uc_write_matrix(pair * 2 + 1, source * 2 + 1, gain)?;
+        }
+        self.uc_monitor_saved = Some(saved);
+        self.settings.external_input = true;
+        Ok(())
     }
 
     /// Rewrite every cell routed to one output after its phase changes.
@@ -2998,9 +3287,7 @@ impl Fireface {
     /// replaced by the activation is saved and written back on release.
     pub fn set_talkback_with(&mut self, on: bool, config: &TalkbackConfig) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Talkback is not mapped on the UC".into(),
-            ));
+            return self.uc_set_talkback_with(on, config);
         }
         if on == self.talkback_active {
             return Ok(());
@@ -3306,8 +3593,10 @@ impl Fireface {
                 (0..self.outputs.len())
                     .map(|i| {
                         let rms = self.uc_meters.output_rms[i];
-                        if post {
-                            if self.outputs[i].mute { 0.0 } else { rms * self.outputs[i].volume }
+                        // The device RMS word already includes the row fader.
+                        // A muted row reads silence in the display.
+                        if post && self.outputs[i].mute {
+                            0.0
                         } else {
                             rms
                         }
@@ -3508,7 +3797,16 @@ impl Fireface {
             ),
             Model::Uc => Some(
                 (0..self.outputs.len())
-                    .map(|i| self.uc_meters.output_peak(i))
+                    .map(|i| {
+                        let peak = self.uc_meters.output_peak(i);
+                        // The device peak word already includes the row fader.
+                        // A muted row reads silence in the display.
+                        if post && self.outputs[i].mute {
+                            0.0
+                        } else {
+                            peak
+                        }
+                    })
                     .collect(),
             ),
         }
@@ -3763,7 +4061,20 @@ impl Fireface {
                 match event.kind {
                     EV_METER => {
                         if self.is_uc() {
-                            if let Some(packet) = UcMeterPacket::parse(&event.data) {
+                            // The driver emits one complete heartbeat: the
+                            // RMS half first, the peak half second.  Role is
+                            // positional, never a word inside a page.
+                            if event.flags & EV_FLAG_METER_PAIR != 0 {
+                                // A pair whose order the driver could not
+                                // resolve is still applied in arrival order,
+                                // so the meters never stop; the flag records
+                                // that the roles are unverified.
+                                self.uc_meters.apply_heartbeat(&event.data);
+                                self.uc_meter_phase_lost =
+                                    event.flags & EV_FLAG_PHASE_LOST != 0;
+                            } else if let Some(packet) = UcMeterPacket::parse(&event.data) {
+                                // Variant without the heartbeat quirk: legacy
+                                // single-page classification.
                                 self.uc_meters.apply(&packet);
                             } else if let Some(rms) = UcRmsPacket::parse(&event.data) {
                                 self.uc_meters.apply_rms(&rms);
@@ -4158,6 +4469,9 @@ impl Fireface {
     }
 
     fn release_cue(&mut self) -> Result<(), Error> {
+        if self.is_uc() {
+            return self.uc_release_cue();
+        }
         let Some((_, target, fx)) = self.cue_state.take() else {
             return Ok(());
         };
@@ -4173,6 +4487,13 @@ impl Fireface {
     }
 
     fn release_external_input(&mut self) -> Result<(), Error> {
+        if self.is_uc() {
+            if let Some(saved) = self.uc_monitor_saved.take() {
+                self.uc_monitor_restore(&saved)?;
+            }
+            self.settings.external_input = false;
+            return Ok(());
+        }
         let Some((pairs, fx)) = self.external_input_saved.take() else {
             self.settings.external_input = false;
             return Ok(());
@@ -5320,11 +5641,6 @@ impl RmeDevice for Fireface {
     }
 
     fn set_dim_with(&mut self, on: bool, amount_db: f32) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Dim is not decoded on the UC".into(),
-            ));
-        }
         let amount_db = amount_db.clamp(-65.0, 0.0);
         self.settings.dim_amount_db = amount_db;
         if on == self.settings.dim {
@@ -5363,7 +5679,9 @@ impl RmeDevice for Fireface {
                 self.set_volume(ChannelId::Output(saved_pair * 2), 0, left_level)?;
                 self.set_volume(ChannelId::Output(saved_pair * 2 + 1), 0, right_level)?;
             }
-            self.write_word(ucx::global::DIM, 0)?;
+            if !self.is_uc() {
+                self.write_word(ucx::global::DIM, 0)?;
+            }
             self.settings.dim = false;
             self.settings.dim_saved.clear();
             return Ok(());
@@ -5408,17 +5726,14 @@ impl RmeDevice for Fireface {
             self.set_volume(ChannelId::Output(pair * 2), 0, dim(left_level))?;
             self.set_volume(ChannelId::Output(pair * 2 + 1), 0, dim(right_level))?;
         }
-        self.write_word(ucx::global::DIM, 1)?;
+        if !self.is_uc() {
+            self.write_word(ucx::global::DIM, 1)?;
+        }
         self.settings.dim = true;
         Ok(())
     }
 
     fn set_main_recall(&mut self, db: f32) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Recall is not decoded on the UC".into(),
-            ));
-        }
         let Some(pair) = self.settings.main_out else {
             return Err(Error::InvalidChannel(
                 "Recall needs an assigned Main Out".into(),
@@ -5461,15 +5776,14 @@ impl RmeDevice for Fireface {
     /// only the monitor state word changes.  `0xNN02` bit 1 means
     /// monitor-muted, not "this pair is Main".
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Assign is not decoded on the UC".into(),
-            ));
-        }
         if let Some(pair) = pair {
             if pair >= BLOCKS / 2 {
                 return Err(Error::InvalidChannel(format!("output pair {pair}")));
             }
+        }
+        if self.is_uc() {
+            self.settings.main_out = pair;
+            return Ok(());
         }
         let previous = self.settings.main_out;
         if previous == pair {
@@ -5504,15 +5818,17 @@ impl RmeDevice for Fireface {
     /// control-room state word stays `0` while Speaker B is off; assigning
     /// a pair must not set that pair's mode bit or mute it.
     fn set_main_out_b(&mut self, pair: Option<usize>) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Assign is not decoded on the UC".into(),
-            ));
-        }
         if let Some(pair) = pair {
             if pair >= BLOCKS / 2 {
                 return Err(Error::InvalidChannel(format!("output pair {pair}")));
             }
+        }
+        if self.is_uc() {
+            self.settings.main_b_out = pair;
+            if pair.is_none() {
+                self.settings.speaker_b = false;
+            }
+            return Ok(());
         }
         let previous = self.settings.main_b_out;
         if previous == pair {
@@ -5609,9 +5925,7 @@ impl RmeDevice for Fireface {
         gain_db: f32,
     ) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "External Input is not decoded on the UC".into(),
-            ));
+            return self.uc_set_external_input(on, source, gain_db);
         }
         let _batch = self.begin_write_batch();
         if self.settings.external_input {
@@ -5784,9 +6098,27 @@ impl RmeDevice for Fireface {
 
     fn set_speaker_b(&mut self, on: bool) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Speaker B does not exist on the UC".into(),
-            ));
+            if on == self.settings.speaker_b {
+                return Ok(());
+            }
+            let Some(main) = self.settings.main_out else {
+                return Err(Error::InvalidChannel(
+                    "Speaker B needs an assigned Main Out".into(),
+                ));
+            };
+            let Some(b) = self.settings.main_b_out else {
+                return Err(Error::InvalidChannel(
+                    "Speaker B needs an assigned output".into(),
+                ));
+            };
+            if main != b {
+                self.set_mute(ChannelId::Output(main * 2), on)?;
+                self.set_mute(ChannelId::Output(main * 2 + 1), on)?;
+                self.set_mute(ChannelId::Output(b * 2), !on)?;
+                self.set_mute(ChannelId::Output(b * 2 + 1), !on)?;
+            }
+            self.settings.speaker_b = on;
+            return Ok(());
         }
         let Some(main) = self.settings.main_out else {
             return Err(Error::InvalidChannel(
@@ -5819,9 +6151,10 @@ impl RmeDevice for Fireface {
 
     fn set_mono(&mut self, on: bool) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Mono does not exist on the UC".into(),
-            ));
+            if on && self.cue_state.is_some() {
+                self.uc_release_cue()?;
+            }
+            return self.uc_set_mono(on);
         }
         // Monitor flags: bit 0 Talkback, bit 1 Mono Main Out.  The mask
         // word is 0x83ff while Mono is active and 0xffff when it is idle.
@@ -5836,11 +6169,6 @@ impl RmeDevice for Fireface {
     }
 
     fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Speaker B does not exist on the UC".into(),
-            ));
-        }
         self.speaker_b_linked = on;
         if on {
             if let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) {
@@ -5913,6 +6241,9 @@ impl RmeDevice for Fireface {
     fn set_cue(&mut self, idx: usize, on: bool) -> Result<(), Error> {
         if idx >= BLOCKS / 2 {
             return Err(Error::InvalidChannel(format!("output {idx}")));
+        }
+        if self.is_uc() {
+            return self.uc_set_cue(idx, on);
         }
         if !on {
             if self
@@ -9443,18 +9774,44 @@ mod tests {
         data[16..20].copy_from_slice(&0x0200_0000u32.to_le_bytes());
         data[24..28].copy_from_slice(&0x0080_0000u32.to_le_bytes());
         data[252..256].copy_from_slice(&0x0100_0000u32.to_le_bytes());
+        // The header words are valid only when the matching output peak
+        // record is at least as high.
+        for channel in 4..8 {
+            let off = 252 + 4 * channel;
+            data[off..off + 4].copy_from_slice(&0x7fff_0000u32.to_le_bytes());
+        }
         let packet = UcMeterPacket::parse(&data).expect("data page");
         dev.uc_meters.apply(&packet);
-        // Put the AN5 row fader at -6 dB to check that the displayed output
-        // meter applies the device's own fader.
+        // The device output words are already post-fader.  Moving the row
+        // fader must not scale the meter a second time.
         dev.set_volume(ChannelId::Output(4), 0, 0.5).unwrap();
         dev.set_volume(ChannelId::Output(5), 0, 0.5).unwrap();
         let bars = dev.output_meters_internal(true).expect("UC output bars");
         assert!((bars[0] - 0.5).abs() < 1e-3, "AN1 flag RMS {:?}", bars);
-        assert!((bars[4] - 0.25).abs() < 1e-3, "AN5 header RMS x fader");
-        assert!((bars[5] - 0.125).abs() < 1e-3, "AN6 header RMS x fader");
-        assert!((bars[6] - 0.125).abs() < 1e-3, "AN7 header RMS x fader");
-        assert!((bars[7] - 0.0625).abs() < 1e-3, "AN8 header RMS x fader");
+        assert!((bars[4] - 0.5).abs() < 1e-3, "output 4 header RMS");
+        assert!((bars[5] - 0.25).abs() < 1e-3, "output 5 header RMS");
+        assert!((bars[6] - 0.125).abs() < 1e-3, "output 6 header RMS");
+        assert!((bars[7] - 0.0625).abs() < 1e-3, "output 7 header RMS");
+    }
+
+    #[test]
+    fn uc_header_rms_rejects_status_values() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut data = [0u8; UcMeterPacket::LEN];
+        data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // Channel 4: RMS 0.5 with a full-scale peak, a valid word.
+        data[0..4].copy_from_slice(&0x2000_0000u32.to_le_bytes());
+        data[268..272].copy_from_slice(&0x7fff_0000u32.to_le_bytes());
+        // Channel 5: RMS 0.5 with no peak, a status-like word.
+        data[8..12].copy_from_slice(&0x2000_0000u32.to_le_bytes());
+        // Channel 6: small status word with no peak.
+        data[16..20].copy_from_slice(&3u32.to_le_bytes());
+        let packet = UcMeterPacket::parse(&data).expect("data page");
+        dev.uc_meters.apply(&packet);
+        let bars = dev.output_meters_internal(true).expect("output bars");
+        assert!((bars[4] - 0.5).abs() < 1e-3, "valid header word {:?}", bars);
+        assert_eq!(bars[5], 0.0, "reject header word without a peak");
+        assert_eq!(bars[6], 0.0, "reject small status word");
     }
 
     #[test]
@@ -9465,6 +9822,26 @@ mod tests {
         let w = writes.lock().unwrap();
         let (value, index) = uc::matrix_word(0.5, 2 * 36 + 18);
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+    }
+
+    #[test]
+    fn uc_output_meters_do_not_reapply_the_row_fader() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let mut data = [0u8; UcMeterPacket::LEN];
+        data[4..8].copy_from_slice(&0x1fffu32.to_le_bytes());
+        // AN5 output record: low OVR 0, high peak 0x4000 = -6.02 dBFS.
+        data[268..272].copy_from_slice(&0x4000_0000u32.to_le_bytes());
+        dev.uc_meters
+            .apply(&UcMeterPacket::parse(&data).expect("data page"));
+        dev.set_volume(ChannelId::Output(4), 0, 0.5).unwrap();
+        let raw = dev.output_peaks_internal(false).expect("raw peak line");
+        assert!((raw[4] - 0.5).abs() < 1e-6, "raw AN5 peak {raw:?}");
+        let post = dev.output_peaks_internal(true).expect("post peak line");
+        assert!((post[4] - 0.5).abs() < 1e-6, "post AN5 peak {post:?}");
+
+        dev.set_mute(ChannelId::Output(4), true).unwrap();
+        let muted = dev.output_peaks_internal(true).expect("muted peak line");
+        assert_eq!(muted[4], 0.0);
     }
 
     #[test]
@@ -9532,6 +9909,10 @@ mod tests {
             .apply(&UcMeterPacket::parse(&data).expect("data page"));
         let level = dev.meters().expect("UC input meters")[8];
         assert!((level - 0.1).abs() < 1e-3, "S/PDIF at -20 dBFS, got {level}");
+        // A record page always co-publishes other channels' records; keep
+        // one outside the S/PDIF bank so page validity does not hinge on
+        // this record going to a no-data filler.
+        data[228..232].copy_from_slice(&1u32.to_le_bytes());
         // The 0x1fff filler is no data, not a level: hold the last value.
         data[140..144].copy_from_slice(&0x00001fffu32.to_le_bytes());
         dev.uc_meters

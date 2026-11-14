@@ -7,10 +7,10 @@
 
 use std::mem::size_of;
 
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 pub const HWDEP_MAX_DATA: usize = 64;
 pub const HWDEP_MAX_WORDS: usize = 63;
-pub const EVENT_MAX: usize = 512;
+pub const EVENT_MAX: usize = 704;
 
 pub const MODEL_UNKNOWN: u32 = 0;
 pub const MODEL_UC: u32 = 1;
@@ -30,6 +30,11 @@ pub const EV_METER: u32 = 1;
 pub const EV_STATE: u32 = 2;
 pub const EV_STATUS: u32 = 3;
 pub const EV_LATCH: u32 = 4;
+
+/// Meter event flag: first heartbeat of a session whose phase is not anchored.
+pub const EV_FLAG_PHASE_LOST: u32 = 1;
+/// Meter event flag: payload is one complete heartbeat (RMS then peak).
+pub const EV_FLAG_METER_PAIR: u32 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

@@ -301,8 +301,9 @@ TotalControl draws the mixer window on the GPU. A redraw updates the whole
 window, so the window's size sets the cost of a frame rather than the part
 that changed.
 
-The VU meters animate at up to 20 frames per second and fall back to a slower
-poll while a level is steady; a held peak still appears. Channel strips,
+The VU meters animate at 15 frames per second while a level moves; the
+window redraws at twice that rate while you drag a control or a panel is
+animating, so interaction stays smooth.  A held peak still appears. Channel strips,
 faders, knobs and meters are drawn with crisp edges rather than multisampling,
 which keeps the window's share of the GPU small enough for the desktop
 compositor to keep its frame rate on a shared or integrated GPU. Text is
@@ -695,9 +696,9 @@ views of one value. The echo block also shows the FX bus level meters.
 
 ## 10. Control Room
 
-On the UCX the Control Room section sits at the right of the Hardware Outputs
-row. The UC and Babyface-classic currently omit it until their host-side
-Control Room writes are mapped. It turns ordinary hardware outputs into
+On the UCX and UC the Control Room section sits at the right of the Hardware
+Outputs row. The Babyface-classic omits it until its host-side Control Room
+writes are mapped. It turns ordinary hardware outputs into
 monitoring destinations with fixed names: `Main`, `Speaker B` and `Phones 1–4`. Every hardware output is either
 assigned in the Control Room or remains an ordinary output in the Hardware
 Outputs row; there are no empty slots.
