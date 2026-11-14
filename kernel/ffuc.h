@@ -175,6 +175,7 @@ struct ffuc_stream {
 	snd_pcm_uframes_t pos[FFUC_MAX_EPS];
 	snd_pcm_uframes_t hw_ptr;
 	snd_pcm_uframes_t period;
+	snd_pcm_uframes_t signalled;	/* period at the last period signal */
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must
