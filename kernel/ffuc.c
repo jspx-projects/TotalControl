@@ -1104,49 +1104,67 @@ static bool ffuc_stream_advance(struct ffuc *chip, struct ffuc_stream *s,
  * resyncs (inserts silence or drops a period).  Below a quantum of ~256 the
  * jump stays under PipeWire's resync threshold.
  */
-static void ffuc_period_elapsed(struct ffuc *chip, int dir)
+/* A direction may be signalled only when its period index has moved
+ * since its last signal: a signal is the announcement of one completed
+ * period. */
+static bool ffuc_pending(struct ffuc_stream *s)
 {
-	struct ffuc_stream *other = &chip->streams[!dir];
-	struct ffuc_stream *s = &chip->streams[dir];
+	return s->running && s->period != s->signalled;
+}
+
+static void ffuc_signal_period(struct ffuc *chip, struct ffuc_stream *s)
+{
 	unsigned long flags;
 
-	if (other->substream) {
-		snd_pcm_stream_lock_irqsave(other->substream, flags);
-		if (other->running) {
-			/* Spurious-call counter: a period-elapsed message for
-			 * a direction whose period index has not moved since
-			 * its last signal.  Counted, not gated, on this
-			 * reference build; the gated scheme removes the
-			 * call outright. */
-			if (other->period == other->signalled)
-				atomic_inc(&chip->delta_zero);
-			snd_pcm_period_elapsed_under_stream_lock(other->substream);
-			other->signalled = other->period;
-			/* The core refreshes the shared status pointer from
-			 * .pointer inside the period-elapsed call.  It must
-			 * re-read the same value the driver maintains.  Any
-			 * difference means the core moved hw_base by itself
-			 * (the double-interrupt jiffies heuristic), which
-			 * would present the reader a pointer ahead of the
-			 * committed data.  Counted; one fired trace line. */
-			if (other->substream->runtime->status->hw_ptr !=
-			    other->hw_ptr % other->substream->runtime->boundary)
-				ffuc_ptr_mismatch(chip, other->substream,
-						  other);
-		}
-		snd_pcm_stream_unlock_irqrestore(other->substream, flags);
-	}
+	if (!s->substream)
+		return;
 	snd_pcm_stream_lock_irqsave(s->substream, flags);
-	if (s->running) {
-		if (s->period == s->signalled)
-			atomic_inc(&chip->delta_zero);
-		snd_pcm_period_elapsed_under_stream_lock(s->substream);
+	if (!ffuc_pending(s)) {
+		/* Unreachable under the gate; the counter proves it. */
+		atomic_inc(&chip->delta_zero);
+	} else {
 		s->signalled = s->period;
+		snd_pcm_period_elapsed_under_stream_lock(s->substream);
+		/* The core refreshes the shared status pointer from
+		 * .pointer inside the period-elapsed call.  It must
+		 * re-read the same value this driver maintains; a
+		 * difference means the core moved hw_base by itself
+		 * (the double-interrupt jiffies heuristic). */
 		if (s->substream->runtime->status->hw_ptr !=
 		    s->hw_ptr % s->substream->runtime->boundary)
 			ffuc_ptr_mismatch(chip, s->substream, s);
 	}
 	snd_pcm_stream_unlock_irqrestore(s->substream, flags);
+}
+
+/*
+ * Signal a period.  The graph is woken when both running directions have
+ * completed a period: at whichever boundary is later, derived every cycle,
+ * so the follower's pointer is never stale when the reader wakes and no
+ * direction is ever signalled for zero completed periods.  When one
+ * direction is behind, the driver waits one URB rather than waking the
+ * graph early; a direction that is two or more periods overdue signals
+ * alone so a stalled or missing stream cannot hold the other hostage.
+ * Single-direction operation signals that direction at its own boundary.
+ */
+static void ffuc_period_elapsed(struct ffuc *chip, int dir)
+{
+	struct ffuc_stream *p = &chip->streams[SNDRV_PCM_STREAM_PLAYBACK];
+	struct ffuc_stream *c = &chip->streams[SNDRV_PCM_STREAM_CAPTURE];
+
+	if (!p->running || !c->running) {
+		ffuc_signal_period(chip, p->running ? p : c);
+		return;
+	}
+	if (ffuc_pending(p) && ffuc_pending(c)) {
+		ffuc_signal_period(chip, p);
+		ffuc_signal_period(chip, c);
+		return;
+	}
+	if (p->period - p->signalled >= 2)
+		ffuc_signal_period(chip, p);
+	if (c->period - c->signalled >= 2)
+		ffuc_signal_period(chip, c);
 }
 
 /* Interrupt transport: one URB of interleaved frames. */
