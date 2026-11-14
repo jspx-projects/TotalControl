@@ -5998,8 +5998,8 @@ impl RmeDevice for Fireface {
     }
 
     /// Control Room External Input: route the selected hardware input pair
-    /// into the Main Out and Speaker B submixes at the configured gain,
-    /// mute those pairs' FX returns, and set monitor flag bit 5.
+    /// into the Main Out submix at the configured gain, mute the Main FX
+    /// returns, and set monitor flag bit 5.  Speaker B keeps its mix.
     fn set_external_input(
         &mut self,
         on: bool,
