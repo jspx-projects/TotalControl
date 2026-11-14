@@ -189,14 +189,6 @@ fn uc_is_data_page(b: &[u8]) -> bool {
     marker == 0x1fff || uc_word(b, 6) != 0
 }
 
-/// Whether a raw Peak/OVR record at the record region carries a level.
-/// `0` is true silence and `0x1fff` is the stream's no-data filler (the
-/// device publishes a record only when the detector refreshed it).  Every
-/// level decode returns `None` for the filler, so it can never be a
-/// valid reading on input, playback or output records.
-fn valid_record(record: u32) -> bool {
-    record != 0 && record != 0x0000_1fff
-}
 
 impl Default for UcMeterPacket {
     fn default() -> Self {
@@ -226,27 +218,17 @@ impl UcMeterPacket {
     pub const OUTPUT_COUNT: usize = 18;
     pub const RECORD_COUNT: usize = Self::INPUT_COUNT + Self::PLAYBACK_COUNT + Self::OUTPUT_COUNT;
 
-    pub fn parse(b: &[u8]) -> Option<Self> {
-        if b.len() != Self::LEN || b[108..Self::LEN].iter().all(|&byte| byte == 0) {
-            return None;
-        }
-        // Only the data page carries Peak/OVR records.  The alternate flag
-        // page carries the RMS words; applying its zero peak records would
-        // release every meter once per data page.
-        if !uc_is_data_page(b) {
+    /// Decode a page as the peak half of a heartbeat.
+    ///
+    /// The live path uses this parser: role comes from the heartbeat
+    /// position, never from a word inside the page.
+    pub fn parse_peak_page(b: &[u8]) -> Option<Self> {
+        if b.len() != Self::LEN {
             return None;
         }
         let mut records = [0u32; Self::RECORD_COUNT];
         for (i, r) in records.iter_mut().enumerate() {
             *r = u32::from_le_bytes(b[108 + i * 4..108 + i * 4 + 4].try_into().unwrap());
-        }
-        // A page whose whole record region is silence plus no-data fillers
-        // is the stream's status/flag page, not a meter record page.  Its
-        // header words are DSP status, not output RMS; accepting it painted
-        // the status values onto the output rows (the meter-hold release in
-        // `UcMeterBank::apply` keeps previous levels until a real page).
-        if !records.iter().any(|r| valid_record(*r)) {
-            return None;
         }
         let mut output_rms = [0u32; UC_HEADER_OUTPUT_RMS_CHANNELS];
         for group in 0..7 {
@@ -258,6 +240,19 @@ impl UcMeterPacket {
                 u32::from_le_bytes(b[right * 4..right * 4 + 4].try_into().unwrap());
         }
         Some(Self { records, output_rms })
+    }
+
+    /// Compatibility parser for single-page fixtures.  The live meter
+    /// path never classifies a page by its content; it uses the page's
+    /// position in the heartbeat via `parse_peak_page`.
+    pub fn parse(b: &[u8]) -> Option<Self> {
+        if b.len() != Self::LEN || b[108..Self::LEN].iter().all(|&byte| byte == 0) {
+            return None;
+        }
+        if !uc_is_data_page(b) {
+            return None;
+        }
+        Self::parse_peak_page(b)
     }
 
     /// Raw analog input record `AN1..AN8`.
@@ -405,6 +400,18 @@ pub const UC_OUTPUT_RMS_CHANNELS: usize = 4;
 pub const UC_HEADER_OUTPUT_RMS_CHANNELS: usize = 14;
 
 impl UcRmsPacket {
+    /// Decode a page as the RMS half of a heartbeat.
+    ///
+    /// The live path uses this parser: role comes from the heartbeat
+    /// position, never from a word inside the page.
+    pub fn parse_rms_page(b: &[u8]) -> Option<Self> {
+        if b.len() != UcMeterPacket::LEN {
+            return None;
+        }
+        Self::build(b)
+    }
+
+    /// Compatibility parser for single-page fixtures.
     pub fn parse(b: &[u8]) -> Option<Self> {
         if b.len() != UcMeterPacket::LEN {
             return None;
@@ -413,12 +420,15 @@ impl UcRmsPacket {
             return None;
         }
         // A quiet flag page can be all zero; there is simply no RMS update
-        // to apply.  The input bank occupies words 0..71, the playback bank
-        // words 72..143 and the output bank words 144..161.
+        // to apply.
         let any_input = (0..18).any(|channel| uc_word(b, 3 + channel * 4) != 0);
         if !any_input && (72..=161).all(|word| uc_word(b, word) == 0) {
             return None;
         }
+        Self::build(b)
+    }
+
+    fn build(b: &[u8]) -> Option<Self> {
         let mut input = [0u16; 18];
         for channel in 0..18 {
             let word = 3 + channel * 4;
@@ -1307,27 +1317,28 @@ mod tests {
         assert!((uc_output_header_rms_linear(0x4000_0000) - 0.70710677).abs() < 1e-5);
     }
 
-    /// The stream's status/flag page: marker words are small counters, the
-    /// header carries DSP status and the record region is silence plus
-    /// `0x1fff` no-data fillers.  It must not reach the meter bank: its
-    /// header words are not output RMS.  Verified live on the ISO stream,
-    /// `docs/captures/uc/` live-mic capture.
+    /// Role comes from the heartbeat position: the peak parser accepts a
+    /// page regardless of its words, and the RMS parser does the same.
+    /// Content is never used to classify a page.
     #[test]
-    fn uc_status_page_is_not_a_meter_page() {
-        let mut b = [0u8; UcMeterPacket::LEN];
-        // Status page counters instead of the 0x1fff record marker.
-        b[4..6].copy_from_slice(&2u16.to_le_bytes());
-        b[12..14].copy_from_slice(&1u16.to_le_bytes());
-        // Status header words where the output RMS decode looks.
-        b[0..4].copy_from_slice(&0x3042_f1f8u32.to_le_bytes());
-        b[8..12].copy_from_slice(&0x91e7_c4f5u32.to_le_bytes());
-        // The record region is silence plus a no-data playback filler.
-        b[212..216].copy_from_slice(&0x0000_1fffu32.to_le_bytes());
-        assert!(UcMeterPacket::parse(&b).is_none(), "status page rejected");
-        // The same shape must stay rejected when the header words look
-        // like a plausible RMS sine.
-        b[0..4].copy_from_slice(&0x4000_0000u32.to_le_bytes());
-        assert!(UcMeterPacket::parse(&b).is_none(), "filler-only page");
+    fn uc_heartbeat_role_is_positional() {
+        let mut rms = [0u8; UcMeterPacket::LEN];
+        // A silent RMS half: all words zero.
+        let r = UcRmsPacket::parse_rms_page(&rms).expect("rms half accepted");
+        assert_eq!(r.input(0), 0);
+        // A peak half with an AN record and one header group.
+        let mut peak = [0u8; UcMeterPacket::LEN];
+        peak[108..112].copy_from_slice(&0x0000_4600u32.to_le_bytes());
+        peak[0..4].copy_from_slice(&0x4000_0000u32.to_le_bytes());
+        let p = UcMeterPacket::parse_peak_page(&peak).expect("peak half accepted");
+        assert_eq!(p.analog_input(0), 0x0000_4600);
+        assert_eq!(p.output_header_rms(4), 0x4000_0000);
+        // Swapping the two halves must not be inferred from content: the
+        // positional parsers decode whatever they are given.
+        assert!(UcMeterPacket::parse_peak_page(&rms).is_some());
+        assert!(UcRmsPacket::parse_rms_page(&peak).is_some());
+        // Wrong length is rejected.
+        assert!(UcMeterPacket::parse_peak_page(&peak[..100]).is_none());
     }
 
     /// A record page with one valid input record is a meter page even when
@@ -1347,12 +1358,5 @@ mod tests {
         assert!(p.output_header_rms(4) == 0, "record page header stays empty");
     }
 
-    #[test]
-    fn valid_record_law() {
-        assert!(!valid_record(0), "zero record is silence");
-        assert!(!valid_record(0x1fff), "no-data filler carries no level");
-        assert!(valid_record(0x0001_1000), "small real peak");
-        assert!(valid_record(0x7fff_ffcf), "over event record");
-    }
 
 }

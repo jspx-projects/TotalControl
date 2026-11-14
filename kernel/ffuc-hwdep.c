@@ -369,10 +369,33 @@ static void ffuc_meter_complete(struct urb *urb)
 	struct ffuc *chip = urb->context;
 
 	atomic_inc(&chip->meter_urbs);
-	if (urb->status == 0 && urb->actual_length >= 4)
+	if (urb->status == 0 && chip->desc &&
+	    (chip->model == FFUC_MODEL_UC) &&
+	    urb->actual_length == chip->desc->meter_len &&
+	    2 * chip->desc->meter_len <= FFUC_EVENT_MAX) {
+		unsigned int len = chip->desc->meter_len;
+
+		if (chip->meter_pair_len == 0) {
+			memcpy(chip->meter_pair, urb->transfer_buffer, len);
+			chip->meter_pair_len = len;
+		} else {
+			memcpy(chip->meter_pair + len, urb->transfer_buffer, len);
+			chip->meter_pair_len = 0;
+			ffuc_event_put(chip, FFUC_EV_METER, chip->meter_pair,
+				       2 * len,
+				       FFUC_EV_FLAG_METER_PAIR |
+					       (chip->meter_phase_lost ?
+							FFUC_EV_FLAG_PHASE_LOST : 0));
+			chip->meter_phase_lost = false;
+		}
+	} else if (urb->status == 0 && urb->actual_length >= 4 &&
+		   chip->model != FFUC_MODEL_UC) {
+		/* Self-describing packet devices (UCX, Babyface) pass each
+		 * packet through unchanged. */
 		ffuc_event_put(chip, FFUC_EV_METER, urb->transfer_buffer,
 			       min_t(unsigned int, urb->actual_length,
 				     FFUC_EVENT_MAX), 0);
+	}
 
 	switch (urb->status) {
 	case -ENOENT:
@@ -509,7 +532,11 @@ int ffuc_transport_setup(struct ffuc *chip)
 	}
 	if (have_meter && d->meter_len && !chip->meter_urb) {
 		chip->meter_urb = usb_alloc_urb(0, GFP_KERNEL);
-		chip->meter_buf = usb_alloc_coherent(chip->dev, d->meter_len,
+		/* Debug probe: allow one transfer to ask for two pages, to
+		 * find out whether the endpoint delivers the heartbeat
+		 * atomically.  The production length stays one page. */
+		chip->meter_buf = usb_alloc_coherent(chip->dev,
+						     2 * d->meter_len,
 						     GFP_KERNEL,
 						     &chip->meter_dma);
 		if (chip->meter_urb && chip->meter_buf) {
@@ -548,6 +575,8 @@ int ffuc_transport_start(struct ffuc *chip)
 	if (chip->state_active)
 		return 0;
 	chip->state_active = true;
+	if (chip->model == FFUC_MODEL_UC)
+		chip->meter_pair_len = 0;
 	/*
 	 * The UC 0x85 endpoint carries the hardware Peak/RMS meter pages.
 	 * Keep the meter URB running for both models; PCM capture remains
@@ -579,6 +608,29 @@ void ffuc_transport_stop(struct ffuc *chip)
 		usb_kill_urb(chip->state_urb);
 	if (chip->meter_urb)
 		usb_kill_urb(chip->meter_urb);
+	/*
+	 * A heartbeat left half-read must be completed before the transport
+	 * stops, or the device's page phase would shift for the next
+	 * session.  Consume the partner page and discard the pair.
+	 */
+	if (chip->meter_pair_len && chip->desc &&
+	    (chip->model == FFUC_MODEL_UC) &&
+	    !READ_ONCE(chip->disconnected)) {
+		u8 buf[FFUC_METER_PAIR_MAX];
+		int actual = 0;
+		int ret;
+
+		ret = usb_bulk_msg(chip->dev,
+				   usb_rcvbulkpipe(chip->dev,
+						   chip->desc->meter_in_ep),
+				   buf, chip->desc->meter_len, &actual, 50);
+		if (ret || actual != (int)chip->desc->meter_len)
+			chip->meter_phase_lost = true;
+		chip->meter_pair_len = 0;
+	} else if (chip->meter_pair_len) {
+		chip->meter_phase_lost = true;
+		chip->meter_pair_len = 0;
+	}
 	wake_up_interruptible_all(&chip->event_wait);
 }
 

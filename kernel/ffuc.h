@@ -94,6 +94,7 @@
 
 #define FFUC_STATE_BUF_SIZE	1024
 #define FFUC_EVENT_FIFO_SIZE	(64 * 1024)
+#define FFUC_METER_PAIR_MAX	648
 #define FFUC_EVENT_BUF_SIZE	(sizeof(struct ffuc_hwdep_event_hdr) + \
 				 FFUC_EVENT_MAX)
 
@@ -324,6 +325,14 @@ struct ffuc {
 	struct delayed_work meter_work;
 	atomic_t hwdep_users;
 	atomic_t meter_urbs;
+	/* One meter heartbeat under assembly: the RMS page then the peak
+	 * page.  Emitted as one event, so a reader can never see a half. */
+	u8 meter_pair[FFUC_METER_PAIR_MAX];
+	unsigned int meter_pair_len;
+	/* The device's page phase is not anchored for this session (fresh
+	 * probe, or a failed drain).  The next heartbeat carries the
+	 * phase-lost flag. */
+	bool meter_phase_lost;
 	atomic_t state_urbs;
 
 	/* USB-MIDI streaming interface (bulk OUT / bulk IN) */

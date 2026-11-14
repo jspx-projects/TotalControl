@@ -373,25 +373,37 @@ U32 field is little-endian unless stated otherwise.
 | **Value slot / status slot** | The two U32 positions of a header group: +0 and +8 are value slots, +4 and +12 are status slots. On the peak page the header carries output RMS groups and their status. On the RMS page the same range spans the input bank's slots. |
 | **Peak word** | The level halfword of a meter record (16-bit analog/playback/output; 24-bit in bits 8..31 for digital). Linear scale, `0x8000`/`0x800000` full scale. |
 | **OVR word** | The over halfword (low byte/nibble) of a meter record: the `0xff` event byte plus the device's consecutive full-scale-sample count; carries no level data. |
+| **Heartbeat event** | One driver event carrying a complete heartbeat: the RMS page, then the peak page. The event flag `METER_PAIR` says the payload is a pair. |
+| **Phase anchor** | The point at which the page order is known: device power-up starts with the RMS half. |
 
 ### Heartbeat synchronisation
 
-1. The driver delivers pages in order. The host counts the beat phase
-   and toggles it per page. Identity is the phase, never a field value.
-2. A transport gap of exactly one page flips the phase once. The host
-   detects it from the page sequence counter, repairs the phase, and
-   logs the drop.
-3. Two consecutive peak phases mean a double drop or a re-order; the
-   host logs it and re-anchors phase at the next clean pair.
-4. Volatile format changes of the beat words (counter, timestamp, zero)
-   never affect identity. They are health data only.
-5. Only one meter reader may drain the stream at a time. Concurrent
+1. The device emits the peak page and the RMS page strictly alternately.
+   Role is positional: a page is never classified by any of its fields.
+2. The device advances its page order only when a transfer completes
+   successfully. A page that is not polled waits indefinitely; a pause
+   between the two halves of up to one second does not restart the pair.
+3. The device has no idle timeout and no restart request. Phase advances
+   by exactly one per consumed page, so the phase at any moment is the
+   parity of consumption since device power-up.
+4. Device power-up anchors the order: the first page is the RMS half.
+   A USB reset without power loss does not anchor reliably, so it does
+   not count as an anchor.
+5. The driver consumes pages in pairs and emits one heartbeat event per
+   pair: RMS half first, peak half second. Userspace never sees a single
+   page on a UC device. The event flag `METER_PAIR` marks the payload.
+6. A normal transport stop completes a held half before stopping, so the
+   phase survives reader attachment and detachment.
+7. If a session begins after a fresh probe, or if the stop drain fails,
+   the driver flags the first heartbeat `PHASE_LOST`. The meters still
+   alternate, but the two halves may be swapped until the next device
+   power-up. The flag is reported, never guessed away.
+8. Only one meter reader may drain the stream at a time. Concurrent
    readers each receive a sample of pages and break the phase model.
 
-A page must therefore never be classified by reading any of its fields.
-Verified across eight captured sessions: the phase alternation is exact
-except at transport gaps, and no session carries a byte field that
-identifies the page kind in every engine state.
+The heartbeat pairing is a property of the UC model. The UCX and
+Babyface-classic meter packets are self-describing and pass through
+unchanged; the `METER_PAIR` flag distinguishes the two feeds.
 
 ### Page map
 
@@ -642,7 +654,11 @@ change the input meter or the input bank in the `0x85` page.
 3. The beat words' (bytes 4..8) semantics.  Observed formats include a
    steady `0x00001fff`/zero pair, two independent counter/timestamp
    pairs, and an all-zero state; one session changed its format
-   mid-stream.  No session-level value carries page identity.
+   mid-stream.  No session-level value carries page identity, and the
+   words have no role in synchronisation.
+7. Pair ordering under the UC's Mac (ISO) personality.  Alternation is
+   verified in that mode; the RMS-then-peak pair order is verified live
+   in the interrupt personality and is carried by the same DSP firmware.
 4. The hardware-output record-slot ↔ display-pair mapping in the current
    firmware.  In one session, output record slots 0/1 byte-matched the
    input record slots 0/1; that has not been reconciled with the display

@@ -448,6 +448,23 @@ impl UcMeterBank {
         }
     }
 
+    /// Apply one complete heartbeat: the RMS half then the peak half.
+    /// Role is positional by contract with the driver.
+    fn apply_heartbeat(&mut self, data: &[u8]) -> bool {
+        let half = UcMeterPacket::LEN;
+        if data.len() != 2 * half {
+            return false;
+        }
+        let (rms, peak) = data.split_at(half);
+        if let Some(p) = UcRmsPacket::parse_rms_page(rms) {
+            self.apply_rms(&p);
+        }
+        if let Some(p) = UcMeterPacket::parse_peak_page(peak) {
+            self.apply(&p);
+        }
+        true
+    }
+
     fn apply_rms(&mut self, packet: &UcRmsPacket) {
         for channel in 0..18 {
             self.input_rms[channel] =
@@ -799,6 +816,9 @@ pub struct Fireface {
     /// UC matrix cells saved by a Control Room runtime action.  The UC uses
     /// direct `0x12` cells instead of the UCX register/FX-return shape.
     uc_monitor_saved: Option<Vec<(usize, usize, f32)>>,
+    /// The first heartbeat of the current session followed a phase that the
+    /// driver could not anchor (fresh probe or failed drain).
+    uc_meter_phase_lost: bool,
     /// Register words replaced by the current Talkback activation, in write
     /// order.  Restored when Talkback is released.
     talkback_saved: Option<Vec<(u16, u16)>>,
@@ -1311,6 +1331,7 @@ impl Fireface {
             dim_amount_db: -20.0,
             speaker_b_linked: false,
             uc_monitor_saved: None,
+            uc_meter_phase_lost: false,
             talkback_saved: None,
             talkback_active: false,
             talkback_config: TalkbackConfig::default(),
@@ -1357,6 +1378,13 @@ impl Fireface {
 
     pub fn personality(&self) -> Personality {
         self.info.personality
+    }
+
+    /// True when the first heartbeat of the current session could not be
+    /// anchored to a known device phase.  The meters then still alternate,
+    /// but the two halves may be swapped until the next device power-up.
+    pub fn meter_phase_unverified(&self) -> bool {
+        self.uc_meter_phase_lost
     }
 
     pub fn profile(&self) -> &'static crate::profile::DeviceProfile {
@@ -4007,7 +4035,16 @@ impl Fireface {
                 match event.kind {
                     EV_METER => {
                         if self.is_uc() {
-                            if let Some(packet) = UcMeterPacket::parse(&event.data) {
+                            // The driver emits one complete heartbeat: the
+                            // RMS half first, the peak half second.  Role is
+                            // positional, never a word inside a page.
+                            if event.flags & EV_FLAG_METER_PAIR != 0 {
+                                self.uc_meters.apply_heartbeat(&event.data);
+                                self.uc_meter_phase_lost =
+                                    event.flags & EV_FLAG_PHASE_LOST != 0;
+                            } else if let Some(packet) = UcMeterPacket::parse(&event.data) {
+                                // Variant without the heartbeat quirk: legacy
+                                // single-page classification.
                                 self.uc_meters.apply(&packet);
                             } else if let Some(rms) = UcRmsPacket::parse(&event.data) {
                                 self.uc_meters.apply_rms(&rms);

@@ -2399,9 +2399,13 @@ static int ffuc_probe(struct usb_interface *intf,
 	chip->in_ep = desc->in_ep;
 	chip->modes = desc->modes;
 	chip->debugfs = debugfs_create_dir(dev_name(&intf->dev), NULL);
-	if (!IS_ERR_OR_NULL(chip->debugfs))
+	if (!IS_ERR_OR_NULL(chip->debugfs)) {
 		debugfs_create_file("stats", 0444, chip->debugfs, chip,
 				    &ffuc_stats_fops);
+		/* Meter phase is unknown until the device anchors it at
+		 * power-up; the flag marks the first heartbeat. */
+		WRITE_ONCE(chip->meter_phase_lost, true);
+	}
 	mutex_init(&chip->mutex);
 	mutex_init(&chip->ctl_lock);
 	spin_lock_init(&chip->fb_lock);
