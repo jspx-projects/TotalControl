@@ -31,6 +31,11 @@ The PC personalities differ in the interrupt transport:
 | `UC_PC`, `UC_PC_RME` | float32 | alt N; alt reselect only on a rate-band change |
 | `UC_WIN_RME` | S32 | alt 0, then alt N, on every start |
 
+The S32 sample format arrived with the firmware-138 UC revision.  Every
+UC unit with firmware 138 or newer uses S32 sample words, whichever PC
+descriptor it enumerates under.  Units below firmware 138 use the
+format of their descriptor in the table.
+
 On `UC_WIN_RME` the output latch clears only on the alt 0 → alt N reselect.
 Every UC engine start follows the previous engine stop by at least
 `FFUC_RESTART_SETTLE_MS` (250 ms); an immediate restart leaves `UC_WIN_RME`

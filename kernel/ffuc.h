@@ -129,6 +129,9 @@
 /* quirks */
 #define FFUC_QUIRK_ALT_RESELECT		BIT(0)	/* alt 0 then alt N at start */
 #define FFUC_QUIRK_INT32_SAMPLES	BIT(1)	/* IF5 sends S32, not float */
+/* The S32 sample format arrived with the firmware-138 UC revision.  Newer
+ * UC units use it even when they enumerate under an older descriptor. */
+#define FFUC_UC_S32_FIRMWARE		138
 #define FFUC_QUIRK_STATUS_LATCH		BIT(2)	/* status byte 3 bit 7 */
 #define FFUC_QUIRK_IF5_PRE_START	BIT(3)	/* 0x10 0x8000 + 0x1d before audio */
 #define FFUC_QUIRK_IF5_PLAYBACK_MASK	BIT(4)	/* req 19/20 channel mask */

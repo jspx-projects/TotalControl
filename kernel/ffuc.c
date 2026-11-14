@@ -542,6 +542,17 @@ static const struct ffuc_ops ffuc_ucx_ops = {
 	.hw_mute = ffuc_ucx_hw_mute,
 };
 
+/* Effective quirks for this unit: static descriptor quirks plus runtime
+ * rules that depend on the firmware revision. */
+static inline u32 ffuc_effective_quirks(const struct ffuc *chip)
+{
+	u32 quirks = chip->desc->quirks;
+
+	if (chip->model == FFUC_MODEL_UC && chip->firmware >= FFUC_UC_S32_FIRMWARE)
+		quirks |= FFUC_QUIRK_INT32_SAMPLES;
+	return quirks;
+}
+
 /* -- per-device descriptors ------------------------------------------ */
 
 static const struct ffuc_device_desc ffuc_devices[] = {
@@ -1078,7 +1089,7 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
-		if (chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES)
+		if (ffuc_effective_quirks(chip) & FFUC_QUIRK_INT32_SAMPLES)
 			ffuc_capture_copy_int32(subs->runtime, s->pos[ep->index],
 						urb->transfer_buffer, frames, words,
 						ep->index * words, words, 1, total);
@@ -1106,7 +1117,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
-		if (chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES)
+		if (ffuc_effective_quirks(chip) & FFUC_QUIRK_INT32_SAMPLES)
 			ffuc_playback_copy_int32(subs->runtime, s->pos[ep->index],
 						 urb->transfer_buffer, frames,
 						 words, ep->index * words,
