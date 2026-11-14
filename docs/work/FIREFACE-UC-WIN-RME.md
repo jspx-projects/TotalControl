@@ -347,6 +347,38 @@ through the loopback, counters zero, both `bad_length` counters zero);
 the bit-exact check needs the session's own routing and stays open as a
 bench item for PR #167.
 
+## Shared-core items for all transports
+
+The two transferred-frame-count defects sit only in the interrupt
+handlers; the ISO capture handler already validates per packet
+(status, minimum length, whole-frame alignment, `max_frames` clamp,
+drop and count), and the ISO playback path is structurally immune to
+the over-advance because the driver builds its own OUT packets and
+advances by what it wrote, corrected by the device's implicit
+feedback. PR #167's rule converges the interrupt path onto the ISO
+handler's discipline; the rule itself should become one shared helper
+called by both transports, so two copies of one invariant cannot drift
+apart.
+
+Two gaps are not shared today and would bite on the other models:
+
+1. Signalling: the ISO handlers still signal only their own direction
+   at their own period crossings. The same latent follower-staleness
+   weakness the interrupt transport had before #132, unmeasured on the
+   UCX, UC Mac and Babyface-classic ISO paths. A gated both-pending
+   rule is transport-independent and would port; a capture-boundary
+   rule built on interrupt URB ordering would not.
+2. Instruments: the ring-pressure, payload and pointer-divergence
+   counters live only in the interrupt handlers. An ISO-mode failure
+   would be as blind as the session before this instrumentation.
+
+Follow-up PR, after #167 settles: one validation helper, one
+ring-pressure helper under the stream lock, one gated
+`ffuc_signal_period` used by both transports' period crossings. Each
+transport keeps its own packet loop (interrupt = one block; ISO =
+per-packet descriptors with headers and feedback); the invariants are
+shared, the packet formats are delegated.
+
 ## Endpoints that differ from the original UC
 
 
