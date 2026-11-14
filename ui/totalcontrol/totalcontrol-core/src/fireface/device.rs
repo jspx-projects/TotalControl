@@ -10554,6 +10554,23 @@ mod tests {
     }
 
     #[test]
+    fn mono_follows_speaker_b_switching() {
+        for model in [Model::Uc, Model::Ucx] {
+            let (mut dev, _writes) = open(model);
+            dev.set_main_out(Some(1)).unwrap();
+            dev.set_main_out_b(Some(2)).unwrap();
+            dev.set_mono(true).unwrap();
+            assert!(dev.settings().mono);
+            dev.set_speaker_b(true).unwrap();
+            assert!(dev.settings().speaker_b);
+            assert!(dev.settings().mono, "Mono must remain active on Speaker B");
+            dev.set_speaker_b(false).unwrap();
+            assert!(!dev.settings().speaker_b);
+            assert!(dev.settings().mono, "Mono must return to Main");
+        }
+    }
+
+    #[test]
     fn uc_mono_sums_the_source_sides_into_the_active_pair() {
         let (mut dev, writes) = open(Model::Uc);
         dev.set_main_out(Some(2)).unwrap();
