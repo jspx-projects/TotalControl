@@ -421,6 +421,53 @@ rate of roughly one event per 2-4 minutes. Conclusions:
   management? USB hub event?), long unattended batteries should poll
   the card's presence between runs.
 
+## PipeWire follower attribution (2026-11-14, restart-cycling session)
+
+Twelve ~76 s q48 rounds with fresh streams per round, alternating
+phase, stereo fixture, `PIPEWIRE_DEBUG=3` on the pipewire daemon.
+Two WAV-visible zero runs (exactly 48 frames each: round 3 at stream
+frame 90720, round 12 at frame 3081312) and 125 xrun log entries from
+the daemon over the 15 minutes.
+
+At both visible events the daemon logged the same decision, on the
+client's stream node (the follower inside the daemon), not on the ALSA
+node:
+
+- `process` negative: 18446744073708512790 (−32526) and
+  18446744073708536655 (−21513). The follower computed a negative
+  available count at process time and substituted its own silence for
+  the cycle. That is the recorded zero run.
+- The follower's scheduled deadline (`f`) sat one period behind the
+  graph driver clock (`a`): the deltas are 1038826 ns and 1014961 ns,
+  both ~1.04 ms = one period at quantum 48.
+- 125 logged xruns against 2 visible zero runs: the deadline miss
+  itself happens roughly eight times a minute; only a subset escalates
+  to a full quantum of audible silence.
+
+Revision of the startup-transient reading: the round-12 event sits at
+64 s into its round, so misses are not confined to stream startup.
+The handoff lines (`change driver`, `sync group`) at stream start make
+startup a plausible aggravator, but the mechanism is a recurring
+follower deadline lag of about one period, not a startup-only fault.
+
+Attribution: the follower misses its deadline by about one period,
+reads one period short, computes negative available, and substitutes
+silence. The driver's instruments are silent at both events; the
+driver is not the owner. Consequences for the fix decision:
+
+- A driver-side configuration or signalling change can only narrow the
+  window; it cannot prevent a scheduling lag inside the daemon.
+  Mitigation, not a solve.
+- The margin lever (follower headroom above the measured worst-case
+  jitter of about one period) converts a missed cycle from negative to
+  non-negative available: config-only mitigation with a latency cost.
+- The guarantee lives in PipeWire's follower scheduling. An upstream
+  report should carry this log line, the negative `process` values,
+  the 125-versus-2 escalation ratio, and the driver-side instrument
+  record showing a healthy ALSA layer at every event.
+- The escalation condition (which misses become audible silence) is
+  the remaining open question before any mitigation is sized.
+
 ## Invalid session: device drop during the PR #160 battery
 
 The first PR #160 battery ran against a device that had already left
