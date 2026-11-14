@@ -377,6 +377,16 @@ struct ffuc {
 	atomic_t in_gaps;
 	atomic_t in_shorts;
 	atomic_t in_status_errors;
+	/* q48 instrumentation: ring pressure and core-pointer coherence.
+	 * in_overruns: capture completions that overwrote unread frames.
+	 * out_underruns: playback completions that sent non-written data.
+	 * in_bad_length: status-0 IN URBs with an unaligned or overlong
+	 *   payload.  hw_ptr_mismatch: snd_pcm_period_elapsed messages
+	 *   where the core pointer diverged from the driver pointer. */
+	atomic_t in_overruns;
+	atomic_t out_underruns;
+	atomic_t in_bad_length;
+	atomic_t hw_ptr_mismatch;
 	ktime_t last_out_complete;
 	unsigned long engine_stopped_at;	/* jiffies; 0 = never stopped */
 	ktime_t last_in_complete;
