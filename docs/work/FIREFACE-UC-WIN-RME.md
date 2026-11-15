@@ -498,7 +498,7 @@ Consequences:
 
 ## ISO transport findings (2026-11-14, UC Mac personality)
 
-The unit switches to the AP/Mac personality (`2a39:3fc6`), interface 0
+The unit switches to the AP/Mac personality, interface 0
 ISO endpoints, firmware 127. Findings recorded from measurement:
 
 - **IN body layout: planar (channel-major).** A packet with ten silent
@@ -810,11 +810,116 @@ Two instrument findings from this run:
 The descriptor is copied from the original UC.  On the test unit interface 1
 has only bulk IN `0x85`; there is no `0x0c` OUT or `0x8d` IN.  Interface 3
 has bulk `0x88` IN and `0x09` OUT, interface 4 bulk `0x8a` IN.  Audio,
-status (`0x8b`) and EP0 control work; the state and meter paths are
-untested.
+status (`0x8b`) and EP0 control work; the meter path is decoded.  The state
+endpoints are absent on this unit.
 
 ## AP personality
 
-The unit's AP personality enumerates under a product ID the driver does not
-match.  Its interface 0 is isochronous, with alternate settings 1–3.  Not
-supported yet; a capture is needed.
+The AP personality is supported: interface 0 is isochronous with alternate
+settings 1-3, and the driver binds it as the UC ISO transport.  The findings
+above were measured on this personality.
+
+## ISO consolidation (2026-11-15)
+
+Disposition: the ISO hardening lands as one consolidation PR.  The gate
+ships on both transports as implemented (signal ownership + both-pending
+wake with the deferral-count fallback).  The zero-slack corner at 2x/4x is
+accepted and documented in the manual (quantum of at least 2 ms at 96 and
+192 kHz).  The deterministic fix — ISO schedule alignment and
+telemetry-validated frame accounting — is the next investigation, not a
+merge blocker.
+
+### Corrections made while consolidating
+
+- Rate commit placement.  The cold-start commit ran at the top of
+  `ffuc_engine_start()`, before the stop->start settle and the close->rate
+  gap.  On the Windows personalities that is the documented wedge sequence
+  (rate write right after the close word, #132).  The commit now runs at
+  the protected rate-write site after the settle and alt selection,
+  unconditional on every cold start.  The init sequence does not set the
+  rate, so the first start needs the commit too.
+- Windows session timing is a descriptor quirk.  The settle and the two
+  200 ms gaps were measured on UC_WIN_RME (captures A2/A2b) but gated on
+  the whole UC model, sweeping in the AP personality.  They are now
+  `FFUC_QUIRK_WIN_SESSION`, set on the two interrupt UC descriptors.  AP
+  keeps the session words without the gaps; AP restart cycling is
+  re-verified on the bench.
+- Header-only IN packets reset `in_end` to zero instead of carrying the
+  header position.  The header is now decoded for every valid packet,
+  header-only included; the continuity check and the frame-count
+  cross-check apply to it.
+- The stop-line histogram's 9+ bucket summed bins 9..13 only; 4x packets
+  (24-25 frames) were invisible in it.  It now sums all bins above 8.
+- The stop-path cadence check now suppresses on histogram overflow, like
+  the periodic guard.
+- `out_lead` used `& (wrap - 1)`; the UCX wrap (3072) is not a power of
+  two.  Now modulo the wrap, the same class as the header-mask fix.
+- The ISO handlers ignored `chip->s32_samples` (float path hardcoded).
+  Both now branch like the interrupt handlers.  No behaviour change on
+  current ISO descriptors (all float32); one rule across transports.
+- The ISO handlers had no ring-pressure instruments; the interrupt-only
+  counters made the ISO arms' "ring counters 0" reading vacuous.  Both
+  ISO handlers now check once per URB with the same span arithmetic.
+- The USB ID table referenced descriptors by raw position.  Named enum
+  indices plus a `static_assert` make a mismatched addition a build error.
+
+### Spent diagnostics removed
+
+The per-word IN/OUT packet dumps (default-on `pr_info` inside the
+completion) are compiled out: the body layout and the wire format are
+settled by measurement.  The signal-time phi instrument is removed: it
+measured the gate's own deferral, not the crossing phase.  The
+handler-cost fields were declared and reset but never written in the
+committed branch; they are removed.
+
+### Record reconciliation
+
+The crossing-based phi result (476 samples in one 250 us bin, roughly
+1.3 ms offset), the handler-cost numbers and the phase-logger observations
+were measured with a session build whose instruments were not committed.
+They stand as session measurements.  The instruments are rebuilt on the
+telemetry branch; `test/uc-iso-telemetry-wip` preserves the started fields.
+The phi number is not quoted as a committed-instrument result until the
+rebuilt sampler verifies its pairing.
+
+### Quirk audit (reuse across devices)
+
+The descriptor table + ops + quirks structure is sound: a new device is a
+descriptor entry, a mode table, reused or new ops, and a profile if the
+model is new.  The contribution guide's rule (capability flags, not
+scattered model checks) is the standard.  Follow-ups, not in this PR:
+
+- `chip->ucx` is a protocol-family flag (UCX or Babyface-classic), not a
+  model check; the name misleads.  A rename goes through the user first.
+- The ISO counter wrap and the header field widths are family branches in
+  the handlers; moving them into the descriptor would make a new ISO
+  device purely data-driven.
+- The UC session sequence is gated on the model enum in the engine
+  lifecycle; a session-ops split would remove the remaining model checks
+  from shared code.
+- The GUI latency model scales `urb_frames` by the integer rate factor;
+  at fractional ISO rates the exact queue is
+  `nurbs * iso_packets * rate / 8000`.  The calibrated AP path absorbs the
+  fixed part; verify the live-queue delta.
+
+### Next: telemetry hardening of the corner
+
+1. Rebuild the crossing-based phi sampler: timestamp at the period
+   crossing in `ffuc_stream_advance()`, signed nearest-neighbour pairing,
+   histogram.  Verify the pairing, then measure phi per rate and its
+   stability.
+2. Rebuild the phase logger.  Use the fractional-sample accumulator to
+   predict frame add/drop and count unattributed events (the 5-frame
+   packet at phase 10005, the off-wrap 7-frame event).
+3. Prototype ISO `start_frame` alignment: submit both directions to a
+   common microframe base instead of `URB_ISO_ASAP`, with the accumulator
+   as the device-clock drift reference.  Target: `deferred` -> 0 at the
+   2x/4x zero-slack quanta.
+4. Optional: read-only probe of the status endpoint for a direct rate
+   readback, closing the rate-commit verification loop without cadence
+   inference.
+
+Bench items carried: physical-loopback bit-exact check on both transports
+(the only gate for audio-content claims); PC-personality verification of
+the relocated rate commit and the session quirk at the next personality
+switch.
