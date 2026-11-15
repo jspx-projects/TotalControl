@@ -25,8 +25,10 @@ streaming defect.
 
 | Item | Status | Notes |
 |---|---|---|
-| UC MIDI | needs-capture | The driver owns rawmidi. USB-MIDI 1.0 is implemented for the UCX (all variants) and Babyface-classic (interface 2, bulk OUT 0x07 / IN 0x86, cable 0; `kernel/ffuc-midi.c`). The UC has no port; its interface-2 bulk pair protocol is undecoded. If it matches USB-MIDI 1.0, reuse `ffuc-midi.c` by adding the UC endpoints to the descriptor. |
-| Interfaces 2/3/4 roles (PC) | needs-capture | Endpoints present, unclaimed/undecoded. |
+| UC MIDI | done | Interface 2 carries two logical MIDI ports on bulk OUT `0x07` / IN `0x86` (`kernel/ffuc-midi.c`). Both directions use USB-MIDI code index numbers; RME's Windows driver sends length codes instead and the unit accepts both. A bridge from MIDI 1 out to MIDI 1 in returned three messages and a 20-byte LCD SysEx through the rawmidi devices. The unit parses each bulk transfer as a separate stream, so a message must fit one transfer. The AP personality has no MIDI row. |
+| Mackie Control host | done | Userspace host on the rawmidi surface: handshake, faders/VPOT/buttons, bank/row/submix navigation, control room, snapshots, cue, simple CC/note, LCD + meter feedback, loopback guard, MIDI AND OSC settings page (`mackie.rs`, `midi.rs`, `app.rs`). Codec and mixer mapping unit-tested; live-surface verification and the remaining open items are in `TOTALCONTROL-MIDI-SPEC.md` §13. |
+| MIDI descriptors and wire (AP, Babyface, UCX) | needs-capture | AP personality IF2 class; Babyface normal-mode IF2 class and jacks; UCX class-codec wire verification and whether it shares the per-transfer parsing rule; UC port 2 physical output. See MIDI spec §13. |
+| Interfaces 3/4 roles (PC) | needs-capture | Endpoints present, unclaimed/undecoded. |
 | Read form of request 0x10 | needs-capture | Only the write is implemented. |
 | Status bytes 0/1 | needs-capture | Front-panel events use bytes 2/3. |
 | Bulk role of 0x03/0x84 at 1x/2x | needs-capture | Bulk there, interrupt at 4x. |

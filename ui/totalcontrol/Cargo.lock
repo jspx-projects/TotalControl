@@ -3835,6 +3835,7 @@ dependencies = [
 name = "totalcontrol-gui"
 version = "0.1.0"
 dependencies = [
+ "alsa",
  "env_logger",
  "iced",
  "ksni",

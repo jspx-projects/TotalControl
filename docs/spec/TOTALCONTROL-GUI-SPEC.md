@@ -122,10 +122,11 @@ that same height. The standard height is 350 px at scale 1.0.
 ### 1.1 Options menu
 
 The top bar carries `OPTIONS` beside the view tabs. It opens a menu with
-`Audio Config`, `TotalControl`, `Control Room` and `Reset Mix`. `Audio Config`
-opens the device Audio Configuration panel immediately left of the CONTROLS sidebar and is
+`Audio Config`, `TotalControl`, `MIDI and OSC`, `Control Room` and `Reset Mix`.
+`Audio Config` opens the device Audio Configuration panel immediately left of the CONTROLS sidebar and is
 disabled without a connected device. `TotalControl` opens the centered
-application settings dialog. `Control Room` opens the Control Room settings
+application settings dialog. `MIDI and OSC` opens the centered remote-control
+dialog (§1.4). `Control Room` opens the Control Room settings
 panel above the Control Room when the active backend has a mapped Control Room
 path; it is currently present for the UCX and omitted for the UC and
 Babyface-classic until their monitoring writes are mapped. `Reset Mix` is a submenu; choosing an entry closes the menu, rewrites
@@ -148,6 +149,26 @@ scale 1.0.  The Workspace and Options menus use the same 224 px width at
 scale 1.0; long Reset Mix labels wrap inside the item.  Settings use standard
 controls: independent switches are checkboxes, mutually exclusive choices are
 radio buttons, and buttons are reserved for actions.
+
+**Settings-dialog behaviour.** Every settings dialog follows one rule:
+changes apply as they are made, the dialog stays open so the effect can be
+tried live, and a single `Close` dismisses it. There is no `OK`, `Cancel`
+or `Apply` in a settings dialog. `Cancel` belongs only to confirmation
+dialogs (below), which are a different kind.
+
+A settings section that is not enabled is **grayed out**: every control
+below its enable switch is disabled and rendered muted, and only the
+enable switch stays active. The gray-out effect is defined once, in
+`theme::disabled_text`; a control is disabled by having no interaction
+handler, which iced reports as its `Disabled` status, and every widget
+style renders that status with the one shared appearance. The shared
+primitives in `widgets/dialog.rs` (`section`, `check`, `radio_choice`,
+`help`, `footer`, the action buttons) build this behaviour, so dialogs do
+not re-implement it.
+
+Dialog action buttons are right-aligned in a fixed order. A settings
+dialog shows one `Close`. A confirmation pair shows `Cancel` then the
+confirming button, in that order.
 
 Confirmation dialogs never use `Yes`/`No`.  The confirming button names the
 action in one word (`Open`, `Load`, `Discard`, `Delete`); the other button is
@@ -214,25 +235,16 @@ it immediately on the first press; submenu items open on the first click.
 `Options > TotalControl`, the tray Settings entry and the `,` shortcut open
 the app-level settings dialog. It is centered with a dimmed scrim, not a
 sidebar popover, and it blocks mouse and keyboard access to the mixer until it
-closes. It holds BACKGROUND, STARTUP SYNC, SURROUND, OSC and VU FALLBACK
-sections.  Independent options are checkboxes, one-of-many options are radio
-buttons, and the only footer action is `Close`.
+closes. It holds BACKGROUND, STARTUP SYNC, SURROUND and VU FALLBACK
+sections — settings specific to TotalControl itself. Remote control has its
+own dialog (§1.4). Independent options are checkboxes, one-of-many options are
+radio buttons, and the only footer action is `Close`.
 
 SURROUND has the `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
 checked output creates a PipeWire sink while TotalControl runs and removes it
 when the application exits. The setting is persisted. The sinks follow the
 selected Fireface/MR18 Pro Audio device and bridge to the first six or eight
 SW playback channels.
-
-OSC has an `Enable OSC control surface` checkbox, `Classic` and `Global`
-radio buttons, a receive-port field, a send-port field and `Apply`.  The
-`Show OSC debug log` checkbox sits directly below the enable checkbox and is
-disabled and greyed out while OSC is off; turning OSC off also hides the
-panel.  `Classic` is the banked TotalMix FX 1.96–2.11 address space; `Global`
-is the absolute-channel TotalMix FX 2.1+ address space. Enabling it starts
-the loopback UDP surface; disabling it stops it. The switch, protocol and
-both ports are persisted. The command line `--osc`, `--osc-mode`, `--osc-port`
-and `--osc-send-port` remain a development override.
 
 VU FALLBACK has an `RMS bar release` dropdown (10, 15, 20, 25, 30, 40 dB/s
 plus the unit's measured rate if different) and a `Default` button. The
@@ -242,7 +254,64 @@ default is. The peak line keeps its own hold and release. The dropdown and
 button carry tooltips; the section has no help text. The choice is workspace
 state (STATE-SPEC §6.1).
 
-### 1.4 Quick view
+### 1.4 MIDI and OSC dialog
+
+`Options > MIDI and OSC` opens the centered remote-control dialog, with the
+same scrim and blocking behaviour as the app settings. Its title is
+`MIDI and OSC`; inside, `MIDI` and `OSC` are the two level-1 section titles.
+It follows the settings-dialog behaviour of §1.1: changes apply as they are
+made, the only footer action is `Close`, and a part that is not enabled is
+grayed out. The dialog carries controls and short labels only; the
+explanations live in the manual, Appendix C. Option rows use the wider
+dialog spacing.
+
+The MIDI part:
+
+| Control | Form |
+|---|---|
+| Enable | checkbox, master switch of the MIDI part |
+| Help line | "Use a Mackie controller to control the mixer." |
+| MIDI In | one checkbox per device port: `Port 1`, `Port 2` |
+| MIDI Out | one checkbox per device port: `Port 1`, `Port 2` |
+| Enable Mackie protocol | checkbox |
+| Full LCD support | checkbox |
+| Send user defined names | checkbox |
+| Send level messages | checkbox |
+| Peak hold | checkbox |
+| Show MIDI debug log | checkbox |
+
+While the MIDI part is disabled, every control below `Enable` is grayed
+out. The port checkboxes are the unit's own MIDI ports: two on the UC and
+UCX, one on the Babyface-classic (then only `Port 1` is shown). Each checked
+MIDI In port runs one remote; its feedback goes to the same-numbered MIDI
+Out port when that is checked. Toggling a checkbox opens or closes the
+port immediately. The enable switch, port checkboxes and options are host
+settings (STATE-SPEC §7.1). The remote model, the mapping and the feedback
+are in [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
+
+The OSC part:
+
+| Control | Form |
+|---|---|
+| Enable | checkbox |
+| Show OSC debug log | checkbox |
+| Protocol | `OSC 1.96` / `Global` radio buttons |
+| This host | read-only line: IP address and host name |
+| Input port | text field, default 7001 |
+| Output port | text field, default 9001 |
+| Remote controller IP | text field, default 127.0.0.1 |
+
+While the OSC part is disabled, every control below `Enable` is grayed
+out. The port and address fields apply as soon as their content is valid
+(a port of at least 1024, a parseable IP address); there is no Apply
+button. Feedback goes to the remote controller IP; while that address is
+loopback the receive socket stays on loopback, and any other address binds
+it on all interfaces so the controller can reach us. The switch, protocol,
+ports and remote address are persisted. The command line `--osc`,
+`--osc-mode`, `--osc-port` and `--osc-send-port` remain a development
+override.
+
+### 1.5 Quick view
 
 Quick view shows one source strip and one destination strip at a larger
 strip scale, with a picker above each.  The strips use the same
@@ -256,7 +325,7 @@ stereo bus; a split pair contributes its two mono buses, and choosing one
 sets the selected side.  Changing a link state updates the list and the
 current title.
 
-### 1.5 About dialog
+### 1.6 About dialog
 
 The brand lockup in the top bar (mark and wordmark) opens the About dialog: a
 centered modal over a dimmed scrim, closed by `Close`, `Esc` or a click
@@ -653,6 +722,13 @@ covers the readout.
 B2 is a full-width bar flush with the card's bottom edge and clipped by the
 card radius.  A hardware-output strip has no B2 and leaves that row and its
 gap empty, so B1 keeps the same height on every channel kind.
+
+A channel in the active MIDI remote's window shows its name (T1) in the
+remote tint, a brown tone, in both the expanded and the collapsed layout.
+The tint marks the channels the surface currently controls, like TotalMix;
+it is not a selection and does not change on hover. The window and the
+remote are defined in
+[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
 
 #### 2.8.4 Horizontal columns
 
@@ -1815,11 +1891,13 @@ not the Control Room Main assignment; `PH` always addresses channels 7/8.
 ### 11.3 Control Room Settings
 
 `settings` opens a panel titled `CONTROL ROOM SETTINGS`, anchored above the
-Control Room. Its bottom edge sits on the Control Room's top edge and the
-panel shrinks to its content; it scrolls only when the content exceeds the
-available height. It is not dimmed. It edits a draft; the stored values change
-only when `OK` is pressed. `Cancel`, `Escape` and a click outside the panel
-discard the draft.
+Control Room. Its bottom edge sits on the Control Room's top edge and its
+right edge on the Control Room's right edge; it is about 300 px wide (60% of
+the former width) and as tall as its content needs, rising over the rows
+above and scrolling only when it exceeds the available height. It is not
+dimmed. It follows the settings-dialog behaviour of §1.1: changes apply as
+they are made, and `Close` or `Escape` dismisses it. There is no draft and no
+`OK`/`Cancel`.
 
 | Section | Controls |
 |---|---|
@@ -1833,16 +1911,16 @@ device names. External Input lists stereo hardware-input pairs. The five
 level controls have a `-65.0 … 0.0 dB` range, a `0.5 dB` step and a
 one-decimal value display.
 
-`OK` stores the settings in the current workspace for the selected device.
-The settings are workspace state, not part of the mixer scene, snapshot, undo
-stack or OSC scene state.
+Changes store the settings in the current workspace for the selected device as
+they are made. The settings are workspace state, not part of the mixer scene,
+snapshot, undo stack or OSC scene state.
 `Dim`, `Speaker B`, `Mono`, `Mute FX`, `Cue` and the sample rate are mixer
 scene and workspace state. Active Talkback is momentary and starts off when a
 workspace opens; the per-output Talkback receive flags live in the mixer
 scene. External Input and the PFL listening set are workspace state. The
 unit's six setups and device serial number remain outside the workspace.
 External Input source/gain and the Solo/PFL modes are stored as settings and
-applied to the running device on `OK`.
+applied to the running device as they change.
 
 ## 13. Latency display
 

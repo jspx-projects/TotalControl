@@ -95,6 +95,15 @@ pub fn surface() -> Color {
     palette().surface
 }
 
+/// The one grayed-out appearance of a disabled control. A control is
+/// disabled by having no interaction handler (`on_press`, `on_toggle`,
+/// `on_input`, `on_select`); iced then reports its `Disabled` status, and
+/// every widget style renders that status with this color. Defining the
+/// effect here keeps a disabled section looking the same in every dialog.
+pub fn disabled_text() -> Color {
+    Color { a: 0.4, ..text_sec() }
+}
+
 pub fn submix_active() -> Color {
     palette().submix_active
 }
@@ -186,6 +195,9 @@ pub fn bg_deep() -> Color {
 
 /// Hover surface for controls and strips.
 pub const SURFACE_HI: Color = Color::from_rgb8(0x2d, 0x2e, 0x33);
+/// Name tint of a channel under Mackie Control remote control — TotalMix
+/// turns the name field brown for the channels in the remote's window.
+pub const MACKIE_NAME: Color = Color::from_rgb8(0xc4, 0x8a, 0x5a);
 /// VU well on a normal strip: one shade below `surface()`, not a black cut-out.
 pub const METER_WELL: Color = Color::from_rgb8(0x1e, 0x1f, 0x23);
 /// VU well on an active input/playback strip: one shade below
@@ -641,7 +653,7 @@ fn outline_toggle(
         button::Style {
             background: Some(Background::Color(background)),
             text_color: if matches!(status, button::Status::Disabled) {
-                Color { a: 0.4, ..text_sec() }
+                disabled_text()
             } else if active {
                 color
             } else {
@@ -899,7 +911,7 @@ fn plain_toggle(
         // personality has no RME-protocol features). Before this they
         // rendered as live toggles that simply never lit.
         text_color: if matches!(status, button::Status::Disabled) {
-            Color { a: 0.4, ..text_sec() }
+            disabled_text()
         } else if active {
             ON_ACTIVE
         } else {
@@ -1044,7 +1056,7 @@ pub fn segment_cell(active: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
             // disabled control, so a switch that cannot act does not look
             // like one that just did nothing.
             text_color: match (status, active) {
-                (button::Status::Disabled, _) => Color { a: 0.4, ..text_sec() },
+                (button::Status::Disabled, _) => disabled_text(),
                 (_, true) => text_primary(),
                 (_, false) => text_sec(),
             },
@@ -1140,7 +1152,7 @@ pub fn ghost_button(_theme: &iced::Theme, status: button::Status) -> button::Sty
         button::Status::Hovered => (Background::Color(SURFACE_HI), text_primary()),
         button::Status::Disabled => (
             Background::Color(Color::TRANSPARENT),
-            Color { a: 0.4, ..text_sec() },
+            disabled_text(),
         ),
         _ => (Background::Color(Color::TRANSPARENT), text_sec()),
     };
@@ -1210,6 +1222,12 @@ pub fn text_input(
         Status::Focused { .. } => ACCENT,
         _ => border(),
     };
+    // A read-only field (no `on_input`) belongs to a disabled settings
+    // section: its value reads muted, like the other grayed-out controls.
+    let value = match status {
+        Status::Disabled => text_sec(),
+        _ => text_primary(),
+    };
     iced::widget::text_input::Style {
         background: Background::Color(surface()),
         border: Border {
@@ -1219,8 +1237,58 @@ pub fn text_input(
         },
         icon: text_sec(),
         placeholder: text_sec(),
-        value: text_primary(),
+        value,
         selection: ACCENT_DIM,
+    }
+}
+
+/// Checkbox style from the shared palette. A checkbox without
+/// `on_toggle` is `Disabled` and reads grayed out — the single effect
+/// defined by `disabled_text` (GUI spec §1.1).
+pub fn checkbox(
+    _theme: &iced::Theme,
+    status: iced::widget::checkbox::Status,
+) -> iced::widget::checkbox::Style {
+    use iced::widget::checkbox::Status;
+    let disabled = matches!(status, Status::Disabled { .. });
+    let hovered = matches!(status, Status::Hovered { .. });
+    iced::widget::checkbox::Style {
+        background: Background::Color(if hovered && !disabled {
+            SURFACE_HI
+        } else {
+            surface()
+        }),
+        icon_color: if disabled { disabled_text() } else { ACCENT },
+        border: Border {
+            color: border(),
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        text_color: Some(if disabled {
+            disabled_text()
+        } else {
+            text_primary()
+        }),
+    }
+}
+
+/// Radio style from the shared palette. iced radios have no disabled
+/// status; a disabled section renders its choices as muted text instead
+/// (see `widgets::dialog::radio_choice`).
+pub fn radio(
+    _theme: &iced::Theme,
+    status: iced::widget::radio::Status,
+) -> iced::widget::radio::Style {
+    use iced::widget::radio::Status;
+    let selected = match status {
+        Status::Active { is_selected } | Status::Hovered { is_selected } => is_selected,
+    };
+    iced::widget::radio::Style {
+        background: Background::Color(surface()),
+        dot_color: if selected { ACCENT } else { text_sec() },
+        border_width: 1.0,
+        border_color: border(),
+        text_color: Some(text_primary()),
     }
 }
 

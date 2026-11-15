@@ -41,7 +41,10 @@ documents for the current implementation, not as a work log.
 - Keep specifications minimal. Tables and short normative paragraphs are
   preferred over prose.
 - Put open questions, TODO lists, capture requests and working notes in
-  `docs/work/`. They are not part of the specification.
+  `docs/work/`. They are not part of the specification. Work notes are
+  local by default; only explicitly shared notes are committed. The
+  sharing rule lives in `docs/work/AGENTS.md`. Committed documents must
+  not reference local-only notes.
 - The specification describes the shipped model and its device writes. When
   evidence is incomplete, state the implemented mapping positively and keep
   the open question in `docs/work/`.
@@ -102,6 +105,8 @@ Authoritative files:
   host operations, capabilities and scene compatibility.
 - `docs/spec/TOTALCONTROL-OSC-SPEC.md` — OSC 1.96 and Global OSC transport,
   address spaces, scales, feedback and mapping.
+- `docs/spec/TOTALCONTROL-MIDI-SPEC.md` — USB-MIDI transport, rawmidi
+  surface, limits and Mackie Control surface support.
 - `docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` — UCX transport, registers,
   controls and metering.
 - `docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md` — UC protocol and controls.

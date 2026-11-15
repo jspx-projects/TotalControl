@@ -7,12 +7,14 @@ license = "GPL-3.0-only"
 
 [features]
 default = ["alsa"]
-# ALSA class-compliant backend (Linux only) — pass-through to totalcontrol-core.
-alsa = ["totalcontrol-core/alsa"]
+# ALSA class-compliant backend (Linux only) — pass-through to totalcontrol-core
+# and the rawmidi transport of the Mackie Control surface.
+alsa = ["totalcontrol-core/alsa", "dep:alsa"]
 
 [dependencies]
 totalcontrol-core = { path = "../totalcontrol-core", default-features = false }
 totalcontrol-layout = { path = "../totalcontrol-layout" }
+alsa = { version = "0.9", optional = true }
 iced = { version = "0.14", features = ["canvas", "tokio", "advanced", "image-without-codecs"] }
 log = "0.4"
 env_logger = "0.11"

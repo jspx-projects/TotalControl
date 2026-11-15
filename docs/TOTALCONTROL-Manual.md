@@ -41,7 +41,7 @@ reduced control set.
 - [18. The UCX front knob](#18-the-ucx-front-knob)
 - [Appendix A — Device modes](#appendix-a--device-modes)
 - [Appendix B — PipeWire](#appendix-b--pipewire)
-- [Appendix C — OSC setup](#appendix-c--osc-setup)
+- [Appendix C — MIDI and OSC setup](#appendix-c--midi-and-osc-setup)
 - [Appendix D — Command-line options](#appendix-d--command-line-options)
 
 ## Setup
@@ -238,7 +238,9 @@ or AppIndicator extension.
 3. Confirm that the input meters move when a source is connected.
 
 From a terminal, `aplay -l` lists the card and
-`ls -l /dev/snd/hwC*D*` lists the hwdep nodes.
+`ls -l /dev/snd/hwC*D*` lists the hwdep nodes. Each MIDI port appears as one
+ALSA rawmidi device; `amidi -l` lists them. The Fireface UC and UCX expose
+two MIDI ports.
 
 If no device appears, check that the unit is in normal vendor mode, that the
 kernel module is loaded, and that another application is not holding the
@@ -960,7 +962,8 @@ are stored in a workspace and restored when that workspace is opened.
 The Talkback source and Dim, Listenback source and Dim, Recall level, Main Dim,
 External Input and Gain, and the Solo/PFL modes are set in the Control Room
 Settings panel. Press `settings`, immediately above `assign`; the panel opens
-above the Control Room and is not modal.
+directly above the Control Room — its bottom edge meets the Control Room's top
+and its right edge lines up with the Control Room's right — and is not modal.
 
 The panel has four sections:
 
@@ -974,10 +977,11 @@ The source lists start with `None` and then use the hardware input names. The
 five level controls cover `-65.0` to `0.0 dB` in `0.5 dB` steps. The settings
 are saved per device in TotalControl's own preferences, not in the current mix.
 
-`OK` applies and saves the values; `Cancel` and `Escape` discard the edits.
-The settings in the dialog are not written while it is open. `OK` applies
-the External Input source and gain and the Solo/PFL modes to the running
-device; `Cancel` and `Escape` leave the current signal paths unchanged.
+Changes apply as you make them — the panel stays open so you can hear the
+effect while you adjust, and the External Input source/gain and the Solo/PFL
+modes reach the running device immediately. `Close` or `Escape` dismisses the
+panel; there is nothing to confirm and nothing to cancel. `default` restores
+the default values.
 
 ### Assigning outputs
 
@@ -1069,8 +1073,9 @@ until their monitoring writes are mapped.
 Choosing one rewrites the whole mixer in one go.
 
 `TotalControl` opens the centered TotalControl settings dialog: background
-behaviour, startup sync, and the virtual surround outputs described in
-Appendix B. The mixer is dimmed and cannot be used with the mouse or keyboard
+behaviour, startup sync, the virtual surround outputs described in
+Appendix B, and the MIDI and OSC remote controls described in Appendix C.
+The mixer is dimmed and cannot be used with the mouse or keyboard
 until the dialog closes. Independent options are checkboxes; one-of-many choices such as
 the startup sync direction and OSC protocol are radio buttons.
 
@@ -1300,8 +1305,8 @@ the device or the audio graph.
   saved automatically and restored on the next start.
 - Explicit workspaces: `.tcws` files in the folder you choose when saving.
 - Host settings: `host-settings.json` in the `~/.config/totalcontrol/`
-  directory. It holds the start/tray choice, OSC, engine, startup sync and
-  the last workspace folder, globally and per unit.
+  directory. It holds the start/tray choice, the MIDI remote, OSC, engine,
+  startup sync and the last workspace folder, globally and per unit.
 - Channel strip layout: `gui-layout.json` in the same directory. It holds the
   global and per-interface presentation and is optional.
 - Snapshots and layout slots: inside the current workspace and explicit
@@ -1544,15 +1549,81 @@ keeps its old device; stop and restart it, or move it to the new sink.  The
 bridge is host-side: TotalControl still sees the audio on the SW playback
 channels and can route it like any other playback source.
 
-## Appendix C — OSC setup
+## Appendix C — MIDI and OSC setup
 
-OSC is opt-in and binds to loopback. Open `Options > TotalControl`, enable
-`Enable OSC control surface`, and choose `OSC 1.96` or `Global`; the receive
-and send ports are in the same section and are saved with the other settings.
-Disabling the switch stops the surface immediately.
+Remote control has its own dialog: `Options > MIDI and OSC`, with a MIDI
+part and an OSC part. Both surfaces work on every supported device and
+personality — they drive the same mixer model as the GUI; the device only
+supplies the writes.
 
-`Show OSC debug log` below it opens the traffic panel; it is greyed out until
-OSC is enabled and closes when OSC is switched off.
+**What to expect from the settings dialogs.** Changes apply as you make
+them, and the dialog stays open so you can see or hear the effect while you
+adjust — handy for trying a controller port or a monitoring level live.
+There is no `OK` or `Apply` to remember and no `Cancel`: a single `Close`
+(or `Escape`) dismisses the dialog, and everything you changed is already
+saved. A section that is switched off is grayed out; only its `Enable`
+switch stays active until you turn it on.
+
+### MIDI — a Mackie Control surface
+
+TotalControl can be driven by a Mackie Control compatible surface (Mackie
+Control, Behringer BCF2000 in "MC C" mode, X-Touch, and many others), the
+same way TotalMix FX can.
+
+1. Connect the surface. A DIN surface goes into the unit's MIDI breakout
+   ports; a USB surface connects to the computer directly.
+2. In the MIDI part, turn on `Enable`, then check the ports under `MIDI In`
+   (and `MIDI Out` for feedback). `Port 1` and `Port 2` are the unit's own
+   MIDI ports (the Babyface has only `Port 1`); each checked input runs one
+   controller, and changes take effect immediately.
+3. Move a fader: the matching channel strip moves, and its name turns
+   brown while it is in the surface's 8-channel window.
+
+The surface controls the mix of the selected submix. Bank and channel
+buttons move the window, the arrow buttons change the row, REC selects
+the submix, and the control-room buttons map to Dim (STOP), Talkback
+(PLAY), Mono (PAN), Speaker B (FLIP), Master Mute (EQ), Master Solo
+(PLUGINS) and Recall (RECORD). F1–F8 load snapshots. The VPOTs set pan;
+pressing one centers it. The full mapping is in
+[`spec/TOTALCONTROL-MIDI-SPEC.md`](spec/TOTALCONTROL-MIDI-SPEC.md).
+
+Options: `Enable Mackie protocol` (off leaves only the simple CC/note
+commands below), `Full LCD support`, `Send user defined names`, `Send
+level messages` and `Peak hold`. Leave `MIDI Out` unchecked when no
+feedback is needed. `Show MIDI debug log` opens the traffic panel.
+
+Without a Mackie surface, any MIDI controller can use the simple
+commands: CC 7 on channel 1 sets the Main Out volume; CC 102–117 on
+channels 1–12 set the faders of the three rows; note 93 toggles Dim, note
+94 Talkback, note 95 Recall, note 50 Speaker B; notes 54–61 load
+snapshots 1–8. The complete table is in the MIDI spec §8.3.
+
+**Loopback warning.** Do not wire the remote's MIDI output back into its
+input. TotalControl sends a detection note every 500 ms; if it hears it
+back, it disables the remote until you re-enable it. A surface whose
+faders snap back by themselves is usually in such a loop.
+
+The unit's own stand-alone MIDI control (the unit acts as the host when
+no computer is connected) is a device mode, not a TotalControl feature;
+see the MIDI spec §12.
+
+### OSC
+
+OSC is opt-in. In the OSC part, turn on `Enable` and choose `OSC 1.96` or
+`Global`. The input port (default 7001), output port (default 9001) and the
+`Remote controller IP` apply as soon as their content is valid and are saved
+with the other settings. The line above the ports shows this host's IP
+address and host name — the address to point the controller at. Disabling
+the switch stops the surface immediately.
+
+While the remote controller IP is 127.0.0.1 the socket stays on loopback.
+Set it to the controller's address (for example an iPad on the LAN) and
+the socket binds on all interfaces so the controller can reach us; allow
+the ports through the firewall. Do not run two controllers on the same
+feedback port.
+
+`Show OSC debug log` below the enable switch opens the traffic panel; it
+is greyed out until OSC is enabled and closes when OSC is switched off.
 
 `OSC 1.96` is the banked TotalMix FX 1.96 address space. The older 1.90
 classic surface is not supported. `Global` is the absolute-channel TotalMix FX
@@ -1569,7 +1640,7 @@ totalcontrol --osc
 | Option | Default | Meaning |
 |---|---:|---|
 | `--osc-mode` | classic | `classic` (OSC 1.96) or `global` protocol |
-| `--osc-port` | 9000 | UDP port TotalControl listens on |
+| `--osc-port` | 7001 | UDP port TotalControl listens on |
 | `--osc-send-port` | 9001 | UDP port for feedback |
 | `--osc-host` | 127.0.0.1 | Feedback destination |
 
@@ -1577,10 +1648,6 @@ Configure the controller to send to the receive port and receive feedback on
 the send port. Both address spaces are defined in
 [`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md); Global OSC is
 §13 of that document.
-
-For a controller on another host, set `--osc-host` to the controller's address
-and allow the feedback port through the firewall. Do not run two controllers
-on the same feedback port.
 
 ## Appendix D — Command-line options
 
