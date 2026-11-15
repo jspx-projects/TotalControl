@@ -30,6 +30,7 @@ use totalcontrol_core::channel::{EqBandType, InputEq};
 use tokio::sync::Notify;
 
 use crate::app::DeviceHandle;
+use crate::widgets::fader::MeterBallistics;
 
 /// Wakes the UI subscription when a model snapshot is published.  The
 /// snapshot itself travels through the `std` channel on `DeviceService`;
@@ -1288,9 +1289,8 @@ pub struct MeterSnapshot {
     pub inputs: [f32; 18],
     pub playbacks: [f32; 18],
     pub outputs: [f32; 18],
-    /// Peak-hold values for the same channels, held for two seconds and
-    /// then falling at 10 dB/s while the service polls at the device
-    /// rate.  A canvas may only draw 30 frames a second; these catch
+    /// Peak-hold values for the same channels, held and then falling as
+    /// `ballistics` says while the service polls at the device rate.  A canvas may only draw 30 frames a second; these catch
     /// transients that fall between those frames.
     pub input_peaks: [f32; 18],
     pub playback_peaks: [f32; 18],
@@ -1318,6 +1318,9 @@ pub output_ovr: Option<[bool; 18]>,
     /// `false` stops scheduling frames and waits for [`meter_stream`].
     pub active: bool,
     pub at: Option<Instant>,
+    /// The device's TotalMix meter ballistics, for the canvases' bar
+    /// release.
+    pub ballistics: MeterBallistics,
 }
 
 /// A level or held peak above this keeps the meter canvases animating.
@@ -1555,7 +1558,7 @@ fn run(
     let mut last_meter_active = false;
     let mut last_overload = [false; 2];
     let mut last_counters = Instant::now() - Duration::from_secs(1);
-    let mut peak_at = [[Instant::now(); 18]; 3];
+    let mut peak_at = [[(Instant::now(), 0.0); 18]; 3];
 
     loop {
         // The timeout paces the polling loop at about 120 Hz while still
@@ -1670,9 +1673,17 @@ fn run(
             // clears.
             merge_over(m.playbacks.iter_mut(), over_flags_pb.as_deref());
             merge_over(m.outputs.iter_mut(), over_flags_out.as_deref());
-            hold_peaks(&mut m.input_peaks, &input_peaks, &mut peak_at[0], now);
-            hold_peaks(&mut m.playback_peaks, &playback_peaks, &mut peak_at[1], now);
-            hold_peaks(&mut m.output_peaks, &output_peaks, &mut peak_at[2], now);
+            m.ballistics = device.meter_ballistics();
+            let b = m.ballistics;
+            hold_peaks(&mut m.input_peaks, &input_peaks, &mut peak_at[0], b, now);
+            hold_peaks(
+                &mut m.playback_peaks,
+                &playback_peaks,
+                &mut peak_at[1],
+                b,
+                now,
+            );
+            hold_peaks(&mut m.output_peaks, &output_peaks, &mut peak_at[2], b, now);
             m.input_ovr = input_ovr.map(|flags| {
                 let mut out = [false; 18];
                 for (i, flag) in out.iter_mut().enumerate() {
@@ -1755,25 +1766,32 @@ where
     }
 }
 
-/// Hold each channel's peak for two seconds, then fall at 10 dB/s.  The
-/// service sees every device packet, so a transient shorter than a canvas
-/// frame still reaches the needle.
+/// Hold each channel's peak for the device's hold time, then fall at its
+/// peak release.  The service sees every device packet, so a transient
+/// shorter than a canvas frame still reaches the needle.
+///
+/// `held` keeps when each peak was caught and its level then.  The fall is
+/// computed from that level, not from the last published one: this runs on
+/// every ~8 ms poll, and decaying the published value by the whole time
+/// since the hold compounded to about 600 dB in the first second.
 fn hold_peaks(
     peaks: &mut [f32; 18],
     fresh: &[f32],
-    peak_at: &mut [Instant; 18],
+    held: &mut [(Instant, f32); 18],
+    ballistics: MeterBallistics,
     now: Instant,
 ) {
     for (i, slot) in peaks.iter_mut().enumerate() {
         let value = fresh.get(i).copied().unwrap_or(0.0).max(0.0);
         if value >= *slot {
             *slot = value;
-            peak_at[i] = now;
+            held[i] = (now, value);
         } else {
-            let held = now.duration_since(peak_at[i]).as_secs_f32();
-            if held > 2.0 {
-                let decayed = *slot * 10f32.powf(-(held - 2.0) / 2.0);
-                *slot = decayed.max(value);
+            let (since, level) = held[i];
+            let past = now.duration_since(since).as_secs_f32() - ballistics.peak_hold_s;
+            if past > 0.0 {
+                let fall = 10f32.powf(-ballistics.peak_release_db_s * past / 20.0);
+                *slot = (level * fall).max(value);
             }
         }
     }
@@ -1797,7 +1815,7 @@ fn apply(device: &mut DeviceHandle, command: Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{mirror_matrix_blocks, Command, DeviceService};
+    use super::{mirror_matrix_blocks, Command, DeviceService, MeterBallistics};
     use crate::app::DeviceHandle;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -1864,6 +1882,24 @@ mod tests {
         );
         assert!(service.meters().inputs.iter().any(|v| *v >= 0.0));
         service.stop();
+    }
+
+    #[test]
+    fn the_meter_bus_carries_the_device_ballistics() {
+        let uc = DeviceService::spawn(DeviceHandle::Mock(MockDevice::open_uc().unwrap()));
+        assert!(
+            wait_for(|| uc.meters().at.is_some()),
+            "the UC meter snapshot is written"
+        );
+        assert_eq!(uc.meters().ballistics, MeterBallistics::TOTALMIX_UC);
+        uc.stop();
+        let ucx = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| ucx.meters().at.is_some()),
+            "the UCX meter snapshot is written"
+        );
+        assert_eq!(ucx.meters().ballistics, MeterBallistics::TOTALMIX_UCX);
+        ucx.stop();
     }
 
     #[test]
@@ -1958,24 +1994,89 @@ mod tests {
     }
 
     #[test]
-    fn peak_hold_keeps_a_transient_and_then_falls() {
+    fn a_held_peak_falls_ten_db_per_second_at_the_service_poll_rate() {
+        // The service calls `hold_peaks` on every ~8 ms poll; the fall
+        // after the hold must not depend on how often it is called.
+        let ucx = MeterBallistics::TOTALMIX_UCX;
         let start = Instant::now();
         let mut peaks = [0.0; 18];
-        let mut at = [start; 18];
-        super::hold_peaks(&mut peaks, &[0.8], &mut at, start);
+        let mut at = [(start, 0.0); 18];
+        super::hold_peaks(&mut peaks, &[0.8], &mut at, ucx, start);
+        let mut now = start;
+        while now.duration_since(start) < Duration::from_millis(3000) {
+            now += Duration::from_millis(8);
+            super::hold_peaks(&mut peaks, &[0.0], &mut at, ucx, now);
+        }
+        let fell = now.duration_since(start).as_secs_f32() - 2.0;
+        let db = 20.0 * (peaks[0] / 0.8).log10();
+        assert!(
+            (db + 10.0 * fell).abs() < 0.2,
+            "{db:.2} dB {fell:.3} s after the hold, want {:.2}",
+            -10.0 * fell
+        );
+    }
+
+    #[test]
+    fn the_uc_peak_line_holds_two_seconds_then_falls_fifteen_db_per_second() {
+        // TotalMix FX with the UC: a 10 ms burst at -6 dBFS holds its
+        // line 2.0 s, then the line falls 15 dB/s.
+        let uc = MeterBallistics::TOTALMIX_UC;
+        let start = Instant::now();
+        let mut peaks = [0.0; 18];
+        let mut at = [(start, 0.0); 18];
+        super::hold_peaks(&mut peaks, &[0.5], &mut at, uc, start);
+        let mut now = start;
+        while now.duration_since(start) < Duration::from_millis(3000) {
+            now += Duration::from_millis(8);
+            super::hold_peaks(&mut peaks, &[0.0], &mut at, uc, now);
+        }
+        let fell = now.duration_since(start).as_secs_f32() - 2.0;
+        let db = 20.0 * (peaks[0] / 0.5).log10();
+        assert!(
+            (db + 15.0 * fell).abs() < 0.2,
+            "{db:.2} dB {fell:.3} s after the hold, TotalMix falls {:.2}",
+            -15.0 * fell
+        );
+    }
+
+    #[test]
+    fn peak_hold_keeps_a_transient_and_then_falls() {
+        let ucx = MeterBallistics::TOTALMIX_UCX;
+        let start = Instant::now();
+        let mut peaks = [0.0; 18];
+        let mut at = [(start, 0.0); 18];
+        super::hold_peaks(&mut peaks, &[0.8], &mut at, ucx, start);
         assert!((peaks[0] - 0.8).abs() < 1e-6);
 
         // The bar may be at zero between frames; the peak is still held.
-        super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(900));
+        super::hold_peaks(
+            &mut peaks,
+            &[0.0],
+            &mut at,
+            ucx,
+            start + Duration::from_millis(900),
+        );
         assert!((peaks[0] - 0.8).abs() < 1e-6);
 
         // Still held at 1.9 s: the default TotalMix hold is two seconds.
-        super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(1900));
+        super::hold_peaks(
+            &mut peaks,
+            &[0.0],
+            &mut at,
+            ucx,
+            start + Duration::from_millis(1900),
+        );
         assert!((peaks[0] - 0.8).abs() < 1e-6);
 
         // After the two-second hold it falls at 10 dB/s (a factor
         // 10^(−1/2) per second against the 20 dB ruler).
-        super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(2900));
+        super::hold_peaks(
+            &mut peaks,
+            &[0.0],
+            &mut at,
+            ucx,
+            start + Duration::from_millis(2900),
+        );
         assert!((peaks[0] - 0.8 * 0.1f32.powf(0.45)).abs() < 1e-4);
     }
 
