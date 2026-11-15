@@ -346,6 +346,9 @@ pub struct StripParams<'a> {
     /// Double-clicking the name may open the rename field. Control Room
     /// channels set this off: the name still selects the channel.
     pub renameable: bool,
+    /// The channel is under Mackie Control remote control: the name shows
+    /// in the remote tint, like TotalMix's brown name field.
+    pub mackie_remote: bool,
 }
 
 /// A button's own padding-based centering isn't reliable across glyphs of
@@ -683,6 +686,7 @@ const ROTATED_LABEL_LEN: f32 = 64.0;
 struct RotatedLabel {
     text: String,
     size: f32,
+    color: Color,
 }
 
 impl<Message> canvas::Program<Message> for RotatedLabel {
@@ -710,7 +714,7 @@ impl<Message> canvas::Program<Message> for RotatedLabel {
             frame.fill_text(canvas::Text {
                 content: self.text.clone(),
                 position: Point::ORIGIN,
-                color: theme::text_primary(),
+                color: self.color,
                 size: self.size.into(),
                 align_x: advanced_text::Alignment::Center,
                 align_y: alignment::Vertical::Center,
@@ -721,8 +725,13 @@ impl<Message> canvas::Program<Message> for RotatedLabel {
     }
 }
 
-fn rotated_label<'a, Msg: 'a + Clone>(text: String, size: f32, scale: f32) -> Element<'a, Msg> {
-    Canvas::new(RotatedLabel { text, size })
+fn rotated_label<'a, Msg: 'a + Clone>(
+    text: String,
+    size: f32,
+    scale: f32,
+    color: Color,
+) -> Element<'a, Msg> {
+    Canvas::new(RotatedLabel { text, size, color })
         .width(Length::Fill)
         .height(Length::Fixed(ROTATED_LABEL_LEN * scale))
         .into()
@@ -744,6 +753,7 @@ fn header_row<'a>(
     cid: ChannelId,
     name: &str,
     name_custom: bool,
+    name_color: Color,
     type_tag: Option<(&'static str, Color)>,
     renameable: bool,
     renaming: bool,
@@ -778,7 +788,7 @@ fn header_row<'a>(
     // matching `.wrapping(None)` added to every other `text()` in
     // `full_strip` below for the same reason.
     let mut header = row![text(shown_name.to_string())
-        .color(theme::text_primary())
+        .color(name_color)
         .size(theme::TEXT_MD * scale)
         .wrapping(advanced_text::Wrapping::None)]
     .spacing(theme::SPACE_HAIRLINE);
@@ -906,6 +916,11 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             },
             theme::TEXT_SM * scale,
             scale,
+            if p.mackie_remote {
+                theme::MACKIE_NAME
+            } else {
+                theme::text_primary()
+            },
         ),
         mute_btn,
         second_slot,
@@ -1029,6 +1044,11 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         cid,
         &p.name,
         p.name_custom,
+        if p.mackie_remote {
+            theme::MACKIE_NAME
+        } else {
+            theme::text_primary()
+        },
         p.type_tag,
         p.renameable,
         p.renaming,

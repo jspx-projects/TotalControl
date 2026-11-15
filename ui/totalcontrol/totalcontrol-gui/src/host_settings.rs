@@ -27,11 +27,15 @@ fn schema() -> u32 {
 }
 
 fn recv_port() -> u16 {
-    9000
+    7001
 }
 
 fn send_port() -> u16 {
     9001
+}
+
+fn send_host() -> std::net::IpAddr {
+    std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
 }
 
 fn ovr_samples() -> u8 {
@@ -72,6 +76,13 @@ pub struct HostSettings {
     pub osc_recv_port: u16,
     #[serde(default = "send_port")]
     pub osc_send_port: u16,
+    /// Feedback destination of the OSC surface.  Loopback keeps the
+    /// receive socket on loopback; any other address binds it on all
+    /// interfaces.
+    #[serde(default = "send_host")]
+    pub osc_send_host: std::net::IpAddr,
+    /// The Mackie Control remote (Settings > MIDI and OSC, MIDI part).
+    pub mackie: crate::mackie::MackieConfig,
     pub engine_force_rate: Option<u32>,
     pub engine_rate_mode: Option<EngineRateMode>,
     pub engine_force_quantum: Option<u32>,
@@ -93,6 +104,8 @@ impl Default for HostSettings {
             osc_mode: OscDialect::Classic,
             osc_recv_port: recv_port(),
             osc_send_port: send_port(),
+            osc_send_host: send_host(),
+            mackie: crate::mackie::MackieConfig::default(),
             engine_force_rate: None,
             engine_rate_mode: None,
             engine_force_quantum: None,
@@ -189,7 +202,7 @@ mod tests {
     fn a_missing_file_uses_defaults() {
         let settings = HostSettings::load(Path::new("/nonexistent/host-settings.json"));
         assert_eq!(settings.schema, SCHEMA);
-        assert_eq!(settings.osc_recv_port, 9000);
+        assert_eq!(settings.osc_recv_port, 7001);
         assert_eq!(settings.osc_send_port, 9001);
         assert_eq!(settings.ovr_sample_count(), 3);
         assert!(settings.units.is_empty());
@@ -202,6 +215,23 @@ mod tests {
         assert_eq!(settings.ovr_sample_count(), OVR_SAMPLES_MIN);
         settings.ovr_full_scale_samples = 99;
         assert_eq!(settings.ovr_sample_count(), OVR_SAMPLES_MAX);
+    }
+
+    #[test]
+    fn the_mackie_remote_round_trips() {
+        let mut settings = HostSettings::default();
+        settings.mackie.in_use = true;
+        settings.mackie.input = Some(crate::mackie::MidiPort { card: 2, device: 0 });
+        settings.mackie.output = Some(crate::mackie::MidiPort { card: 2, device: 1 });
+        settings.mackie.full_lcd = false;
+        settings.mackie.send_levels = true;
+        let json = serde_json::to_string(&settings).unwrap();
+        let loaded: HostSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.mackie, settings.mackie);
+        // An older file without the mackie block keeps the defaults.
+        let legacy: HostSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.mackie, crate::mackie::MackieConfig::default());
+        assert_eq!(legacy.osc_recv_port, 7001);
     }
 
     #[test]

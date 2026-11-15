@@ -186,6 +186,9 @@ pub fn bg_deep() -> Color {
 
 /// Hover surface for controls and strips.
 pub const SURFACE_HI: Color = Color::from_rgb8(0x2d, 0x2e, 0x33);
+/// Name tint of a channel under Mackie Control remote control — TotalMix
+/// turns the name field brown for the channels in the remote's window.
+pub const MACKIE_NAME: Color = Color::from_rgb8(0xc4, 0x8a, 0x5a);
 /// VU well on a normal strip: one shade below `surface()`, not a black cut-out.
 pub const METER_WELL: Color = Color::from_rgb8(0x1e, 0x1f, 0x23);
 /// VU well on an active input/playback strip: one shade below

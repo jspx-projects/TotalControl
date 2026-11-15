@@ -5,9 +5,10 @@
 //! [`crate::osc_global`].  This module only owns the UDP socket, the debug
 //! log and the outgoing feedback queue; the codecs decode the paths.
 //!
-//! Opt-in from the app settings or `--osc` (see `main.rs`).  Off by default,
-//! and bound to loopback only, so enabling it never silently exposes control
-//! to the LAN.
+//! Opt-in from the app settings or `--osc` (see `main.rs`).  Off by default.
+//! With a loopback feedback address the socket stays on loopback; a remote
+//! controller address binds it on all interfaces so the controller can
+//! reach us.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -163,7 +164,15 @@ fn flatten(packet: OscPacket) -> Vec<OscMessage> {
 pub fn worker(config: &OscConfig) -> impl Stream<Item = Message> {
     let config = *config;
     stream::channel(100, async move |mut output| {
-        let recv_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.recv_port);
+        // Loopback feedback keeps the socket on loopback.  A remote
+        // controller on another host needs the socket on all interfaces
+        // so its messages can reach us.
+        let bind_ip = if config.send_host.is_loopback() {
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        } else {
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        };
+        let recv_addr = SocketAddr::new(bind_ip, config.recv_port);
         let socket = match UdpSocket::bind(recv_addr).await {
             Ok(s) => s,
             Err(err) => {

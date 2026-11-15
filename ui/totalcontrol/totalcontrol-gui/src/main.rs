@@ -19,7 +19,9 @@ mod device_service;
 mod host_settings;
 mod icon;
 mod layouts;
+mod mackie;
 mod matrix;
+mod midi;
 mod osc;
 mod osc_global;
 mod osc_rme;
@@ -110,8 +112,9 @@ fn main() -> iced::Result {
         std::env::set_var("TOTALCONTROL_NO_CAPTURE", "1");
     }
 
-    // Opt-in, loopback-only OSC control surface — see osc.rs. Off unless
-    // `--osc` is passed, so enabling it is always a deliberate choice.
+    // Opt-in OSC control surface — see osc.rs. Off unless `--osc` is
+    // passed, so enabling it is always a deliberate choice. With a
+    // loopback feedback address the socket stays on loopback.
     let osc_dialect = match arg_value(&args, "--osc-mode").as_deref() {
         Some("global") => osc::OscDialect::Global,
         Some("classic") | None => osc::OscDialect::Classic,
@@ -123,7 +126,7 @@ fn main() -> iced::Result {
     let osc_config = args.iter().any(|a| a == "--osc").then(|| osc::OscConfig {
         recv_port: arg_value(&args, "--osc-port")
             .and_then(|v| v.parse().ok())
-            .unwrap_or(9000),
+            .unwrap_or(7001),
         send_port: arg_value(&args, "--osc-send-port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(9001),

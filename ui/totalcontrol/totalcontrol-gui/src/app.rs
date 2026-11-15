@@ -1974,6 +1974,9 @@ pub enum Message {
     WindowSize(f32, f32),
     /// The window moved to a new logical position.
     WindowMoved(i32, i32),
+    /// The window gained or lost focus; background-disable remotes
+    /// suspend while it is unfocused.
+    WindowFocus(bool),
     /// The page's scroll offset changed.
     WorkspaceScrolled(f32, f32),
     /// Apply the offset restored from the workspace after the window opens.
@@ -2231,8 +2234,33 @@ pub enum Message {
     SetOscMode(crate::osc::OscDialect),
     OscRecvPortChanged(String),
     OscSendPortChanged(String),
+    /// Settings sheet: the remote controller address feedback is sent to.
+    OscSendHostChanged(String),
     /// Parse both port fields and restart the worker if they changed.
     ApplyOscPorts,
+    /// The Mackie worker (see `midi.rs`) just started — carries the
+    /// sender used to push feedback bytes to the surface.
+    MackieReady(mpsc::Sender<Vec<u8>>),
+    /// One raw MIDI byte block from the surface.  Parsed on the UI thread
+    /// so toggles resolve against the confirmed mixer model.
+    MackieIn(Vec<u8>),
+    /// A model-dependent Mackie action (master mute/solo, cue selection).
+    MackieAction(crate::mackie::MackieAction),
+    /// A relative VPOT turn: nudge the pan by the delta, clamped.
+    MackiePanNudge(ChannelId, usize, i16),
+    /// The surface sent a connection query; reply with the response code.
+    MackieHandshake([u8; 4]),
+    ToggleMackieLog,
+    ClearMackieLog,
+    /// Settings sheet: start/stop the MIDI remote.
+    SetMackieEnabled(bool),
+    /// Settings sheet: port picklists (None or a rawmidi port).
+    MackieInChanged(Option<crate::mackie::MidiPort>),
+    MackieOutChanged(Option<crate::mackie::MidiPort>),
+    /// Open the chosen ports and restart the worker.
+    ApplyMackiePorts,
+    /// Settings sheet: one Mackie Control option checkbox.
+    SetMackieOption(crate::mackie::MackieOption),
     /// Toggles the Audio Configuration panel (clock source, SPDIF,
     /// sample rate).
     ToggleDevicePanel,
@@ -2757,9 +2785,14 @@ pub struct TotalControl {
     pub osc_enabled: bool,
     pub osc_recv_port: u16,
     pub osc_send_port: u16,
+    /// Feedback destination.  Loopback keeps the receive socket on
+    /// loopback too; any other address binds it on all interfaces so the
+    /// remote controller can reach us.
+    pub osc_send_host: std::net::IpAddr,
     pub osc_dialect: crate::osc::OscDialect,
     pub osc_recv_text: String,
     pub osc_send_text: String,
+    pub osc_send_host_text: String,
     /// `--osc` was passed: the command line overrides the saved switch.
     pub osc_cli: bool,
     /// User override of the RMS bar release ("VU fallback"), in dB/s.
@@ -2780,6 +2813,27 @@ pub struct TotalControl {
     /// opening the panel after a burst of activity isn't a blank page.
     pub osc_log: VecDeque<String>,
     pub show_osc_log: bool,
+    /// The Mackie Control remote: settings, navigation, feedback state
+    /// and the worker's sender.  One remote in this version; the codec
+    /// is per-remote so more can be added without rework.
+    pub mackie_config: crate::mackie::MackieConfig,
+    pub mackie_nav: crate::mackie::MackieNav,
+    pub mackie_surface: crate::mackie::MackieSurface,
+    pub mackie_tx: Option<mpsc::Sender<Vec<u8>>>,
+    /// Worker recipe identity; `subscription()` starts the worker while
+    /// this is `Some`.
+    pub mackie_worker: Option<crate::midi::MackieWorkerConfig>,
+    /// Cached rawmidi port list for the settings picklists.
+    pub mackie_ports: Vec<crate::midi::MidiPortInfo>,
+    pub mackie_log: VecDeque<String>,
+    pub show_mackie_log: bool,
+    /// Last loopback-detection note send (500 ms period while online).
+    pub mackie_loopback_due: Instant,
+    /// Last meter feedback send, throttled to ~25 Hz.
+    pub mackie_meter_due: Instant,
+    /// The window has focus; `background_disable` remotes suspend when
+    /// it does not.
+    pub window_focused: bool,
     /// Docked Audio Configuration panel (device group, clock source, SPDIF
     /// flags) — same pattern as `show_osc_log`, see `device_panel`.
     pub show_device_panel: bool,
@@ -3344,8 +3398,11 @@ pub fn new_with_device(
     // of the saved preference.  Without it the settings sheet owns the
     // switch and the two ports.
     let osc_cli = osc_config.is_some();
-    let osc_recv_port = osc_config.map(|c| c.recv_port).unwrap_or(9000);
+    let osc_recv_port = osc_config.map(|c| c.recv_port).unwrap_or(7001);
     let osc_send_port = osc_config.map(|c| c.send_port).unwrap_or(9001);
+    let osc_send_host = osc_config
+        .map(|c| c.send_host)
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
     let osc_dialect = osc_config
         .map(|c| c.dialect)
         .unwrap_or(crate::osc::OscDialect::Classic);
@@ -3436,15 +3493,28 @@ pub fn new_with_device(
         osc_enabled,
         osc_recv_port,
         osc_send_port,
+        osc_send_host,
         osc_dialect,
         osc_recv_text: osc_recv_port.to_string(),
         osc_send_text: osc_send_port.to_string(),
+        osc_send_host_text: osc_send_host.to_string(),
         osc_cli,
         vu_release_db_s: None,
         rme: crate::osc_rme::RmeState::default(),
         osc_tx: None,
         osc_log: VecDeque::new(),
         show_osc_log: false,
+        mackie_config: crate::mackie::MackieConfig::default(),
+        mackie_nav: crate::mackie::MackieNav::default(),
+        mackie_surface: crate::mackie::MackieSurface::default(),
+        mackie_tx: None,
+        mackie_worker: None,
+        mackie_ports: crate::midi::enumerate(),
+        mackie_log: VecDeque::new(),
+        show_mackie_log: false,
+        mackie_loopback_due: Instant::now(),
+        mackie_meter_due: Instant::now(),
+        window_focused: true,
         show_device_panel: false,
         talkback_on: false,
         control_room: ControlRoomSettings::default(),
@@ -3586,7 +3656,7 @@ fn rebuild_osc_config(state: &mut TotalControl) {
         state.osc_config = Some(OscConfig {
             recv_port: state.osc_recv_port,
             send_port: state.osc_send_port,
-            send_host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            send_host: state.osc_send_host,
             dialect: state.osc_dialect,
         });
     } else {
@@ -3595,6 +3665,29 @@ fn rebuild_osc_config(state: &mut TotalControl) {
     }
     state.osc_recv_text = state.osc_recv_port.to_string();
     state.osc_send_text = state.osc_send_port.to_string();
+    state.osc_send_host_text = state.osc_send_host.to_string();
+}
+
+/// Start or stop the Mackie worker from the current settings.  The
+/// worker recipe only carries the ports; option changes apply live.
+fn rebuild_mackie_worker(state: &mut TotalControl) {
+    if state.mackie_config.runnable() {
+        state.mackie_worker = Some(crate::midi::MackieWorkerConfig {
+            input: state.mackie_config.input,
+            output: state.mackie_config.output,
+        });
+    } else {
+        if state.mackie_worker.is_some() {
+            // Tell the surface to go offline before the port closes.
+            if let Some(tx) = state.mackie_tx.as_mut() {
+                let _ = tx.try_send(crate::mackie::go_offline());
+            }
+        }
+        state.mackie_worker = None;
+        state.mackie_tx = None;
+        state.mackie_nav.online = false;
+        state.mackie_surface = crate::mackie::MackieSurface::default();
+    }
 }
 
 /// The host settings document for the live state.  Workspace fields,
@@ -3625,6 +3718,8 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
     settings.osc_mode = state.osc_dialect;
     settings.osc_recv_port = state.osc_recv_port;
     settings.osc_send_port = state.osc_send_port;
+    settings.osc_send_host = state.osc_send_host;
+    settings.mackie = state.mackie_config.clone();
     settings
 }
 
@@ -3645,7 +3740,7 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
     state.engine_force_quantum = settings.engine_force_quantum.unwrap_or(0);
     if !state.osc_cli {
         state.osc_recv_port = if settings.osc_recv_port == 0 {
-            9000
+            7001
         } else {
             settings.osc_recv_port
         };
@@ -3654,10 +3749,13 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
         } else {
             settings.osc_send_port
         };
+        state.osc_send_host = settings.osc_send_host;
         state.osc_enabled = settings.osc_enabled;
         state.osc_dialect = settings.osc_mode;
         rebuild_osc_config(state);
     }
+    state.mackie_config = settings.mackie.clone();
+    rebuild_mackie_worker(state);
     if let Some((key, unit)) = settings.active() {
         state.current_unit_key = Some(key.to_string());
         state.always_init_device = unit.always_init_device;
@@ -8000,6 +8098,290 @@ fn notify_rme_channel(state: &mut TotalControl, cid: ChannelId) {
     }
 }
 
+// ---- Mackie Control surface --------------------------------------------
+
+/// Channel counts per row, capped like the OSC surface.
+fn mackie_counts(state: &TotalControl) -> [usize; 3] {
+    [
+        state.device.inputs().len().min(crate::osc_rme::CHANNELS),
+        state.device.playbacks().len().min(crate::osc_rme::CHANNELS),
+        state.device.outputs().len().min(crate::osc_rme::CHANNELS),
+    ]
+}
+
+/// The row as a strip list: a linked pair is one strip (its left channel)
+/// unless "Map Stereo to 2 Mono Channels" is on.
+fn mackie_row_strips(state: &TotalControl, bus: crate::osc_rme::Bus) -> Vec<ChannelId> {
+    use crate::osc_rme::Bus;
+    let count = match bus {
+        Bus::Input => state.device.inputs().len(),
+        Bus::Playback => state.device.playbacks().len(),
+        Bus::Output => state.device.outputs().len(),
+    }
+    .min(crate::osc_rme::CHANNELS);
+    let mut strips = Vec::new();
+    let mut idx = 0;
+    while idx < count {
+        let cid = match bus {
+            Bus::Input => ChannelId::Input(idx),
+            Bus::Playback => ChannelId::Playback(idx),
+            Bus::Output => ChannelId::Output(idx),
+        };
+        strips.push(cid);
+        if !state.mackie_config.stereo_to_mono && pair_linked(state, cid) && idx + 1 < count {
+            idx += 2;
+        } else {
+            idx += 1;
+        }
+    }
+    strips
+}
+
+fn mackie_strip_counts(state: &TotalControl) -> [usize; 3] {
+    use crate::osc_rme::Bus;
+    [
+        mackie_row_strips(state, Bus::Input).len(),
+        mackie_row_strips(state, Bus::Playback).len(),
+        mackie_row_strips(state, Bus::Output).len(),
+    ]
+}
+
+fn mackie_window_for(state: &TotalControl, bus: crate::osc_rme::Bus) -> crate::mackie::Window {
+    let strips = mackie_row_strips(state, bus);
+    std::array::from_fn(|i| strips.get(state.mackie_nav.bank + i).copied())
+}
+
+/// The remote processes input and sends feedback only while it is
+/// enabled, opened and (with background disable) in the foreground.
+fn mackie_active(state: &TotalControl) -> bool {
+    state.mackie_config.runnable()
+        && state.mackie_tx.is_some()
+        && (!state.mackie_config.background_disable
+            || (state.window_focused && !state.window_hidden))
+}
+
+/// Whether the channel sits in the active remote's window: its name shows
+/// in the remote tint, like TotalMix's brown name field.
+fn mackie_marks(state: &TotalControl, cid: ChannelId) -> bool {
+    mackie_active(state)
+        && mackie_window_for(state, state.mackie_nav.bus).contains(&Some(cid))
+}
+
+fn mackie_log(state: &mut TotalControl, line: String) {
+    state.mackie_log.push_front(line);
+    state.mackie_log.truncate(OSC_LOG_MAX);
+}
+
+fn mackie_send(state: &mut TotalControl, bytes: Vec<u8>) {
+    if bytes.is_empty() {
+        return;
+    }
+    if let Some(tx) = state.mackie_tx.as_mut() {
+        if tx.try_send(bytes.clone()).is_err() {
+            log::debug!("Mackie: feedback queue full, dropping {} bytes", bytes.len());
+        }
+    }
+    if state.show_mackie_log {
+        let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        mackie_log(state, format!("OUT {}", hex.join(" ")));
+    }
+}
+
+/// The Main Out pair, when one is assigned.
+fn mackie_main_pair(state: &TotalControl) -> Option<usize> {
+    state.device.settings().main_out
+}
+
+/// Resolve a model-dependent Mackie action into ordinary messages.
+fn mackie_action_messages(state: &TotalControl, action: crate::mackie::MackieAction) -> Vec<Message> {
+    use crate::mackie::MackieAction as A;
+    match action {
+        A::MasterMute => {
+            let Some(pair) = mackie_main_pair(state) else {
+                return Vec::new();
+            };
+            let left = ChannelId::Output(pair * 2);
+            let on = !channel_is_muted(state, left);
+            let mut msgs = vec![Message::Mute(left, on)];
+            if pair * 2 + 1 < state.device.outputs().len() {
+                msgs.push(Message::Mute(ChannelId::Output(pair * 2 + 1), on));
+            }
+            msgs
+        }
+        A::MasterSolo => {
+            let Some(pair) = mackie_main_pair(state) else {
+                return Vec::new();
+            };
+            let left = ChannelId::Output(pair * 2);
+            let on = !channel_is_soloed(state, left);
+            let mut msgs = vec![Message::Solo(left, on)];
+            if pair * 2 + 1 < state.device.outputs().len() {
+                msgs.push(Message::Solo(ChannelId::Output(pair * 2 + 1), on));
+            }
+            msgs
+        }
+        A::SelectMainOut => mackie_main_pair(state)
+            .map(|pair| vec![Message::SelectOutput(pair)])
+            .unwrap_or_default(),
+        A::CueMainOut => {
+            let Some(pair) = mackie_main_pair(state) else {
+                return Vec::new();
+            };
+            mackie_cue_pair(state, pair)
+        }
+        A::CuePhones(slot) => {
+            // Assign slots: 0 Main, 1 Main B, 2..4 Phones 1..3.
+            let Some(Some(pair)) = state.assign.get(2 + slot).copied() else {
+                return Vec::new();
+            };
+            mackie_cue_pair(state, pair)
+        }
+    }
+}
+
+/// Listen to one pair: cue it, uncue every other output.
+fn mackie_cue_pair(state: &TotalControl, pair: usize) -> Vec<Message> {
+    let mut msgs = Vec::new();
+    for (i, out) in state.device.outputs().iter().enumerate() {
+        let want = i / 2 == pair && i % 2 == 0;
+        if out.cue != want {
+            msgs.push(Message::CueChanged(ChannelId::Output(i), want));
+        }
+    }
+    msgs
+}
+
+/// Build the feedback content for the current window from the model.
+fn mackie_feedback_input(state: &TotalControl) -> crate::mackie::FeedbackInput {
+    use crate::mackie::{FeedbackInput, StripFeedback, STRIPS};
+    use crate::osc_rme::Bus;
+    let window = mackie_window_for(state, state.mackie_nav.bus);
+    let mut strips: [StripFeedback; STRIPS] = std::array::from_fn(|_| StripFeedback::default());
+    for (i, cid) in window.iter().enumerate() {
+        let Some(cid) = *cid else { continue };
+        let out = match cid {
+            ChannelId::Output(idx) => idx,
+            _ => state.mackie_nav.submix,
+        };
+        let gain = channel_level(state, cid, out);
+        let trim = state.mackie_nav.trim && !matches!(cid, ChannelId::Output(_));
+        let fader = if trim {
+            crate::osc_rme::fader_norm(channel_trim(state, cid))
+        } else {
+            crate::osc_rme::gain_to_fader(gain)
+        };
+        let value = if trim {
+            format!("{:.1} dB", channel_trim(state, cid))
+        } else {
+            rme_db_string(gain)
+        };
+        strips[i] = StripFeedback {
+            fader,
+            mute: channel_is_muted(state, cid),
+            solo: channel_is_soloed(state, cid),
+            select: state.selected.contains(&cid),
+            rec: matches!(cid, ChannelId::Output(idx) if idx / 2 == state.mackie_nav.submix),
+            pan: channel_pan(state, cid, out),
+            name: rme_name(state, cid),
+            value,
+        };
+    }
+    let master_fader = mackie_main_pair(state)
+        .map(|pair| {
+            let left = ChannelId::Output(pair * 2);
+            crate::osc_rme::gain_to_fader(channel_level(state, left, pair * 2))
+        })
+        .unwrap_or(0.0);
+    let master_mute = mackie_main_pair(state)
+        .map(|pair| channel_is_muted(state, ChannelId::Output(pair * 2)))
+        .unwrap_or(false);
+    let master_solo = mackie_main_pair(state)
+        .map(|pair| channel_is_soloed(state, ChannelId::Output(pair * 2)))
+        .unwrap_or(false);
+    let first_channel = window
+        .iter()
+        .flatten()
+        .next()
+        .map(|cid| match cid {
+            ChannelId::Input(i) | ChannelId::Playback(i) | ChannelId::Output(i) => i + 1,
+        })
+        .unwrap_or(1);
+    FeedbackInput {
+        strips,
+        master_fader,
+        dim: state.device.settings().dim,
+        talkback: state.talkback_on,
+        mono: state.device.settings().mono,
+        speaker_b: state.device.settings().speaker_b,
+        master_mute,
+        master_solo,
+        trim: state.mackie_nav.trim,
+        rude_solo: any_channel_soloed(state),
+        full_lcd: state.mackie_config.full_lcd,
+        send_names: state.mackie_config.send_names,
+        row_name: match state.mackie_nav.bus {
+            Bus::Input => "In",
+            Bus::Playback => "Play",
+            Bus::Output => "Out",
+        },
+        first_channel,
+    }
+}
+
+/// Refresh the surface after any model or navigation change.  The
+/// encoder only emits deltas, so an unchanged window costs no MIDI
+/// traffic.
+fn notify_mackie(state: &mut TotalControl) {
+    if !mackie_active(state) || !state.mackie_nav.online {
+        return;
+    }
+    let input = mackie_feedback_input(state);
+    let mut out = Vec::new();
+    crate::mackie::refresh(&input, &mut state.mackie_surface, &mut out);
+    mackie_send(state, out);
+}
+
+/// Meter feedback, throttled by the caller.  Reads the shared meter bus.
+fn mackie_meters(state: &mut TotalControl) {
+    if !mackie_active(state) || !state.mackie_nav.online || !state.mackie_config.send_levels {
+        return;
+    }
+    let Some(bus) = state.meter_bus.clone() else {
+        return;
+    };
+    let Ok(meters) = bus.lock() else { return };
+    let window = mackie_window_for(state, state.mackie_nav.bus);
+    let mut levels = [-100.0f32; crate::mackie::STRIPS];
+    let mut over = [false; crate::mackie::STRIPS];
+    for (i, cid) in window.iter().enumerate() {
+        let Some(cid) = *cid else { continue };
+        let (level, peak, ovr) = match cid {
+            ChannelId::Input(idx) => (
+                meters.inputs.get(idx).copied().unwrap_or(0.0),
+                meters.input_peaks.get(idx).copied().unwrap_or(0.0),
+                meters.input_ovr.map(|o| o.get(idx).copied().unwrap_or(false)),
+            ),
+            ChannelId::Playback(idx) => (
+                meters.playbacks.get(idx).copied().unwrap_or(0.0),
+                meters.playback_peaks.get(idx).copied().unwrap_or(0.0),
+                meters.playback_ovr.map(|o| o.get(idx).copied().unwrap_or(false)),
+            ),
+            ChannelId::Output(idx) => (
+                meters.outputs.get(idx).copied().unwrap_or(0.0),
+                meters.output_peaks.get(idx).copied().unwrap_or(0.0),
+                meters.output_ovr.map(|o| o.get(idx).copied().unwrap_or(false)),
+            ),
+        };
+        let v = if state.mackie_config.peak_hold { peak } else { level };
+        levels[i] = if v <= 0.0 { -100.0 } else { 20.0 * v.log10() };
+        over[i] = ovr.unwrap_or(levels[i] >= 0.0);
+    }
+    drop(meters);
+    let mut out = Vec::new();
+    crate::mackie::refresh_meters(&levels, &over, &mut state.mackie_surface, &mut out);
+    mackie_send(state, out);
+}
+
 /// Flips `cid`'s collapsed/expanded target and kicks off (or redirects, if
 /// one was already in flight — e.g. double-clicking again before it
 /// settles) the width animation that plays it out. A no-op if `cid` is
@@ -8776,6 +9158,79 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         state.assign_pinned = false;
     }
 
+    // Mackie Control: parse on this thread so toggles resolve against the
+    // confirmed model, dispatch the resulting ordinary messages, then
+    // refresh the surface window when the navigation changed.
+    if let Message::MackieIn(bytes) = &message {
+        if !mackie_active(state) {
+            return Task::none();
+        }
+        if state.show_mackie_log {
+            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            mackie_log(state, format!("IN  {}", hex.join(" ")));
+        }
+        let before = state.mackie_nav.nav();
+        let counts = mackie_counts(state);
+        let strip_counts = mackie_strip_counts(state);
+        let submix_count = state.device.output_pair_count().max(1);
+        let mut dispatch = Vec::new();
+        let mut loopback = false;
+        for &b in bytes.iter() {
+            let Some(ev) = state.mackie_nav.parser.feed(b) else {
+                continue;
+            };
+            if matches!(
+                ev,
+                crate::mackie::MidiEvent::NoteOn {
+                    ch: crate::mackie::LOOPBACK_CHANNEL,
+                    note: crate::mackie::LOOPBACK_NOTE,
+                    vel: crate::mackie::LOOPBACK_VELOCITY,
+                }
+            ) {
+                loopback = true;
+                continue;
+            }
+            // Surfaces that skip the handshake go online on their first
+            // control message.
+            if !state.mackie_nav.online
+                && !matches!(ev, crate::mackie::MidiEvent::SysEx(_) | crate::mackie::MidiEvent::Realtime(_))
+            {
+                state.mackie_nav.online = true;
+                state.mackie_surface = crate::mackie::MackieSurface::default();
+            }
+            let window = mackie_window_for(state, state.mackie_nav.bus);
+            let out_window = mackie_window_for(state, crate::osc_rme::Bus::Output);
+            if let Some(msgs) = crate::mackie::parse(
+                &ev,
+                &mut state.mackie_nav,
+                &state.mackie_config,
+                &window,
+                &out_window,
+                counts,
+                strip_counts,
+                submix_count,
+            ) {
+                dispatch.extend(msgs);
+            }
+        }
+        if loopback {
+            // The output is wired back into the input.  Disable the
+            // remote until the user re-enables it, like TotalMix FX.
+            state.mackie_config.in_use = false;
+            rebuild_mackie_worker(state);
+            state.host_dirty = true;
+            log::warn!("Mackie: MIDI loopback detected, remote disabled");
+            mackie_log(state, "Loopback detected — remote disabled".into());
+            return Task::none();
+        }
+        for message in dispatch {
+            let _ = update(state, message);
+        }
+        if state.mackie_nav.nav() != before {
+            notify_mackie(state);
+        }
+        return Task::none();
+    }
     // Classic RME OSC: parse on this thread so `Toggle` can read the
     // confirmed model, dispatch the resulting ordinary messages, then
     // re-send the page when the bank/bus/channel selection changed.
@@ -8969,6 +9424,19 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         // the canvases read the now-active snapshot and schedule a frame.
         Message::MeterWake => {}
         Message::Tick => {
+            // Mackie housekeeping: the loopback-detection note every
+            // 500 ms while online, and meter feedback at ~25 Hz.
+            if mackie_active(state) && state.mackie_nav.online {
+                let now = Instant::now();
+                if state.mackie_config.output.is_some() && now >= state.mackie_loopback_due {
+                    state.mackie_loopback_due = now + Duration::from_millis(500);
+                    mackie_send(state, crate::mackie::loopback_note().to_vec());
+                }
+                if now >= state.mackie_meter_due {
+                    state.mackie_meter_due = now + Duration::from_millis(40);
+                    mackie_meters(state);
+                }
+            }
             // Driver transport health: cumulative counters, shown relative
             // to the first reading of this connection (or the reset button).
             let counters = state.device.transport_counters();
@@ -9465,6 +9933,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             let sel_out = i.min(state.device.output_pair_count().saturating_sub(1));
             state.sel_out = sel_out;
             state.sel_out_side = 0;
+            // "Submix linked to MIDI / OSC control": the remote follows
+            // the submix selected in the GUI.
+            if state.mackie_config.submix_linked {
+                state.mackie_nav.submix = sel_out;
+            }
             // Selecting a bus dismisses the Route flyout — it did its
             // job. Doesn't touch any other (Settings/Eq/Trim) flyout
             // that happens to be open elsewhere.
@@ -9472,6 +9945,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_osc_raw(state, "/submix", vec![OscType::Int(sel_out as i32)]);
         }
         Message::ModifiersChanged(m) => state.modifiers = m,
+        Message::WindowFocus(focused) => {
+            state.window_focused = focused;
+            // A background-disable remote resumes with a full refresh.
+            if focused && state.mackie_config.background_disable {
+                state.mackie_surface = crate::mackie::MackieSurface::default();
+                notify_mackie(state);
+            }
+        }
         Message::WindowSize(w, h) => {
             // The right-hand control strip is never folded by the window
             // width.  A narrow window keeps it visible and the mixer rows
@@ -10737,7 +11218,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.osc_log.truncate(OSC_LOG_MAX);
         }
         // Handled at the top of `update`, before this match.
-        Message::OscRmeIn(_, _) | Message::OscGlobalIn(_) => {}
+        Message::OscRmeIn(_, _) | Message::OscGlobalIn(_) | Message::MackieIn(_) => {}
         Message::ToggleOscLog => state.show_osc_log = !state.show_osc_log,
         Message::ClearOscLog => state.osc_log.clear(),
         Message::SetOscEnabled(on) => {
@@ -10755,6 +11236,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::OscRecvPortChanged(text) => state.osc_recv_text = text,
         Message::OscSendPortChanged(text) => state.osc_send_text = text,
+        Message::OscSendHostChanged(text) => state.osc_send_host_text = text,
         Message::ApplyOscPorts => {
             if let Ok(port) = state.osc_recv_text.trim().parse::<u16>() {
                 if port >= 1024 {
@@ -10766,8 +11248,70 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.osc_send_port = port;
                 }
             }
+            if let Ok(host) = state.osc_send_host_text.trim().parse::<std::net::IpAddr>() {
+                state.osc_send_host = host;
+            }
             state.host_dirty = true;
             rebuild_osc_config(state);
+        }
+        Message::SetMackieEnabled(on) => {
+            state.mackie_config.in_use = on;
+            if !on {
+                state.show_mackie_log = false;
+            }
+            state.mackie_ports = crate::midi::enumerate();
+            state.host_dirty = true;
+            rebuild_mackie_worker(state);
+        }
+        Message::MackieInChanged(port) => state.mackie_config.input = port,
+        Message::MackieOutChanged(port) => state.mackie_config.output = port,
+        Message::ApplyMackiePorts => {
+            state.mackie_ports = crate::midi::enumerate();
+            state.host_dirty = true;
+            rebuild_mackie_worker(state);
+        }
+        Message::SetMackieOption(option) => {
+            let on = !state.mackie_config.option(option);
+            state.mackie_config.set_option(option, on);
+            state.host_dirty = true;
+            // LCD options change the whole display: force a full rewrite.
+            if matches!(
+                option,
+                crate::mackie::MackieOption::FullLcd | crate::mackie::MackieOption::SendNames
+            ) {
+                state.mackie_surface = crate::mackie::MackieSurface::default();
+            }
+            notify_mackie(state);
+        }
+        Message::ToggleMackieLog => state.show_mackie_log = !state.show_mackie_log,
+        Message::ClearMackieLog => state.mackie_log.clear(),
+        Message::MackieReady(tx) => {
+            state.mackie_tx = Some(tx);
+            state.mackie_nav.online = false;
+            state.mackie_surface = crate::mackie::MackieSurface::default();
+            // Ask the surface to identify itself; surfaces that skip the
+            // handshake go online on their first control message.
+            mackie_send(state, crate::mackie::device_query());
+            mackie_send(state, crate::mackie::version_request());
+            mackie_log(state, "Mackie remote opened".into());
+        }
+        Message::MackieHandshake(challenge) => {
+            let reply = if challenge == [0; 4] {
+                crate::mackie::device_query()
+            } else {
+                crate::mackie::host_connection_reply(&state.mackie_nav.serial, &challenge)
+            };
+            mackie_send(state, reply);
+        }
+        Message::MackieAction(action) => {
+            for message in mackie_action_messages(state, action) {
+                let _ = update(state, message);
+            }
+        }
+        Message::MackiePanNudge(cid, out, delta) => {
+            let pan = channel_pan(state, cid, out);
+            let next = (i16::from(pan) + delta).clamp(-100, 100) as i8;
+            let _ = update(state, Message::PanChanged(cid, out, next));
         }
         Message::ToggleDevicePanel => {
             if !state.connected || state.device.is_mock() {
@@ -11615,6 +12159,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             merge_host_changes(state, before);
         }
     }
+    // Mackie feedback: refresh the surface window after any change.  The
+    // encoder only emits deltas, so an unchanged window is free.
+    notify_mackie(state);
     Task::none()
 }
 
@@ -11988,6 +12535,10 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
     if let Some(config) = &state.osc_config {
         subs.push(Subscription::run_with(*config, osc::worker));
     }
+    // The Mackie Control remote — see `midi.rs`.
+    if let Some(config) = &state.mackie_worker {
+        subs.push(Subscription::run_with(config.clone(), crate::midi::worker));
+    }
     Subscription::batch(subs)
 }
 
@@ -12068,6 +12619,8 @@ fn handle_global_event(
         )),
         iced::Event::Window(window::Event::CloseRequested) => Some(Message::CloseRequested),
         iced::Event::Window(window::Event::Closed) => Some(Message::WindowClosed(id)),
+        iced::Event::Window(window::Event::Focused) => Some(Message::WindowFocus(true)),
+        iced::Event::Window(window::Event::Unfocused) => Some(Message::WindowFocus(false)),
         iced::Event::Window(window::Event::Opened { size, .. }) => {
             Some(Message::WindowSize(size.width, size.height))
         }
@@ -12166,6 +12719,9 @@ fn view_inner(state: &TotalControl, _window: window::Id) -> Element<'_, Message>
     }
     if state.show_osc_log {
         main = main.push(osc_log_panel(state));
+    }
+    if state.show_mackie_log {
+        main = main.push(mackie_log_panel(state));
     }
     let main = main.width(Length::Fill).height(Length::Fill);
     // TotalMix's own order across the window: mixer, FX column, control
@@ -12290,36 +12846,63 @@ fn disconnected_banner(state: &TotalControl) -> Element<'_, Message> {
 /// Newest line first, so the most recent activity is always visible at the
 /// top without needing scroll-follow logic.
 fn osc_log_panel(state: &TotalControl) -> Element<'_, Message> {
-    let scale = state.ui_scale;
+    debug_log_panel(
+        "OSC DEBUG LOG",
+        "No OSC traffic yet.",
+        &state.osc_log,
+        Message::ClearOscLog,
+        Message::ToggleOscLog,
+        state.ui_scale,
+    )
+}
 
+fn mackie_log_panel(state: &TotalControl) -> Element<'_, Message> {
+    debug_log_panel(
+        "MIDI DEBUG LOG",
+        "No MIDI traffic yet.",
+        &state.mackie_log,
+        Message::ClearMackieLog,
+        Message::ToggleMackieLog,
+        state.ui_scale,
+    )
+}
+
+fn debug_log_panel<'a>(
+    title: &'static str,
+    empty: &'static str,
+    log: &'a VecDeque<String>,
+    clear: Message,
+    toggle: Message,
+    scale: f32,
+) -> Element<'a, Message> {
     let header = row![
-        text("OSC DEBUG LOG")
+        text(title)
             .color(theme::text_primary())
             .size(theme::TEXT_SM * scale),
-        text(format!("{} lines", state.osc_log.len()))
+        text(format!("{} lines", log.len()))
             .color(theme::text_sec())
             .size(theme::TEXT_XS * scale),
         iced::widget::Space::new().width(Length::Fill),
         iced::widget::button(strip::centered_label_auto("Clear", theme::TEXT_XS * scale))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .style(theme::plain_button)
-            .on_press(Message::ClearOscLog),
+            .on_press(clear),
         iced::widget::button(strip::centered_label_auto("Close", theme::TEXT_XS * scale))
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .style(theme::plain_button)
-            .on_press(Message::ToggleOscLog),
+            .on_press(toggle),
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
 
-    let body: Element<'_, Message> = if state.osc_log.is_empty() {
-        text("No OSC traffic yet.")
+    let body: Element<'_, Message> = if log.is_empty() {
+        text(empty)
             .color(theme::text_sec())
             .size(theme::TEXT_XS * scale)
             .into()
     } else {
         let mut lines = column![].spacing(1.0);
-        for line in &state.osc_log {
+        for line in log {
             lines = lines.push(
                 text(line.clone())
                     .font(iced::Font::MONOSPACE)
@@ -12968,20 +13551,148 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);
 
+    // ---- MIDI and OSC (one page, two parts) -------------------------
+
+    let subhead = |label: &'static str| {
+        text(label)
+            .color(theme::text_primary())
+            .size(text_size)
+    };
+    let port_pick = |selected: String,
+                     options: Vec<String>,
+                     message: fn(Option<crate::mackie::MidiPort>) -> Message,
+                     ports: Vec<crate::midi::MidiPortInfo>| {
+        pick_list(options, Some(selected), move |label| {
+            if label == "None" {
+                message(None)
+            } else {
+                let port = ports.iter().find(|p| p.label == label).map(|p| p.port);
+                message(port)
+            }
+        })
+        .style(theme::pick_list)
+        .menu_style(theme::menu)
+        .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+        .text_size(text_size)
+        .width(Length::Fill)
+    };
+    let in_options: Vec<String> = std::iter::once("None".to_string())
+        .chain(
+            state
+                .mackie_ports
+                .iter()
+                .filter(|p| p.input)
+                .map(|p| p.label.clone()),
+        )
+        .collect();
+    let out_options: Vec<String> = std::iter::once("None".to_string())
+        .chain(
+            state
+                .mackie_ports
+                .iter()
+                .filter(|p| p.output)
+                .map(|p| p.label.clone()),
+        )
+        .collect();
+    let midi_in_row = row![
+        text("MIDI In")
+            .color(theme::text_primary())
+            .size(text_size)
+            .width(Length::Fixed(90.0 * scale)),
+        port_pick(
+            crate::midi::port_label(state.mackie_config.input, &state.mackie_ports),
+            in_options,
+            Message::MackieInChanged,
+            state.mackie_ports.clone(),
+        ),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .align_y(iced::Alignment::Center)
+    .width(Length::Fill);
+    let midi_out_row = row![
+        text("MIDI Out")
+            .color(theme::text_primary())
+            .size(text_size)
+            .width(Length::Fixed(90.0 * scale)),
+        port_pick(
+            crate::midi::port_label(state.mackie_config.output, &state.mackie_ports),
+            out_options,
+            Message::MackieOutChanged,
+            state.mackie_ports.clone(),
+        ),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .align_y(iced::Alignment::Center)
+    .width(Length::Fill);
+    let mackie_option = |label: &'static str, option: crate::mackie::MackieOption| {
+        check(
+            label,
+            state.mackie_config.option(option),
+            Message::SetMackieOption(option),
+        )
+    };
+    let midi_part = column![
+        subhead("MIDI"),
+        check(
+            "Enable MIDI control surface",
+            state.mackie_config.in_use,
+            Message::SetMackieEnabled(!state.mackie_config.in_use),
+        ),
+        midi_in_row,
+        midi_out_row,
+        row![
+            iced::widget::Space::new().width(Length::Fill),
+            iced::widget::button(strip::centered_label_auto("Apply", text_size))
+                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::ApplyMackiePorts),
+        ]
+        .width(Length::Fill),
+        mackie_option("Enable Mackie protocol", crate::mackie::MackieOption::Protocol),
+        mackie_option("Full LCD support", crate::mackie::MackieOption::FullLcd),
+        mackie_option("Send user defined names", crate::mackie::MackieOption::SendNames),
+        mackie_option("Send level messages", crate::mackie::MackieOption::SendLevels),
+        mackie_option("Peak hold", crate::mackie::MackieOption::PeakHold),
+        {
+            let mut log = checkbox(state.show_mackie_log)
+                .label("Show MIDI debug log")
+                .text_size(text_size);
+            if state.mackie_config.in_use {
+                log = log.on_toggle(|_| Message::ToggleMackieLog);
+            }
+            log
+        },
+        help("A Mackie Control compatible surface on the chosen ports drives the mixer. \
+              With the protocol off, only the simple CC and note commands are accepted. \
+              MIDI Out may stay None when no feedback is needed."),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .width(Length::Fill);
+
+    let host_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| {
+            s.connect("8.8.8.8:80")?;
+            s.local_addr()
+        })
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|_| "127.0.0.1".into());
+    let host_name = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
     let osc_ports = row![
-        text("Receive port")
+        text("Input port")
             .color(theme::text_primary())
             .size(text_size),
-        text_input("9000", &state.osc_recv_text)
+        text_input("7001", &state.osc_recv_text)
             .on_input(Message::OscRecvPortChanged)
-            .width(Length::Fixed(90.0 * scale))
+            .width(Length::Fixed(70.0 * scale))
             .size(text_size),
-        text("Send port")
+        text("Output port")
             .color(theme::text_primary())
             .size(text_size),
         text_input("9001", &state.osc_send_text)
             .on_input(Message::OscSendPortChanged)
-            .width(Length::Fixed(90.0 * scale))
+            .width(Length::Fixed(70.0 * scale))
             .size(text_size),
         iced::widget::button(strip::centered_label_auto("Apply", text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
@@ -12991,9 +13702,20 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_SM * scale)
     .align_y(iced::Alignment::Center)
     .width(Length::Fill);
-
-    let osc = column![
-        section("OSC"),
+    let osc_remote = row![
+        text("Remote controller IP")
+            .color(theme::text_primary())
+            .size(text_size),
+        text_input("127.0.0.1", &state.osc_send_host_text)
+            .on_input(Message::OscSendHostChanged)
+            .width(Length::Fixed(130.0 * scale))
+            .size(text_size),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .align_y(iced::Alignment::Center)
+    .width(Length::Fill);
+    let osc_part = column![
+        subhead("OSC"),
         check(
             "Enable OSC control surface",
             state.osc_enabled,
@@ -13025,11 +13747,21 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         ]
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
+        text(format!("This host: {host_ip} ({host_name})"))
+            .color(theme::text_sec())
+            .size(text_size),
         osc_ports,
-        help("Loopback only. OSC 1.96 uses the banked TotalMix FX 1.96 address space (1.90 is not supported); Global uses absolute channels and native values (TotalMix FX 2.1+)."),
+        osc_remote,
+        help("OSC 1.96 uses the banked TotalMix FX 1.96 address space (1.90 is not supported); \
+              Global uses absolute channels and native values (TotalMix FX 2.1+). Feedback goes \
+              to the remote controller IP; with 127.0.0.1 the socket stays on loopback."),
     ]
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);
+
+    let midi_osc = column![section("MIDI AND OSC"), midi_part, osc_part]
+        .spacing(theme::SPACE_SM * scale)
+        .width(Length::Fill);
 
     let device_rate = state.device.meter_ballistics().bar_release_db_s.round() as u32;
     let mut vu_rates: Vec<u32> = workspaces::VU_RELEASE_CHOICES.to_vec();
@@ -13086,7 +13818,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     .align_y(iced::Alignment::Center)
     .width(Length::Fill);
 
-    let body = column![header, background, sync, surround, osc, vu, footer]
+    let body = column![header, background, sync, surround, midi_osc, vu, footer]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
     centered_dialog(state, body.into(), Message::ToggleSettings, 520.0)
@@ -14709,6 +15441,7 @@ fn strip_params<'a>(
         name_custom: false,
         name_locked: false,
         renameable: true,
+        mackie_remote: mackie_marks(state, cid),
     };
 
     // A device switch can leave one stale id in the frame while the next
@@ -19986,6 +20719,169 @@ mod tests {
         assert!(!state.device.inputs()[0].mute);
         let _ = update(&mut state, mute(0.0));
         assert!(!state.device.inputs()[0].mute);
+    }
+
+    /// Bring the Mackie remote up without a real port: enabled, an input
+    /// chosen, a feedback queue attached and the handshake done.
+    fn mackie_up(
+        state: &mut TotalControl,
+    ) -> iced::futures::channel::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = iced::futures::channel::mpsc::channel(4096);
+        state.mackie_config.in_use = true;
+        state.mackie_config.input = Some(crate::mackie::MidiPort { card: 0, device: 0 });
+        state.mackie_tx = Some(tx);
+        state.mackie_nav.online = true;
+        rx
+    }
+
+    fn drain_bytes(rx: &mut iced::futures::channel::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Ok(bytes) = rx.try_recv() {
+            out.extend_from_slice(&bytes);
+        }
+        out
+    }
+
+    #[test]
+    fn mackie_fader_moves_the_window_channel() {
+        let mut state = new(true, None, None);
+        let _rx = mackie_up(&mut state);
+        // Pitch bend channel 1 at the documented 0 dB position (104/127).
+        let _ = update(&mut state, Message::MackieIn(vec![0xe0, 0x68, 0x68]));
+        let gain = super::channel_level(&state, ChannelId::Input(0), 0);
+        assert!((gain - 1.0).abs() < 0.02, "expected ~0 dB, got {gain}");
+    }
+
+    #[test]
+    fn mackie_mute_note_toggles_the_channel() {
+        let mut state = new(true, None, None);
+        let _rx = mackie_up(&mut state);
+        let note = |vel| Message::MackieIn(vec![0x90, 0x10, vel]);
+        let _ = update(&mut state, note(127));
+        assert!(state.device.inputs()[0].mute);
+        let _ = update(&mut state, note(127));
+        assert!(!state.device.inputs()[0].mute);
+    }
+
+    #[test]
+    fn mackie_bank_navigation_shifts_the_window() {
+        let mut state = new(true, None, None);
+        let _rx = mackie_up(&mut state);
+        // One strip per channel, so the bank offset is a channel offset.
+        state.mackie_config.stereo_to_mono = true;
+        // Bank right, then fader 1: addresses input 9, not input 1.
+        let _ = update(&mut state, Message::MackieIn(vec![0x90, 0x2f, 0x7f]));
+        assert_eq!(state.mackie_nav.bank, 8);
+        let _ = update(&mut state, Message::MackieIn(vec![0xe0, 0x68, 0x68]));
+        let gain = super::channel_level(&state, ChannelId::Input(8), 0);
+        assert!((gain - 1.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn mackie_stereo_pairs_share_one_strip_by_default() {
+        let mut state = new(true, None, None);
+        let _rx = mackie_up(&mut state);
+        // The mock's inputs are linked pairs: strip 2 is input 3, and a
+        // fader move on it carries the linked peer.
+        let window = super::mackie_window_for(&state, crate::osc_rme::Bus::Input);
+        assert_eq!(window[0], Some(ChannelId::Input(0)));
+        assert_eq!(window[1], Some(ChannelId::Input(2)));
+    }
+
+    #[test]
+    fn mackie_simple_cc_fader_works_without_the_handshake() {
+        let mut state = new(true, None, None);
+        let _rx = mackie_up(&mut state);
+        state.mackie_nav.online = false;
+        // B0 66 68: input 1 to 0 dB, a chapter-29.5 CC command.
+        let _ = update(&mut state, Message::MackieIn(vec![0xb0, 0x66, 0x68]));
+        let gain = super::channel_level(&state, ChannelId::Input(0), 0);
+        assert!((gain - 1.0).abs() < 0.02);
+        // The first control message brings the remote online.
+        assert!(state.mackie_nav.online);
+    }
+
+    #[test]
+    fn mackie_feedback_emits_pitch_bend_and_leds() {
+        let mut state = new(true, None, None);
+        let mut rx = mackie_up(&mut state);
+        let _ = update(&mut state, Message::Mute(ChannelId::Input(0), true));
+        let bytes = drain_bytes(&mut rx);
+        // Fader 1 pitch bend and the mute 1 LED (note 0x10, velocity 127).
+        assert!(bytes.windows(3).any(|w| w[0] == 0xe0), "{bytes:02x?}");
+        assert!(
+            bytes.windows(3).any(|w| w == [0x90, 0x10, 0x7f]),
+            "{bytes:02x?}"
+        );
+    }
+
+    #[test]
+    fn mackie_loopback_note_disables_the_remote() {
+        let mut state = new(true, None, None);
+        let _rx = mackie_up(&mut state);
+        let _ = update(&mut state, Message::MackieIn(vec![0x9f, 0x7f, 0x5a]));
+        assert!(!state.mackie_config.in_use);
+        assert!(state.mackie_tx.is_none());
+    }
+
+    #[test]
+    fn mackie_handshake_replies_with_the_response_code() {
+        let mut state = new(true, None, None);
+        let mut rx = mackie_up(&mut state);
+        state.mackie_nav.online = false;
+        let serial = *b"ABC1234";
+        let challenge = [0x10, 0x20, 0x30, 0x40];
+        let mut query = vec![0xf0, 0x00, 0x00, 0x66, 0x14, 0x01];
+        query.extend_from_slice(&serial);
+        query.extend_from_slice(&challenge);
+        query.push(0xf7);
+        let _ = update(&mut state, Message::MackieIn(query));
+        let bytes = drain_bytes(&mut rx);
+        let reply = bytes
+            .windows(18)
+            .find(|w| w[0] == 0xf0 && w[5] == 0x02)
+            .expect("host connection reply");
+        assert_eq!(&reply[6..13], &serial);
+        assert_eq!(
+            &reply[13..17],
+            &crate::mackie::challenge_response(&challenge)
+        );
+        // The confirmation brings the surface online.
+        let mut confirm = vec![0xf0, 0x00, 0x00, 0x66, 0x14, 0x03];
+        confirm.extend_from_slice(&serial);
+        confirm.push(0xf7);
+        let _ = update(&mut state, Message::MackieIn(confirm));
+        assert!(state.mackie_nav.online);
+    }
+
+    #[test]
+    fn mackie_rec_selects_the_submix_from_the_output_row() {
+        let mut state = new(true, None, None);
+        let _rx = mackie_up(&mut state);
+        // Row down twice: input -> playback -> output.
+        let _ = update(&mut state, Message::MackieIn(vec![0x90, 0x61, 0x7f]));
+        let _ = update(&mut state, Message::MackieIn(vec![0x90, 0x61, 0x7f]));
+        assert_eq!(state.mackie_nav.bus, crate::osc_rme::Bus::Output);
+        // REC 2 selects the output pair under strip 2.
+        let _ = update(&mut state, Message::MackieIn(vec![0x90, 0x01, 0x7f]));
+        assert_eq!(state.sel_out, 1);
+        assert_eq!(state.mackie_nav.submix, 1);
+    }
+
+    #[test]
+    fn mackie_trim_mode_writes_the_channel_trim() {
+        let mut state = new(true, None, None);
+        let _rx = mackie_up(&mut state);
+        // DYN on, then fader 1 to about -6 dB (half throw is ~-20 dB;
+        // use a quarter: p=0.25 -> f=255.75 -> about -30 dB).  Just check
+        // the trim moved and the volume did not.
+        let before = super::channel_level(&state, ChannelId::Input(0), 0);
+        let _ = update(&mut state, Message::MackieIn(vec![0x90, 0x2d, 0x7f]));
+        assert!(state.mackie_nav.trim);
+        let _ = update(&mut state, Message::MackieIn(vec![0xe0, 0x00, 0x40]));
+        assert!(state.device.inputs()[0].trim < 0.0);
+        let after = super::channel_level(&state, ChannelId::Input(0), 0);
+        assert_eq!(before, after);
     }
 
     #[test]
