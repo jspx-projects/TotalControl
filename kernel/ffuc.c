@@ -2343,8 +2343,9 @@ static void ffuc_iso_align(struct ffuc *chip)
 			 ffuc_iso_wrap(chip);
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 	WRITE_ONCE(chip->iso_frames_ok, ok);
-	dev_dbg(&chip->dev->dev, "start frames IN %d OUT %d%s, OUT lead %u\n",
-		in, out, ok ? "" : " (not contiguous, unchecked)", chip->out_lead);
+	dev_info(&chip->dev->dev, "start frames IN %d OUT %d diff %d%s, OUT lead %u\n",
+		 in, out, diff, ok ? "" : " (not contiguous, unchecked)",
+		 chip->out_lead);
 }
 
 static int ffuc_engine_start(struct ffuc *chip)

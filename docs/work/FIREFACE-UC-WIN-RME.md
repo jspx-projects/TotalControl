@@ -991,6 +991,22 @@ device was restored to the default (ASAP) build and verified healthy
 a record; a working alignment would need ASAP for the first URB and
 explicit frames only for resubmission, or a different mechanism.
 
+### The offset is not in scheduling (decisive)
+
+With the default ASAP build, `ffuc_iso_align` reports the actual first-URB
+start frames: **IN == OUT, diff 0** at both 48 kHz (16400/16400) and
+192 kHz (14552/14552). The HCD already schedules both directions at the
+same microframe. So the ~875 us inter-direction offset measured by the
+crossing sampler is NOT a scheduling offset - it is in completion-crossing
+detection, driven by the `out_lead` / feedback data offset (the OUT ring
+position leads IN by `out_lead` frames, so the two directions' period
+boundaries fall at different packets within the URB). Forcing
+`start_frame` alignment therefore could not remove the offset and only
+broke streaming. The lever for the corner is the gate deferral itself
+(bounded deferral, transport-independent), not URB scheduling. This is
+consistent with the macOS model: RME slaves the graph to the device clock
+rather than aligning URB schedules.
+
 ### Disposition
 
 The corner remains accepted with the manual warning (quantum >= 2 ms at
