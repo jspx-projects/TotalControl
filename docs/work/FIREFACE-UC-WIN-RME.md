@@ -626,7 +626,43 @@ Next session, in order:
 4. Physical loopback: the only gate for audio-content claims on either
    transport.
 
-## ISO 2x/4x arms (INVALID — rerun required)
+## ISO 2x/4x arms (rerun with live guard, 2026-11-15)
+
+Rate-scaled rerun after widening the frame histogram: two pairs at
+96 kHz/q96 and two at 192 kHz/q192, own-direction-only versus gated,
+settling loop before each arm, holder assertion active.
+
+| Arm | Own xruns / skips | Gated xruns / skips |
+|---|---|---|
+| 2x pair 1 | 28 / 6 | 31 / 5 |
+| 2x pair 2 | 23 / 7 | 232 / 13 |
+| 4x pair 1 | 32 / 7 | 252 / 15 |
+| 4x pair 2 | 35 / 11 | 232 / 11 |
+
+All arms: cadence 96000/192000 Hz exact, `rate_mismatch` 0,
+`in_frames_overflow` 0, `fb` priming 24 with ahead/stale 0,
+capacity/status-0 packet errors 0, `pcm_prepare_err`/`pcm_trigger_err`
+0. These arms are therefore valid: the rate confound is excluded, so
+the gate regression is real, not a measurement fault.
+
+The gate counters name the mechanism. Own-direction arms: `deferred 0,
+overdue 0, max_pending 0`. Gated arms: `deferred` 104749 to 233568,
+`overdue` 0-1, `max_pending` 1-2. The gate is withholding nearly every
+wake because both directions are rarely pending at the same instant at
+these rates, so the two-deferral fallback becomes the normal path. The
+added wait is one to two periods, which exceeds the follower's slack
+when the quantum equals one period, and the daemon skips cycles.
+
+So the gate's benefit does not transfer to 2x/4x as designed: it is
+neutral at 2x pair 1 and a large regression in three of four
+higher-rate arms. The design bound (`max_pending` <= 2 at rate-scaled
+quanta) is met, so this is not a bound violation but a consequence of
+deferral latency when the directions are phase-offset. The completion
+phase and per-URB handler cost instruments (phi, timing lines) are in
+the build for the follow-up run that will confirm whether the offset is
+the cause.
+
+## ISO 2x/4x arms (first attempt, INVALID)
 
 The first 2x/4x pair is not usable as evidence. The frame histogram had
 bins only for 0..8 frames while 2x packets carry 12-13 and 4x packets

@@ -415,6 +415,15 @@ struct ffuc {
 	atomic_t signal_deferred;
 	atomic_t signal_overdue;
 	u32 max_pending;
+	/* Completion phase between directions and per-URB handler cost. */
+	u64 sig_ns[2];
+	u64 phi_sum;
+	u32 phi_count;
+	s32 phi_min, phi_max;
+	u64 cap_cost_sum, cap_cost_max;
+	u32 cap_cost_n;
+	u64 play_cost_sum, play_cost_max;
+	u32 play_cost_n;
 	unsigned int iso_cadence; /* measured device clock, Hz */
 	unsigned int rate_mismatch_windows; /* consecutive bad windows */
 	u64 lag_n, lag_sx, lag_sy, lag_sxx, lag_sxy;

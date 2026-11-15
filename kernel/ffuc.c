@@ -1132,6 +1132,27 @@ static void ffuc_signal_period(struct ffuc *chip, struct ffuc_stream *s)
 		if (s->running)
 			atomic_inc(&chip->delta_zero);
 	} else {
+		if (s->running) {
+			unsigned int idx = (s ==
+				&chip->streams[SNDRV_PCM_STREAM_CAPTURE]) ? 1 : 0;
+			struct ffuc_stream *o = &chip->streams[idx ? 0 : 1];
+			u64 now = ktime_get_ns();
+			u64 delta;
+
+			chip->sig_ns[idx] = now;
+			if (o->running && chip->sig_ns[idx ? 0 : 1]) {
+				delta = now > chip->sig_ns[idx ? 0 : 1] ?
+					now - chip->sig_ns[idx ? 0 : 1] :
+					chip->sig_ns[idx ? 0 : 1] - now;
+				chip->phi_sum += delta;
+				chip->phi_count++;
+				if ((s32)delta > chip->phi_max)
+					chip->phi_max = delta;
+				if (chip->phi_min == 0 ||
+				    (s32)delta < chip->phi_min)
+					chip->phi_min = delta;
+			}
+		}
 		s->signalled = s->period;
 		snd_pcm_period_elapsed_under_stream_lock(s->substream);
 		/* The core refreshes the shared status pointer from
@@ -2095,7 +2116,18 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->dump_out_count = 0;
 	chip->rate_mismatch_windows = 0;
 	chip->lag_n = chip->lag_sx = chip->lag_sy = 0;
-	chip->lag_sxx = chip->lag_sxy = 0;
+	chip->lag_sxx = chip->lag_sxy = chip->lag_syy = 0;
+	WRITE_ONCE(chip->max_pending, 0);
+	memset(chip->sig_ns, 0, sizeof(chip->sig_ns));
+	chip->phi_sum = chip->phi_count = 0;
+	chip->phi_min = chip->phi_max = 0;
+	chip->cap_cost_sum = chip->cap_cost_max = chip->cap_cost_n = 0;
+	chip->play_cost_sum = chip->play_cost_max = chip->play_cost_n = 0;
+	atomic_set(&chip->in_frames_overflow, 0);
+	atomic_set(&chip->pcm_prepare_err, 0);
+	atomic_set(&chip->pcm_trigger_err, 0);
+	atomic_set(&chip->signal_deferred, 0);
+	atomic_set(&chip->signal_overdue, 0);
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
 	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin. */
