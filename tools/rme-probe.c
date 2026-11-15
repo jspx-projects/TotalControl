@@ -14,9 +14,13 @@
 //        ./rme-probe stream --iface 5 --alt 1 --seconds 2 --out cap-if5.bin
 //
 // Permission: install the udev rule once with `sudo ./scripts/setup.sh`.
+// Without it, control commands still work through the driver's hwdep node
+// while the driver is bound (automatic fallback, or --hwdep NODE).
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
+#include <dirent.h>
 #include <inttypes.h>
 #include <math.h>
 #include <signal.h>
@@ -26,10 +30,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "libusb.h"
+#include "../kernel/ffuc-uapi.h"
 
 #define RME_VID_OLD 0x0424u
 #define RME_VID_NEW 0x2a39u
@@ -54,7 +60,7 @@ static uint64_t now_ns(void)
 	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-static void die(const char *fmt, ...)
+static __attribute__((noreturn)) void die(const char *fmt, ...)
 {
 	va_list ap;
 
@@ -121,55 +127,254 @@ static void print_string(libusb_device_handle *h, uint8_t idx, const char *label
 		printf("  %-12s %s\n", label, buf);
 }
 
-static libusb_device_handle *open_first(libusb_context *ctx, uint16_t vid,
-					uint16_t pid)
+/* ------------------------------------------------------------------ */
+/* hwdep backend                                                       */
+/*                                                                     */
+/* When the transport driver is bound, EP0 control requests can go     */
+/* through its hwdep node instead of direct USB access.  This needs no */
+/* udev rule and no interface claim, and it serializes with the        */
+/* driver's own control writes.  Control commands fall back to it when */
+/* the USB device node cannot be opened; raw stream commands still     */
+/* need direct USB access.                                             */
+/* ------------------------------------------------------------------ */
+
+struct probe_dev {
+	libusb_device_handle *usb;	/* NULL when routed through hwdep */
+	int fd;				/* hwdep node, -1 for direct USB */
+	struct ffuc_hwdep_info info;	/* valid when fd >= 0 */
+	char node[300];
+};
+
+static const char *g_hwdep_node;	/* --hwdep override, or NULL */
+
+static bool hwdep_match(const struct ffuc_hwdep_info *info, uint16_t pid)
 {
+	/* The hwdep info carries model and transport, not USB IDs; both
+	 * vendor IDs of one personality map to the same entry. */
+	switch (pid) {
+	case 0x3fc5:
+		return info->model == FFUC_MODEL_UC &&
+		       info->transport == FFUC_XPORT_INTERRUPT;
+	case 0x3fc6:
+		return info->model == FFUC_MODEL_UC &&
+		       info->transport == FFUC_XPORT_ISO;
+	case 0x3fc9:
+		return info->model == FFUC_MODEL_UCX;
+	default:
+		return false;
+	}
+}
+
+static int hwdep_open_node(const char *path, uint16_t pid, bool want_match,
+			   struct probe_dev *d)
+{
+	struct ffuc_hwdep_info info;
+	int fd = open(path, O_RDWR);
+
+	if (fd < 0)
+		return -1;
+	memset(&info, 0, sizeof(info));
+	if (ioctl(fd, FFUC_HWDEP_IOCTL_INFO, &info) < 0 ||
+	    info.abi != FFUC_ABI_VERSION ||
+	    (want_match && !hwdep_match(&info, pid))) {
+		close(fd);
+		return -1;
+	}
+	d->usb = NULL;
+	d->fd = fd;
+	d->info = info;
+	snprintf(d->node, sizeof(d->node), "%s", path);
+	return 0;
+}
+
+static int hwdep_try_open(uint16_t pid, struct probe_dev *d)
+{
+	DIR *dir;
+	struct dirent *e;
+	int found = -1;
+
+	if (g_hwdep_node)
+		return hwdep_open_node(g_hwdep_node, pid, false, d);
+
+	dir = opendir("/dev/snd");
+	if (!dir)
+		return -1;
+	while ((e = readdir(dir)) != NULL) {
+		char path[300];
+
+		if (strncmp(e->d_name, "hwC", 3) || !strchr(e->d_name, 'D'))
+			continue;
+		snprintf(path, sizeof(path), "/dev/snd/%s", e->d_name);
+		if (hwdep_open_node(path, pid, true, d) == 0) {
+			if (found == 0)
+				fprintf(stderr,
+					"note: several matching hwdep nodes, using %s\n",
+					d->node);
+			found = 0;
+			break;
+		}
+	}
+	closedir(dir);
+	return found;
+}
+
+static struct probe_dev probe_open(libusb_context *ctx, uint16_t vid,
+				   uint16_t pid)
+{
+	struct probe_dev d = { .usb = NULL, .fd = -1 };
 	libusb_device **list = NULL;
 	libusb_device *found = NULL;
-	libusb_device_handle *h = NULL;
 	ssize_t n;
 	int r;
+
+	if (g_hwdep_node) {
+		if (hwdep_try_open(pid, &d) == 0)
+			return d;
+		die("hwdep node %s not usable (no driver, wrong ABI, or no access)",
+		    g_hwdep_node);
+	}
 
 	n = libusb_get_device_list(ctx, &list);
 	if (n < 0)
 		die("libusb_get_device_list: %s", libusb_error_name((int)n));
-
 	for (ssize_t i = 0; i < n; i++) {
-		struct libusb_device_descriptor d;
+		struct libusb_device_descriptor dd;
 
-		if (libusb_get_device_descriptor(list[i], &d) < 0)
+		if (libusb_get_device_descriptor(list[i], &dd) < 0)
 			continue;
-		if (d.idVendor == vid && d.idProduct == pid) {
+		if (dd.idVendor == vid && dd.idProduct == pid) {
 			found = list[i];
 			break;
 		}
 	}
-	if (!found) {
+	if (found) {
+		/* Quiet the access-denied log noise; the hwdep fallback
+		 * below reports the route it actually took. */
+		libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL,
+				  LIBUSB_LOG_LEVEL_NONE);
+		r = libusb_open(found, &d.usb);
+		libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL,
+				  LIBUSB_LOG_LEVEL_WARNING);
 		libusb_free_device_list(list, 1);
-		die("device %04x:%04x not found (is it plugged in?)", vid, pid);
+		if (r == 0)
+			return d;
+		if (r != LIBUSB_ERROR_ACCESS)
+			die("libusb_open: %s", libusb_error_name(r));
+		/* Access denied: fall through to the hwdep backend. */
+	} else {
+		libusb_free_device_list(list, 1);
 	}
 
-	r = libusb_open(found, &h);
-	if (r < 0) {
-		libusb_free_device_list(list, 1);
-		if (r == LIBUSB_ERROR_ACCESS)
-			die("permission denied opening %04x:%04x\n"
-			    "Install the udev rule once:  sudo ./scripts/setup.sh",
-			    vid, pid);
-		die("libusb_open: %s", libusb_error_name(r));
+	if (hwdep_try_open(pid, &d) == 0) {
+		fprintf(stderr, "note: via hwdep %s (%s, driver bound)\n",
+			d.node, d.info.name);
+		return d;
 	}
+	die("device %04x:%04x not usable (not found, or no USB access and no "
+	    "matching hwdep node)\n"
+	    "For direct USB access install the udev rule:  sudo ./scripts/setup.sh",
+	    vid, pid);
+}
 
-	libusb_free_device_list(list, 1);
-	return h;
+/* Raw-stream commands need the USB handle; hwdep cannot carry them. */
+static libusb_device_handle *probe_open_usb(libusb_context *ctx, uint16_t vid,
+					    uint16_t pid)
+{
+	struct probe_dev d = probe_open(ctx, vid, pid);
+
+	if (!d.usb)
+		die("this command needs direct USB access; the device is only "
+		    "reachable through hwdep %s\n"
+		    "Install the udev rule:  sudo ./scripts/setup.sh", d.node);
+	return d.usb;
+}
+
+static void probe_close(struct probe_dev *d)
+{
+	if (d->usb)
+		libusb_close(d->usb);
+	if (d->fd >= 0)
+		close(d->fd);
+	d->usb = NULL;
+	d->fd = -1;
+}
+
+static const char *probe_err(int r, const struct probe_dev *d)
+{
+	if (d->fd >= 0)
+		return strerror(-r);
+	return libusb_error_name(r);
+}
+
+static int probe_ctl_in(struct probe_dev *d, uint8_t req, uint16_t value,
+			uint16_t index, unsigned char *buf, uint16_t len)
+{
+	struct ffuc_hwdep_vendor v;
+
+	if (d->fd >= 0) {
+		if (len > FFUC_HWDEP_MAX_DATA)
+			len = FFUC_HWDEP_MAX_DATA;
+		memset(&v, 0, sizeof(v));
+		v.request = req;
+		v.direction = 1;
+		v.value = value;
+		v.index = index;
+		v.length = len;
+		if (ioctl(d->fd, FFUC_HWDEP_IOCTL_VENDOR, &v) < 0)
+			return -errno;
+		memcpy(buf, v.data, v.length);
+		return v.length;
+	}
+	return libusb_control_transfer(d->usb, 0xc0, req, value, index,
+				       buf, len, 1000);
+}
+
+static int probe_ctl_out(struct probe_dev *d, uint8_t req, uint16_t value,
+			 uint16_t index)
+{
+	struct ffuc_hwdep_vendor v;
+
+	if (d->fd >= 0) {
+		memset(&v, 0, sizeof(v));
+		v.request = req;
+		v.direction = 0;
+		v.value = value;
+		v.index = index;
+		if (ioctl(d->fd, FFUC_HWDEP_IOCTL_VENDOR, &v) < 0)
+			return -errno;
+		return 0;
+	}
+	return libusb_control_transfer(d->usb, 0x40, req, value, index,
+				       NULL, 0, 1000);
 }
 
 static void cmd_info(libusb_context *ctx, uint16_t vid, uint16_t pid)
 {
-	libusb_device_handle *h = open_first(ctx, vid, pid);
-	libusb_device *dev = libusb_get_device(h);
+	struct probe_dev d = probe_open(ctx, vid, pid);
+	libusb_device_handle *h = d.usb;
+	libusb_device *dev;
 	struct libusb_device_descriptor dd;
 	struct libusb_config_descriptor *cfg = NULL;
 	int r;
+
+	if (!h) {
+		printf("hwdep %s: %s\n", d.node, d.info.name);
+		printf("  abi %u  model %u  transport %u  caps 0x%x\n",
+		       d.info.abi, d.info.model, d.info.transport, d.info.caps);
+		printf("  firmware %u  rate %u Hz  card %u  channels %u\n",
+		       d.info.firmware, d.info.rate, d.info.card,
+		       d.info.channels);
+		printf("  inputs %u  outputs %u  playback %u  meter %u bytes\n",
+		       d.info.inputs, d.info.outputs, d.info.playback,
+		       d.info.meter_bytes);
+		if (d.info.serial[0])
+			printf("  serial %s\n", d.info.serial);
+		printf("  (descriptor dump needs direct USB access)\n");
+		probe_close(&d);
+		return;
+	}
+
+	dev = libusb_get_device(h);
 
 	r = libusb_get_device_descriptor(dev, &dd);
 	if (r < 0)
@@ -274,34 +479,22 @@ static int find_in_endpoint(libusb_device_handle *h, int iface, int alt,
 	return found;
 }
 
-static int ctl_in(libusb_device_handle *h, uint8_t req, uint16_t value,
-		  uint16_t index, unsigned char *buf, uint16_t len)
-{
-	return libusb_control_transfer(h, 0xc0, req, value, index, buf, len, 1000);
-}
-
-static int ctl_out(libusb_device_handle *h, uint8_t req, uint16_t value,
-		   uint16_t index)
-{
-	return libusb_control_transfer(h, 0x40, req, value, index, NULL, 0, 1000);
-}
-
 static void cmd_fw(libusb_context *ctx, uint16_t vid, uint16_t pid)
 {
-	libusb_device_handle *h = open_first(ctx, vid, pid);
+	struct probe_dev d = probe_open(ctx, vid, pid);
 	unsigned char buf[8] = { 0 };
 	int r;
 
-	r = ctl_in(h, 0x1c, 0, 0, buf, 4);
+	r = probe_ctl_in(&d, 0x1c, 0, 0, buf, 4);
 	if (r < 0)
-		die("control 0x1c: %s", libusb_error_name(r));
+		die("control 0x1c: %s", probe_err(r, &d));
 	printf("firmware raw: ");
 	hexdump(buf, r, 16);
 	printf("firmware version: %u\n", le32(buf) >> 16);
-	libusb_close(h);
+	probe_close(&d);
 }
 
-static void read_and_print(libusb_device_handle *h, const char *name, uint8_t req,
+static void read_and_print(struct probe_dev *d, const char *name, uint8_t req,
 			   uint16_t len)
 {
 	unsigned char buf[256] = { 0 };
@@ -309,10 +502,10 @@ static void read_and_print(libusb_device_handle *h, const char *name, uint8_t re
 
 	if (len > sizeof(buf))
 		len = sizeof(buf);
-	r = ctl_in(h, req, 0, 0, buf, len);
+	r = probe_ctl_in(d, req, 0, 0, buf, len);
 	if (r < 0) {
 		printf("%s (req 0x%02x, len %u): %s\n", name, req, len,
-		       libusb_error_name(r));
+		       probe_err(r, d));
 		return;
 	}
 	printf("%s (req 0x%02x, len %u): ", name, req, len);
@@ -323,21 +516,23 @@ static void read_and_print(libusb_device_handle *h, const char *name, uint8_t re
 
 static void cmd_rate(libusb_context *ctx, uint16_t vid, uint16_t pid)
 {
-	libusb_device_handle *h = open_first(ctx, vid, pid);
+	struct probe_dev d = probe_open(ctx, vid, pid);
 
-	read_and_print(h, "rate 0x11", 0x11, 4);
-	read_and_print(h, "rate 0x10", 0x10, 4);
-	libusb_close(h);
+	read_and_print(&d, "rate 0x11", 0x11, 4);
+	read_and_print(&d, "rate 0x10", 0x10, 4);
+	if (d.fd >= 0)
+		printf("driver rate: %u Hz\n", d.info.rate);
+	probe_close(&d);
 }
 
 static void cmd_status(libusb_context *ctx, uint16_t vid, uint16_t pid)
 {
-	libusb_device_handle *h = open_first(ctx, vid, pid);
+	struct probe_dev d = probe_open(ctx, vid, pid);
 
-	read_and_print(h, "status 0x19 len 4", 0x19, 4);
-	read_and_print(h, "status 0x19 len 16", 0x19, 16);
-	read_and_print(h, "status 0x19 len 64", 0x19, 64);
-	libusb_close(h);
+	read_and_print(&d, "status 0x19 len 4", 0x19, 4);
+	read_and_print(&d, "status 0x19 len 16", 0x19, 16);
+	read_and_print(&d, "status 0x19 len 64", 0x19, 64);
+	probe_close(&d);
 }
 
 static void cmd_write(libusb_context *ctx, uint16_t vid, uint16_t pid,
@@ -345,7 +540,7 @@ static void cmd_write(libusb_context *ctx, uint16_t vid, uint16_t pid,
 {
 	unsigned long req, value = 0, index = 0;
 	bool yes = false;
-	libusb_device_handle *h;
+	struct probe_dev d;
 	int r;
 
 	if (argc < 1)
@@ -361,13 +556,13 @@ static void cmd_write(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	if (!yes)
 		die("refusing to write without --yes");
 
-	h = open_first(ctx, vid, pid);
-	r = ctl_out(h, (uint8_t)req, (uint16_t)value, (uint16_t)index);
+	d = probe_open(ctx, vid, pid);
+	r = probe_ctl_out(&d, (uint8_t)req, (uint16_t)value, (uint16_t)index);
 	if (r < 0)
-		die("write 0x%02lx: %s", req, libusb_error_name(r));
+		die("write 0x%02lx: %s", req, probe_err(r, &d));
 	printf("wrote 0x%02lx value=0x%04lx index=0x%04lx\n",
 	       req, value, index);
-	libusb_close(h);
+	probe_close(&d);
 }
 
 static void cmd_bulk(libusb_context *ctx, uint16_t vid, uint16_t pid,
@@ -407,7 +602,7 @@ static void cmd_bulk(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	if (count <= 0 || count > 100000)
 		die("invalid --count");
 
-	h = open_first(ctx, vid, pid);
+	h = probe_open_usb(ctx, vid, pid);
 	libusb_set_auto_detach_kernel_driver(h, 1);
 	r = libusb_claim_interface(h, iface);
 	if (r < 0)
@@ -466,7 +661,7 @@ static void cmd_raw(libusb_context *ctx, uint16_t vid, uint16_t pid,
 {
 	unsigned char buf[1024] = { 0 };
 	unsigned long req, len = 4, value = 0, index = 0;
-	libusb_device_handle *h;
+	struct probe_dev d;
 	int r;
 
 	if (argc < 1)
@@ -478,15 +673,20 @@ static void cmd_raw(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	if (len > sizeof(buf))
 		die("len too large (max %zu)", sizeof(buf));
 
-	h = open_first(ctx, vid, pid);
-	r = libusb_control_transfer(h, 0xc0, (uint8_t)req, (uint16_t)value,
-				    (uint16_t)index, buf, (uint16_t)len, 1000);
+	d = probe_open(ctx, vid, pid);
+	if (d.fd >= 0 && len > FFUC_HWDEP_MAX_DATA) {
+		printf("note: hwdep caps reads at %u bytes\n",
+		       FFUC_HWDEP_MAX_DATA);
+		len = FFUC_HWDEP_MAX_DATA;
+	}
+	r = probe_ctl_in(&d, (uint8_t)req, (uint16_t)value, (uint16_t)index,
+			 buf, (uint16_t)len);
 	if (r < 0)
-		die("control 0x%02lx: %s", req, libusb_error_name(r));
+		die("control 0x%02lx: %s", req, probe_err(r, &d));
 	printf("req 0x%02lx value 0x%04lx index 0x%04lx len %d:\n",
 	       req, value, index, r);
 	hexdump(buf, r, 256);
-	libusb_close(h);
+	probe_close(&d);
 }
 
 /*
@@ -560,7 +760,7 @@ static void cmd_set_rate(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	bool yes = false, dry = false;
 	uint16_t value, index, p2_value, p2_index;
 	unsigned char rb[4];
-	libusb_device_handle *h;
+	struct probe_dev d;
 	int r;
 
 	for (int i = 0; i < argc; i++) {
@@ -587,28 +787,28 @@ static void cmd_set_rate(libusb_context *ctx, uint16_t vid, uint16_t pid,
 		return;
 	}
 
-	h = open_first(ctx, vid, pid);
-	r = ctl_out(h, 0x1b, value, index);
+	d = probe_open(ctx, vid, pid);
+	r = probe_ctl_out(&d, 0x1b, value, index);
 	if (r < 0)
-		die("0x1b: %s", libusb_error_name(r));
-	r = ctl_out(h, 0x10, p2_value, p2_index);
+		die("0x1b: %s", probe_err(r, &d));
+	r = probe_ctl_out(&d, 0x10, p2_value, p2_index);
 	if (r < 0)
-		die("0x10: %s", libusb_error_name(r));
+		die("0x10: %s", probe_err(r, &d));
 
 	usleep(100000);
 	memset(rb, 0, sizeof(rb));
-	r = ctl_in(h, 0x11, 0, 0, rb, 4);
+	r = probe_ctl_in(&d, 0x11, 0, 0, rb, 4);
 	if (r >= 0) {
 		printf("readback 0x11: ");
 		hexdump(rb, r, 16);
 	}
 	memset(rb, 0, sizeof(rb));
-	r = ctl_in(h, 0x10, 0, 0, rb, 4);
+	r = probe_ctl_in(&d, 0x10, 0, 0, rb, 4);
 	if (r >= 0) {
 		printf("readback 0x10: ");
 		hexdump(rb, r, 16);
 	}
-	libusb_close(h);
+	probe_close(&d);
 }
 
 /* ------------------------------------------------------------------ */
@@ -897,7 +1097,7 @@ static void cmd_stream(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	if (seconds <= 0)
 		die("--seconds must be > 0");
 
-	h = open_first(ctx, vid, pid);
+	h = probe_open_usb(ctx, vid, pid);
 	if (!out) {
 		static char path[64];
 
@@ -1556,7 +1756,7 @@ static void cmd_play(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	if (amp < 0.0 || amp > 1.0)
 		die("--amp must be 0..1");
 
-	h = open_first(ctx, vid, pid);
+	h = probe_open_usb(ctx, vid, pid);
 	libusb_set_auto_detach_kernel_driver(h, 1);
 	r = libusb_claim_interface(h, 0);
 	if (r < 0)
@@ -1613,7 +1813,8 @@ static void cmd_play(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	       format_char(format), c.frames_per_pkt);
 
 	if (unmute) {
-		r = ctl_out(h, 0x14, 0xffff, 0xc000);
+		r = libusb_control_transfer(h, 0x40, 0x14, 0xffff, 0xc000,
+					    NULL, 0, 1000);
 		if (r < 0)
 			fprintf(stderr, "unmute 0x14: %s\n",
 				libusb_error_name(r));
@@ -1796,7 +1997,7 @@ static void cmd_pcplay(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	if (!out_buf || !in_buf)
 		die("out of memory");
 
-	h = open_first(ctx, vid, pid);
+	h = probe_open_usb(ctx, vid, pid);
 	libusb_set_auto_detach_kernel_driver(h, 1);
 	r = libusb_claim_interface(h, iface);
 	if (r < 0)
@@ -1810,7 +2011,8 @@ static void cmd_pcplay(libusb_context *ctx, uint16_t vid, uint16_t pid,
 		die("set IF%d alt %d: %s", iface, alt, libusb_error_name(r));
 
 	if (unmute) {
-		r = ctl_out(h, 0x14, 0xffff, 0xc000);
+		r = libusb_control_transfer(h, 0x40, 0x14, 0xffff, 0xc000,
+					    NULL, 0, 1000);
 		if (r < 0)
 			fprintf(stderr, "unmute 0x14: %s\n",
 				libusb_error_name(r));
@@ -1871,7 +2073,12 @@ static void cmd_pcplay(libusb_context *ctx, uint16_t vid, uint16_t pid,
 
 static void usage(const char *argv0)
 {
-	printf("usage: %s [--vid HEX] [--pid HEX] <command> [options]\n"
+	printf("usage: %s [--vid HEX] [--pid HEX] [--hwdep NODE] <command> [options]\n"
+	       "\n"
+	       "Control commands (info, fw, rate, status, raw, write, set-rate)\n"
+	       "fall back to the driver's hwdep node when the USB device node\n"
+	       "cannot be opened; --hwdep NODE forces that path.  Raw stream\n"
+	       "commands (bulk, stream, play, pcplay) need direct USB access.\n"
 	       "\n"
 	       "Commands:\n"
 	       "  info                 dump descriptors, interfaces, endpoints\n"
@@ -1931,7 +2138,8 @@ static void usage(const char *argv0)
 	       "      --no-in          do not drain the IF5 IN endpoint\n"
 	       "      --no-unmute      skip the 0x14 unmute\n"
 	       "\n"
-	       "Default device: 0424:3fc9 (Fireface UCX). Use --pid 0x3fc6 for UC.\n"
+	       "Default device: 0424:3fc9 (Fireface UCX). Use --pid 0x3fc6 for UC AP,\n"
+	       "--pid 0x3fc5 for UC PC.  Both vendor IDs (0424, 2a39) work.\n"
 	       "Permission: sudo ./scripts/setup.sh  (installs the udev rule)\n",
 	       argv0);
 }
@@ -1951,6 +2159,8 @@ int main(int argc, char **argv)
 			vid = (uint16_t)strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "--pid") && i + 1 < argc)
 			pid = (uint16_t)strtoul(argv[++i], NULL, 0);
+		else if (!strcmp(argv[i], "--hwdep") && i + 1 < argc)
+			g_hwdep_node = argv[++i];
 		else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
 			usage(argv[0]);
 			return 0;
