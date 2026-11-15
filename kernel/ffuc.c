@@ -1524,11 +1524,16 @@ cadence_skip:
 			ffuc_fb_put(chip, pos, frames[i],
 				    chip->ucx ? ((hdr >> 21) & 0x7ff) :
 						((hdr >> 18) & 0x3fff));
-			/* Phase-accumulator telemetry: the field integrates
-			 * the device clock against the host microframe clock.
-			 * A wrap with one extra frame is the predicted drift
-			 * event; anything else outside the nominal cadence is
-			 * counted and logged for attribution. */
+			/* Phase-accumulator telemetry.  The UC field is a
+			 * mod-10000 fractional-sample accumulator (units of
+			 * 1/10000 sample); it advances at a rate-independent
+			 * ~580 units/s and wraps when a whole sample
+			 * accumulates.  At the boundary the device dithers the
+			 * correction across several packets (phase bounces
+			 * high/low, frames alternate +1/-1), so a true wrap is
+			 * debounced: a high->low transition more than 1000
+			 * packets after the previous one.  The first wrap is
+			 * dense-logged to characterise the boundary. */
 			{
 				unsigned int phase = chip->ucx ?
 					((hdr >> 21) & 0x7ff) :
@@ -1536,31 +1541,41 @@ cadence_skip:
 				unsigned int nom_lo = chip->rate / 8000;
 				unsigned int nom_hi = nom_lo +
 					(chip->rate % 8000 ? 1 : 0);
-				bool wrapped = chip->in_pkts > 1 &&
-					phase < chip->phase_prev;
+				bool wrapped = chip->phase_prev > 5000 &&
+					phase < 5000 &&
+					chip->in_pkts -
+						chip->phase_last_wrap_pkt > 1000;
+				bool boundary = chip->in_pkts -
+					chip->phase_last_wrap_pkt <= 200;
 
-				if (wrapped)
+				if (wrapped) {
 					chip->phase_wraps++;
-				if (frames[i] &&
-				    (frames[i] < nom_lo ||
-				     frames[i] > nom_hi + (wrapped ? 1 : 0))) {
-					chip->phase_anom++;
-					if (chip->phase_logged < 40) {
-						chip->phase_logged++;
-						dev_info(&chip->dev->dev,
-							 "iso phase anom: pkts %llu phase %u prev %u frames %u nom %u..%u wrap %d\n",
-							 (unsigned long long)chip->in_pkts,
-							 phase, chip->phase_prev,
-							 frames[i], nom_lo, nom_hi,
-							 wrapped);
-					}
-				} else if (wrapped && frames[i] == nom_hi + 1 &&
-					   chip->phase_logged < 40) {
-					chip->phase_logged++;
+					chip->phase_last_wrap_pkt = chip->in_pkts;
+					if (!chip->phase_dense)
+						chip->phase_dense = 40;
+				}
+				if (chip->phase_dense) {
+					chip->phase_dense--;
 					dev_info(&chip->dev->dev,
-						 "iso phase wrap add: pkts %llu phase %u prev %u frames %u\n",
+						 "iso phase dense: pkts %llu phase %u frames %u\n",
 						 (unsigned long long)chip->in_pkts,
-						 phase, chip->phase_prev, frames[i]);
+						 phase, frames[i]);
+				}
+				if (frames[i] && frames[i] != nom_lo &&
+				    frames[i] != nom_hi) {
+					if (boundary) {
+						chip->phase_dither++;
+					} else {
+						chip->phase_anom++;
+						if (chip->phase_logged < 40) {
+							chip->phase_logged++;
+							dev_info(&chip->dev->dev,
+								 "iso phase anom: pkts %llu phase %u prev %u frames %u nom %u..%u\n",
+								 (unsigned long long)chip->in_pkts,
+								 phase, chip->phase_prev,
+								 frames[i], nom_lo, nom_hi);
+						}
+					}
 				}
 				chip->phase_prev = phase;
 				if ((chip->in_pkts % 8000) == 0 &&
@@ -2212,7 +2227,10 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->streams[SNDRV_PCM_STREAM_CAPTURE].cross_ns = 0;
 	chip->phase_prev = 0;
 	chip->phase_wraps = chip->phase_anom = 0;
+	chip->phase_dither = 0;
+	chip->phase_last_wrap_pkt = 0;
 	chip->phase_logged = 0;
+	chip->phase_dense = 0;
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
 	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin.
@@ -2873,8 +2891,8 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 chip->phi_hist[10], chip->phi_hist[11],
 			 chip->phi_hist[12]);
 		dev_info(&chip->dev->dev,
-			 "phase accumulator: wraps %u anom %u\n",
-			 chip->phase_wraps, chip->phase_anom);
+			 "phase accumulator: wraps %u dither %u anom %u\n",
+			 chip->phase_wraps, chip->phase_dither, chip->phase_anom);
 		dev_info(&chip->dev->dev,
 			 "iso lag samples (one per OUT URB): n %llu sx %lld sy %lld sxx %lld sxy %lld syy %lld\n",
 			 (unsigned long long)chip->lag_n,

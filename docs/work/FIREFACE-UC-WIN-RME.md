@@ -923,3 +923,57 @@ Bench items carried: physical-loopback bit-exact check on both transports
 (the only gate for audio-content claims); PC-personality verification of
 the relocated rate commit and the session quirk at the next personality
 switch.
+
+## Telemetry instruments: first measurement (2026-11-15)
+
+Branch `test/uc-iso-telemetry`, UC AP personality, firmware 127, bare ALSA.
+Two diagnostic instruments: a crossing-phase sampler (host-side) and a
+phase-accumulator logger (device-side).
+
+### Header interpretation, verified
+
+- Frames (bits 0..4) and position (bits 5..17) are correct: the
+  frame-count cross-check and the position-continuity check run on every
+  packet and stayed at zero mismatch / zero gap across the runs.
+- The phase field (bits 18..31) is a **mod-10000 fractional-sample
+  accumulator**, units of 1/10000 sample. Periodic samples fit exactly:
+  9241 -> 9783 -> 309 -> 842 -> 1384 -> 1918, i.e. +~540 units/s, and
+  9783 + 542 = 10325 = 309 (mod 10000). The advance is rate-independent
+  (~540/s at 48, 96 and 192 kHz). The field is 14 bits wide; the modulus
+  is 10000, not 16384. This resolves the earlier 22.6 s vs 37 s wrap-period
+  discrepancy (the 37 s figure assumed mod 16384).
+- The wrap coincides with a one-frame add: the dense boundary log shows
+  phase 9993 -> 1 with frames 7, and 9995 -> 3 with frames 7, then frames
+  back to nominal 6. The device spreads the correction over a few packets
+  (a boundary dither: phase bounces high/low, frames alternate +1/-1).
+  A naive `phase < prev` detector counted every bounce (5603 "wraps" in
+  60 s); the debounced detector (high->low transition >1000 packets after
+  the previous) reads 3 true wraps in 40 s, consistent with the ~13 s
+  period. Dither and true anomalies are counted apart.
+
+### Crossing phase (host scheduling offset)
+
+The sampler timestamps each period crossing in `ffuc_stream_advance`,
+independent of the signalling policy, and pairs it with the other
+direction's most recent crossing (delta below one period binned at
+250 us; larger deltas counted as `far`).
+
+At q48@48k, q96@96k and q192@192k the histogram has two tight clusters
+(bin 0 ~10000, bin 3 ~9900-9960, almost nothing between): a stable offset
+of ~0.875 ms, playback later, rate-independent. The `far` count rises
+with rate: 39 -> 67 -> 105. The stable offset alone does not explain the
+rate-dependent gate regression (it is the same at 1x where the gate
+wins); the rising crossing jitter (`far`) is the candidate mechanism to
+investigate next.
+
+### Next
+
+1. Characterise the rising `far` count at 2x/4x (crossing jitter vs the
+   feedback dependency) - the rate-dependent regression candidate.
+2. Prototype ISO `start_frame` alignment: submit both directions to a
+   common microframe base, using the mod-10000 accumulator as the
+   device-clock drift reference and the position counter for continuity.
+   Target: the gate deferral (one period minus the paired delta) goes to
+   zero at the zero-slack quanta.
+3. Decide the shipping posture of the two instruments (the cadence guard
+   already ships; the phase logger and crossing sampler are diagnostic).

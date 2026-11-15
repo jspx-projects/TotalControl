@@ -429,12 +429,16 @@ struct ffuc {
 	u32 phi_count2;
 	u32 phi_far;
 	u32 phi_cap_later, phi_play_later;
-	/* Phase-accumulator telemetry (diagnostic): wrap events, anomalies
-	 * outside the nominal cadence, and the log budget. */
+	/* Phase-accumulator telemetry (diagnostic): the UC field is a
+	 * mod-10000 fractional-sample accumulator.  True wraps are debounced
+	 * (the boundary dithers); dither and anomalies are counted apart. */
 	u32 phase_prev;
 	u32 phase_wraps;
 	u32 phase_anom;
+	u32 phase_dither;
+	u64 phase_last_wrap_pkt;
 	unsigned int phase_logged;
+	unsigned int phase_dense;
 	unsigned int iso_cadence; /* measured device clock, Hz */
 	unsigned int rate_mismatch_windows; /* consecutive bad windows */
 	u64 lag_n, lag_sx, lag_sy, lag_sxx, lag_sxy;
