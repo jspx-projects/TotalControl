@@ -441,8 +441,9 @@ Each meter has two indicators, following TotalMix FX:
   lights after three consecutive full-scale samples (the global default).
 
 Peak hold applies only to the peak line. The RMS bar is not held and keeps
-following the RMS signal. Falling levels release at 10 dB/s, measured
-against TotalMix FX's own meters.
+following the RMS signal. Fall rates follow TotalMix FX's own meters for
+the device: on the UC the bar falls 25 dB/s and the peak line, after its
+hold, 15 dB/s; on the UCX both fall 10 dB/s.
 
 The meter scale runs from -65 dB at the bottom to +6 dB at the top. The
 whole area above 0 dB is red. The ruler has an unlabelled green tick at

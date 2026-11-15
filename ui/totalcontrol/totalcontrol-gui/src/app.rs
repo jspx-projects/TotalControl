@@ -1700,6 +1700,17 @@ impl DeviceHandle {
     }
 
     /// True for a Fireface UCX model regardless of which backend drives it.
+    /// The TotalMix meter ballistics measured for this device.  Only the
+    /// UC has its own measurement; the rest use the UCX reference.
+    pub fn meter_ballistics(&self) -> crate::widgets::fader::MeterBallistics {
+        use crate::widgets::fader::MeterBallistics;
+        if self.is_uc_model() {
+            MeterBallistics::TOTALMIX_UC
+        } else {
+            MeterBallistics::TOTALMIX_UCX
+        }
+    }
+
     pub fn is_ucx_model(&self) -> bool {
         match self {
             DeviceHandle::Mock(d) => d.is_ucx(),

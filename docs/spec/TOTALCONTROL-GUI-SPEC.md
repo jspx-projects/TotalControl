@@ -449,8 +449,8 @@ while a live level is steady.  Drags and slideout animations keep the 33 ms
 interaction tick, so their motion stays as smooth as before.  The tick while the window is hidden is 4 Hz, at rest 10 Hz, and
 the numeric strength readouts refresh at 4 Hz.
 
-The meter ballistics are time-based: 10 dB/s release and a 2 s peak hold,
-independent of the tick.  Slideout and flyout animations are time-based
+The meter ballistics are time-based and per device (2.7.1), independent of
+the tick.  Slideout and flyout animations are time-based
 too, so their speed does not depend on the refresh rate.
 
 #### 2.7.1 VU meter element
@@ -484,8 +484,16 @@ bar is mathematically correct RMS, so a full-scale sine reads about -3 dB;
 no RMS +3 dB shift is applied. There is no separate red guide across the
 meter bar.
 
-Falling levels release at 10 dB/s, measured against the reference
-application's meters. The peak hold is fixed at two seconds.
+The ballistics follow the reference application's meters for the device,
+measured on its own screen:
+
+| Device | RMS bar release | Peak hold | Peak line release |
+|---|---|---|---|
+| UC | 25 dB/s | 2 s | 15 dB/s |
+| UCX and devices not yet measured | 10 dB/s | 2 s | 10 dB/s |
+
+On the UC the bar's 25 dB/s is the rate of the device's own RMS
+integrator; the reference keeps that rate below the RMS word's floor.
 The OVR segment lights after three consecutive full-scale samples. The OVR
 sample count is a global meter setting (1–15, default three), not a dB
 threshold and not a per-channel value. There is no configurable hold time.

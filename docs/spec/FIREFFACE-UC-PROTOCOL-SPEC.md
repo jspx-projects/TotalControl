@@ -708,7 +708,9 @@ zero; the bar then uses the peak word's sine equivalent
 - Input OVR LED: the analog low-word over event, gated by the global OVR
   sample preference; the digital full-scale-sample count, gated by the
   same preference.
-- Ballistics are host side: a 10 dB/s release and a 2 s peak hold.
+- Ballistics are host side: the RMS bar falls 25 dB/s (the device RMS
+  integrator's own rate, kept below the word's floor), the peak line holds
+  2 s and then falls 15 dB/s, as TotalMix FX draws them for the UC.
 Input meters measure the physical input before loopback.  A
 loopback-enabled output replaces the input's record signal, but does not
 change the input meter or the input bank in the `0x85` page.
