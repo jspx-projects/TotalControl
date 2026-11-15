@@ -564,13 +564,23 @@ on one boot. Metric: daemon xrun log lines and skipped cycles
 | 3 | 4 / 1 | 1 / 0 |
 | total | 42 / 3 | 8 / 0 |
 
-The gate is better in every pair. Pooled counts give a two-sided
-binomial p of about 5.8e-7 on xrun lines and P(0 of 3 skipped cycles)
-of 0.05; the per-pair sign test alone gives p = 0.125. The first
-own-direction arm carries most of the difference (36 of 42), so the
-stronger pooled figure overstates the evidence; the honest summary is
-that the direction is consistent and the mechanism metric is
-favourable, not that the size is established.
+The gate is better in every pair. Stratified view (the honest lead,
+because pair 1 holds 36 of the 42 own-direction lines and 7 of the 8
+gated lines, i.e. the pooled sample is overdispersed): direction
+consistent in 3/3 pairs, per-pair ratios 5.1x, "no gated line at all",
+and 4x; roughly a 4-5x reduction in xrun lines. Pooled counts give a
+one-sided binomial p of 5.8e-7 (two-sided 1.2e-6) as descriptive
+support, not as the headline.
+
+Skipped cycles: 3 versus 0 with both arms measured, so the conditional
+two-sample answer is 0.5^3 = 0.125 one-sided (0.25 two-sided), which is
+also the sign-test value; the fixed-baseline Poisson figure e^-3 is not
+used because the baseline was estimated from the same minutes.
+
+Excluding pair 1, the residual is own 6 versus gated 1, close to the
+PC pattern. The parsimonious reading is a system transient during
+pair 1 affecting both arms rather than an ISO-specific lag; a
+feedback-dependent lag would not single out one pair.
 
 No audible zero runs appeared in any arm. All arms: cadence 48000 Hz,
 `rate_mismatch` 0, `fb` priming 24 with ahead/stale 0, capacity and
@@ -584,6 +594,27 @@ need the finer-grained arms (q48 at 2x/4x) to expose.
 Claims scope: scheduling metrics are sound on the dither substrate.
 Audio-content regression (pitch, level, channel mapping under load) is
 unverified on the ISO path until a physical loopback exists.
+
+Power note: ISO is quieter than the PC case was (0.25 skipped cycles per
+minute versus 3.25), so the mechanism metric is underpowered by
+construction. With zero events in T minutes the 95% bound is 3/T; a
+5x claim against 0.25/min needs about 60 minutes of gated running, or a
+deliberate, identical background load on both arms to raise the
+baseline.
+
+Next session, in order:
+
+1. `snd_pcm_delay` uprobe: does PipeWire read the reported delay at all
+   in this configuration? It decides whether the constant-peak
+   (sawtooth) over-report matters on either transport, and it is the
+   cheapest shared open item.
+2. 2x/4x arms, where the feedback dependency can expose itself (URB
+   spans several periods, packet frame counts vary); use rate-scaled
+   quanta and `max_pending <= ceil(urb_frames/period_size) + 1`.
+3. More 1x pairs under matched load, to settle whether the gated
+   residual is real.
+4. Physical loopback: the only gate for audio-content claims on either
+   transport.
 
 ## Endpoints that differ from the original UC
 
