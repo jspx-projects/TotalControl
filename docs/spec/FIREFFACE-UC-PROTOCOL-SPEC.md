@@ -905,10 +905,12 @@ count, bits 5..17 the position, bits 18..31 the phase.  The frame count in
 the header equals the count derived from the packet length.  The position is
 the stream position modulo 8192.
 
-The phase field is a 14-bit fractional-sample accumulator.  It integrates
-the device clock against the host microframe clock and wraps when a whole
-sample accumulates.  A packet at the wrap carries one extra frame.  The
-field predicts frame add/drop; it does not give an absolute rate.
+The phase field is a 14-bit fractional-sample accumulator counting in
+units of 1/10000 sample (modulus 10000).  It integrates the device clock
+against the host microframe clock and wraps when a whole sample
+accumulates.  A packet at the wrap carries one extra frame; the device
+spreads the correction over a few packets at the boundary.  The field
+predicts frame add/drop; it does not give an absolute rate.
 
 Every OUT sample frame starts with a lead word.  The UC uses the first lead
 word in a packet; the remaining lead words are padding.  The first lead word

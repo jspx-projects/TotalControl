@@ -154,6 +154,53 @@ graph with `--restore`; `--build` builds first. `reload-kernel.sh` delegates
 to it. `scripts/install-dkms.sh` is the supported driver installer;
 `scripts/install-kernel.sh` is its compatibility wrapper.
 
+## Lab helpers (installed, password-free)
+
+The bench has three root-owned helpers in `/usr/local/sbin`, each with a
+scoped `NOPASSWD` sudoers rule so they run without a password prompt. They
+are the preferred way to recover or reload the unit; reach for them before
+raw `sudo rmmod`/`insmod`. Source copies live in [`scripts/lab/`](../scripts/lab/).
+
+| Helper | Usage | Purpose |
+|---|---|---|
+| `reset-fireface-usb` | `sudo -n reset-fireface-usb` | USB port reset (`usbreset`) without unplugging. Finds the unit by product string, waits for the card to reappear in `/proc/asound/cards`. Use when the card vanished or the interface will not re-bind. |
+| `reload-fireface-uc` | `sudo -n reload-fireface-uc` | Full module reload: discovers the newest `snd-fireface-uc.ko` (prefers `/usr/local/lib/ffuc-lab/`, else the newest build under any checkout), refuses a world-writable module, unbinds interfaces, `rmmod` + `insmod`, prints cards and hwdep nodes. |
+| `ffuc-lab` | `sudo -n ffuc-lab pause <ms>` / `double <0\|1>` / `kill` | Meter-driver debugfs probes for the UC meter consolidation: pause metering, double the meter URB, or kill the next meter URB. Fixed subcommands only. |
+
+Recovery sequence when the card disappears or a reload fails: stop the user
+audio graph (`systemctl --user stop wireplumber pipewire-pulse pipewire
+pipewire.socket pipewire-pulse.socket`), then `sudo -n reset-fireface-usb`,
+then `sudo -n reload-fireface-uc`. The ALSA card can hold a module reference
+until the USB interface disconnects, so a reset is often needed before
+`rmmod` succeeds.
+
+`scripts/bench-reload.sh` automates the stop/assert/reload/restore sequence
+for a checkout build and prefers `sudo -n` when the scoped rule is present.
+
+### Scoped sudoers rule
+
+The helpers and the raw bench commands are covered by
+`/etc/sudoers.d/ffuc-bench` (0440 root:root). It grants **no general root** —
+only these commands:
+
+```
+Cmnd_Alias FFUC_BENCH = /usr/bin/rmmod snd_fireface_uc, \
+    /usr/bin/modprobe snd-pcm, \
+    /usr/bin/dmesg, \
+    /usr/bin/tee /sys/bus/usb/drivers/snd-fireface-uc/unbind, \
+    /usr/bin/insmod <checkout>/kernel/snd-fireface-uc.ko *
+
+<user> ALL=(root) NOPASSWD: FFUC_BENCH
+```
+
+`<checkout>` is the absolute checkout path and `<user>` the bench user; the
+`insmod` line is pinned to that module so it cannot load arbitrary modules.
+Install with `sudo visudo -f /etc/sudoers.d/ffuc-bench` (validate syntax
+first with `visudo -cf`). The three `/usr/local/sbin` helpers have their own
+`NOPASSWD` lines. `bench-reload.sh` probes with `sudo -n dmesg` (a covered
+command) to decide whether to use plain `sudo` or the `ksshaskpass` GUI
+fallback.
+
 `scripts/run-totalcontrol.sh` builds the current GUI sources in the release
 profile, stops a running instance of any profile and starts the freshly built
 binary. `TOTALCONTROL_BUILD_PROFILE=dev` builds the development binary instead.

@@ -1,0 +1,35 @@
+#!/bin/sh
+# Lab helper for the Fireface UC meter driver probes.
+# Fixed subcommands only; installed with a NOPASSWD sudoers rule.
+set -eu
+
+find_dbg() {
+    for d in /sys/kernel/debug/*/; do
+        [ -f "$d/meter_pause_ms" ] && echo "$d" && return 0
+    done
+    return 1
+}
+
+case "${1:-}" in
+    pause)
+        N=${2:?usage: ffuc-lab pause <ms>}
+        case "$N" in ''|*[!0-9]*) echo "bad ms" >&2; exit 2;; esac
+        [ "$N" -le 5000 ] || { echo "ms too large" >&2; exit 2; }
+        d=$(find_dbg) || { echo "no driver debugfs" >&2; exit 1; }
+        echo "$N" > "$d/meter_pause_ms"
+        ;;
+    double)
+        N=${2:?usage: ffuc-lab double <0|1>}
+        case "$N" in 0|1) ;; *) echo "bad value" >&2; exit 2;; esac
+        d=$(find_dbg) || { echo "no driver debugfs" >&2; exit 1; }
+        echo "$N" > "$d/meter_urb_double"
+        ;;
+    kill)
+        d=$(find_dbg) || { echo "no driver debugfs" >&2; exit 1; }
+        echo 1 > "$d/meter_kill_next"
+        ;;
+    *)
+        echo "usage: ffuc-lab pause <ms> | double <0|1> | kill" >&2
+        exit 2
+        ;;
+esac

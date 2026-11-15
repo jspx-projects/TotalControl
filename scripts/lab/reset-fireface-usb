@@ -1,0 +1,26 @@
+#!/bin/sh
+# Reset an RME Fireface USB device without physically unplugging it.
+# Installed as /usr/local/sbin/reset-fireface-usb with a NOPASSWD rule.
+#
+# The unit is found by product string, so new models do not need a new
+# script version.  One Fireface at a time is assumed.
+set -eu
+
+ids=$(/usr/bin/lsusb | awk '/Fireface/ {print $6}' | sort -u)
+[ -n "$ids" ] || { echo "No Fireface USB device found" >&2; exit 1; }
+
+echo "$ids" | while read -r id; do
+    echo "resetting $id"
+    /usr/bin/usbreset "$id"
+done
+
+i=0
+while [ "$i" -lt 50 ]; do
+    if grep -q Fireface /proc/asound/cards 2>/dev/null; then
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 0.1
+done
+echo "Fireface did not reappear in /proc/asound/cards" >&2
+exit 1

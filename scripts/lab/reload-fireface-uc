@@ -1,0 +1,41 @@
+#!/bin/sh
+# Reload the Fireface UC/UCX transport module.
+#
+# Installed as /usr/local/sbin/reload-fireface-uc with a NOPASSWD sudoers
+# rule.  It accepts no arguments.
+#
+# The module is discovered, not fixed to one checkout: a stable installed
+# copy is preferred, otherwise the newest build in any checkout is used.
+set -eu
+
+KO=/usr/local/lib/ffuc-lab/snd-fireface-uc.ko
+if [ ! -f "$KO" ]; then
+    KO=$(find /home /opt -maxdepth 7 -type f \
+              -path '*/kernel/snd-fireface-uc.ko' -printf '%T@ %p\n' 2>/dev/null |
+         sort -nr | head -1 | cut -d' ' -f2-)
+fi
+[ -n "${KO:-}" ] && [ -f "$KO" ] || { echo "no snd-fireface-uc.ko found" >&2; exit 1; }
+
+# Do not load a world-writable module file.
+case $(ls -l "$KO" | cut -c9) in
+    w) echo "refusing world-writable module: $KO" >&2; exit 1 ;;
+esac
+
+echo "loading $KO"
+for i in $(ls -d /sys/bus/usb/drivers/snd-fireface-uc/*:*.* 2>/dev/null || true); do
+    echo -n "$(basename "$i")" > /sys/bus/usb/drivers/snd-fireface-uc/unbind || true
+done
+
+if ! rmmod snd_fireface_uc 2>/dev/null; then
+    sleep 2
+    rmmod snd_fireface_uc 2>/dev/null || true
+fi
+
+modprobe snd-pcm || true
+insmod "$KO"
+sleep 2
+
+echo '--- cards ---'
+cat /proc/asound/cards
+echo '--- hwdep ---'
+ls -l /dev/snd/hwC*D* 2>/dev/null || true
