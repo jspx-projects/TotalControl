@@ -468,13 +468,18 @@ subscription on its own port.
 ### MIDI SysEx, MCU or another transport
 
 The inbound side is generic: any transport that produces `Message` values can
-drive the mixer. A MIDI adapter needs a transport worker, SysEx framing and
-7-bit packing, a decoder and a feedback encoder.
+drive the mixer. The Mackie Control host is implemented this way: a rawmidi
+worker (`midi.rs`) forwards byte blocks, a pure codec (`mackie.rs`) parses
+them into ordinary messages and encodes feedback, and the application
+dispatches and refreshes the surface window. A further transport adds the
+same three pieces: a worker, a decoder and a feedback encoder.
 
 The feedback side still carries the names of its first user: `OscOutbound`
 contains internal address strings and the application stores one `osc_tx`.
-Several control surfaces would be cleaner with a control-surface-neutral
-`ControlEvent`, typed variants and a list or broadcast of feedback sinks.
+The Mackie host keeps its own feedback queue and last-sent surface state
+beside it. Several more control surfaces would be cleaner with a
+control-surface-neutral `ControlEvent`, typed variants and a list or
+broadcast of feedback sinks.
 
 ### Another device backend
 
@@ -492,5 +497,6 @@ A new device model or transport implements `RmeDevice` and adds a
 | Device service | `totalcontrol-gui/src/device_service.rs` |
 | Application state and update loop | `totalcontrol-gui/src/app.rs` |
 | OSC bridge | `totalcontrol-gui/src/osc.rs`, `osc_rme.rs` |
+| Mackie Control host | `totalcontrol-gui/src/mackie.rs`, `midi.rs` |
 | GUI widgets | `totalcontrol-gui/src/widgets/` |
 | Developer tools | `docs/DEVELOPMENT-TOOLS.md` |

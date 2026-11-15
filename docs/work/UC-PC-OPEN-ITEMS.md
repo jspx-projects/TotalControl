@@ -19,21 +19,12 @@ decode features, host-side measurement questions, and optional consolidation.
 
 Spec `FIREFFACE-UC-PROTOCOL-SPEC.md` §11.11. Each needs a capture before code.
 
-1. **MIDI.** The driver owns MIDI (ALSA rawmidi). It is implemented for the
-   UCX (all four variants) and Babyface-classic as class-compliant USB-MIDI
-   1.0: interface 2, bulk OUT `0x07`, bulk IN `0x86`, cable 0
-   (`kernel/ffuc-midi.c`). The UC descriptors set no MIDI endpoints, so
-   `ffuc_midi_create` returns without a port. The UC PC descriptor has a bulk
-   IN/OUT pair on interface 2 whose protocol is not decoded; whether it is the
-   same USB-MIDI 1.0 as the UCX is unknown. A capture of the UC MIDI interface
-   decides it; if it matches, the existing `ffuc-midi.c` path can be reused by
-   adding the UC endpoints to the descriptor.
-2. **Interfaces 2, 3, 4 roles.** Endpoints present, unclaimed/undecoded.
-3. **Read form of `0x10`.** Only the write is implemented.
-4. **Status bytes 0 and 1.** Front-panel events use bytes 2/3; 0/1 undecoded.
-5. **Bulk role of `0x03`/`0x84` at 1x/2x.** Bulk there, interrupt at 4x; the
+1. **Interfaces 3, 4 roles.** Endpoints present, unclaimed/undecoded.
+2. **Read form of `0x10`.** Only the write is implemented.
+3. **Status bytes 0 and 1.** Front-panel events use bytes 2/3; 0/1 undecoded.
+4. **Bulk role of `0x03`/`0x84` at 1x/2x.** Bulk there, interrupt at 4x; the
    bulk role is undecoded.
-6. **PC interrupt URB size.** Documentation only: 48/96/192 frames is the
+5. **PC interrupt URB size.** Documentation only: 48/96/192 frames is the
    host's choice, not a device contract.
 
 ## Host-side measurements (not driver code)

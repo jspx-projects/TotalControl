@@ -209,11 +209,17 @@ mixer scene, labels, groups, snapshots, layouts or window layout.
 | Setting | Contents |
 |---|---|
 | Active unit | Last selected unit key |
-| OSC | Enabled, dialect and ports |
+| OSC | Enabled, dialect, ports and feedback destination address |
+| MIDI remote | Enabled, input and output rawmidi ports, Mackie options |
 | Engine | Forced rate, quantum and rate mode |
 | Meters | OVR full-scale sample count (global, 1–15, default 3) |
 | Startup | Session autostart (starts hidden in the tray) and keep in tray |
 | Files | Last workspace folder |
+
+The OSC receive port defaults to 7001 and the send port to 9001, matching
+TotalMix FX. The MIDI remote is one surface connection; its navigation
+state (row, window, submix, trim) is runtime state, not persisted. The
+remote model is in [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
 
 ### 7.2 Per unit
 

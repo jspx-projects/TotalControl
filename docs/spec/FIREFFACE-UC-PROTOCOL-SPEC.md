@@ -794,6 +794,10 @@ sections use.
 | Capture endpoint 1 | IN `0x84`, IF0 alt 3 | Carries the second half of the input words at 4x on the PC personality. |
 | Meter endpoint | IF1 IN `0x85` | Carries meter pages. |
 | Status endpoint | IF5 IN `0x8b` on PC; IF4 IN `0x8b` on AP | Carries status frames. |
+| MIDI interface | IF2 | The interface that carries MIDI packets in both directions. |
+| MIDI endpoint pair | OUT `0x07`, IN `0x86` | The bulk endpoints of the MIDI interface. |
+| MIDI port | byte 0 bits 7..4 | A logical MIDI port on the endpoint pair; 0 is port 1 and 1 is port 2. |
+| MIDI packet | 4 bytes | One port, one packet code and up to three MIDI bytes. |
 
 ### 11.2 Device model
 
@@ -847,7 +851,7 @@ The interface map is:
 | 0 | 2 | 2x audio | `0x01` OUT interrupt, 896; `0x82` IN interrupt, 896; `0x03` OUT bulk, 512; `0x84` IN bulk, 512 |
 | 0 | 3 | 4x audio | `0x01` OUT interrupt, 768; `0x82` IN interrupt, 768; `0x03` OUT interrupt, 768; `0x84` IN interrupt, 768 |
 | 1 | 0 | meter | `0x85` IN bulk, 512 |
-| 2 | 0 | not claimed | `0x86` IN bulk, 512; `0x07` OUT bulk, 512 |
+| 2 | 0 | MIDI | `0x86` IN bulk, 512; `0x07` OUT bulk, 512 |
 | 3 | 0 | not claimed | `0x88` IN bulk, 512; `0x09` OUT bulk, 512 |
 | 4 | 0 | not claimed | `0x8a` IN bulk, 512 |
 | 5 | 0 | status | `0x8b` IN interrupt, 4 |
@@ -856,6 +860,63 @@ The audio engine uses the playback and capture endpoints.  At 1x and 2x that
 is playback endpoint 0 and capture endpoint 0.  At 4x it adds playback
 endpoint 1 and capture endpoint 1.  The interrupt endpoints use a
 one-microframe interval.
+
+Interface 2 is the MIDI interface.  It has one bulk endpoint pair, OUT
+`0x07` and IN `0x86`, and it carries two logical MIDI ports.
+
+A MIDI packet is 4 bytes:
+
+| Byte | Bits | Meaning |
+|---|---|---|
+| 0 | 7..4 | MIDI port: 0 is port 1, 1 is port 2 |
+| 0 | 3..0 | Packet code |
+| 1 | | MIDI byte 1 |
+| 2 | | MIDI byte 2, or 0 when unused |
+| 3 | | MIDI byte 3, or 0 when unused |
+
+The low nibble is a USB-MIDI 1.0 code index number in both directions:
+
+| Code | MIDI bytes | Message |
+|---|---|---|
+| `0x2` | 2 | two-byte system common |
+| `0x3` | 3 | three-byte system common |
+| `0x4` | 3 | SysEx start or continue |
+| `0x5` | 1 | SysEx end |
+| `0x6` | 2 | SysEx end |
+| `0x7` | 3 | SysEx end |
+| `0x8`..`0xe` | 3, or 2 for `0xc` and `0xd` | channel voice |
+| `0xf` | 1 | single byte |
+
+RME's Windows driver sends the payload length in the low nibble instead:
+`0xf` for one byte, `0x2` for two and `0x3` for three.  Each of those values
+also carries the same payload length under the class table, so the unit
+accepts both forms.  The driver sends the class form.
+
+The unit parses each bulk transfer as a separate MIDI stream.  A message
+must therefore lie within one bulk transfer.  A SysEx that starts in one
+transfer and continues in the next loses the continuation bytes.
+
+TotalMix FX sends the packet `9f 7f 5a` on the selected port once per second
+while a MIDI remote output is enabled.  The port field selects the front-panel
+MIDI output.
+
+The interface is vendor-specific, so the driver matches the endpoint addresses
+instead of the interface class.  It exposes one ALSA rawmidi device for each
+port.  The class driver (`snd-usb-audio`) skips this interface: its subclass
+is 0, not MIDI streaming.  MIDI on the PC personality therefore requires this
+driver.
+
+The wire format is class-compliant USB-MIDI 1.0 even though the declaration
+is vendor-specific.  RME documents the MIDI ports as class compliant under
+Mac OS, i.e. in the AP personality; the UC has no full class-compliant mode.
+The MIDI protocol, the ALSA surface and the Mackie Control host are generic
+across devices and live in
+[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
+
+The unit also implements stand-alone MIDI control: disconnected from the
+computer, it acts as a Mackie host itself, covering rows 1 and 3, input mute,
+Select ganging and submix selection, with SEL+DYN resetting a fader to unity
+gain.  This is a unit mode, not a TotalControl feature.
 
 ### 11.4 AP personality
 
@@ -870,6 +931,11 @@ class.  These rows are the mapping the driver uses.
 | 0 | 3 | 4x audio | `0x01` OUT isochronous; `0x82` IN isochronous |
 | 1 | 0 | meter | `0x85` IN bulk |
 | 4 | 0 | status | `0x8b` IN bulk |
+
+The AP interface table has no MIDI row: the AP MIDI interface is not
+captured, and the driver exposes no MIDI on AP.  RME documents the AP MIDI
+ports as class compliant; the descriptor capture is an open item in the
+MIDI spec.
 
 ### 11.5 Control requests
 
@@ -1005,22 +1071,25 @@ init sequence does not set it.
 
 1. The AP descriptor.  The AP interface and packet rows are the implemented
    mapping; the descriptor has not been captured.
-2. Interfaces 2, 3 and 4 on the PC personality.  The endpoints are present;
+2. Interfaces 3 and 4 on the PC personality.  The endpoints are present;
    the driver does not claim them and their roles are not decoded.
-3. MIDI.  Interface 2 has a bulk IN/OUT pair on the PC descriptor; the
-   driver creates no rawmidi port for the UC and the protocol is not decoded.
-4. The read form of `0x10`.  "EP0 request map" lists it as write or read;
+3. MIDI port 2 on the wired outputs.  Packets carry port 1 and port 2, and
+   the front panel shows activity for both.  The physical output that port 2
+   drives is not identified; a loopback on that output decides it.
+4. MIDI on the AP personality.  The AP interface table has no MIDI row; the
+   AP descriptor has not been captured.
+5. The read form of `0x10`.  "EP0 request map" lists it as write or read;
    the implemented host only writes it.
-5. The PC interrupt URB size.  The 48/96/192 sample-frame size is the host's
+6. The PC interrupt URB size.  The 48/96/192 sample-frame size is the host's
    choice; the device contract is the packet size and the rate class.
-6. The AP header phase field on the UCX.  The 12-bit position, 11-bit phase
+7. The AP header phase field on the UCX.  The 12-bit position, 11-bit phase
    and the 3072 wrap are the implemented mapping; they are not verified
    against a UCX capture.  On the UC the accumulator semantics are verified
    at 48 kHz; isolated add/drop events away from the wrap are unattributed
    (`docs/work/FIREFACE-UC-WIN-RME.md`).
-7. Status bytes 0 and 1.  "Front-panel events" uses bytes 2 and 3; the roles
+8. Status bytes 0 and 1.  "Front-panel events" uses bytes 2 and 3; the roles
    of bytes 0 and 1 are not decoded.
-8. The bulk endpoints on interface 0 at 1x and 2x.  `0x03` and `0x84` are
+9. The bulk endpoints on interface 0 at 1x and 2x.  `0x03` and `0x84` are
    bulk there and interrupt at 4x; the bulk role is not decoded.
 
 ## 12. Code map
@@ -1029,6 +1098,7 @@ init sequence does not set it.
 |---|---|
 | EP0 requests and device sequences | `kernel/ffuc.c` |
 | PCM, URBs and sample conversion | `kernel/ffuc.c` |
+| USB-MIDI on interface 2 | `kernel/ffuc-midi.c` |
 | Meter pairing, status and hwdep events | `kernel/ffuc-hwdep.c` |
 | hwdep ABI | `kernel/ffuc-uapi.h` |
 | UC control and meter decode | `ui/totalcontrol/totalcontrol-core/src/fireface/device.rs` |

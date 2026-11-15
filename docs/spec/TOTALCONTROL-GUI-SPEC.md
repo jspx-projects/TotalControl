@@ -214,9 +214,9 @@ it immediately on the first press; submenu items open on the first click.
 `Options > TotalControl`, the tray Settings entry and the `,` shortcut open
 the app-level settings dialog. It is centered with a dimmed scrim, not a
 sidebar popover, and it blocks mouse and keyboard access to the mixer until it
-closes. It holds BACKGROUND, STARTUP SYNC, SURROUND, OSC and VU FALLBACK
-sections.  Independent options are checkboxes, one-of-many options are radio
-buttons, and the only footer action is `Close`.
+closes. It holds BACKGROUND, STARTUP SYNC, SURROUND, MIDI AND OSC and VU
+FALLBACK sections.  Independent options are checkboxes, one-of-many options are
+radio buttons, and the only footer action is `Close`.
 
 SURROUND has the `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
 checked output creates a PipeWire sink while TotalControl runs and removes it
@@ -224,15 +224,35 @@ when the application exits. The setting is persisted. The sinks follow the
 selected Fireface/MR18 Pro Audio device and bridge to the first six or eight
 SW playback channels.
 
-OSC has an `Enable OSC control surface` checkbox, `Classic` and `Global`
-radio buttons, a receive-port field, a send-port field and `Apply`.  The
+MIDI AND OSC is one page with two parts, MIDI and OSC.
+
+The MIDI part has an `Enable MIDI control surface` checkbox, `MIDI In` and
+`MIDI Out` picklists and `Apply`. Each picklist offers `None` plus every ALSA
+rawmidi port of every card, labelled `<card> — <port>`; the unit's own ports
+appear as `Fireface UC — MIDI 1` and so on. The picklists are opaque like
+every other list in the dialog. Below sit the Mackie Control Options
+checkboxes: `Enable Mackie protocol`, `Full LCD support`, `Send user defined
+names`, `Send level messages` and `Peak hold`. `Show MIDI debug log` opens the
+MIDI traffic panel; it is greyed out while the remote is disabled and closes
+when the remote is switched off. Enabling the remote opens the chosen ports;
+`Apply` reopens them after a port change. The enable switch, ports and options
+are host settings (STATE-SPEC §7.1). The remote model, the mapping and the
+feedback are in [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
+
+The OSC part has an `Enable OSC control surface` checkbox, `OSC 1.96` and
+`Global` radio buttons, a line showing this host's IP address and host name,
+an input-port field (default 7001), an output-port field (default 9001), a
+`Remote controller IP` field (default 127.0.0.1) and `Apply`. The
 `Show OSC debug log` checkbox sits directly below the enable checkbox and is
 disabled and greyed out while OSC is off; turning OSC off also hides the
-panel.  `Classic` is the banked TotalMix FX 1.96–2.11 address space; `Global`
-is the absolute-channel TotalMix FX 2.1+ address space. Enabling it starts
-the loopback UDP surface; disabling it stops it. The switch, protocol and
-both ports are persisted. The command line `--osc`, `--osc-mode`, `--osc-port`
-and `--osc-send-port` remain a development override.
+panel. `OSC 1.96` is the banked TotalMix FX 1.96–2.11 address space; `Global`
+is the absolute-channel TotalMix FX 2.1+ address space. Feedback goes to the
+remote controller IP; while that address is loopback the receive socket stays
+on loopback, and any other address binds it on all interfaces so the
+controller can reach us. Enabling it starts the UDP surface; disabling it
+stops it. The switch, protocol, ports and remote address are persisted. The
+command line `--osc`, `--osc-mode`, `--osc-port` and `--osc-send-port` remain
+a development override.
 
 VU FALLBACK has an `RMS bar release` dropdown (10, 15, 20, 25, 30, 40 dB/s
 plus the unit's measured rate if different) and a `Default` button. The
@@ -653,6 +673,13 @@ covers the readout.
 B2 is a full-width bar flush with the card's bottom edge and clipped by the
 card radius.  A hardware-output strip has no B2 and leaves that row and its
 gap empty, so B1 keeps the same height on every channel kind.
+
+A channel in the active MIDI remote's window shows its name (T1) in the
+remote tint, a brown tone, in both the expanded and the collapsed layout.
+The tint marks the channels the surface currently controls, like TotalMix;
+it is not a selection and does not change on hover. The window and the
+remote are defined in
+[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
 
 #### 2.8.4 Horizontal columns
 

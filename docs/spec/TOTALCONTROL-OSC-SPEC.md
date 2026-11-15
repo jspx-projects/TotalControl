@@ -21,6 +21,12 @@ The document covers protocol behaviour only. Enabling OSC in TotalMix FX and
 configuring the network are operational steps and live outside this
 specification.
 
+The OSC surface is device-independent: it drives the shared mixer model,
+and the device backend supplies the writes. It is available on every
+device and personality TotalControl supports, with the same per-device
+capability clamps as the GUI (gain ranges, controllable inputs, cue
+destinations).
+
 ## Contents
 
 - [1. Transport](#1-transport)

@@ -183,13 +183,31 @@ change made while a scene is being applied joins the scene batch.
 ### 2.5 MIDI
 
 The unit exposes a class-compliant USB-MIDI 1.0 streaming interface on IF2 with
-bulk IN `0x86` and bulk OUT `0x07`. Events are 4-byte USB-MIDI packets: cable
-number in the high nibble of byte 0, code index number in the low nibble, then
-one to three MIDI bytes. The wired MIDI input and output use cable 0.
+bulk OUT `0x07` and bulk IN `0x86`.  The interface class is Audio / MIDI
+streaming (`01/03`).  The MIDIStreaming descriptors declare two embedded IN
+jacks and two embedded OUT jacks; `bNumEmbMIDIJack` is 2 on both endpoint
+descriptors, so the interface carries two logical MIDI ports.  This is
+verified in normal mode: the capture shows the vendor-specific audio
+interface 0 alongside the class-compliant MIDI interface.  MIDI stays class
+compliant in CC mode as well.
 
-The driver claims IF2 and exposes one ALSA rawmidi port. Input URBs are
-submitted only while the input substream is open; output data is packed into
-the same event packets and written to the bulk OUT endpoint.
+Events are 4-byte USB-MIDI 1.0 packets: cable number in the high nibble of
+byte 0, code index number in the low nibble, then one to three MIDI bytes.
+Cable numbers 0 and 1 select port 1 and port 2.
+
+The driver claims IF2 and exposes one ALSA rawmidi device for each port.  Input
+URBs are submitted only while at least one input substream is open; output data
+is packed into the same event packets and written to the bulk OUT endpoint.
+Because the interface is class compliant, `snd-usb-audio` binds it on its own
+when this driver does not hold it; the claim policy and the coexistence are in
+[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md) §3.
+
+In class-compliant mode the whole unit belongs to the class driver, and RME's
+TotalMix FX for iPad app controls the mixer over SysEx on MIDI port 2 (observed
+on the UCX II; assumed for the UCX).  The unit also implements stand-alone MIDI
+control with the UCX additions STOP = Dim and F1–F6 = Setup 1–6; see the MIDI
+spec §12.  The MIDI protocol and the Mackie Control host are generic and live
+in the MIDI spec.
 
 ## 3. IF1 register words
 

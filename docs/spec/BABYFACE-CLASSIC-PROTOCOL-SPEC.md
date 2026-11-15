@@ -66,6 +66,24 @@ At 2× and 4× the USB packet carries fewer words than the ALSA stream. The
 kernel maps the words that are present and leaves the remaining ALSA channels
 silent, so the logical channel count stays constant across rates.
 
+### 2.1 MIDI
+
+Interface 2 carries one logical MIDI port on bulk OUT `0x07` and bulk IN
+`0x86` (one MIDI in and one MIDI out on the breakout cable). The port count
+comes from the device profile; the normal-mode interface class and jack
+descriptors are not captured. The driver exposes one ALSA rawmidi device.
+
+The unit has no stand-alone MIDI control: its stand-alone mode is a
+fixed-routing AD/DA converter mode. In class-compliant mode (firmware 200 and
+later, Select+Recall at power-on) the whole unit belongs to the class driver
+and the MIDI port is class compliant and SysEx-capable; RME's TotalMix FX for
+iPad app then controls the mixer over SysEx on the MIDI port.
+
+The MIDI protocol and the Mackie Control host are generic and live in
+[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md). The Babyface
+differences (one port, cue phones 1–2, input gain CC9 up to 60 in steps of at
+least 3 dB) are in its §12.
+
 ## 3. PCM streams
 
 The ALSA PCM device is duplex:
@@ -193,7 +211,7 @@ vendor-request ioctl, the meter event queue and the transport counters.
 | Native-mode isochronous PCM | yes |
 | Capture channels | 12 |
 | Playback channels | 14 |
-| USB-MIDI | yes |
+| USB-MIDI | yes, 1 port (§2.1) |
 | DSP meters on `0x85` | yes |
 | State endpoint | no |
 | Status endpoint | no |
