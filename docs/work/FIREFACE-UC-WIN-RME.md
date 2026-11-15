@@ -549,7 +549,10 @@ ISO path.
 
 Constant-delay question, closed for the PipeWire path: PipeWire 1.6.11's
 ALSA plugin contains no `snd_pcm_delay` call (it drives everything
-through `snd_pcm_avail_update` / `snd_pcm_avail`), so the reported
+through `snd_pcm_avail_update` / `snd_pcm_avail`). `snd_pcm_status` is
+called only in the xrun recovery path and in a one-time status dump at
+link; `snd_pcm_status_get_delay` is never called, so the status route
+does not carry the value per cycle either. The reported
 delay being the peak of a sawtooth, over-reporting by 0..1 URB, has no
 effect on PipeWire's deadline computation on either transport. The
 over-report remains a limitation for native ALSA clients that query
@@ -623,7 +626,30 @@ Next session, in order:
 4. Physical loopback: the only gate for audio-content claims on either
    transport.
 
-## ISO 2x/4x arms (first pair, 2026-11-14/15)
+## ISO 2x/4x arms (INVALID — rerun required)
+
+The first 2x/4x pair is not usable as evidence. The frame histogram had
+bins only for 0..8 frames while 2x packets carry 12-13 and 4x packets
+24-25, so every packet overflowed and the cadence guard read 0 Hz.
+That leaves the rate confound unexcluded in both arms - the exact bug
+that invalidated the earlier ISO session - so the mixed skipped-cycle
+numbers cannot be attributed to the gate or to the transport. The
+histogram is widened and overflow now suppresses the cadence verdict.
+
+Their only legitimate reading is a geometry check: `urbs 2 x 96,
+buffer 384, period 96` and `urbs 2 x 192, buffer 768, period 192` show
+the rate-scaled modes negotiate as intended.
+
+Arm design correction: q96@2x and q192@4x have URB = period = quantum,
+identical geometry to 1x q48, and integer frames per packet, so they do
+not stress the feedback path. The informative arms are q48@2x
+(URB/period = 2, max_pending <= 3), q48@4x (4, <= 5; also documents the
+0.25 ms quantum below the 1 ms URB cadence), and the fractional-rate
+arms at 88.2 and 176.4 kHz with rate-scaled quanta (<= 2), which use the
+drift instrument. At the rate-scaled quanta, ceil(urb/period) = 1, so
+max_pending <= 2.
+
+## ISO 2x/4x arms (superseded measurement note)
 
 Own-direction-only versus gated at the rate-scaled quanta (URB = period
 = quantum): 96 kHz/q96 and 192 kHz/q192, one 4-minute pair per rate.
