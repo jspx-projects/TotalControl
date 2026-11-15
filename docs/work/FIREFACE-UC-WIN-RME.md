@@ -540,6 +540,31 @@ ISO endpoints, firmware 127. Findings recorded from measurement:
   client underruns when the client buffer is explicit. The earlier
   4-vs-1 underrun reading was startup flake at aplay's default start
   threshold.
+- **The IN header phase field is fractional-sample drift telemetry.**
+  It is a 14-bit accumulator (11-bit on UCX) that integrates the device
+  clock against the host microframe clock. In a 60 s 48 kHz run the
+  frame histogram showed one 5-frame and four 7-frame packets among
+  480993 six-frame packets; three of the four 7-frame events occurred
+  at phase 5, 2 and 7, i.e. at the accumulator wrap. The device adds a
+  frame when its fractional sample wraps. The implied offset is about
+  one sample per 22.6 s, roughly 0.9 ppm. The field predicts frame
+  add/drop and validates frame accounting; it does not give an absolute
+  rate. One 5-frame packet at phase 10005 remains unexplained and is
+  not attributed to the accumulator.
+  The field is currently decoded and discarded; the logger
+  (`ffuc_log_phase`) prints periodic samples and every packet whose
+  frame count differs from six.
+- **Handler cost is not the mechanism.** With the packet dumps disabled
+  (they call pr_info per word inside the completion and are now default
+  off; they should be compiled out or static-keyed before any shipped
+  build): capture mean 8.1 us, max 84 us; playback mean 5.6 us, max
+  32 us, all well under a 1 ms URB budget.
+- **Phase between directions is stable and large.** Crossing-based
+  sampling placed all 476 samples in one 250 us bin, i.e. an offset of
+  roughly 1.3 ms against a 1 ms period. The sampler needs the
+  nearest-neighbour pairing verified before the number is quoted; the
+  earlier average/min/max metric paired across gaps and is discarded.
+  A stable, large offset favours scheduling alignment over tolerance.
 - **Padding lead words (UC branch) are not written.** The spec permits
   them as padding; the hardening (write every lead word) is not
   implemented and is recorded as such rather than claimed.
