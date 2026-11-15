@@ -923,3 +923,98 @@ Bench items carried: physical-loopback bit-exact check on both transports
 (the only gate for audio-content claims); PC-personality verification of
 the relocated rate commit and the session quirk at the next personality
 switch.
+
+## Telemetry instruments: first measurement (2026-11-15)
+
+Branch `test/uc-iso-telemetry`, UC AP personality, firmware 127, bare ALSA.
+Two diagnostic instruments: a crossing-phase sampler (host-side) and a
+phase-accumulator logger (device-side).
+
+### Header interpretation, verified
+
+- Frames (bits 0..4) and position (bits 5..17) are correct: the
+  frame-count cross-check and the position-continuity check run on every
+  packet and stayed at zero mismatch / zero gap across the runs.
+- The phase field (bits 18..31) is a **mod-10000 fractional-sample
+  accumulator**, units of 1/10000 sample. Periodic samples fit exactly:
+  9241 -> 9783 -> 309 -> 842 -> 1384 -> 1918, i.e. +~540 units/s, and
+  9783 + 542 = 10325 = 309 (mod 10000). The advance is rate-independent
+  (~540/s at 48, 96 and 192 kHz). The field is 14 bits wide; the modulus
+  is 10000, not 16384. This resolves the earlier 22.6 s vs 37 s wrap-period
+  discrepancy (the 37 s figure assumed mod 16384).
+- The wrap coincides with a one-frame add: the dense boundary log shows
+  phase 9993 -> 1 with frames 7, and 9995 -> 3 with frames 7, then frames
+  back to nominal 6. The device spreads the correction over a few packets
+  (a boundary dither: phase bounces high/low, frames alternate +1/-1).
+  A naive `phase < prev` detector counted every bounce (5603 "wraps" in
+  60 s); the debounced detector (high->low transition >1000 packets after
+  the previous) reads 3 true wraps in 40 s, consistent with the ~13 s
+  period. Dither and true anomalies are counted apart.
+
+### Crossing phase (host scheduling offset)
+
+The sampler timestamps each period crossing in `ffuc_stream_advance`,
+independent of the signalling policy, and pairs it with the other
+direction's most recent crossing (delta below one period binned at
+250 us; larger deltas counted as `far`).
+
+At q48@48k, q96@96k and q192@192k the histogram has two tight clusters
+(bin 0 ~10000, bin 3 ~9900-9960, almost nothing between): a stable offset
+of ~0.875 ms, playback later, rate-independent. The `far` count rises
+with rate: 39 -> 67 -> 105. The stable offset alone does not explain the
+rate-dependent gate regression (it is the same at 1x where the gate
+wins); the rising crossing jitter (`far`) is the candidate mechanism to
+investigate next.
+
+### Crossing jitter characterized
+
+The `far` events (crossings more than one period apart) are all playback,
+delta 1000-1169 us against a 1000 us period - just 1-2 packets over, not
+large jitter. They are boundary quantization around the stable ~875 us
+(7-packet) offset, and the count is run-variable (85 at 96k vs 20 at 192k
+in one pair), not cleanly rate-rising. The dominant feature is the stable
+offset itself: the gate's both-pending deferral equals that offset, so at
+a 1 ms quantum it consumes ~87.5% of the period. Removing the offset is
+the lever, not the small jitter.
+
+### Schedule alignment: tried, failed on xHCI
+
+A gated prototype (`ffuc_iso_sched`, default off) submitted both
+directions to a common microframe base with explicit `start_frame`
+instead of `URB_ISO_ASAP`, advancing each resubmitted URB by its packet
+count. With explicit first-URB `start_frame` the xHCI ISO scheduler does
+not stream: cadence collapsed to 0 / 182555 Hz at a 192 kHz request, the
+cadence guard fired thousands of times, playback underran, histograms
+stayed empty. The HCD needs `URB_ISO_ASAP` to establish the stream. The
+device was restored to the default (ASAP) build and verified healthy
+(cadence 47997 Hz, all counters zero). The prototype is kept gated off as
+a record; a working alignment would need ASAP for the first URB and
+explicit frames only for resubmission, or a different mechanism.
+
+### The offset is not in scheduling (decisive)
+
+With the default ASAP build, `ffuc_iso_align` reports the actual first-URB
+start frames: **IN == OUT, diff 0** at both 48 kHz (16400/16400) and
+192 kHz (14552/14552). The HCD already schedules both directions at the
+same microframe. So the ~875 us inter-direction offset measured by the
+crossing sampler is NOT a scheduling offset - it is in completion-crossing
+detection, driven by the `out_lead` / feedback data offset (the OUT ring
+position leads IN by `out_lead` frames, so the two directions' period
+boundaries fall at different packets within the URB). Forcing
+`start_frame` alignment therefore could not remove the offset and only
+broke streaming. The lever for the corner is the gate deferral itself
+(bounded deferral, transport-independent), not URB scheduling. This is
+consistent with the macOS model: RME slaves the graph to the device clock
+rather than aligning URB schedules.
+
+### Disposition
+
+The corner remains accepted with the manual warning (quantum >= 2 ms at
+96/192 kHz), which is the shipped consolidation state and the original
+goal. The telemetry investigation yielded the verified RME header
+interpretation (mod-10000 phase accumulator, position continuity) and the
+crossing-phase characterization above; both instruments stay diagnostic.
+The remaining option for actually removing the corner is a bounded
+deferral (hrtimer-capped both-pending wait), transport-independent, not
+yet implemented. The physical-loopback bit-exact check remains the open
+audio-content gate (needs a cable).

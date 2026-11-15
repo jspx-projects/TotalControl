@@ -430,13 +430,22 @@ gives the follower one period of slack, and the default quantum of 256 is
 outside the window. This is a host tuning property, not a driver property.
 
 The both-pending wake adds a deferral latency equal to the phase offset
-between the two directions' period crossings. At 48 kHz with a 48-frame
-quantum the offset is small and the gate measurably reduces follower misses.
-At 96 and 192 kHz a quantum equal to the 1 ms USB period (96 and 192 frames)
-is the zero-slack corner: the deferral consumes the follower's entire margin
-and the daemon skips cycles. One period of slack removes the penalty: at
-96 kHz use 192 frames or more, at 192 kHz 384 frames or more. The manual
-carries this guidance.
+between the two directions' period crossings. The offset is a property of
+the implicit-feedback data path: the playback ring position leads capture
+by the feedback lead, so the two directions' period boundaries fall at
+different packets within the URB. It is not a scheduling offset — the host
+controller schedules both directions' first URB at the same microframe
+(measured: start frames equal at 1x and 4x). The offset is roughly 875 us,
+stable and rate-independent.
+
+A quantum equal to the 1 ms USB period (96 frames at 96 kHz, 192 frames at
+192 kHz) is the zero-slack corner: the offset exceeds the follower's entire
+margin and the daemon skips cycles. The corner is inherent to the geometry,
+not a driver defect. The offset cannot be scheduled away, and waking the
+graph earlier would expose the follower to the other direction's stale
+pointer — the false-availability failure the gate prevents. One period of
+slack removes the penalty: at 96 kHz use 192 frames or more, at 192 kHz
+384 frames or more. The manual carries this guidance.
 
 
 ## 11. Development tools

@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-if sudo -n true 2>/dev/null; then
+if sudo -n dmesg >/dev/null 2>&1; then
 	SUDO="sudo"
 elif [ -x /usr/bin/ksshaskpass ]; then
 	export SUDO_ASKPASS=/usr/bin/ksshaskpass
@@ -71,7 +71,7 @@ if lsmod | grep -q '^snd_fireface_uc '; then
 fi
 
 $SUDO modprobe snd-pcm
-$SUDO insmod kernel/snd-fireface-uc.ko "$@"
+$SUDO insmod "$PWD/kernel/snd-fireface-uc.ko" "$@"
 echo '--- fireface log ---'
 $SUDO dmesg | grep -i fireface | tail -3 || true
 echo '--- card ---'
