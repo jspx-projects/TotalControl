@@ -35,6 +35,15 @@ static unsigned int fixed_rate;
  * preserved zero can be distinguished from never-written memory.  Values
  * are near-silent in both formats: float32 denormal and s32 DC null. */
 static bool ffuc_poison = true;
+/* ISO schedule alignment (diagnostic, FAILED on xHCI as implemented):
+ * submit both directions to a common microframe base instead of
+ * URB_ISO_ASAP, to drive the inter-direction phase offset toward zero.
+ * With explicit first-URB start_frame the xHCI ISO scheduler does not
+ * stream (cadence collapses, URB errors); the HCD needs ASAP to establish
+ * the stream.  Kept gated off as a record of the attempt; a working
+ * alignment would need ASAP for the first URB and explicit frames only
+ * for resubmission, or a different mechanism.  Default off. */
+static bool ffuc_iso_sched;
 
 static DEFINE_MUTEX(devices_mutex);
 static unsigned long devices_used;
@@ -43,6 +52,8 @@ static struct usb_driver ffuc_driver;
 
 module_param(ffuc_poison, bool, 0644);
 MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
+module_param(ffuc_iso_sched, bool, 0644);
+MODULE_PARM_DESC(ffuc_iso_sched, "Align ISO IN/OUT URB schedules to a common microframe base (diagnostic).");
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for the Fireface sound card.");
@@ -1140,6 +1151,16 @@ static bool ffuc_stream_advance(struct ffuc *chip, struct ffuc_stream *s,
 					chip->phi_play_later++;
 			} else {
 				chip->phi_far++;
+				if (delta > chip->phi_far_max)
+					chip->phi_far_max = delta;
+				if (chip->phi_far_logged < 20) {
+					chip->phi_far_logged++;
+					dev_info(&chip->dev->dev,
+						 "phi far: dir %d delta_us %llu period_us %llu\n",
+						 dir,
+						 (unsigned long long)div_u64(delta, 1000),
+						 (unsigned long long)div_u64(period_ns, 1000));
+				}
 			}
 		}
 	}
@@ -1998,6 +2019,22 @@ static void ffuc_urb_complete(struct urb *urb)
 resubmit:
 	if (!READ_ONCE(chip->engine_running))
 		return;
+	if (chip->iso && ffuc_iso_sched) {
+		int next = (urb->start_frame + urb->number_of_packets) &
+			   FFUC_ISO_FRAME_MASK;
+		int cur = usb_get_current_frame_number(chip->dev) &
+			  FFUC_ISO_FRAME_MASK;
+
+		/* Keep the next slot contiguous while it is still ahead;
+		 * if completion jitter pushed it into the past, fall back
+		 * to ASAP rather than submit a stale frame. */
+		if (((next - cur) & FFUC_ISO_FRAME_MASK) < 0x400) {
+			urb->start_frame = next;
+			urb->transfer_flags &= ~URB_ISO_ASAP;
+		} else {
+			urb->transfer_flags |= URB_ISO_ASAP;
+		}
+	}
 	ret = usb_submit_urb(urb, GFP_ATOMIC);
 	if (ret == 0) {
 		if (!READ_ONCE(chip->iso_frames_ok) ||
@@ -2230,6 +2267,8 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	memset(chip->phi_hist, 0, sizeof(chip->phi_hist));
 	chip->phi_count2 = chip->phi_far = 0;
 	chip->phi_cap_later = chip->phi_play_later = 0;
+	chip->phi_far_max = 0;
+	chip->phi_far_logged = 0;
 	chip->streams[SNDRV_PCM_STREAM_PLAYBACK].cross_ns = 0;
 	chip->streams[SNDRV_PCM_STREAM_CAPTURE].cross_ns = 0;
 	chip->phase_prev = 0;
@@ -2430,18 +2469,36 @@ static int ffuc_engine_start(struct ffuc *chip)
 	chip->last_in_complete = 0;
 	WRITE_ONCE(chip->engine_broken, false);
 	WRITE_ONCE(chip->engine_running, true);
-	for (i = 0; i < chip->nurbs; i++) {
-		for (e = 0; e < m->neps; e++) {
-			ret = usb_submit_urb(
-				chip->eps[SNDRV_PCM_STREAM_CAPTURE][e].urbs[i].urb,
-				GFP_KERNEL);
-			if (ret < 0)
-				goto error;
-			ret = usb_submit_urb(
-				chip->eps[SNDRV_PCM_STREAM_PLAYBACK][e].urbs[i].urb,
-				GFP_KERNEL);
-			if (ret < 0)
-				goto error;
+	{
+		/* Aligned scheduling: both directions share one microframe
+		 * base, URB i starting base + i * iso_packets.  The margin
+		 * keeps the base in the HCD's scheduling window. */
+		int base = 0;
+
+		if (chip->iso && ffuc_iso_sched)
+			base = usb_get_current_frame_number(chip->dev) + 16;
+		for (i = 0; i < chip->nurbs; i++) {
+			for (e = 0; e < m->neps; e++) {
+				struct urb *cu =
+					chip->eps[SNDRV_PCM_STREAM_CAPTURE][e].urbs[i].urb;
+				struct urb *pu =
+					chip->eps[SNDRV_PCM_STREAM_PLAYBACK][e].urbs[i].urb;
+
+				if (chip->iso && ffuc_iso_sched) {
+					int sf = base + i * chip->iso_packets;
+
+					cu->start_frame = sf;
+					pu->start_frame = sf;
+					cu->transfer_flags &= ~URB_ISO_ASAP;
+					pu->transfer_flags &= ~URB_ISO_ASAP;
+				}
+				ret = usb_submit_urb(cu, GFP_KERNEL);
+				if (ret < 0)
+					goto error;
+				ret = usb_submit_urb(pu, GFP_KERNEL);
+				if (ret < 0)
+					goto error;
+			}
 		}
 	}
 
@@ -2887,8 +2944,9 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 atomic_read(&chip->pcm_prepare_err),
 			 atomic_read(&chip->pcm_trigger_err));
 		dev_info(&chip->dev->dev,
-			 "phi crossings: n %u far %u cap_later %u play_later %u hist250us %u %u %u %u %u %u %u %u %u %u %u %u %u\n",
+			 "phi crossings: n %u far %u far_max_us %llu cap_later %u play_later %u hist250us %u %u %u %u %u %u %u %u %u %u %u %u %u\n",
 			 chip->phi_count2, chip->phi_far,
+			 (unsigned long long)div_u64(chip->phi_far_max, 1000),
 			 chip->phi_cap_later, chip->phi_play_later,
 			 chip->phi_hist[0], chip->phi_hist[1],
 			 chip->phi_hist[2], chip->phi_hist[3],

@@ -966,14 +966,39 @@ rate-dependent gate regression (it is the same at 1x where the gate
 wins); the rising crossing jitter (`far`) is the candidate mechanism to
 investigate next.
 
-### Next
+### Crossing jitter characterized
 
-1. Characterise the rising `far` count at 2x/4x (crossing jitter vs the
-   feedback dependency) - the rate-dependent regression candidate.
-2. Prototype ISO `start_frame` alignment: submit both directions to a
-   common microframe base, using the mod-10000 accumulator as the
-   device-clock drift reference and the position counter for continuity.
-   Target: the gate deferral (one period minus the paired delta) goes to
-   zero at the zero-slack quanta.
-3. Decide the shipping posture of the two instruments (the cadence guard
-   already ships; the phase logger and crossing sampler are diagnostic).
+The `far` events (crossings more than one period apart) are all playback,
+delta 1000-1169 us against a 1000 us period - just 1-2 packets over, not
+large jitter. They are boundary quantization around the stable ~875 us
+(7-packet) offset, and the count is run-variable (85 at 96k vs 20 at 192k
+in one pair), not cleanly rate-rising. The dominant feature is the stable
+offset itself: the gate's both-pending deferral equals that offset, so at
+a 1 ms quantum it consumes ~87.5% of the period. Removing the offset is
+the lever, not the small jitter.
+
+### Schedule alignment: tried, failed on xHCI
+
+A gated prototype (`ffuc_iso_sched`, default off) submitted both
+directions to a common microframe base with explicit `start_frame`
+instead of `URB_ISO_ASAP`, advancing each resubmitted URB by its packet
+count. With explicit first-URB `start_frame` the xHCI ISO scheduler does
+not stream: cadence collapsed to 0 / 182555 Hz at a 192 kHz request, the
+cadence guard fired thousands of times, playback underran, histograms
+stayed empty. The HCD needs `URB_ISO_ASAP` to establish the stream. The
+device was restored to the default (ASAP) build and verified healthy
+(cadence 47997 Hz, all counters zero). The prototype is kept gated off as
+a record; a working alignment would need ASAP for the first URB and
+explicit frames only for resubmission, or a different mechanism.
+
+### Disposition
+
+The corner remains accepted with the manual warning (quantum >= 2 ms at
+96/192 kHz), which is the shipped consolidation state and the original
+goal. The telemetry investigation yielded the verified RME header
+interpretation (mod-10000 phase accumulator, position continuity) and the
+crossing-phase characterization above; both instruments stay diagnostic.
+The remaining option for actually removing the corner is a bounded
+deferral (hrtimer-capped both-pending wait), transport-independent, not
+yet implemented. The physical-loopback bit-exact check remains the open
+audio-content gate (needs a cable).

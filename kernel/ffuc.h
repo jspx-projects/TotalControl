@@ -429,6 +429,8 @@ struct ffuc {
 	u32 phi_count2;
 	u32 phi_far;
 	u32 phi_cap_later, phi_play_later;
+	u64 phi_far_max;
+	unsigned int phi_far_logged;
 	/* Phase-accumulator telemetry (diagnostic): the UC field is a
 	 * mod-10000 fractional-sample accumulator.  True wraps are debounced
 	 * (the boundary dithers); dither and anomalies are counted apart. */
