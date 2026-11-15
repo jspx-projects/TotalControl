@@ -75,6 +75,8 @@ jobs:
           sudo apt-get install -y build-essential "linux-headers-$(uname -r)"
       - name: Build kernel module
         run: make -C kernel KBUILD_MODPOST_WARN=1
+      - name: Host tests
+        run: make -C kernel test
 
   core:
     needs: changes

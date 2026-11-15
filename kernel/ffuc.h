@@ -356,12 +356,15 @@ struct ffuc {
 	u8 meter_pair[FFUC_METER_PAIR_MAX];
 	unsigned int meter_pair_len;
 	/* The device's page phase is not anchored for this session (fresh
-	 * probe, or a failed drain).  The next heartbeat carries the
-	 * phase-lost flag. */
+	 * probe, a failed drain, or a pair without a peak half).  Pairs the
+	 * record-table shape cannot decide carry the phase-lost flag until
+	 * one pair decides it. */
 	bool meter_phase_lost;
 	/* Pair pump state for the reader backpressure. */
 	bool meter_paused;
 	u32 meter_pairs;
+	/* Pairs not emitted to restore the RMS-then-peak order. */
+	u32 meter_realigns;
 	atomic_t state_urbs;
 
 	/* USB-MIDI streaming interface (bulk OUT / bulk IN) */

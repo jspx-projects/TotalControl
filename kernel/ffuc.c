@@ -1828,8 +1828,8 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
 	seq_printf(m, "events_dropped %d\n", atomic_read(&chip->events_dropped));
 	seq_printf(m, "meter_urbs %d\n", atomic_read(&chip->meter_urbs));
-	seq_printf(m, "meter_paused %u\nmeter_pairs %u\n",
-		   chip->meter_paused, chip->meter_pairs);
+	seq_printf(m, "meter_paused %u\nmeter_pairs %u\nmeter_realigns %u\n",
+		   chip->meter_paused, chip->meter_pairs, chip->meter_realigns);
 	seq_printf(m, "urb_frames %u\nnurbs %u\n", chip->urb_frames,
 		   chip->nurbs);
 	return 0;

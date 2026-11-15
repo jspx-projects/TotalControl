@@ -5,6 +5,7 @@
 #   make                 build against the running kernel
 #   make KDIR=/path      build against another kernel tree
 #   sudo make install    install into /lib/modules/$(uname -r)/updates
+#   make test            host tests of the module's pure logic (no kernel)
 #
 # This module is a transport core: USB, PCM and the snd-hwdep raw control
 # node.  Mixer/device policy lives in TotalControl (userspace).
@@ -22,7 +23,12 @@ install: all
 	$(MAKE) -C $(KDIR) M=$(CURDIR) INSTALL_MOD_DIR=updates modules_install
 	depmod -a $(KVER)
 
+test:
+	$(CC) -std=c11 -Wall -Wextra -Werror -o test/meter-pair-test test/meter-pair-test.c
+	./test/meter-pair-test
+
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
+	$(RM) test/meter-pair-test
 
-.PHONY: all install clean
+.PHONY: all install test clean

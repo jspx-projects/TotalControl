@@ -422,35 +422,45 @@ U32 field is little-endian unless stated otherwise.
 
 ### Heartbeat synchronisation
 
-1. The device emits the peak page and the RMS page strictly alternately.
+1. The device emits the peak page and the RMS page alternately.
    Role is positional: a page is never classified by any of its fields.
 2. The device advances its page order only when a transfer completes
    successfully. A page that is not polled waits indefinitely; a pause
    between the two halves of up to one second does not restart the pair.
-3. The device has no idle timeout and no restart request. Phase advances
-   by exactly one per consumed page, so the phase at any moment is the
-   parity of consumption since device power-up.
-4. Device power-up anchors the order: the first page is the RMS half.
+3. The device has no idle timeout and no restart request. Outside a
+   slip, phase advances by exactly one per consumed page.
+4. The page order can slip by one page inside a running session. At a
+   slip, two RMS halves arrive back to back. Slips were captured at
+   streaming engine starts and stops. Not every such transition slips.
+   Reader attachment and detachment between those transitions kept the
+   order.
+5. Device power-up anchors the order: the first page is the RMS half.
    A USB reset without power loss does not anchor reliably, so it does
    not count as an anchor.
-5. The driver consumes pages in pairs and emits one heartbeat event per
+6. The driver consumes pages in pairs and emits one heartbeat event per
    pair: RMS half first, peak half second. Userspace never sees a single
    page on a UC device. The event flag `METER_PAIR` marks the payload.
-6. A normal transport stop completes a held half before stopping, so the
+7. A normal transport stop completes a held half before stopping, so the
    phase survives reader attachment and detachment.
-7. If the phase is not anchored for a session (a fresh probe while the
-   unit kept running, or a failed stop drain), the driver orders the
-   first pair by the record-table shape: the peak half publishes the
-   eight AN records, the RMS half does not. If that check cannot decide,
-   the driver publishes the pair in arrival order and keeps the
-   `PHASE_LOST` flag set. It retries on every following pair; a decidable
-   pair fixes the order and clears the flag. The flag marks the roles as
-   unverified.  The peak half carries nonzero AN record words even when
-   the analog inputs are silent, so the cue decided the first pair in
-   every tested session; the fallback is the safety net for a state where
-   both halves read zero.
-8. Only one meter reader may drain the stream at a time. Concurrent
-   readers each receive a sample of pages and break the phase model.
+8. The driver checks every pair by the record-table shape: the peak half
+   publishes the eight AN records, the RMS half does not. The peak half
+   carries non-zero AN record words even when the analog inputs are
+   silent.
+9. A pair whose first half has the peak shape is not emitted. The driver
+   drops that peak half and holds the RMS half as the first half of the
+   next pair. Every following pair is then RMS-then-peak.
+10. Once a pair has anchored the phase, a pair in which neither half has
+    the peak shape is not emitted. The driver drops its first half and
+    holds the second as the first half of the next pair. The phase then
+    counts as not anchored until a pair decides it.
+11. Any other pair the shape cannot decide is emitted in arrival order.
+12. The phase is not anchored after a fresh probe while the unit kept
+    running, after a failed stop drain, or after item 10. While it is not
+    anchored, an emitted undecided pair carries the `PHASE_LOST` flag. A
+    decided pair anchors the phase and clears the flag. The flag marks
+    the roles as unverified.
+13. Only one meter reader may drain the stream at a time. Concurrent
+    readers each receive a sample of pages and break the phase model.
 
 ### Driver feed
 
@@ -735,6 +745,15 @@ word above the matching output peak is status and is ignored.
    banks' slot-internal engine fields.  These fields drift within a
    session and do not track the input signal under first-difference
    correlation, but no law has been published for them.
+4. The cause of a slip. The streaming engine's alternate-setting change
+   is on the streaming interface; the meter endpoint is on the control
+   interface. Hypothesis: the device resets the meter endpoint's data
+   toggle on that change, and the host discards the next page as a
+   retransmission. A bus analyser trace across an engine start decides
+   it.
+5. The shape check with live digital inputs. The RMS half's AN record
+   range spans input-bank slots; whether a pair stays decidable while
+   those inputs carry signal has not been captured.
 4. `0x1fff` appears in three roles: as the no-update sentinel in meter
    records and RMS bank power words, and as a beat-word value in some
    sessions.  Whether the DSP uses one code for all three roles on

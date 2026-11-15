@@ -25,6 +25,7 @@
 #include <sound/hwdep.h>
 
 #include "ffuc.h"
+#include "ffuc-meter-pair.h"
 
 /* -- event queue ----------------------------------------------------- */
 
@@ -396,27 +397,6 @@ static unsigned int ffuc_event_bytes(struct ffuc *chip)
 	return len;
 }
 
-/* Number of AN input record words that are not zero.  The peak half
- * publishes the eight analog records (idle floors included); the RMS half
- * carries input-bank slot words in that address range, which are zero
- * while the digital inputs are silent.  Used only to recover the phase
- * when the session's order is unknown. */
-static unsigned int ffuc_an_record_words(const u8 *page, unsigned int len)
-{
-	unsigned int i, n = 0;
-
-	if (len < 108 + 8 * 4)
-		return 0;
-	for (i = 0; i < 8; i++) {
-		u32 record;
-
-		memcpy(&record, page + 108 + i * 4, sizeof(record));
-		if (record)
-			n++;
-	}
-	return n;
-}
-
 static void ffuc_meter_complete(struct urb *urb)
 {
 	struct ffuc *chip = urb->context;
@@ -427,38 +407,15 @@ static void ffuc_meter_complete(struct urb *urb)
 	    urb->actual_length == chip->desc->meter_len &&
 	    2 * chip->desc->meter_len <= FFUC_EVENT_MAX) {
 		unsigned int len = chip->desc->meter_len;
+		unsigned int flags = FFUC_EV_FLAG_METER_PAIR;
 
-		if (chip->meter_pair_len == 0) {
-			memcpy(chip->meter_pair, urb->transfer_buffer, len);
-			chip->meter_pair_len = len;
-		} else {
-			unsigned int flags = FFUC_EV_FLAG_METER_PAIR;
-
-			memcpy(chip->meter_pair + len, urb->transfer_buffer, len);
-			chip->meter_pair_len = 0;
-			if (chip->meter_phase_lost) {
-				unsigned int a = ffuc_an_record_words(chip->meter_pair, len);
-				unsigned int b = ffuc_an_record_words(chip->meter_pair + len, len);
-
-				if (a >= b + 4) {
-					/* First page is the peak half: swap. */
-					u8 tmp[FFUC_METER_PAIR_MAX / 2];
-
-					memcpy(tmp, chip->meter_pair, len);
-					memcpy(chip->meter_pair, chip->meter_pair + len, len);
-					memcpy(chip->meter_pair + len, tmp, len);
-					chip->meter_phase_lost = false;
-				} else if (b >= a + 4) {
-					chip->meter_phase_lost = false;
-				} else {
-					/* The cue cannot decide this pair.  Deliver
-					 * it in arrival order and keep reporting
-					 * the order as unverified; a later pair
-					 * with a decidable cue resolves the
-					 * session. */
-					flags |= FFUC_EV_FLAG_PHASE_LOST;
-				}
-			}
+		switch (ffuc_meter_feed(chip->meter_pair, &chip->meter_pair_len,
+					&chip->meter_phase_lost,
+					urb->transfer_buffer, len)) {
+		case FFUC_METER_PAIR_UNVERIFIED:
+			flags |= FFUC_EV_FLAG_PHASE_LOST;
+			fallthrough;
+		case FFUC_METER_PAIR:
 			ffuc_event_put(chip, FFUC_EV_METER, chip->meter_pair,
 				       2 * len, flags);
 			chip->meter_pairs++;
@@ -466,6 +423,12 @@ static void ffuc_meter_complete(struct urb *urb)
 			if (ffuc_event_bytes(chip) >
 			    FFUC_METER_HIGH_WATER * (2 * len + 16))
 				WRITE_ONCE(chip->meter_paused, true);
+			break;
+		case FFUC_METER_REALIGNED:
+			chip->meter_realigns++;
+			break;
+		case FFUC_METER_HELD:
+			break;
 		}
 	} else if (urb->status == 0 && urb->actual_length >= 4 &&
 		   chip->model != FFUC_MODEL_UC) {
