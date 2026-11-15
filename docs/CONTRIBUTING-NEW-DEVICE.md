@@ -155,8 +155,10 @@ The existing profiles are the reference:
    packets and the control writes. Write the protocol specification and list
    unknowns in `docs/work/`.
 2. **Add the kernel descriptor and transport.** Enumerate the device, select
-   modes/rates, expose playback/capture and the hwdep node. Build and load the
-   module; confirm the PCM and hwdep paths before touching the GUI.
+   modes/rates, expose playback/capture and the hwdep node. Name the new
+   entry in the descriptor index enum; the static assertion keeps the ID
+   table and the descriptor table in sync. Build and load the module;
+   confirm the PCM and hwdep paths before touching the GUI.
 3. **Add the profile id.** Extend the model/personality and profile id enums,
    register the profile in `profiles::ALL`, and add the match arms in the
    profile lookup. The profile table must remain the only selection source.

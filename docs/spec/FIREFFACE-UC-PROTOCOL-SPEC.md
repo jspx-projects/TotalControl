@@ -897,9 +897,20 @@ The IN packet is a four-byte header followed by `frames × sample words × 4`
 bytes.  The OUT packet is `frames × (1 + sample words) × 4` bytes.  The
 maximum packet columns are the descriptor allocation sizes.
 
-The IN header is a four-byte little-endian value.  The driver reads the
-position from bits 5..17 and the phase from bits 18..31.  It derives the frame
-count from the packet length.
+The IN body is channel-major: channel `c` occupies `frames` consecutive
+sample words starting at body word `c × frames`.
+
+The IN header is a four-byte little-endian value.  Bits 0..4 carry the frame
+count, bits 5..17 the position, bits 18..31 the phase.  The frame count in
+the header equals the count derived from the packet length.  The position is
+the stream position modulo 8192.
+
+The phase field is a 14-bit fractional-sample accumulator counting in
+units of 1/10000 sample (modulus 10000).  It integrates the device clock
+against the host microframe clock and wraps when a whole sample
+accumulates.  A packet at the wrap carries one extra frame; the device
+spreads the correction over a few packets at the boundary.  The field
+predicts frame add/drop; it does not give an absolute rate.
 
 Every OUT sample frame starts with a lead word.  The UC uses the first lead
 word in a packet; the remaining lead words are padding.  The first lead word
@@ -958,6 +969,10 @@ selects alt 0 and then alt N on every stream start.  The other PC variants
 select alt N on a rate-class change.  The AP personality selects alt N for the
 rate class.
 
+The driver commits the requested sample rate on every cold engine start.
+The device keeps its rate across sessions and personality switches, and the
+init sequence does not set it.
+
 ### 11.11 Open transport items
 
 1. The AP descriptor.  The AP interface and packet rows are the implemented
@@ -970,8 +985,11 @@ rate class.
    the implemented host only writes it.
 5. The PC interrupt URB size.  The 48/96/192 sample-frame size is the host's
    choice; the device contract is the packet size and the rate class.
-6. The AP header phase field.  The driver decodes it; it has not been checked
-   against a capture.
+6. The AP header phase field on the UCX.  The 12-bit position, 11-bit phase
+   and the 3072 wrap are the implemented mapping; they are not verified
+   against a UCX capture.  On the UC the accumulator semantics are verified
+   at 48 kHz; isolated add/drop events away from the wrap are unattributed
+   (`docs/work/FIREFACE-UC-WIN-RME.md`).
 7. Status bytes 0 and 1.  "Front-panel events" uses bytes 2 and 3; the roles
    of bytes 0 and 1 are not decoded.
 8. The bulk endpoints on interface 0 at 1x and 2x.  `0x03` and `0x84` are
