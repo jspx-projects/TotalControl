@@ -545,9 +545,16 @@ ISO endpoints, firmware 127. Findings recorded from measurement:
   implemented and is recorded as such rather than claimed.
 
 Open: a physical loopback for an audio-content (bit-exact) check on the
-ISO path; the shared constant-delay question (reported delay is the peak
-of a sawtooth, so it over-reports by 0..1 ms at every transport) remains
-open pending a check of whether PipeWire reads `snd_pcm_delay`.
+ISO path.
+
+Constant-delay question, closed for the PipeWire path: PipeWire 1.6.11's
+ALSA plugin contains no `snd_pcm_delay` call (it drives everything
+through `snd_pcm_avail_update` / `snd_pcm_avail`), so the reported
+delay being the peak of a sawtooth, over-reporting by 0..1 URB, has no
+effect on PipeWire's deadline computation on either transport. The
+over-report remains a limitation for native ALSA clients that query
+`snd_pcm_delay`, where a dynamic estimate from queued-but-not-sent
+frames (the in-tree USB audio approach) would be the shared fix.
 
 ## ISO gate arms (A/B interleaved, 2026-11-14)
 
