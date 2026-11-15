@@ -83,6 +83,7 @@
 #define FFUC_MAX_URB_ERRORS	16
 #define FFUC_MIN_QUEUE_FRAMES	64
 #define FFUC_MIDI_IN_URBS	2	/* bulk IN URBs kept queued */
+#define FFUC_MIDI_PORTS		2	/* logical ports on the endpoint pair */
 #define FFUC_CTL_TIMEOUT	1000	/* ms */
 
 /* ISO ("Mac"/IF0) transport. */
@@ -246,6 +247,7 @@ struct ffuc_device_desc {
 	u8 midi_iface;
 	u8 midi_out_ep;
 	u8 midi_in_ep;
+	unsigned int midi_ports;	/* logical ports on the MIDI endpoint pair */
 	unsigned int max_channels;	/* capture channels */
 	unsigned int max_playback;	/* playback channels; 0 = max_channels */
 	unsigned int max_rate;
@@ -269,6 +271,19 @@ struct ffuc_midi_tx {
 	u8 sysex[3];
 	unsigned int sysex_len;
 	bool in_sysex;
+};
+
+/* One logical MIDI port carried on the shared endpoint pair. */
+struct ffuc_midi_port {
+	struct ffuc *chip;
+	unsigned int index;
+	struct snd_rawmidi *rmidi;
+	struct snd_rawmidi_substream *in_sub;
+	struct snd_rawmidi_substream *out_sub;
+	struct delayed_work out_work;
+	struct ffuc_midi_tx tx;
+	u8 *out_buf;		/* bulk transfer buffer, must be DMA-able */
+	bool out_running;
 };
 
 struct ffuc {
@@ -368,17 +383,13 @@ struct ffuc {
 	atomic_t state_urbs;
 
 	/* USB-MIDI streaming interface (bulk OUT / bulk IN) */
-	struct snd_rawmidi *rmidi;
 	struct usb_interface *midi_intf;
 	struct urb *midi_in_urb[FFUC_MIDI_IN_URBS];
 	u8 *midi_in_buf[FFUC_MIDI_IN_URBS];
-	struct snd_rawmidi_substream *midi_in_sub;
-	struct snd_rawmidi_substream *midi_out_sub;
-	struct delayed_work midi_out_work;
-	struct ffuc_midi_tx midi_tx;
 	atomic_t midi_in_users;
 	bool midi_in_running;
-	bool midi_out_running;
+	unsigned int n_midi_ports;
+	struct ffuc_midi_port midi_port[FFUC_MIDI_PORTS];
 
 	/* hwdep events */
 	struct kfifo event_fifo;

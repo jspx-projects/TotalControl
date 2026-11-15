@@ -100,7 +100,12 @@ available for the update.
 - UC interrupt and isochronous transports.
 - UCX isochronous and interrupt transports.
 - Babyface-classic isochronous transport (12 capture / 14 playback words at
-  1×), USB-MIDI and the IF1 `0x85` DSP meter stream.
+  1×) and the IF1 `0x85` DSP meter stream.
+- USB-MIDI on interface 2 (bulk OUT `0x07` / IN `0x86`) for the UC, UCX and
+  Babyface-classic.  The UC and UCX carry two logical MIDI ports on the pair.
+  The port count comes from the class descriptor, or from the device profile
+  when the interface is vendor-specific.  Both directions use USB-MIDI code
+  index numbers on every model.
 - UC EP0 vendor requests, UCX IF1 register words, and raw meter/state/status
   events.
 - UC output-latch detection and engine restart.
