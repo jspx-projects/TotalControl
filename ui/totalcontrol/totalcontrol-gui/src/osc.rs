@@ -221,7 +221,10 @@ pub fn worker(config: &OscConfig) -> impl Stream<Item = Message> {
                     }
                 }
                 outbound = rx.next() => {
-                    let Some(outbound) = outbound else { continue };
+                    // The app dropped the feedback sender: the surface is
+                    // being torn down. Exit instead of spinning on a closed
+                    // channel (a `continue` here busy-loops the runtime).
+                    let Some(outbound) = outbound else { break };
                     let packet = outbound.into_packet();
                     if let OscPacket::Message(ref msg) = packet {
                         let _ = output
