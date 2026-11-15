@@ -1112,6 +1112,37 @@ static bool ffuc_stream_advance(struct ffuc *chip, struct ffuc_stream *s,
 	if (hw / rt->period_size == s->period)
 		return false;
 	s->period = hw / rt->period_size;
+	/* Crossing-phase sample, independent of the signalling policy:
+	 * pair this crossing with the other direction's most recent one.
+	 * A delta below one period is the phase modulo one period; the
+	 * gate's deferral is the remainder of the period.  Larger deltas
+	 * are startup, a stall, or a sub-URB period: counted, not binned. */
+	{
+		int dir = s == &chip->streams[SNDRV_PCM_STREAM_CAPTURE];
+		struct ffuc_stream *o = &chip->streams[!dir];
+		u64 now = ktime_get_ns();
+
+		WRITE_ONCE(s->cross_ns, now);
+		if (READ_ONCE(o->cross_ns) && o->running) {
+			u64 delta = now - READ_ONCE(o->cross_ns);
+			u64 period_ns = div_u64((u64)rt->period_size *
+						NSEC_PER_SEC, chip->rate);
+
+			if (delta < period_ns) {
+				unsigned int bin = div_u64(delta, 250000);
+
+				if (bin < ARRAY_SIZE(chip->phi_hist))
+					chip->phi_hist[bin]++;
+				chip->phi_count2++;
+				if (dir)
+					chip->phi_cap_later++;
+				else
+					chip->phi_play_later++;
+			} else {
+				chip->phi_far++;
+			}
+		}
+	}
 	return true;
 }
 
@@ -1493,6 +1524,54 @@ cadence_skip:
 			ffuc_fb_put(chip, pos, frames[i],
 				    chip->ucx ? ((hdr >> 21) & 0x7ff) :
 						((hdr >> 18) & 0x3fff));
+			/* Phase-accumulator telemetry: the field integrates
+			 * the device clock against the host microframe clock.
+			 * A wrap with one extra frame is the predicted drift
+			 * event; anything else outside the nominal cadence is
+			 * counted and logged for attribution. */
+			{
+				unsigned int phase = chip->ucx ?
+					((hdr >> 21) & 0x7ff) :
+					((hdr >> 18) & 0x3fff);
+				unsigned int nom_lo = chip->rate / 8000;
+				unsigned int nom_hi = nom_lo +
+					(chip->rate % 8000 ? 1 : 0);
+				bool wrapped = chip->in_pkts > 1 &&
+					phase < chip->phase_prev;
+
+				if (wrapped)
+					chip->phase_wraps++;
+				if (frames[i] &&
+				    (frames[i] < nom_lo ||
+				     frames[i] > nom_hi + (wrapped ? 1 : 0))) {
+					chip->phase_anom++;
+					if (chip->phase_logged < 40) {
+						chip->phase_logged++;
+						dev_info(&chip->dev->dev,
+							 "iso phase anom: pkts %llu phase %u prev %u frames %u nom %u..%u wrap %d\n",
+							 (unsigned long long)chip->in_pkts,
+							 phase, chip->phase_prev,
+							 frames[i], nom_lo, nom_hi,
+							 wrapped);
+					}
+				} else if (wrapped && frames[i] == nom_hi + 1 &&
+					   chip->phase_logged < 40) {
+					chip->phase_logged++;
+					dev_info(&chip->dev->dev,
+						 "iso phase wrap add: pkts %llu phase %u prev %u frames %u\n",
+						 (unsigned long long)chip->in_pkts,
+						 phase, chip->phase_prev, frames[i]);
+				}
+				chip->phase_prev = phase;
+				if ((chip->in_pkts % 8000) == 0 &&
+				    chip->phase_logged < 40) {
+					chip->phase_logged++;
+					dev_info(&chip->dev->dev,
+						 "iso phase sample: pkts %llu phase %u pos %u frames %u\n",
+						 (unsigned long long)chip->in_pkts,
+						 phase, pos, frames[i]);
+				}
+			}
 		}
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
@@ -2126,6 +2205,14 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	atomic_set(&chip->pcm_trigger_err, 0);
 	atomic_set(&chip->signal_deferred, 0);
 	atomic_set(&chip->signal_overdue, 0);
+	memset(chip->phi_hist, 0, sizeof(chip->phi_hist));
+	chip->phi_count2 = chip->phi_far = 0;
+	chip->phi_cap_later = chip->phi_play_later = 0;
+	chip->streams[SNDRV_PCM_STREAM_PLAYBACK].cross_ns = 0;
+	chip->streams[SNDRV_PCM_STREAM_CAPTURE].cross_ns = 0;
+	chip->phase_prev = 0;
+	chip->phase_wraps = chip->phase_anom = 0;
+	chip->phase_logged = 0;
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
 	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin.
@@ -2673,6 +2760,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->period = 0;
 		s->signalled = 0;
 		s->deferrals = 0;
+		s->cross_ns = 0;
 		s->out_counter_valid = false;
 		s->running = true;
 		/* q48 diagnostics: log the negotiated geometry once per
@@ -2705,6 +2793,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->period = 0;
 		s->signalled = 0;
 		s->deferrals = 0;
+		s->cross_ns = 0;
 		s->out_counter_valid = false;
 		s->running = true;
 		return 0;
@@ -2772,6 +2861,20 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 atomic_read(&chip->in_frames_overflow),
 			 atomic_read(&chip->pcm_prepare_err),
 			 atomic_read(&chip->pcm_trigger_err));
+		dev_info(&chip->dev->dev,
+			 "phi crossings: n %u far %u cap_later %u play_later %u hist250us %u %u %u %u %u %u %u %u %u %u %u %u %u\n",
+			 chip->phi_count2, chip->phi_far,
+			 chip->phi_cap_later, chip->phi_play_later,
+			 chip->phi_hist[0], chip->phi_hist[1],
+			 chip->phi_hist[2], chip->phi_hist[3],
+			 chip->phi_hist[4], chip->phi_hist[5],
+			 chip->phi_hist[6], chip->phi_hist[7],
+			 chip->phi_hist[8], chip->phi_hist[9],
+			 chip->phi_hist[10], chip->phi_hist[11],
+			 chip->phi_hist[12]);
+		dev_info(&chip->dev->dev,
+			 "phase accumulator: wraps %u anom %u\n",
+			 chip->phase_wraps, chip->phase_anom);
 		dev_info(&chip->dev->dev,
 			 "iso lag samples (one per OUT URB): n %llu sx %lld sy %lld sxx %lld sxy %lld syy %lld\n",
 			 (unsigned long long)chip->lag_n,

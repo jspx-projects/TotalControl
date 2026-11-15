@@ -201,6 +201,10 @@ struct ffuc_stream {
 	 * period.  Bounds the gate's added latency to about one URB at any
 	 * period size; reset on every signal and at stream start. */
 	u32 deferrals;
+	/* Timestamp of the last period crossing (diagnostic): paired across
+	 * directions to measure the phase offset independently of the
+	 * signalling policy. */
+	u64 cross_ns;
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must
@@ -418,6 +422,19 @@ struct ffuc {
 	atomic_t signal_deferred;
 	atomic_t signal_overdue;
 	u32 max_pending;
+	/* Crossing-phase sampler (diagnostic): period-crossing deltas
+	 * paired across directions, in 250 us bins.  The gate's deferral is
+	 * one period minus the paired delta. */
+	u32 phi_hist[13];
+	u32 phi_count2;
+	u32 phi_far;
+	u32 phi_cap_later, phi_play_later;
+	/* Phase-accumulator telemetry (diagnostic): wrap events, anomalies
+	 * outside the nominal cadence, and the log budget. */
+	u32 phase_prev;
+	u32 phase_wraps;
+	u32 phase_anom;
+	unsigned int phase_logged;
 	unsigned int iso_cadence; /* measured device clock, Hz */
 	unsigned int rate_mismatch_windows; /* consecutive bad windows */
 	u64 lag_n, lag_sx, lag_sy, lag_sxx, lag_sxy;
