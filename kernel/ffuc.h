@@ -141,6 +141,11 @@
 #define FFUC_QUIRK_STATUS_LATCH		BIT(2)	/* status byte 3 bit 7 */
 #define FFUC_QUIRK_IF5_PRE_START	BIT(3)	/* 0x10 0x8000 + 0x1d before audio */
 #define FFUC_QUIRK_IF5_PLAYBACK_MASK	BIT(4)	/* req 19/20 channel mask */
+/* Windows session timing: the stop->start settle and the close->rate and
+ * close->trio gaps, measured on the UC_WIN_RME unit (captures A2/A2b).
+ * The session words themselves are model-wide; only the timing is a
+ * Windows-personality property. */
+#define FFUC_QUIRK_WIN_SESSION		BIT(6)
 
 struct ffuc;
 
@@ -174,6 +179,8 @@ struct ffuc_ep {
 	int dir;
 	unsigned int index;
 	int next_start;
+	unsigned int buf_size;      /* allocated bytes for one URB */
+	int last_start;             /* diagnostic: previous start_frame */
 	struct ffuc_urb urbs[FFUC_MAX_URBS];
 };
 
@@ -190,6 +197,10 @@ struct ffuc_stream {
 	 * `period` to detect a signal that announces no completed period
 	 * (a delta-0 call). */
 	snd_pcm_uframes_t signalled;
+	/* Consecutive wakes withheld while this direction had a completed
+	 * period.  Bounds the gate's added latency to about one URB at any
+	 * period size; reset on every signal and at stream start. */
+	u32 deferrals;
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must
@@ -308,6 +319,7 @@ struct ffuc {
 	spinlock_t fb_lock;
 	u32 fb[FFUC_FB_SIZE];
 	u64 in_pkts, out_pkts;
+	u32 iso_frames_hist[32];
 	unsigned int in_end;
 	unsigned int fb_acc;
 	unsigned int fb_delay;
@@ -382,6 +394,34 @@ struct ffuc {
 	atomic_t in_gaps;
 	atomic_t in_shorts;
 	atomic_t in_status_errors;
+	/* ISO per-packet failure split and header cross-checks. */
+	atomic_t in_status_err;
+	atomic_t in_short;
+	atomic_t in_misaligned;
+	atomic_t in_frames_mismatch;
+	atomic_t in_pos_gap;
+	atomic_t out_capacity_err;
+	atomic_t out_pkt_len_err;
+	atomic_t out_fb_priming;
+	atomic_t out_fb_ahead;
+	atomic_t out_fb_stale;
+	atomic_t out_fb_nominal;
+	atomic_t fb_only_urbs;
+	atomic_t in_hdr_only;      /* status 0, header-only packet (0 frames) */
+	atomic_t out_pkt_status;   /* per-packet completion with non-zero status */
+	int out_lag_min, out_lag_max;   /* (in_end - out_counter) mod wrap */
+	atomic_t out_resync;
+	atomic_t rate_mismatch;   /* cadence disagrees with chip->rate */
+	atomic_t in_frames_overflow; /* packet frames above the top bin */
+	atomic_t pcm_prepare_err;
+	atomic_t pcm_trigger_err;
+	atomic_t signal_deferred;
+	atomic_t signal_overdue;
+	u32 max_pending;
+	unsigned int iso_cadence; /* measured device clock, Hz */
+	unsigned int rate_mismatch_windows; /* consecutive bad windows */
+	u64 lag_n, lag_sx, lag_sy, lag_sxx, lag_sxy;
+	s64 lag_syy;
 	/* q48 instrumentation: ring pressure and core-pointer coherence.
 	 * in_overruns: capture completions that overwrote unread frames.
 	 * out_underruns: playback completions that sent non-written data.

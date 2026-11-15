@@ -147,7 +147,11 @@ are [`examples/gui-layout.json`](examples/gui-layout.json) and
 for the field reference, the validation rules and the change workflow.
 
 `scripts/audio-health.sh` and `scripts/reload-kernel.sh` are transport and
-driver helpers. `scripts/install-dkms.sh` is the supported driver installer;
+driver helpers. `scripts/bench-reload.sh` is the bench module swap: it stops
+the user audio graph, asserts no `/dev/snd` holder, reloads the built module
+(unbinding the USB interface if the card holds a reference), and restores the
+graph with `--restore`; `--build` builds first. `reload-kernel.sh` delegates
+to it. `scripts/install-dkms.sh` is the supported driver installer;
 `scripts/install-kernel.sh` is its compatibility wrapper.
 
 `scripts/run-totalcontrol.sh` builds the current GUI sources in the release
