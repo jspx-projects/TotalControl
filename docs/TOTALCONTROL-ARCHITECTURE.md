@@ -399,15 +399,23 @@ behaviour.
 
 | Rule | Behaviour |
 |---|---|
-| Advance | The ring advances by exactly the whole frames the transport transferred (`urb->actual_length`). A remainder shorter than one frame is discarded; a payload larger than one URB is clamped. Each anomaly increments `in_bad_length` or `out_bad_length`. |
+| Advance | The ring advances by exactly the whole frames the transport transferred. On the interrupt transport the count derives from `urb->actual_length`; a remainder shorter than one frame is discarded and a payload larger than one URB is clamped, counted in `in_bad_length` / `out_bad_length`. On the isochronous transport each packet is validated separately (status, header minimum, whole-frame alignment, per-mode frame clamp); a bad packet is dropped whole and counted in the split `in_status_err` / `in_short` / `in_misaligned` counters. |
 | Signal ownership | A direction is signalled only when its period index advanced since its last signal. A signal always announces exactly one completed period. |
-| Wake order | While both directions run, the graph is woken when both have an unannounced completed period, whenever that later boundary falls. A direction two or more periods overdue is signalled alone. While one direction runs, it signals at its own boundary. |
+| Wake order | While both directions run, the graph is woken when both have an unannounced completed period, whenever that later boundary falls. A direction whose wake has been withheld twice is signalled alone, so a stalled stream cannot hold the other hostage. While one direction runs, it signals at its own boundary. |
 | Pointer coherence | After each signal the driver compares the core's published `status->hw_ptr` with its own position. A divergence increments `hw_ptr_mismatch`. |
 
 The wake rule derives the later boundary every cycle; it does not assume an
-URB completion order. The ring holds at least two periods, and the playback
-direction reports `nurbs * urb_frames` frames of delay until the stream
-starts.
+URB completion order. Both transports signal through this one gate. The ring
+holds at least two periods. The playback direction reports its queued depth
+as delay: `nurbs * urb_frames` frames on the interrupt transport,
+`nurbs * iso_packets * rate / 8000` on the isochronous transport.
+
+The engine commits the sample rate on every cold start, because the device
+keeps its rate across sessions and personality switches and the init
+sequence does not set it. The Windows-personality session timing (the
+stop-to-start settle and the close-to-write gaps) is a descriptor quirk,
+`FFUC_QUIRK_WIN_SESSION`, measured on the UC_WIN_RME unit; the AP
+personality sends the session words without those gaps.
 
 The gate makes a false availability report impossible: a reader can never be
 told that a period completed when no period did. A follower direction whose
@@ -420,6 +428,24 @@ the follower's deadline; the daemon substitutes silence when its follower
 cycle misses by about one period. A quantum of 96 frames or more at 48 kHz
 gives the follower one period of slack, and the default quantum of 256 is
 outside the window. This is a host tuning property, not a driver property.
+
+The both-pending wake adds a deferral latency equal to the phase offset
+between the two directions' period crossings. The offset is a property of
+the implicit-feedback data path: the playback ring position leads capture
+by the feedback lead, so the two directions' period boundaries fall at
+different packets within the URB. It is not a scheduling offset — the host
+controller schedules both directions' first URB at the same microframe
+(measured: start frames equal at 1x and 4x). The offset is roughly 875 us,
+stable and rate-independent.
+
+A quantum equal to the 1 ms USB period (96 frames at 96 kHz, 192 frames at
+192 kHz) is the zero-slack corner: the offset exceeds the follower's entire
+margin and the daemon skips cycles. The corner is inherent to the geometry,
+not a driver defect. The offset cannot be scheduled away, and waking the
+graph earlier would expose the follower to the other direction's stale
+pointer — the false-availability failure the gate prevents. One period of
+slack removes the penalty: at 96 kHz use 192 frames or more, at 192 kHz
+384 frames or more. The manual carries this guidance.
 
 
 ## 11. Development tools

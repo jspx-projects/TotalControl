@@ -179,6 +179,13 @@ mechanism, FX returns and unsupported controls.
 - Preserve the user scene and `~/.config/totalcontrol/gui.json`. Leave the device on
   the user's scene after hardware tests.
 - One Fireface at a time.
+- Bench/lab helpers are installed in `/usr/local/sbin` with scoped
+  password-free sudo: `reset-fireface-usb` (USB reset without unplugging),
+  `reload-fireface-uc` (module reload), `ffuc-lab` (meter debugfs probes).
+  Prefer these over raw `sudo rmmod`/`insmod`; source copies are in
+  `scripts/lab/` and the full usage, recovery sequence and sudoers setup
+  are in `docs/DEVELOPMENT-TOOLS.md` ("Lab helpers"). `scripts/bench-reload.sh`
+  automates a checkout-build swap.
 - Verify with `cargo test -p totalcontrol-core --lib --features alsa` and
   `cargo test -p totalcontrol-gui`.
 - Do not replace device-backed behaviour with host-side approximations. If the

@@ -496,17 +496,525 @@ Consequences:
   recorded; with the gate the minimum safe quantum may drop, which is
   a follow-up measurement, not a blocker.
 
+## ISO transport findings (2026-11-14, UC Mac personality)
+
+The unit switches to the AP/Mac personality, interface 0
+ISO endpoints, firmware 127. Findings recorded from measurement:
+
+- **IN body layout: planar (channel-major).** A packet with ten silent
+  channels shows one contiguous zero block of 60 words (10 channels x 6
+  frames) at body indices 48..107. Frame-major would place ten zeros at
+  stride 18 per frame, never a contiguous 60-word run. The OUT layout is
+  frame-major with one lead word per frame, which is spec-defined for
+  that direction; the asymmetry is not a contradiction.
+- **Wire format float32, measured.** Body words decode as floats around
+  2e-6 full scale; S32 at that level would be 0x00000xxx, not 0x36xxxxxx.
+  An OUT dump with S32 0x20000000 confirms the conversion both ways: the
+  wire word is exactly 0x3E800000, the lead word advances by the frame
+  count (0x6f0 -> 0x6f6), and the sample stride is words+1 (19).
+- **start_frame units are microframes.** Consecutive URBs of one
+  endpoint differ by exactly the packet count (8), matching
+  number_of_packets. The continuity watchdog arithmetic is correct.
+- **Reported playback delay was ~9% high at 44.1 kHz.** It was
+  `nurbs * urb_frames` for every transport; the ISO queue is
+  `nurbs * iso_packets * rate / 8000`, i.e. 88 frames at 44.1 kHz, not
+  96. The reported value now uses the exact cadence (96 at 48 kHz,
+  88 at 44.1 kHz), visible in the start line.
+- **Device rate is not preserved across sessions.** A 48 kHz start did
+  not reprogram a device left at 44.1 kHz; the driver cached the
+  requested rate. The engine start now commits the rate on every cold
+  start (nothing running), logs the result, and a cadence guard
+  (mean frames per packet x 8000, checked every 8000 packets and at
+  stop, two consecutive bad windows, 1% tolerance) counts
+  `rate_mismatch`. Transition test: 48k -> 44.1k -> 48k gives cadence
+  48000, 44100, 48000 with a commit line on each start.
+- **Feedback health.** Misses are split into priming, playback-ahead and
+  stale buckets; priming equals `fb_delay` (24) exactly per run, ahead
+  and stale are zero in steady state. Header-only packets are counted
+  separately and never inject nominal feedback. Per-packet OUT
+  delivery mismatches are split by completion status, so teardown never
+  pollutes the anomaly counter.
+- **No drift.** With packet-0-of-every-OUT-URB sampling, a 60-second run
+  at 48 kHz and another at 44.1 kHz each report a slope of
+  0.000 frames per 1000 URBs (n = 60,000) with zero driver and zero
+  client underruns when the client buffer is explicit. The earlier
+  4-vs-1 underrun reading was startup flake at aplay's default start
+  threshold.
+- **The IN header phase field is fractional-sample drift telemetry.**
+  It is a 14-bit accumulator (11-bit on UCX) that integrates the device
+  clock against the host microframe clock. In a 60 s 48 kHz run the
+  frame histogram showed one 5-frame and four 7-frame packets among
+  480993 six-frame packets; three of the four 7-frame events occurred
+  at phase 5, 2 and 7, i.e. at the accumulator wrap. The device adds a
+  frame when its fractional sample wraps. The implied offset is about
+  one sample per 22.6 s, roughly 0.9 ppm. The field predicts frame
+  add/drop and validates frame accounting; it does not give an absolute
+  rate. One 5-frame packet at phase 10005 remains unexplained and is
+  not attributed to the accumulator.
+  The field is currently decoded and discarded; the logger
+  (`ffuc_log_phase`) prints periodic samples and every packet whose
+  frame count differs from six.
+- **Handler cost is not the mechanism.** With the packet dumps disabled
+  (they call pr_info per word inside the completion and are now default
+  off; they should be compiled out or static-keyed before any shipped
+  build): capture mean 8.1 us, max 84 us; playback mean 5.6 us, max
+  32 us, all well under a 1 ms URB budget.
+- **Phase between directions is stable and large.** Crossing-based
+  sampling placed all 476 samples in one 250 us bin, i.e. an offset of
+  roughly 1.3 ms against a 1 ms period. The sampler needs the
+  nearest-neighbour pairing verified before the number is quoted; the
+  earlier average/min/max metric paired across gaps and is discarded.
+  A stable, large offset favours scheduling alignment over tolerance.
+- **Padding lead words (UC branch) are not written.** The spec permits
+  them as padding; the hardening (write every lead word) is not
+  implemented and is recorded as such rather than claimed.
+
+Open: a physical loopback for an audio-content (bit-exact) check on the
+ISO path.
+
+Constant-delay question, closed for the PipeWire path: PipeWire 1.6.11's
+ALSA plugin contains no `snd_pcm_delay` call (it drives everything
+through `snd_pcm_avail_update` / `snd_pcm_avail`). `snd_pcm_status` is
+called only in the xrun recovery path and in a one-time status dump at
+link; `snd_pcm_status_get_delay` is never called, so the status route
+does not carry the value per cycle either. The reported
+delay being the peak of a sawtooth, over-reporting by 0..1 URB, has no
+effect on PipeWire's deadline computation on either transport. The
+over-report remains a limitation for native ALSA clients that query
+`snd_pcm_delay`, where a dynamic estimate from queued-but-not-sent
+frames (the in-tree USB audio approach) would be the shared fix.
+
+## ISO gate arms (A/B interleaved, 2026-11-14)
+
+Own-direction-only signalling versus the gated both-pending wake, ISO
+transport, q48 at 48 kHz (URB = period = quantum = 1 ms, the same
+geometry as the PC case). Three pairs, 4 minutes per arm, interleaved
+on one boot. Metric: daemon xrun log lines and skipped cycles
+(negative `process`).
+
+| Pair | Own-direction xruns / skips | Gated xruns / skips |
+|---|---|---|
+| 1 | 36 / 2 | 7 / 0 |
+| 2 | 2 / 0 | 0 / 0 |
+| 3 | 4 / 1 | 1 / 0 |
+| total | 42 / 3 | 8 / 0 |
+
+The gate is better in every pair. Stratified view (the honest lead,
+because pair 1 holds 36 of the 42 own-direction lines and 7 of the 8
+gated lines, i.e. the pooled sample is overdispersed): direction
+consistent in 3/3 pairs, per-pair ratios 5.1x, "no gated line at all",
+and 4x; roughly a 4-5x reduction in xrun lines. Pooled counts give a
+one-sided binomial p of 5.8e-7 (two-sided 1.2e-6) as descriptive
+support, not as the headline.
+
+Skipped cycles: 3 versus 0 with both arms measured, so the conditional
+two-sample answer is 0.5^3 = 0.125 one-sided (0.25 two-sided), which is
+also the sign-test value; the fixed-baseline Poisson figure e^-3 is not
+used because the baseline was estimated from the same minutes.
+
+Excluding pair 1, the residual is own 6 versus gated 1, close to the
+PC pattern. The parsimonious reading is a system transient during
+pair 1 affecting both arms rather than an ISO-specific lag; a
+feedback-dependent lag would not single out one pair.
+
+No audible zero runs appeared in any arm. All arms: cadence 48000 Hz,
+`rate_mismatch` 0, `fb` priming 24 with ahead/stale 0, capacity and
+status-0 packet errors 0, lag band 8036..8079 (unchanged across arms).
+
+Interpretation: the gate's benefit transfers to the ISO transport, as
+the shared-core principle predicts. The remaining ISO lag contribution
+from the feedback dependency is not visible at this quantum; it would
+need the finer-grained arms (q48 at 2x/4x) to expose.
+
+Claims scope: scheduling metrics are sound on the dither substrate.
+Audio-content regression (pitch, level, channel mapping under load) is
+unverified on the ISO path until a physical loopback exists.
+
+Power note: ISO is quieter than the PC case was (0.25 skipped cycles per
+minute versus 3.25), so the mechanism metric is underpowered by
+construction. With zero events in T minutes the 95% bound is 3/T; a
+5x claim against 0.25/min needs about 60 minutes of gated running, or a
+deliberate, identical background load on both arms to raise the
+baseline.
+
+Next session, in order:
+
+1. `snd_pcm_delay` uprobe: does PipeWire read the reported delay at all
+   in this configuration? It decides whether the constant-peak
+   (sawtooth) over-report matters on either transport, and it is the
+   cheapest shared open item.
+2. 2x/4x arms, where the feedback dependency can expose itself (URB
+   spans several periods, packet frame counts vary); use rate-scaled
+   quanta and `max_pending <= ceil(urb_frames/period_size) + 1`.
+3. More 1x pairs under matched load, to settle whether the gated
+   residual is real.
+4. Physical loopback: the only gate for audio-content claims on either
+   transport.
+
+## ISO 2x/4x arms (rerun with live guard, 2026-11-15)
+
+Rate-scaled rerun after widening the frame histogram: two pairs at
+96 kHz/q96 and two at 192 kHz/q192, own-direction-only versus gated,
+settling loop before each arm, holder assertion active.
+
+| Arm | Own xruns / skips | Gated xruns / skips |
+|---|---|---|
+| 2x pair 1 | 28 / 6 | 31 / 5 |
+| 2x pair 2 | 23 / 7 | 232 / 13 |
+| 4x pair 1 | 32 / 7 | 252 / 15 |
+| 4x pair 2 | 35 / 11 | 232 / 11 |
+
+All arms: cadence 96000/192000 Hz exact, `rate_mismatch` 0,
+`in_frames_overflow` 0, `fb` priming 24 with ahead/stale 0,
+capacity/status-0 packet errors 0, `pcm_prepare_err`/`pcm_trigger_err`
+0. These arms are therefore valid: the rate confound is excluded, so
+the gate regression is real, not a measurement fault.
+
+The gate counters name the mechanism. Own-direction arms: `deferred 0,
+overdue 0, max_pending 0`. Gated arms: `deferred` 104749 to 233568
+against 240000 periods, i.e. 0.44 to 0.97 withheld wakes per period,
+with `overdue` 0-1 and `max_pending` 1-2.
+
+The mechanism, stated precisely: the both-pending rule converts an
+uncontrolled inter-direction URB phase offset into wake latency. At 1x
+the offset happened to be small, so freshness was nearly free. At
+2x/4x the offset consumes the follower's entire slack when quantum
+equals period, and the daemon skips cycles. The rule's own bound
+(`max_pending` <= 2) is satisfied; the bound was on the wrong quantity,
+because the added latency is set by the accidental phase, not by
+anything the driver bounds.
+
+So the gate's benefit does not transfer to 2x/4x as designed: it is
+neutral at 2x pair 1 and a large regression in three of four
+higher-rate arms. The design bound (`max_pending` <= 2 at rate-scaled
+quanta) is met, so this is not a bound violation but a consequence of
+deferral latency when the directions are phase-offset. The completion
+phase and per-URB handler cost instruments (phi, timing lines) are in
+the build for the follow-up run that will confirm whether the offset is
+the cause.
+
+## Follower-slack matrix (4x, 192 kHz, gate vs own)
+
+| Quantum | Period | URB/period | Gate xrun/skip | Own xrun/skip |
+|---|---|---|---|---|
+| q192 | 192 | 1.0 (zero slack) | 252 / 15, 232 / 11 | 32 / 7, 35 / 11 |
+| q384 | 384 | 0.5 | 1 / 0 | 4 / 0 |
+| q512 | 512 | 0.375 | 1 / 0 | 1 / 0 |
+| (2x q192) | 96 | 0.5 | 3 / 1 | not run |
+| (2x q96) | 96 | 1.0 (zero slack) | 31, 232, 36 / 5, 13, 8 | 28, 23, 51 / 6, 7, 5 |
+
+With at least one period of follower slack (q384 and q512 at 4x, and
+q192 at 2x), both variants settle at about one xrun line per four
+minutes with zero skipped cycles, and the gate stops deferring
+(`deferred 0`). At zero slack (quantum = period = URB) the 4x gate arms
+show 232-252 lines in both runs, while the 1x zero-slack result was a
+gate win. Zero slack alone therefore does not predict the penalty; the
+inter-direction phase is the third variable, and the current phi
+sampler is invalid when the period exceeds one URB (n = 0 at q384).
+
+Handler cost in these arms: capture 27.6 us mean / 40.8 us max and
+playback 4.7 us mean / 11 us max over the short captured sample.
+
+## Signalling design space after the 2x/4x result
+
+A - signal a direction only when it completed a period - is
+unconditional correctness: it removes the confirmed contract violation,
+costs no latency, and stands on the `hw_ptr_mismatch` observation at
+q256. B - wake only when both directions are pending - is a freshness
+optimisation that costs latency equal to the inter-direction phase
+offset. The two are currently fused into one rule, which is why a
+correctness fix carries a scheduling regression.
+
+| Rule | Deferral | Freshness | Cost |
+|---|---|---|---|
+| A only | 0 | may be one period stale | none |
+| A + both-pending (current) | = phase offset, uncontrolled | guaranteed | measured above |
+| A + time-bounded deferral | <= budget | guaranteed if offset <= budget | bounded, tunable |
+| A + ISO start_frame alignment | ~0 | guaranteed | explicit scheduling, HCD constraints |
+
+Two candidate directions:
+
+1. **Alignment for ISO.** The driver controls `urb->start_frame`.
+   Submitting both directions to a common microframe boundary instead of
+   `URB_ISO_ASAP` would drive the phase offset to zero, making the
+   both-pending rule free and stable across rates. This is the
+   deterministic answer to the root cause.
+2. **Bounded deferral for the interrupt transport**, where the phase
+   cannot be scheduled. A period-count bound expressed in URBs cannot
+   subdivide a 1 ms URB; a time bound needs finer URBs or an hrtimer,
+   with expiries counted separately from deferrals.
+
+Rejected: adaptive switching to both-boundaries on a detected offset. It
+is a behavioural fork with hysteresis, the same class as the
+per-firmware signalling branches that started the PC investigation.
+
+Interim disposition: the 1x win is real and stays; A can ship on its own
+merit; B must gain a bound or alignment before being enabled above 1x.
+
+## ISO 2x/4x arms (first attempt, INVALID)
+
+The first 2x/4x pair is not usable as evidence. The frame histogram had
+bins only for 0..8 frames while 2x packets carry 12-13 and 4x packets
+24-25, so every packet overflowed and the cadence guard read 0 Hz.
+That leaves the rate confound unexcluded in both arms - the exact bug
+that invalidated the earlier ISO session - so the mixed skipped-cycle
+numbers cannot be attributed to the gate or to the transport. The
+histogram is widened and overflow now suppresses the cadence verdict.
+
+Their only legitimate reading is a geometry check: `urbs 2 x 96,
+buffer 384, period 96` and `urbs 2 x 192, buffer 768, period 192` show
+the rate-scaled modes negotiate as intended.
+
+Arm design correction: q96@2x and q192@4x have URB = period = quantum,
+identical geometry to 1x q48, and integer frames per packet, so they do
+not stress the feedback path. The informative arms are q48@2x
+(URB/period = 2, max_pending <= 3), q48@4x (4, <= 5; also documents the
+0.25 ms quantum below the 1 ms URB cadence), and the fractional-rate
+arms at 88.2 and 176.4 kHz with rate-scaled quanta (<= 2), which use the
+drift instrument. At the rate-scaled quanta, ceil(urb/period) = 1, so
+max_pending <= 2.
+
+## ISO 2x/4x arms (superseded measurement note)
+
+Own-direction-only versus gated at the rate-scaled quanta (URB = period
+= quantum): 96 kHz/q96 and 192 kHz/q192, one 4-minute pair per rate.
+Geometry confirmed from the start lines: `urbs 2 x 96 frames, buffer
+384, period 96` and `urbs 2 x 192 frames, buffer 768, period 192`.
+
+| Pair | Own xruns / skips | Gated xruns / skips |
+|---|---|---|
+| 2x | 41 / 8 | 27 / 10 |
+| 4x | 35 / 10 | 24 / 4 |
+
+The gate lowers xrun lines at both rates (about 30%) but the
+skipped-cycle metric is mixed at 2x (10 versus 8) and lower at 4x.
+One pair per rate cannot support a conclusion; the 2x window also shows
+repeated stream restarts right after the rate switch, which contaminate
+it.
+
+Two instrument findings from this run:
+
+- The frame histogram only had bins 0..8, while 2x packets carry up to
+  13 frames and 4x up to 25. Cadence therefore read 0 Hz at both rates
+  and the cadence guard was blind. The histogram now spans 32 bins and
+  prints 9+ as one bucket.
+- This diagnostic build does not carry the gate counters
+  (`signal_deferred`, `signal_overdue`, `max_pending`), so the corrected
+  expectation `max_pending <= ceil(urb_frames/period_size) + 1` could
+  not be checked. Those counters live on the gate branch and need to be
+  merged into the ISO build before the next 2x/4x pairs.
+
 ## Endpoints that differ from the original UC
 
 
 The descriptor is copied from the original UC.  On the test unit interface 1
 has only bulk IN `0x85`; there is no `0x0c` OUT or `0x8d` IN.  Interface 3
 has bulk `0x88` IN and `0x09` OUT, interface 4 bulk `0x8a` IN.  Audio,
-status (`0x8b`) and EP0 control work; the state and meter paths are
-untested.
+status (`0x8b`) and EP0 control work; the meter path is decoded.  The state
+endpoints are absent on this unit.
 
 ## AP personality
 
-The unit's AP personality enumerates under a product ID the driver does not
-match.  Its interface 0 is isochronous, with alternate settings 1–3.  Not
-supported yet; a capture is needed.
+The AP personality is supported: interface 0 is isochronous with alternate
+settings 1-3, and the driver binds it as the UC ISO transport.  The findings
+above were measured on this personality.
+
+## ISO consolidation (2026-11-15)
+
+Disposition: the ISO hardening lands as one consolidation PR.  The gate
+ships on both transports as implemented (signal ownership + both-pending
+wake with the deferral-count fallback).  The zero-slack corner at 2x/4x is
+accepted and documented in the manual (quantum of at least 2 ms at 96 and
+192 kHz).  The deterministic fix — ISO schedule alignment and
+telemetry-validated frame accounting — is the next investigation, not a
+merge blocker.
+
+### Corrections made while consolidating
+
+- Rate commit placement.  The cold-start commit ran at the top of
+  `ffuc_engine_start()`, before the stop->start settle and the close->rate
+  gap.  On the Windows personalities that is the documented wedge sequence
+  (rate write right after the close word, #132).  The commit now runs at
+  the protected rate-write site after the settle and alt selection,
+  unconditional on every cold start.  The init sequence does not set the
+  rate, so the first start needs the commit too.
+- Windows session timing is a descriptor quirk.  The settle and the two
+  200 ms gaps were measured on UC_WIN_RME (captures A2/A2b) but gated on
+  the whole UC model, sweeping in the AP personality.  They are now
+  `FFUC_QUIRK_WIN_SESSION`, set on the two interrupt UC descriptors.  AP
+  keeps the session words without the gaps; AP restart cycling is
+  re-verified on the bench.
+- Header-only IN packets reset `in_end` to zero instead of carrying the
+  header position.  The header is now decoded for every valid packet,
+  header-only included; the continuity check and the frame-count
+  cross-check apply to it.
+- The stop-line histogram's 9+ bucket summed bins 9..13 only; 4x packets
+  (24-25 frames) were invisible in it.  It now sums all bins above 8.
+- The stop-path cadence check now suppresses on histogram overflow, like
+  the periodic guard.
+- `out_lead` used `& (wrap - 1)`; the UCX wrap (3072) is not a power of
+  two.  Now modulo the wrap, the same class as the header-mask fix.
+- The ISO handlers ignored `chip->s32_samples` (float path hardcoded).
+  Both now branch like the interrupt handlers.  No behaviour change on
+  current ISO descriptors (all float32); one rule across transports.
+- The ISO handlers had no ring-pressure instruments; the interrupt-only
+  counters made the ISO arms' "ring counters 0" reading vacuous.  Both
+  ISO handlers now check once per URB with the same span arithmetic.
+- The USB ID table referenced descriptors by raw position.  Named enum
+  indices plus a `static_assert` make a mismatched addition a build error.
+
+### Spent diagnostics removed
+
+The per-word IN/OUT packet dumps (default-on `pr_info` inside the
+completion) are compiled out: the body layout and the wire format are
+settled by measurement.  The signal-time phi instrument is removed: it
+measured the gate's own deferral, not the crossing phase.  The
+handler-cost fields were declared and reset but never written in the
+committed branch; they are removed.
+
+### Record reconciliation
+
+The crossing-based phi result (476 samples in one 250 us bin, roughly
+1.3 ms offset), the handler-cost numbers and the phase-logger observations
+were measured with a session build whose instruments were not committed.
+They stand as session measurements.  The instruments are rebuilt on the
+telemetry branch; `test/uc-iso-telemetry-wip` preserves the started fields.
+The phi number is not quoted as a committed-instrument result until the
+rebuilt sampler verifies its pairing.
+
+### Quirk audit (reuse across devices)
+
+The descriptor table + ops + quirks structure is sound: a new device is a
+descriptor entry, a mode table, reused or new ops, and a profile if the
+model is new.  The contribution guide's rule (capability flags, not
+scattered model checks) is the standard.  Follow-ups, not in this PR:
+
+- `chip->ucx` is a protocol-family flag (UCX or Babyface-classic), not a
+  model check; the name misleads.  A rename goes through the user first.
+- The ISO counter wrap and the header field widths are family branches in
+  the handlers; moving them into the descriptor would make a new ISO
+  device purely data-driven.
+- The UC session sequence is gated on the model enum in the engine
+  lifecycle; a session-ops split would remove the remaining model checks
+  from shared code.
+- The GUI latency model scales `urb_frames` by the integer rate factor;
+  at fractional ISO rates the exact queue is
+  `nurbs * iso_packets * rate / 8000`.  The calibrated AP path absorbs the
+  fixed part; verify the live-queue delta.
+
+### Next: telemetry hardening of the corner
+
+1. Rebuild the crossing-based phi sampler: timestamp at the period
+   crossing in `ffuc_stream_advance()`, signed nearest-neighbour pairing,
+   histogram.  Verify the pairing, then measure phi per rate and its
+   stability.
+2. Rebuild the phase logger.  Use the fractional-sample accumulator to
+   predict frame add/drop and count unattributed events (the 5-frame
+   packet at phase 10005, the off-wrap 7-frame event).
+3. Prototype ISO `start_frame` alignment: submit both directions to a
+   common microframe base instead of `URB_ISO_ASAP`, with the accumulator
+   as the device-clock drift reference.  Target: `deferred` -> 0 at the
+   2x/4x zero-slack quanta.
+4. Optional: read-only probe of the status endpoint for a direct rate
+   readback, closing the rate-commit verification loop without cadence
+   inference.
+
+Bench items carried: physical-loopback bit-exact check on both transports
+(the only gate for audio-content claims); PC-personality verification of
+the relocated rate commit and the session quirk at the next personality
+switch.
+
+## Telemetry instruments: first measurement (2026-11-15)
+
+Branch `test/uc-iso-telemetry`, UC AP personality, firmware 127, bare ALSA.
+Two diagnostic instruments: a crossing-phase sampler (host-side) and a
+phase-accumulator logger (device-side).
+
+### Header interpretation, verified
+
+- Frames (bits 0..4) and position (bits 5..17) are correct: the
+  frame-count cross-check and the position-continuity check run on every
+  packet and stayed at zero mismatch / zero gap across the runs.
+- The phase field (bits 18..31) is a **mod-10000 fractional-sample
+  accumulator**, units of 1/10000 sample. Periodic samples fit exactly:
+  9241 -> 9783 -> 309 -> 842 -> 1384 -> 1918, i.e. +~540 units/s, and
+  9783 + 542 = 10325 = 309 (mod 10000). The advance is rate-independent
+  (~540/s at 48, 96 and 192 kHz). The field is 14 bits wide; the modulus
+  is 10000, not 16384. This resolves the earlier 22.6 s vs 37 s wrap-period
+  discrepancy (the 37 s figure assumed mod 16384).
+- The wrap coincides with a one-frame add: the dense boundary log shows
+  phase 9993 -> 1 with frames 7, and 9995 -> 3 with frames 7, then frames
+  back to nominal 6. The device spreads the correction over a few packets
+  (a boundary dither: phase bounces high/low, frames alternate +1/-1).
+  A naive `phase < prev` detector counted every bounce (5603 "wraps" in
+  60 s); the debounced detector (high->low transition >1000 packets after
+  the previous) reads 3 true wraps in 40 s, consistent with the ~13 s
+  period. Dither and true anomalies are counted apart.
+
+### Crossing phase (host scheduling offset)
+
+The sampler timestamps each period crossing in `ffuc_stream_advance`,
+independent of the signalling policy, and pairs it with the other
+direction's most recent crossing (delta below one period binned at
+250 us; larger deltas counted as `far`).
+
+At q48@48k, q96@96k and q192@192k the histogram has two tight clusters
+(bin 0 ~10000, bin 3 ~9900-9960, almost nothing between): a stable offset
+of ~0.875 ms, playback later, rate-independent. The `far` count rises
+with rate: 39 -> 67 -> 105. The stable offset alone does not explain the
+rate-dependent gate regression (it is the same at 1x where the gate
+wins); the rising crossing jitter (`far`) is the candidate mechanism to
+investigate next.
+
+### Crossing jitter characterized
+
+The `far` events (crossings more than one period apart) are all playback,
+delta 1000-1169 us against a 1000 us period - just 1-2 packets over, not
+large jitter. They are boundary quantization around the stable ~875 us
+(7-packet) offset, and the count is run-variable (85 at 96k vs 20 at 192k
+in one pair), not cleanly rate-rising. The dominant feature is the stable
+offset itself: the gate's both-pending deferral equals that offset, so at
+a 1 ms quantum it consumes ~87.5% of the period. Removing the offset is
+the lever, not the small jitter.
+
+### Schedule alignment: tried, failed on xHCI
+
+A gated prototype (`ffuc_iso_sched`, default off) submitted both
+directions to a common microframe base with explicit `start_frame`
+instead of `URB_ISO_ASAP`, advancing each resubmitted URB by its packet
+count. With explicit first-URB `start_frame` the xHCI ISO scheduler does
+not stream: cadence collapsed to 0 / 182555 Hz at a 192 kHz request, the
+cadence guard fired thousands of times, playback underran, histograms
+stayed empty. The HCD needs `URB_ISO_ASAP` to establish the stream. The
+device was restored to the default (ASAP) build and verified healthy
+(cadence 47997 Hz, all counters zero). The prototype is kept gated off as
+a record; a working alignment would need ASAP for the first URB and
+explicit frames only for resubmission, or a different mechanism.
+
+### The offset is not in scheduling (decisive)
+
+With the default ASAP build, `ffuc_iso_align` reports the actual first-URB
+start frames: **IN == OUT, diff 0** at both 48 kHz (16400/16400) and
+192 kHz (14552/14552). The HCD already schedules both directions at the
+same microframe. So the ~875 us inter-direction offset measured by the
+crossing sampler is NOT a scheduling offset - it is in completion-crossing
+detection, driven by the `out_lead` / feedback data offset (the OUT ring
+position leads IN by `out_lead` frames, so the two directions' period
+boundaries fall at different packets within the URB). Forcing
+`start_frame` alignment therefore could not remove the offset and only
+broke streaming. The lever for the corner is the gate deferral itself
+(bounded deferral, transport-independent), not URB scheduling. This is
+consistent with the macOS model: RME slaves the graph to the device clock
+rather than aligning URB schedules.
+
+### Disposition
+
+The corner remains accepted with the manual warning (quantum >= 2 ms at
+96/192 kHz), which is the shipped consolidation state and the original
+goal. The telemetry investigation yielded the verified RME header
+interpretation (mod-10000 phase accumulator, position continuity) and the
+crossing-phase characterization above; both instruments stay diagnostic.
+The remaining option for actually removing the corner is a bounded
+deferral (hrtimer-capped both-pending wait), transport-independent, not
+yet implemented. The physical-loopback bit-exact check remains the open
+audio-content gate (needs a cable).

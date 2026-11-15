@@ -1496,6 +1496,14 @@ between the device's period and the reader's deadline, and PipeWire may
 replace a missed period with silence. Use 96 frames or more for low-latency
 recording with the UC; the default of 256 is unaffected.
 
+At 96 kHz and 192 kHz keep the quantum at two milliseconds or more: 192
+frames at 96 kHz, 384 frames at 192 kHz. A quantum equal to the 1 ms USB
+period at these rates (96 frames at 96 kHz, 192 frames at 192 kHz) is the
+one corner where the driver's period coordination can add a full period of
+wait and PipeWire replaces missed cycles with silence. With two milliseconds
+of quantum the corner disappears; 512 frames is a safe low-latency choice at
+192 kHz.
+
 The WirePlumber rule in
 [`ui/totalcontrol/tools/alsa/wireplumber-uc.conf`](../ui/totalcontrol/tools/alsa/wireplumber-uc.conf)
 selects polled scheduling and the 18-channel Pro Audio profile.
