@@ -1,14 +1,13 @@
-//! ALSA rawmidi transport for the Mackie Control surface.
+//! ALSA rawmidi transport for the Mackie Control remotes.
 //!
-//! One worker owns one remote's port pair: it reads the surface's byte
+//! One worker owns one remote's port pair: it reads the controller's byte
 //! stream and forwards it as [`Message::MackieIn`], and drains the
 //! feedback channel handed back through [`Message::MackieReady`].  The
 //! codec in [`crate::mackie`] does the parsing and encoding; this module
 //! only moves bytes.
 //!
-//! Port enumeration lists every rawmidi device of every card, so the
-//! settings page can offer the unit's own MIDI ports (a surface on the
-//! breakout cable) and any USB MIDI surface alike.
+//! The remotes are the unit's own MIDI ports, found by the ALSA card id;
+//! a controller connects through the breakout cable.
 
 use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, Stream};
@@ -17,21 +16,40 @@ use iced::stream;
 use crate::app::Message;
 use crate::mackie::MidiPort;
 
-/// One rawmidi port as offered in the settings picklists.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MidiPortInfo {
-    pub port: MidiPort,
-    pub label: String,
-    pub input: bool,
-    pub output: bool,
-}
-
-/// The worker recipe: which ports to open.  `Hash` because it identifies
-/// the `Subscription::run_with` recipe.
+/// The worker recipe: which remote, which ports to open.  `Hash` because
+/// it identifies the `Subscription::run_with` recipe.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MackieWorkerConfig {
+    pub remote: usize,
     pub input: Option<MidiPort>,
     pub output: Option<MidiPort>,
+}
+
+/// The device's own rawmidi ports, found by the card id (for example
+/// `FirefaceUC`).  Port 1 is device 0, port 2 is device 1.  Returns fewer
+/// than `count` ports when the card exposes fewer.
+pub fn device_ports(card_id: &str, count: usize) -> Vec<MidiPort> {
+    if card_id.is_empty() {
+        return Vec::new();
+    }
+    let Ok(cards) = std::fs::read_to_string("/proc/asound/cards") else {
+        return Vec::new();
+    };
+    for line in cards.lines() {
+        // " 2 [FirefaceUC     ]: FirefaceUSB - Fireface UC"
+        let Some(open) = line.find('[') else { continue };
+        let Some(close) = line.find(']') else { continue };
+        if line[open + 1..close].trim() != card_id {
+            continue;
+        }
+        let Ok(card) = line[..open].trim().parse::<u32>() else {
+            continue;
+        };
+        return (0..count as u32)
+            .map(|device| MidiPort { card, device })
+            .collect();
+    }
+    Vec::new()
 }
 
 #[cfg(feature = "alsa")]
@@ -42,46 +60,6 @@ mod imp {
 
     use alsa::rawmidi::Rawmidi;
     use alsa::Direction;
-
-    /// Every rawmidi port of every card, inputs and outputs merged.
-    pub fn enumerate() -> Vec<MidiPortInfo> {
-        let mut ports: Vec<MidiPortInfo> = Vec::new();
-        for card in alsa::card::Iter::new().flatten() {
-            let Ok(ctl) = alsa::Ctl::from_card(&card, false) else {
-                continue;
-            };
-            let card_name = card.get_name().unwrap_or_default();
-            for info in alsa::rawmidi::Iter::new(&ctl).flatten() {
-                let port = MidiPort {
-                    card: card.get_index() as u32,
-                    device: info.get_device() as u32,
-                };
-                let name = info
-                    .get_subdevice_name()
-                    .ok()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| format!("MIDI {}", info.get_device() + 1));
-                let entry = ports.iter_mut().find(|p| p.port == port);
-                let entry = match entry {
-                    Some(entry) => entry,
-                    None => {
-                        ports.push(MidiPortInfo {
-                            port,
-                            label: format!("{card_name} — {name}"),
-                            input: false,
-                            output: false,
-                        });
-                        ports.last_mut().unwrap()
-                    }
-                };
-                match info.get_stream() {
-                    Direction::Capture => entry.input = true,
-                    Direction::Playback => entry.output = true,
-                }
-            }
-        }
-        ports
-    }
 
     fn open(port: Option<MidiPort>, dir: Direction) -> Option<Rawmidi> {
         let port = port?;
@@ -99,9 +77,10 @@ mod imp {
     /// byte time while costing nothing when no surface is connected.
     pub fn worker(config: &MackieWorkerConfig) -> impl Stream<Item = Message> {
         let config = config.clone();
+        let remote = config.remote;
         stream::channel(100, async move |mut output| {
             let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4096);
-            if output.send(Message::MackieReady(tx)).await.is_err() {
+            if output.send(Message::MackieReady(remote, tx)).await.is_err() {
                 return;
             }
             let input = open(config.input, Direction::Capture);
@@ -164,7 +143,7 @@ mod imp {
                     } => {
                         match bytes {
                             Some(bytes) => {
-                                if output.send(Message::MackieIn(bytes)).await.is_err() {
+                                if output.send(Message::MackieIn(remote, bytes)).await.is_err() {
                                     return;
                                 }
                             }
@@ -193,30 +172,12 @@ mod imp {
 }
 
 #[cfg(feature = "alsa")]
-pub use imp::{enumerate, worker};
+pub use imp::worker;
 
-/// Without the ALSA feature there is no rawmidi access; the settings
-/// page shows an empty port list.
-#[cfg(not(feature = "alsa"))]
-pub fn enumerate() -> Vec<MidiPortInfo> {
-    Vec::new()
-}
-
+/// Without the ALSA feature there is no rawmidi access.
 #[cfg(not(feature = "alsa"))]
 pub fn worker(_config: &MackieWorkerConfig) -> impl Stream<Item = Message> {
     stream::channel(1, async move |_output| {})
-}
-
-/// The picklist label for a port choice; `None` reads "None".
-pub fn port_label(port: Option<MidiPort>, ports: &[MidiPortInfo]) -> String {
-    match port {
-        None => "None".into(),
-        Some(port) => ports
-            .iter()
-            .find(|p| p.port == port)
-            .map(|p| p.label.clone())
-            .unwrap_or_else(|| format!("hw:{},{}", port.card, port.device)),
-    }
 }
 
 #[cfg(test)]
@@ -224,26 +185,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn port_labels_fall_back_to_the_hw_name() {
-        let port = MidiPort { card: 2, device: 0 };
-        assert_eq!(port_label(None, &[]), "None");
-        assert_eq!(port_label(Some(port), &[]), "hw:2,0");
-        let info = MidiPortInfo {
-            port,
-            label: "Fireface UC — MIDI 1".into(),
-            input: true,
-            output: true,
-        };
-        assert_eq!(port_label(Some(port), &[info]), "Fireface UC — MIDI 1");
+    fn device_ports_parses_the_card_id() {
+        // The live check runs with --ignored; here only the empty cases.
+        assert!(device_ports("", 2).is_empty());
+        assert!(device_ports("NoSuchCardId", 2).is_empty());
     }
 
-    /// Live check: run with `cargo test -p totalcontrol-gui enumerate -- --ignored`.
+    /// Live check: run with `cargo test -p totalcontrol-gui device_ports -- --ignored`.
     #[test]
     #[ignore]
-    fn enumerate_lists_the_live_ports() {
-        let ports = enumerate();
-        for p in &ports {
-            println!("{:?} in={} out={} {}", p.port, p.input, p.output, p.label);
+    fn device_ports_lists_the_live_unit() {
+        let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
+        println!("{cards}");
+        for id in ["FirefaceUC", "FirefaceUCX", "Babyface"] {
+            println!("{id}: {:?}", device_ports(id, 2));
         }
     }
 }

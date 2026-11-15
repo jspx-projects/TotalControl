@@ -220,9 +220,9 @@ mod tests {
     #[test]
     fn the_mackie_remote_round_trips() {
         let mut settings = HostSettings::default();
-        settings.mackie.in_use = true;
-        settings.mackie.input = Some(crate::mackie::MidiPort { card: 2, device: 0 });
-        settings.mackie.output = Some(crate::mackie::MidiPort { card: 2, device: 1 });
+        settings.mackie.enabled = true;
+        settings.mackie.in_enabled = [true, false];
+        settings.mackie.out_enabled = [true, true];
         settings.mackie.full_lcd = false;
         settings.mackie.send_levels = true;
         let json = serde_json::to_string(&settings).unwrap();

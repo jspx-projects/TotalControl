@@ -23,8 +23,12 @@ use totalcontrol_core::ChannelId;
 use crate::app::Message;
 use crate::osc_rme::Bus;
 
-/// Independent MIDI remotes in TotalMix FX.  This version exposes one.
+/// Independent MIDI remotes in TotalMix FX.  This version exposes the
+/// device's own ports: up to two.
+#[allow(dead_code)]
 pub const REMOTES: usize = 4;
+/// The device MIDI ports offered as remotes (UC/UCX: 2, Babyface: 1).
+pub const PORTS: usize = 2;
 /// Channel strips per surface (the master fader is separate).
 pub const STRIPS: usize = 8;
 /// Characters per LCD row; the LCD is two rows of 56.
@@ -46,22 +50,24 @@ impl MidiPort {
     }
 }
 
-/// One remote's settings — the TotalMix FX MIDI page for one index.
+/// One remote's settings — the MIDI part of the MIDI and OSC dialog.
+/// The device's own MIDI ports are the remotes: port 1 is remote 0,
+/// port 2 is remote 1. Options apply to every remote.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MackieConfig {
-    /// "In Use": the remote is active.
-    pub in_use: bool,
-    /// MIDI In port the surface is connected to.
-    pub input: Option<MidiPort>,
-    /// MIDI Out port for feedback; `None` means control without feedback.
-    pub output: Option<MidiPort>,
+    /// Master enable of the MIDI part.
+    pub enabled: bool,
+    /// MIDI In: listen for a controller on this device port.
+    pub in_enabled: [bool; PORTS],
+    /// MIDI Out: send feedback to this device port.
+    pub out_enabled: [bool; PORTS],
     /// "Enable Protocol Support".  When off, only the simple CC commands
     /// of the RME MIDI chapter are accepted.
     pub protocol: bool,
     /// "Extender to": index of the main remote this one extends.  The
     /// group shares one navigation state and forms one fader block.
-    /// Reserved for the multi-remote increment; not exposed yet.
+    /// Reserved for the extender increment; not exposed yet.
     pub extender_to: Option<usize>,
     /// "Map Stereo to 2 Mono Channels": one strip per channel instead of
     /// one strip per linked pair.
@@ -89,9 +95,9 @@ pub struct MackieConfig {
 impl Default for MackieConfig {
     fn default() -> Self {
         Self {
-            in_use: false,
-            input: None,
-            output: None,
+            enabled: false,
+            in_enabled: [false; PORTS],
+            out_enabled: [false; PORTS],
             protocol: true,
             extender_to: None,
             stereo_to_mono: false,
@@ -117,9 +123,9 @@ pub enum MackieOption {
 }
 
 impl MackieConfig {
-    /// A remote needs an input port to do anything.
-    pub fn runnable(&self) -> bool {
-        self.in_use && self.input.is_some()
+    /// Whether remote `i` (device port `i + 1`) listens for a controller.
+    pub fn remote_enabled(&self, i: usize) -> bool {
+        self.enabled && i < PORTS && self.in_enabled[i]
     }
 
     /// Apply one settings checkbox.
@@ -166,7 +172,9 @@ pub const NOTE_GLOBAL_VIEW: u8 = 0x33;
 pub const NOTE_F1: u8 = 0x36; // ..0x3d = F8
 pub const NOTE_MIDI_TRACKS: u8 = 0x3e; // F9 / Cue Main Out
 pub const NOTE_INPUTS: u8 = 0x3f; // F10 / Cue Phones 1
+#[allow(dead_code)]
 pub const NOTE_AUDIO_TRACKS: u8 = 0x40; // F11 / Cue Phones 2
+#[allow(dead_code)]
 pub const NOTE_AUDIO_INSTRUMENTS: u8 = 0x41; // F12 / Cue Phones 3
 pub const NOTE_AUX: u8 = 0x42; // Cue Phones 4
 pub const NOTE_SHIFT: u8 = 0x46;
@@ -197,6 +205,7 @@ pub const LOOPBACK_CHANNEL: u8 = 15;
 
 pub const CC_VPOT: u8 = 0x10; // ..0x17 turn
 pub const CC_VPOT_RING: u8 = 0x30; // ..0x37 LED ring
+#[allow(dead_code)]
 pub const CC_JOG: u8 = 0x3c;
 /// Simple CC faders: 102..117 on channels 1..12 (rows 1..3).
 pub const CC_FADER_BASE: u8 = 102;
@@ -462,6 +471,7 @@ pub fn fader_to_gain(p: f32) -> f32 {
 /// row's (REC selects the submix under the strip).  `counts` are channel
 /// counts for the simple CC faders, `strip_counts` for navigation.
 pub fn parse(
+    remote: usize,
     ev: &MidiEvent,
     nav: &mut MackieNav,
     cfg: &MackieConfig,
@@ -517,7 +527,7 @@ pub fn parse(
         MidiEvent::Cc { ch, cc, val } => {
             parse_cc(*ch, *cc, *val, nav, cfg, window, counts, submix_count)
         }
-        MidiEvent::SysEx(data) => parse_sysex(data, nav),
+        MidiEvent::SysEx(data) => parse_sysex(remote, data, nav),
         _ => None,
     }
 }
@@ -801,15 +811,6 @@ pub fn host_connection_reply(serial: &[u8; 7], challenge: &[u8; 4]) -> Vec<u8> {
     v
 }
 
-/// The version reply to a surface's version request.
-pub fn version_reply() -> Vec<u8> {
-    let mut v = SYSEX_HEADER.to_vec();
-    v.push(SYX_VERSION_REPLY);
-    v.extend_from_slice(b"V1.0\x00");
-    v.push(0xf7);
-    v
-}
-
 /// One parsed host-side SysEx command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SysexCommand {
@@ -849,13 +850,13 @@ pub fn parse_sysex_command(data: &[u8]) -> Option<SysexCommand> {
     }
 }
 
-fn parse_sysex(data: &[u8], nav: &mut MackieNav) -> Option<Vec<Message>> {
+fn parse_sysex(remote: usize, data: &[u8], nav: &mut MackieNav) -> Option<Vec<Message>> {
     match parse_sysex_command(data)? {
         SysexCommand::ConnectionQuery { serial, challenge } => {
             nav.serial = serial;
             // The reply is sent by the app, which owns the output queue.
             nav.online = false;
-            Some(vec![Message::MackieHandshake(challenge)])
+            Some(vec![Message::MackieHandshake(remote, challenge)])
         }
         SysexCommand::ConnectionConfirm => {
             nav.online = true;
@@ -865,7 +866,7 @@ fn parse_sysex(data: &[u8], nav: &mut MackieNav) -> Option<Vec<Message>> {
             log::warn!("Mackie: surface reported a connection error");
             Some(Vec::new())
         }
-        SysexCommand::DeviceQuery => Some(vec![Message::MackieHandshake([0; 4])]),
+        SysexCommand::DeviceQuery => Some(vec![Message::MackieHandshake(remote, [0; 4])]),
         SysexCommand::VersionReply => Some(Vec::new()),
     }
 }
@@ -1148,7 +1149,7 @@ mod tests {
     }
 
     fn parse_ev(ev: MidiEvent, nav: &mut MackieNav) -> Option<Vec<Message>> {
-        parse(&ev, nav, &cfg(), &window(), &out_window(), counts(), counts(), 9)
+        parse(0, &ev, nav, &cfg(), &window(), &out_window(), counts(), counts(), 9)
     }
 
     #[test]
@@ -1271,6 +1272,7 @@ mod tests {
         let mut c = cfg();
         c.submix_any_row = true;
         let msgs = parse(
+            0,
             &MidiEvent::NoteOn { ch: 0, note: NOTE_REC + 2, vel: 127 },
             &mut nav,
             &c,
@@ -1364,6 +1366,7 @@ mod tests {
         let mut c = cfg();
         c.protocol = false;
         let msgs = parse(
+            0,
             &MidiEvent::Cc { ch: 0, cc: 102, val: 104 },
             &mut nav,
             &c,
@@ -1377,6 +1380,7 @@ mod tests {
         assert!(matches!(msgs[0], Message::VolumeChanged(..)));
         // Mackie pitch bend is ignored.
         let msgs = parse(
+            0,
             &MidiEvent::PitchBend { ch: 0, value: 8192 },
             &mut nav,
             &c,
@@ -1431,7 +1435,7 @@ mod tests {
         query.extend_from_slice(&challenge);
         query.push(0xf7);
         let msgs = parse_ev(MidiEvent::SysEx(query), &mut nav).unwrap();
-        assert!(matches!(msgs[0], Message::MackieHandshake(c) if c == challenge));
+        assert!(matches!(msgs[0], Message::MackieHandshake(0, c) if c == challenge));
         assert_eq!(nav.serial, serial);
         let reply = host_connection_reply(&serial, &challenge);
         assert_eq!(reply[5], SYX_HOST_CONNECTION_REPLY);
