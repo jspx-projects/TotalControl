@@ -646,12 +646,18 @@ capacity/status-0 packet errors 0, `pcm_prepare_err`/`pcm_trigger_err`
 the gate regression is real, not a measurement fault.
 
 The gate counters name the mechanism. Own-direction arms: `deferred 0,
-overdue 0, max_pending 0`. Gated arms: `deferred` 104749 to 233568,
-`overdue` 0-1, `max_pending` 1-2. The gate is withholding nearly every
-wake because both directions are rarely pending at the same instant at
-these rates, so the two-deferral fallback becomes the normal path. The
-added wait is one to two periods, which exceeds the follower's slack
-when the quantum equals one period, and the daemon skips cycles.
+overdue 0, max_pending 0`. Gated arms: `deferred` 104749 to 233568
+against 240000 periods, i.e. 0.44 to 0.97 withheld wakes per period,
+with `overdue` 0-1 and `max_pending` 1-2.
+
+The mechanism, stated precisely: the both-pending rule converts an
+uncontrolled inter-direction URB phase offset into wake latency. At 1x
+the offset happened to be small, so freshness was nearly free. At
+2x/4x the offset consumes the follower's entire slack when quantum
+equals period, and the daemon skips cycles. The rule's own bound
+(`max_pending` <= 2) is satisfied; the bound was on the wrong quantity,
+because the added latency is set by the accidental phase, not by
+anything the driver bounds.
 
 So the gate's benefit does not transfer to 2x/4x as designed: it is
 neutral at 2x pair 1 and a large regression in three of four
@@ -661,6 +667,42 @@ deferral latency when the directions are phase-offset. The completion
 phase and per-URB handler cost instruments (phi, timing lines) are in
 the build for the follow-up run that will confirm whether the offset is
 the cause.
+
+## Signalling design space after the 2x/4x result
+
+A - signal a direction only when it completed a period - is
+unconditional correctness: it removes the confirmed contract violation,
+costs no latency, and stands on the `hw_ptr_mismatch` observation at
+q256. B - wake only when both directions are pending - is a freshness
+optimisation that costs latency equal to the inter-direction phase
+offset. The two are currently fused into one rule, which is why a
+correctness fix carries a scheduling regression.
+
+| Rule | Deferral | Freshness | Cost |
+|---|---|---|---|
+| A only | 0 | may be one period stale | none |
+| A + both-pending (current) | = phase offset, uncontrolled | guaranteed | measured above |
+| A + time-bounded deferral | <= budget | guaranteed if offset <= budget | bounded, tunable |
+| A + ISO start_frame alignment | ~0 | guaranteed | explicit scheduling, HCD constraints |
+
+Two candidate directions:
+
+1. **Alignment for ISO.** The driver controls `urb->start_frame`.
+   Submitting both directions to a common microframe boundary instead of
+   `URB_ISO_ASAP` would drive the phase offset to zero, making the
+   both-pending rule free and stable across rates. This is the
+   deterministic answer to the root cause.
+2. **Bounded deferral for the interrupt transport**, where the phase
+   cannot be scheduled. A period-count bound expressed in URBs cannot
+   subdivide a 1 ms URB; a time bound needs finer URBs or an hrtimer,
+   with expiries counted separately from deferrals.
+
+Rejected: adaptive switching to both-boundaries on a detected offset. It
+is a behavioural fork with hysteresis, the same class as the
+per-firmware signalling branches that started the PC investigation.
+
+Interim disposition: the 1x win is real and stays; A can ship on its own
+merit; B must gain a bound or alignment before being enabled above 1x.
 
 ## ISO 2x/4x arms (first attempt, INVALID)
 
