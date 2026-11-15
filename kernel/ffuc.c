@@ -1527,13 +1527,19 @@ cadence_skip:
 			/* Phase-accumulator telemetry.  The UC field is a
 			 * mod-10000 fractional-sample accumulator (units of
 			 * 1/10000 sample); it advances at a rate-independent
-			 * ~580 units/s and wraps when a whole sample
+			 * ~540 units/s and wraps when a whole sample
 			 * accumulates.  At the boundary the device dithers the
 			 * correction across several packets (phase bounces
 			 * high/low, frames alternate +1/-1), so a true wrap is
 			 * debounced: a high->low transition more than 1000
 			 * packets after the previous one.  The first wrap is
-			 * dense-logged to characterise the boundary. */
+			 * dense-logged to characterise the boundary.
+			 *
+			 * This model is verified on the UC only.  The UCX field
+			 * is 11-bit (max 2047) and cannot be the same mod-10000
+			 * accumulator; its semantics are unverified (spec open
+			 * item), so wrap attribution is gated to the UC.  The
+			 * raw-field samples below still report the UCX value. */
 			{
 				unsigned int phase = chip->ucx ?
 					((hdr >> 21) & 0x7ff) :
@@ -1541,7 +1547,8 @@ cadence_skip:
 				unsigned int nom_lo = chip->rate / 8000;
 				unsigned int nom_hi = nom_lo +
 					(chip->rate % 8000 ? 1 : 0);
-				bool wrapped = chip->phase_prev > 5000 &&
+				bool wrapped = !chip->ucx &&
+					chip->phase_prev > 5000 &&
 					phase < 5000 &&
 					chip->in_pkts -
 						chip->phase_last_wrap_pkt > 1000;
