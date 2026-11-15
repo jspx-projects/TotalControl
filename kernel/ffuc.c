@@ -2671,12 +2671,15 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			}
 		}
 		dev_info(&chip->dev->dev,
-			 "iso frames histogram [0..8]: %u %u %u %u %u %u %u %u %u\n",
+			 "iso frames histogram [0..8,9+]: %u %u %u %u %u %u %u %u %u %u\n",
 			 chip->iso_frames_hist[0], chip->iso_frames_hist[1],
-			 chip->iso_frames_hist[3], chip->iso_frames_hist[4],
-			 chip->iso_frames_hist[5], chip->iso_frames_hist[6],
+			 chip->iso_frames_hist[2], chip->iso_frames_hist[3],
+			 chip->iso_frames_hist[4], chip->iso_frames_hist[5],
 			 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
-			 chip->iso_frames_hist[8]);
+			 chip->iso_frames_hist[8],
+			 chip->iso_frames_hist[9] + chip->iso_frames_hist[10] +
+			 chip->iso_frames_hist[11] + chip->iso_frames_hist[12] +
+			 chip->iso_frames_hist[13]);
 		dev_info(&chip->dev->dev,
 			 "%s stop: delta_zero(cum) %d mismatch(cum) %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d cadence %uHz err(cum) %d delay %u lead %u\n",
 			 subs->stream ? "capture" : "playback",

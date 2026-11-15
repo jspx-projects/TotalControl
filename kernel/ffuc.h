@@ -315,7 +315,7 @@ struct ffuc {
 	u32 fb[FFUC_FB_SIZE];
 	u64 in_pkts, out_pkts;
 	unsigned int dump_count;
-	u32 iso_frames_hist[9];
+	u32 iso_frames_hist[32];
 	unsigned int dump_out_count;
 	unsigned int in_end;
 	unsigned int fb_acc;
