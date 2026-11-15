@@ -234,10 +234,11 @@ the loopback UDP surface; disabling it stops it. The switch, protocol and
 both ports are persisted. The command line `--osc`, `--osc-mode`, `--osc-port`
 and `--osc-send-port` remain a development override.
 
-VU FALLBACK has an `RMS bar release` dropdown (`Device default`, 10, 20, 30,
-40 dB/s) and a `Default` button. The choice sets the RMS bar release rate;
-`Device default` and the `Default` button both restore the unit's measured
-rate (2.7.1). The peak line keeps its own hold and release. The dropdown and
+VU FALLBACK has an `RMS bar release` dropdown (10, 15, 20, 25, 30, 40 dB/s
+plus the unit's measured rate if different) and a `Default` button. The
+choice sets the RMS bar release rate; the `Default` button selects the
+unit's measured rate (2.7.1) in the dropdown, so the user sees what the
+default is. The peak line keeps its own hold and release. The dropdown and
 button carry tooltips; the section has no help text. The choice is workspace
 state (STATE-SPEC §6.1).
 

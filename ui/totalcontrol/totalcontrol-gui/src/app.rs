@@ -10985,8 +10985,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             sync_surround_bridge(state);
         }
         Message::SetVuRelease(rate) => {
-            state.vu_release_db_s =
-                rate.filter(|v| workspaces::VU_RELEASE_CHOICES.contains(v));
+            let device_rate =
+                state.device.meter_ballistics().bar_release_db_s.round() as u32;
+            // Selecting the device's own rate is the default choice; store it
+            // as None so the dropdown shows the measured rate and the service
+            // keeps the device ballistics.
+            state.vu_release_db_s = match rate {
+                Some(v) if v == device_rate => None,
+                Some(v) if workspaces::VU_RELEASE_CHOICES.contains(&v) => Some(v),
+                _ => None,
+            };
             apply_vu_release(state);
         }
         Message::ToggleAbout => {
@@ -13023,17 +13031,15 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);
 
-    let vu_options: Vec<String> = std::iter::once("Device default".to_string())
-        .chain(
-            workspaces::VU_RELEASE_CHOICES
-                .iter()
-                .map(|v| format!("{v} dB/s")),
-        )
-        .collect();
-    let vu_selected = match state.vu_release_db_s {
-        Some(v) if workspaces::VU_RELEASE_CHOICES.contains(&v) => format!("{v} dB/s"),
-        _ => "Device default".to_string(),
-    };
+    let device_rate = state.device.meter_ballistics().bar_release_db_s.round() as u32;
+    let mut vu_rates: Vec<u32> = workspaces::VU_RELEASE_CHOICES.to_vec();
+    if !vu_rates.contains(&device_rate) {
+        vu_rates.push(device_rate);
+    }
+    vu_rates.sort_unstable();
+    let vu_options: Vec<String> = vu_rates.iter().map(|v| format!("{v} dB/s")).collect();
+    let vu_selected = format!("{} dB/s", state.vu_release_db_s.unwrap_or(device_rate));
+    let vu_rates_for_pick = vu_rates.clone();
     let vu = column![
         section("VU FALLBACK"),
         row![
@@ -13042,7 +13048,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
                 .size(text_size),
             strip::hint(
                 pick_list(vu_options, Some(vu_selected), move |label| {
-                    let rate = workspaces::VU_RELEASE_CHOICES
+                    let rate = vu_rates_for_pick
                         .iter()
                         .find(|v| format!("{v} dB/s") == label)
                         .copied();
@@ -13060,7 +13066,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::SetVuRelease(None)),
-                "Reset to the unit's measured TotalMix release rate",
+                "Select the unit's measured TotalMix release rate",
                 scale,
             ),
         ]

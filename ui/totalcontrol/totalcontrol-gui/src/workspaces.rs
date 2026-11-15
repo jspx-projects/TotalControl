@@ -154,7 +154,7 @@ pub struct Workspace {
 }
 
 /// The selectable "VU fallback" RMS bar release rates, in dB/s.
-pub const VU_RELEASE_CHOICES: [u32; 4] = [10, 20, 30, 40];
+pub const VU_RELEASE_CHOICES: [u32; 6] = [10, 15, 20, 25, 30, 40];
 
 fn fader_ganged_default() -> bool {
     true

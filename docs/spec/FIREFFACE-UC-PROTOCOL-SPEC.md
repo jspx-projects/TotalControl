@@ -749,11 +749,18 @@ word above the matching output peak is status and is ignored.
    is on the streaming interface; the meter endpoint is on the control
    interface. Hypothesis: the device resets the meter endpoint's data
    toggle on that change, and the host discards the next page as a
-   retransmission. A bus analyser trace across an engine start decides
-   it.
+   retransmission. A usbmon capture across a 48->96 kHz switch confirmed
+   the SET_INTERFACE (alt 2) and showed healthy meter URBs with no
+   duplicate page across 8891 pages, so the slip is intermittent and was
+   not reproduced there. A bus analyser trace at the data-toggle level
+   across a slipping engine start decides it. The shape check (item 5)
+   realigns the pair regardless of the cause.
 5. The shape check with live digital inputs. The RMS half's AN record
-   range spans input-bank slots; whether a pair stays decidable while
-   those inputs carry signal has not been captured.
+   range (bytes 108..139) spans the ADAT 3..7 input-bank slots. With live
+   AN5 (analog) and SPDIF (digital) loopback inputs the pair stayed
+   decidable on every heartbeat (748/748; the RMS-half count stayed 0
+   because ADAT 3..7 were silent). The exact case of ADAT 3..7 carrying
+   signal still needs an ADAT source.
 4. `0x1fff` appears in three roles: as the no-update sentinel in meter
    records and RMS bank power words, and as a beat-word value in some
    sessions.  Whether the DSP uses one code for all three roles on
