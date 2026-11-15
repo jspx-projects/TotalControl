@@ -141,6 +141,11 @@
 #define FFUC_QUIRK_STATUS_LATCH		BIT(2)	/* status byte 3 bit 7 */
 #define FFUC_QUIRK_IF5_PRE_START	BIT(3)	/* 0x10 0x8000 + 0x1d before audio */
 #define FFUC_QUIRK_IF5_PLAYBACK_MASK	BIT(4)	/* req 19/20 channel mask */
+/* Windows session timing: the stop->start settle and the close->rate and
+ * close->trio gaps, measured on the UC_WIN_RME unit (captures A2/A2b).
+ * The session words themselves are model-wide; only the timing is a
+ * Windows-personality property. */
+#define FFUC_QUIRK_WIN_SESSION		BIT(6)
 
 struct ffuc;
 
@@ -314,9 +319,7 @@ struct ffuc {
 	spinlock_t fb_lock;
 	u32 fb[FFUC_FB_SIZE];
 	u64 in_pkts, out_pkts;
-	unsigned int dump_count;
 	u32 iso_frames_hist[32];
-	unsigned int dump_out_count;
 	unsigned int in_end;
 	unsigned int fb_acc;
 	unsigned int fb_delay;
@@ -415,15 +418,6 @@ struct ffuc {
 	atomic_t signal_deferred;
 	atomic_t signal_overdue;
 	u32 max_pending;
-	/* Completion phase between directions and per-URB handler cost. */
-	u64 sig_ns[2];
-	u64 phi_sum;
-	u32 phi_count;
-	s32 phi_min, phi_max;
-	u64 cap_cost_sum, cap_cost_max;
-	u32 cap_cost_n;
-	u64 play_cost_sum, play_cost_max;
-	u32 play_cost_n;
 	unsigned int iso_cadence; /* measured device clock, Hz */
 	unsigned int rate_mismatch_windows; /* consecutive bad windows */
 	u64 lag_n, lag_sx, lag_sy, lag_sxx, lag_sxy;

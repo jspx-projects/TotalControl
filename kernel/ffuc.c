@@ -35,11 +35,6 @@ static unsigned int fixed_rate;
  * preserved zero can be distinguished from never-written memory.  Values
  * are near-silent in both formats: float32 denormal and s32 DC null. */
 static bool ffuc_poison = true;
-/* One-shot ISO IN packet dump: header plus the first 36 body words of the
- * first two valid packets of a run.  Settles the body layout (planar vs
- * frame-major) and the wire format by measurement. */
-static bool ffuc_dump_iso = true;
-static bool ffuc_dump_out = true;
 
 static DEFINE_MUTEX(devices_mutex);
 static unsigned long devices_used;
@@ -47,8 +42,6 @@ static unsigned long devices_used;
 static struct usb_driver ffuc_driver;
 
 module_param(ffuc_poison, bool, 0644);
-module_param(ffuc_dump_iso, bool, 0644);
-module_param(ffuc_dump_out, bool, 0644);
 MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
 
 module_param_array(index, int, NULL, 0444);
@@ -572,6 +565,23 @@ static bool ffuc_wire_s32(const struct ffuc *chip)
 
 /* -- per-device descriptors ------------------------------------------ */
 
+/* Named indices into ffuc_devices[].  The USB ID table references these
+ * instead of raw positions, and the count assertion after the table fails
+ * the build when a descriptor is added without updating the enum.  Append
+ * new devices at the end of both. */
+enum {
+	FFUC_DEV_UC_PC,
+	FFUC_DEV_UC_MAC_SMSC,
+	FFUC_DEV_UC_MAC_RME,
+	FFUC_DEV_UCX_ISO_SMSC,
+	FFUC_DEV_UCX_IF5_SMSC,
+	FFUC_DEV_UCX_ISO_RME,
+	FFUC_DEV_UCX_IF5_RME,
+	FFUC_DEV_BABYFACE_CLASSIC,
+	FFUC_DEV_UC_WIN_RME,
+	FFUC_DEV_COUNT
+};
+
 static const struct ffuc_device_desc ffuc_devices[] = {
 	{
 		.name = "Fireface UC",
@@ -581,7 +591,7 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.product = FFUC_PRODUCT_UC_PC,
 		.iface = 0,
 		.transport = FFUC_XPORT_INTERRUPT,
-		.quirks = FFUC_QUIRK_STATUS_LATCH,
+		.quirks = FFUC_QUIRK_STATUS_LATCH | FFUC_QUIRK_WIN_SESSION,
 		.model = FFUC_MODEL_UC,
 		.modes = ffuc_pc_modes,
 		.n_modes = ARRAY_SIZE(ffuc_pc_modes),
@@ -829,7 +839,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.quirks = FFUC_QUIRK_STATUS_LATCH |
 			  FFUC_QUIRK_INT32_SAMPLES |
 			  FFUC_QUIRK_INT32_BY_FIRMWARE |
-			  FFUC_QUIRK_ALT_RESELECT,
+			  FFUC_QUIRK_ALT_RESELECT |
+			  FFUC_QUIRK_WIN_SESSION,
 		.model = FFUC_MODEL_UC,
 		.modes = ffuc_pc_modes,
 		.n_modes = ARRAY_SIZE(ffuc_pc_modes),
@@ -851,29 +862,33 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 	},
 };
 
+/* The ID table indexes ffuc_devices by the named enum above; a new
+ * descriptor without a new enum entry (or vice versa) fails the build. */
+static_assert(ARRAY_SIZE(ffuc_devices) == FFUC_DEV_COUNT);
+
 static const struct usb_device_id ffuc_ids[] = {
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UC_PC, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[0] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UC_PC] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_PC_RME, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[0] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UC_PC] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_WIN_RME, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[8] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UC_WIN_RME] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UC_MAC, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[1] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UC_MAC_SMSC] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_MAC, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[2] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UC_MAC_RME] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UCX, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[3] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UCX_ISO_SMSC] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UCX, 5),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[4] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UCX_IF5_SMSC] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UCX, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[5] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UCX_ISO_RME] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UCX, 5),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[6] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_UCX_IF5_RME] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_BABYFACE_CLASSIC, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[7] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_BABYFACE_CLASSIC] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_BABYFACE_CLASSIC, 0),
-	  .driver_info = (kernel_ulong_t)&ffuc_devices[7] },
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[FFUC_DEV_BABYFACE_CLASSIC] },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, ffuc_ids);
@@ -1100,17 +1115,6 @@ static bool ffuc_stream_advance(struct ffuc *chip, struct ffuc_stream *s,
 	return true;
 }
 
-/*
- * Signal a period on @dir, after bringing the other running direction's ALSA
- * hw_ptr up to date.  PipeWire in IRQ mode wakes on one direction's period
- * and reads the other direction of the same card with snd_pcm_avail_update(),
- * which returns the hw_ptr as of that direction's last period.  Both
- * directions' periods end within one URB of each other, so whether the other
- * side has already been updated depends on URB completion order: the reader
- * sees the other side's fill jump by a whole period from cycle to cycle and
- * resyncs (inserts silence or drops a period).  Below a quantum of ~256 the
- * jump stays under PipeWire's resync threshold.
- */
 /* A direction may be signalled only when its period index has moved
  * since its last signal: a signal is the announcement of one completed
  * period. */
@@ -1132,27 +1136,6 @@ static void ffuc_signal_period(struct ffuc *chip, struct ffuc_stream *s)
 		if (s->running)
 			atomic_inc(&chip->delta_zero);
 	} else {
-		if (s->running) {
-			unsigned int idx = (s ==
-				&chip->streams[SNDRV_PCM_STREAM_CAPTURE]) ? 1 : 0;
-			struct ffuc_stream *o = &chip->streams[idx ? 0 : 1];
-			u64 now = ktime_get_ns();
-			u64 delta;
-
-			chip->sig_ns[idx] = now;
-			if (o->running && chip->sig_ns[idx ? 0 : 1]) {
-				delta = now > chip->sig_ns[idx ? 0 : 1] ?
-					now - chip->sig_ns[idx ? 0 : 1] :
-					chip->sig_ns[idx ? 0 : 1] - now;
-				chip->phi_sum += delta;
-				chip->phi_count++;
-				if ((s32)delta > chip->phi_max)
-					chip->phi_max = delta;
-				if (chip->phi_min == 0 ||
-				    (s32)delta < chip->phi_min)
-					chip->phi_min = delta;
-			}
-		}
 		s->signalled = s->period;
 		snd_pcm_period_elapsed_under_stream_lock(s->substream);
 		/* The core refreshes the shared status pointer from
@@ -1172,10 +1155,10 @@ static void ffuc_signal_period(struct ffuc *chip, struct ffuc_stream *s)
  * completed a period: at whichever boundary is later, derived every cycle,
  * so the follower's pointer is never stale when the reader wakes and no
  * direction is ever signalled for zero completed periods.  When one
- * direction is behind, the driver waits one URB rather than waking the
- * graph early; a direction that is two or more periods overdue signals
- * alone so a stalled or missing stream cannot hold the other hostage.
- * Single-direction operation signals that direction at its own boundary.
+ * direction is behind, the wake is withheld; a direction whose wake has
+ * been withheld twice signals alone, so a stalled or missing stream cannot
+ * hold the other hostage.  Single-direction operation signals that
+ * direction at its own boundary.
  */
 static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 {
@@ -1443,12 +1426,6 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 			ffuc_fb_put_nominal(chip);
 			continue;
 		}
-		if (d->actual_length == FFUC_ISO_IN_HEADER) {
-			atomic_inc(&chip->in_hdr_only);
-			frames[i] = 0;
-			ffuc_fb_put(chip, 0, 0, 0);
-			continue;
-		}
 		if (d->actual_length < FFUC_ISO_IN_HEADER) {
 			atomic_inc(&chip->in_short);
 			frames[i] = 0;
@@ -1464,6 +1441,8 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		}
 		frames[i] = min((d->actual_length - FFUC_ISO_IN_HEADER) /
 				(nch * FFUC_SAMPLE_BYTES), m->max_frames);
+		if (!frames[i])
+			atomic_inc(&chip->in_hdr_only);
 		if (frames[i] < ARRAY_SIZE(chip->iso_frames_hist)) {
 			chip->iso_frames_hist[frames[i]]++;
 		} else {
@@ -1493,26 +1472,12 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 cadence_skip:
 			;
 		}
-		if (ffuc_dump_iso && chip->dump_count < 20 && frames[i]) {
-			const __le32 *w = (const __le32 *)(pkt + FFUC_ISO_IN_HEADER);
-			unsigned int k, n = frames[i] * nch;
-			u32 hv = le32_to_cpup((const __le32 *)pkt);
-
-			chip->dump_count++;
-			dev_info(&chip->dev->dev,
-				 "iso dump pkt%d len %u hdr %08x frames %u words %u:",
-				 i, d->actual_length, hv, frames[i], nch);
-			for (k = 0; k < n; k++) {
-				if ((k % 10) == 0)
-					pr_info("\n");
-				pr_info(" %08x", le32_to_cpu(w[k]));
-			}
-			pr_info("\n");
-		}
 		hdr = le32_to_cpup((const __le32 *)pkt);
 		/* The wrap is not a power of two on the UCX (3072), so a
 		 * mask derived from it would clear payload bits: mask the
-		 * header field, then reduce modulo the wrap. */
+		 * header field, then reduce modulo the wrap.  A header-only
+		 * packet carries the current position with zero frames; it
+		 * must advance the feedback position, not reset it. */
 		{
 			unsigned int pos = chip->ucx ? ((hdr >> 5) & 0xfff) :
 						      ((hdr >> 5) & 0x1fff);
@@ -1541,13 +1506,34 @@ cadence_skip:
 		atomic_inc(&chip->fb_only_urbs);
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
+		struct snd_pcm_runtime *rt = subs->runtime;
+		unsigned int total = 0;
+		unsigned long appl, own, unread;
+
+		for (i = 0; i < urb->number_of_packets; i++)
+			total += frames[i];
+		/* Same attribution as the interrupt transport, once per
+		 * URB: a write that passes appl_ptr + buffer_size overwrites
+		 * frames the reader has not consumed.  Counted, not
+		 * prevented. */
+		appl = READ_ONCE(rt->control->appl_ptr);
+		own = READ_ONCE(rt->status->hw_ptr);
+		unread = (own + rt->boundary - appl) % rt->boundary;
+		if (unread + total > rt->buffer_size)
+			ffuc_ring_event(chip, subs, &chip->in_overruns,
+					"capture overwrite", appl, own);
 		for (i = 0; i < urb->number_of_packets; i++) {
 			const u8 *pkt = (const u8 *)urb->transfer_buffer +
 					urb->iso_frame_desc[i].offset;
 
 			if (!frames[i])
 				continue;
-			ffuc_capture_copy(subs->runtime, s->pos[0],
+			if (chip->s32_samples)
+				ffuc_capture_copy_int32(subs->runtime, s->pos[0],
+					  (const __le32 *)(pkt + FFUC_ISO_IN_HEADER),
+					  frames[i], nch, 0, 1, frames[i], nch);
+			else
+				ffuc_capture_copy(subs->runtime, s->pos[0],
 					  (const __le32 *)(pkt + FFUC_ISO_IN_HEADER),
 					  frames[i], nch, 0, 1, frames[i], nch);
 			elapsed |= ffuc_stream_advance(chip, s, subs->runtime, 0,
@@ -1614,7 +1600,43 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 
+	/* Capacity clamp before anything reads frames[]: a packet that does
+	 * not fit is dropped whole, never truncated mid-frame, so the
+	 * lead-word stride cannot desync. */
+	{
+		unsigned int cap_off = 0;
+
+		for (i = 0; i < urb->number_of_packets; i++) {
+			unsigned int len = frames[i] * fwords * FFUC_SAMPLE_BYTES;
+
+			if (cap_off + len > ep->buf_size) {
+				atomic_inc(&chip->out_capacity_err);
+				frames[i] = 0;
+				len = 0;
+			}
+			cap_off += len;
+		}
+	}
+
 	snd_pcm_stream_lock_irqsave(subs, flags);
+	if (s->running) {
+		struct snd_pcm_runtime *rt = subs->runtime;
+		unsigned int total = 0;
+		unsigned long appl, own, filled;
+
+		for (i = 0; i < urb->number_of_packets; i++)
+			total += frames[i];
+		/* Same attribution as the interrupt transport, once per
+		 * URB: sending more frames than the application wrote
+		 * transmits ring content nobody wrote.  Counted, not
+		 * prevented. */
+		appl = READ_ONCE(rt->control->appl_ptr);
+		own = READ_ONCE(rt->status->hw_ptr);
+		filled = (appl + rt->boundary - own) % rt->boundary;
+		if (total > filled)
+			ffuc_ring_event(chip, subs, &chip->out_underruns,
+					"playback underrun", appl, own);
+	}
 	if (s->running && !s->out_counter_valid) {
 		for (i = 0; i < urb->number_of_packets; i++) {
 			if (frames[i]) {
@@ -1629,17 +1651,15 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		unsigned int len = frames[i] * fwords * FFUC_SAMPLE_BYTES;
 		unsigned int f;
 
-		if (off + len > ep->buf_size) {
-			/* Never truncate mid-frame: drop the packet. */
-			atomic_inc(&chip->out_capacity_err);
-			frames[i] = 0;
-			len = 0;
-		}
 		urb->iso_frame_desc[i].offset = off;
 		urb->iso_frame_desc[i].length = len;
 		if (s->running && frames[i]) {
-			ffuc_playback_copy(subs->runtime, s->pos[0], dst + 1,
-					   frames[i], nch, 0, fwords);
+			if (chip->s32_samples)
+				ffuc_playback_copy_int32(subs->runtime, s->pos[0],
+					   dst + 1, frames[i], nch, 0, fwords);
+			else
+				ffuc_playback_copy(subs->runtime, s->pos[0],
+					   dst + 1, frames[i], nch, 0, fwords);
 			elapsed |= ffuc_stream_advance(chip, s, subs->runtime, 0,
 						       frames[i]);
 		} else {
@@ -1657,21 +1677,6 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 				dst[0] = cpu_to_le32(base);
 			}
 			s->out_counter += frames[i];
-			if (ffuc_dump_out && chip->dump_out_count < 2 &&
-			    chip->out_pkts > 300 && frames[i]) {
-				unsigned int q, nq = frames[i] * fwords;
-
-				chip->dump_out_count++;
-				dev_info(&chip->dev->dev,
-					 "iso out dump pkt%d frames %u words %u lead %08x:",
-					 i, frames[i], nch, le32_to_cpu(dst[0]));
-				for (q = 0; q < nq; q++) {
-					if ((q % 10) == 0)
-						pr_info("\n");
-					pr_info(" %08x", le32_to_cpu(dst[q]));
-				}
-				pr_info("\n");
-			}
 			{
 				unsigned int wrap = ffuc_iso_wrap(chip);
 				int lag = (int)((chip->in_end + wrap -
@@ -2112,17 +2117,10 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	atomic_set(&chip->out_pkt_len_err, 0);
 	atomic_set(&chip->out_pkt_status, 0);
 	atomic_set(&chip->fb_only_urbs, 0);
-	chip->dump_count = 0;
-	chip->dump_out_count = 0;
 	chip->rate_mismatch_windows = 0;
 	chip->lag_n = chip->lag_sx = chip->lag_sy = 0;
 	chip->lag_sxx = chip->lag_sxy = chip->lag_syy = 0;
 	WRITE_ONCE(chip->max_pending, 0);
-	memset(chip->sig_ns, 0, sizeof(chip->sig_ns));
-	chip->phi_sum = chip->phi_count = 0;
-	chip->phi_min = chip->phi_max = 0;
-	chip->cap_cost_sum = chip->cap_cost_max = chip->cap_cost_n = 0;
-	chip->play_cost_sum = chip->play_cost_max = chip->play_cost_n = 0;
 	atomic_set(&chip->in_frames_overflow, 0);
 	atomic_set(&chip->pcm_prepare_err, 0);
 	atomic_set(&chip->pcm_trigger_err, 0);
@@ -2130,11 +2128,12 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	atomic_set(&chip->signal_overdue, 0);
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
-	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin. */
+	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin.
+	 * Reduce modulo the wrap: it is not a power of two on the UCX. */
 	chip->out_lead = (DIV_ROUND_CLOSEST(chip->fb_delay * chip->rate,
 					    8000) +
-			  (chip->ucx ? 60 : 2 * m->max_frames - 2)) &
-			 (ffuc_iso_wrap(chip) - 1);
+			  (chip->ucx ? 60 : 2 * m->max_frames - 2)) %
+			 ffuc_iso_wrap(chip);
 
 	for (dir = 0; dir < 2; dir++) {
 		struct ffuc_ep *ep = &chip->eps[dir][0];
@@ -2216,18 +2215,6 @@ static int ffuc_engine_start(struct ffuc *chip)
 	for (e = 0; e < 2; e++)
 		WARN_ON_ONCE(!chip->eps[e][0].buf_size);
 
-	/* Cold start: re-assert the rate.  The device keeps its own rate
-	 * across personality switches and prior sessions, so a cached
-	 * value cannot be trusted; a commit on every prepare would glitch
-	 * a running stream, and this point is reached only with nothing
-	 * running. */
-	if (chip->desc->ops && chip->desc->ops->set_rate && chip->rate) {
-		int rret = chip->desc->ops->set_rate(chip, chip->rate);
-
-		dev_info(&chip->dev->dev,
-			 "engine start: rate commit %u Hz alt %u cur_alt %u ret=%d\n",
-			 chip->rate, m->alt, chip->cur_alt, rret);
-	}
 	chip->urb_frames = ffuc_urb_frames(chip, chip->rate);
 	if (chip->iso)
 		bytes = chip->iso_packets * max(m->in_mps, m->out_mps);
@@ -2242,8 +2229,11 @@ static int ffuc_engine_start(struct ffuc *chip)
 	 * between a session close and the next open; a start that follows
 	 * the close word at once (interface reselect, session words) leaves
 	 * a UC_WIN_RME unit dead in both directions until the module is
-	 * reloaded.  100 ms was enough on the bench; keep a margin. */
-	if (chip->model == FFUC_MODEL_UC && chip->engine_stopped_at) {
+	 * reloaded.  100 ms was enough on the bench; keep a margin.  The
+	 * settle is a Windows-personality property (FFUC_QUIRK_WIN_SESSION);
+	 * the AP personality restarts without it. */
+	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) &&
+	    chip->engine_stopped_at) {
 		unsigned long ready = chip->engine_stopped_at +
 				      msecs_to_jiffies(FFUC_RESTART_SETTLE_MS);
 
@@ -2280,18 +2270,22 @@ static int ffuc_engine_start(struct ffuc *chip)
 			chip->cur_alt = m->alt;
 		}
 	}
-	/* On a same-rate reopen Windows sends only the session trio; it does
-	 * not rewrite the rate register.  Re-writing it right after the close
-	 * (with no settle gap) wedges the UC.  Only write the rate when the
-	 * rate actually changed, and then leave the same 200 ms gap Windows
-	 * shows between the session close and the rate write (A2: 220 ms). */
-	if (chip->model != FFUC_MODEL_UC || chip->session_reopen) {
-		if (chip->model == FFUC_MODEL_UC)
-			msleep(200);
-		ret = chip->desc->ops->set_rate(chip, chip->rate);
-		if (ret < 0)
-			return ret;
-	}
+	/* Cold start: commit the rate on every start.  The device keeps its
+	 * own rate across personality switches and prior sessions, and the
+	 * init sequence does not set it, so a cached value cannot be
+	 * trusted.  This point is reached only with nothing running, so the
+	 * commit cannot glitch a live stream.  On a Windows-session unit the
+	 * close word needs the Windows gap before the rate write (A2:
+	 * 220 ms); writing right after the close wedges the unit.  The
+	 * settle above already separated the close from this start. */
+	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) && chip->uc_session)
+		msleep(200);
+	ret = chip->desc->ops->set_rate(chip, chip->rate);
+	dev_info(&chip->dev->dev,
+		 "engine start: rate commit %u Hz alt %u cur_alt %u ret=%d\n",
+		 chip->rate, m->alt, chip->cur_alt, ret);
+	if (ret < 0)
+		return ret;
 
 	/* Windows sends the session-open trio before the stream starts, not
 	 * after the URBs are submitted.  On the UC the trio is what opens the
@@ -2303,8 +2297,11 @@ static int ffuc_engine_start(struct ffuc *chip)
 		/* Windows leaves seconds between a stream close and the next
 		 * open (A2b: 6.64 -> 10.87).  A back-to-back reopen after the
 		 * 0x13 close leaves the UC silent even when the rate did not
-		 * change.  Give the close time to take effect. */
-		msleep(200);
+		 * change.  Give the close time to take effect.  The gap is a
+		 * Windows-personality property; the AP personality keeps the
+		 * session words without it. */
+		if (chip->desc->quirks & FFUC_QUIRK_WIN_SESSION)
+			msleep(200);
 		ret = chip->desc->ops->stream_start(
 			chip, ffuc_mode_channels(chip, chip->rate));
 		if (ret < 0)
@@ -2659,6 +2656,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 {
 	struct ffuc *chip = snd_pcm_substream_chip(subs);
 	struct ffuc_stream *s = &chip->streams[subs->stream];
+	int i;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -2719,24 +2717,32 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		{
 			int mm = 0;
 
-			chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
-			if (mm) {
-				atomic_inc(&chip->rate_mismatch);
-				dev_warn(&chip->dev->dev,
-					 "ISO cadence %u Hz disagrees with rate %u Hz\n",
-					 chip->iso_cadence, chip->rate);
+			/* Overflow truncates the histogram: a cadence
+			 * computed from it would be an instrument error,
+			 * not a device rate. */
+			if (!atomic_read(&chip->in_frames_overflow)) {
+				chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
+				if (mm) {
+					atomic_inc(&chip->rate_mismatch);
+					dev_warn(&chip->dev->dev,
+						 "ISO cadence %u Hz disagrees with rate %u Hz\n",
+						 chip->iso_cadence, chip->rate);
+				}
 			}
 		}
-		dev_info(&chip->dev->dev,
-			 "iso frames histogram [0..8,9+]: %u %u %u %u %u %u %u %u %u %u\n",
-			 chip->iso_frames_hist[0], chip->iso_frames_hist[1],
-			 chip->iso_frames_hist[2], chip->iso_frames_hist[3],
-			 chip->iso_frames_hist[4], chip->iso_frames_hist[5],
-			 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
-			 chip->iso_frames_hist[8],
-			 chip->iso_frames_hist[9] + chip->iso_frames_hist[10] +
-			 chip->iso_frames_hist[11] + chip->iso_frames_hist[12] +
-			 chip->iso_frames_hist[13]);
+		{
+			u32 over = 0;
+
+			for (i = 9; i < ARRAY_SIZE(chip->iso_frames_hist); i++)
+				over += chip->iso_frames_hist[i];
+			dev_info(&chip->dev->dev,
+				 "iso frames histogram [0..8,9+]: %u %u %u %u %u %u %u %u %u %u\n",
+				 chip->iso_frames_hist[0], chip->iso_frames_hist[1],
+				 chip->iso_frames_hist[2], chip->iso_frames_hist[3],
+				 chip->iso_frames_hist[4], chip->iso_frames_hist[5],
+				 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
+				 chip->iso_frames_hist[8], over);
+		}
 		dev_info(&chip->dev->dev,
 			 "%s stop: delta_zero(cum) %d mismatch(cum) %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d cadence %uHz err(cum) %d delay %u lead %u\n",
 			 subs->stream ? "capture" : "playback",
