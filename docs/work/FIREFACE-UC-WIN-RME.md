@@ -693,6 +693,28 @@ phase and per-URB handler cost instruments (phi, timing lines) are in
 the build for the follow-up run that will confirm whether the offset is
 the cause.
 
+## Follower-slack matrix (4x, 192 kHz, gate vs own)
+
+| Quantum | Period | URB/period | Gate xrun/skip | Own xrun/skip |
+|---|---|---|---|---|
+| q192 | 192 | 1.0 (zero slack) | 252 / 15, 232 / 11 | 32 / 7, 35 / 11 |
+| q384 | 384 | 0.5 | 1 / 0 | 4 / 0 |
+| q512 | 512 | 0.375 | 1 / 0 | 1 / 0 |
+| (2x q192) | 96 | 0.5 | 3 / 1 | not run |
+| (2x q96) | 96 | 1.0 (zero slack) | 31, 232, 36 / 5, 13, 8 | 28, 23, 51 / 6, 7, 5 |
+
+With at least one period of follower slack (q384 and q512 at 4x, and
+q192 at 2x), both variants settle at about one xrun line per four
+minutes with zero skipped cycles, and the gate stops deferring
+(`deferred 0`). At zero slack (quantum = period = URB) the 4x gate arms
+show 232-252 lines in both runs, while the 1x zero-slack result was a
+gate win. Zero slack alone therefore does not predict the penalty; the
+inter-direction phase is the third variable, and the current phi
+sampler is invalid when the period exceeds one URB (n = 0 at q384).
+
+Handler cost in these arms: capture 27.6 us mean / 40.8 us max and
+playback 4.7 us mean / 11 us max over the short captured sample.
+
 ## Signalling design space after the 2x/4x result
 
 A - signal a direction only when it completed a period - is
