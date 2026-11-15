@@ -409,6 +409,12 @@ struct ffuc {
 	int out_lag_min, out_lag_max;   /* (in_end - out_counter) mod wrap */
 	atomic_t out_resync;
 	atomic_t rate_mismatch;   /* cadence disagrees with chip->rate */
+	atomic_t in_frames_overflow; /* packet frames above the top bin */
+	atomic_t pcm_prepare_err;
+	atomic_t pcm_trigger_err;
+	atomic_t signal_deferred;
+	atomic_t signal_overdue;
+	u32 max_pending;
 	unsigned int iso_cadence; /* measured device clock, Hz */
 	unsigned int rate_mismatch_windows; /* consecutive bad windows */
 	u64 lag_n, lag_sx, lag_sy, lag_sxx, lag_sxy;

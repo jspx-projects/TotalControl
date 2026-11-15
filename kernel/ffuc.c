@@ -1165,6 +1165,13 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 		ffuc_signal_period(chip, p->running ? p : c);
 		return;
 	}
+	{
+		u32 mp = max((u32)(p->period - p->signalled),
+			     (u32)(c->period - c->signalled));
+
+		if (mp > READ_ONCE(chip->max_pending))
+			WRITE_ONCE(chip->max_pending, mp);
+	}
 	if (ffuc_pending(p) && ffuc_pending(c)) {
 		ffuc_signal_period(chip, p);
 		ffuc_signal_period(chip, c);
@@ -1172,17 +1179,20 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 		WRITE_ONCE(c->deferrals, 0);
 		return;
 	}
+	atomic_inc(&chip->signal_deferred);
 	/* One direction is behind: withhold the wake until the later
 	 * boundary, but never longer than two completions.  Counting
 	 * deferrals instead of periods bounds the wait to about one URB at
 	 * every period size. */
 	if (ffuc_pending(p) &&
 	    ++p->deferrals >= 2) {
+		atomic_inc(&chip->signal_overdue);
 		ffuc_signal_period(chip, p);
 		WRITE_ONCE(p->deferrals, 0);
 	}
 	if (ffuc_pending(c) &&
 	    ++c->deferrals >= 2) {
+		atomic_inc(&chip->signal_overdue);
 		ffuc_signal_period(chip, c);
 		WRITE_ONCE(c->deferrals, 0);
 	}
@@ -1433,14 +1443,19 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		}
 		frames[i] = min((d->actual_length - FFUC_ISO_IN_HEADER) /
 				(nch * FFUC_SAMPLE_BYTES), m->max_frames);
-		if (frames[i] < ARRAY_SIZE(chip->iso_frames_hist))
+		if (frames[i] < ARRAY_SIZE(chip->iso_frames_hist)) {
 			chip->iso_frames_hist[frames[i]]++;
+		} else {
+			atomic_inc(&chip->in_frames_overflow);
+		}
 		/* Periodic cadence guard: the packets reveal the device
 		 * clock; a mismatch means the rate write did not take
 		 * effect or the device was reprogrammed externally. */
 		if ((chip->in_pkts % 8000) == 0) {
 			int mm = 0;
 
+			if (atomic_read(&chip->in_frames_overflow))
+				goto cadence_skip;
 			chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
 			if (mm) {
 				if (++chip->rate_mismatch_windows >= 2) {
@@ -1454,6 +1469,8 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 			} else {
 				chip->rate_mismatch_windows = 0;
 			}
+cadence_skip:
+			;
 		}
 		if (ffuc_dump_iso && chip->dump_count < 20 && frames[i]) {
 			const __le32 *w = (const __le32 *)(pkt + FFUC_ISO_IN_HEADER);
@@ -2176,8 +2193,8 @@ static int ffuc_engine_start(struct ffuc *chip)
 		int rret = chip->desc->ops->set_rate(chip, chip->rate);
 
 		dev_info(&chip->dev->dev,
-			 "engine start: rate commit %u Hz ret=%d\n",
-			 chip->rate, rret);
+			 "engine start: rate commit %u Hz alt %u cur_alt %u ret=%d\n",
+			 chip->rate, m->alt, chip->cur_alt, rret);
 	}
 	chip->urb_frames = ffuc_urb_frames(chip, chip->rate);
 	if (chip->iso)
@@ -2573,8 +2590,10 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	if (ret == 0)
 		chip->prepared_mask |= 1 << subs->stream;
 	mutex_unlock(&chip->mutex);
-	if (ret < 0)
+	if (ret < 0) {
+		atomic_inc(&chip->pcm_prepare_err);
 		return ret;
+	}
 
 	snd_pcm_stream_lock_irq(subs);
 	s->running = false;
@@ -2611,10 +2630,14 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
-		if (!(chip->prepared_mask & (1u << subs->stream)))
+		if (!(chip->prepared_mask & (1u << subs->stream))) {
+			atomic_inc(&chip->pcm_trigger_err);
 			return -EPIPE;
-		if (!READ_ONCE(chip->engine_running))
+		}
+		if (!READ_ONCE(chip->engine_running)) {
+			atomic_inc(&chip->pcm_trigger_err);
 			return -EIO;
+		}
 		memset(s->pos, 0, sizeof(s->pos));
 		s->hw_ptr = 0;
 		s->period = 0;
@@ -2643,8 +2666,10 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		 * instead of running a stream with no URBs.
 		 */
 		if (!(chip->prepared_mask & (1u << subs->stream)) ||
-		    !READ_ONCE(chip->engine_running))
+		    !READ_ONCE(chip->engine_running)) {
+			atomic_inc(&chip->pcm_trigger_err);
 			return -EIO;
+		}
 		memset(s->pos, 0, sizeof(s->pos));
 		s->hw_ptr = 0;
 		s->period = 0;
@@ -2701,6 +2726,14 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			 chip->iso_cadence,
 			 atomic_read(&chip->rate_mismatch),
 			 chip->fb_delay, chip->out_lead);
+		dev_info(&chip->dev->dev,
+			 "gate: deferred %d overdue %d max_pending %u overflow %d prep_err %d trig_err %d\n",
+			 atomic_read(&chip->signal_deferred),
+			 atomic_read(&chip->signal_overdue),
+			 READ_ONCE(chip->max_pending),
+			 atomic_read(&chip->in_frames_overflow),
+			 atomic_read(&chip->pcm_prepare_err),
+			 atomic_read(&chip->pcm_trigger_err));
 		dev_info(&chip->dev->dev,
 			 "iso lag samples (one per OUT URB): n %llu sx %lld sy %lld sxx %lld sxy %lld syy %lld\n",
 			 (unsigned long long)chip->lag_n,
