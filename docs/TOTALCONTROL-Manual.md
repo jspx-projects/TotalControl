@@ -962,7 +962,8 @@ are stored in a workspace and restored when that workspace is opened.
 The Talkback source and Dim, Listenback source and Dim, Recall level, Main Dim,
 External Input and Gain, and the Solo/PFL modes are set in the Control Room
 Settings panel. Press `settings`, immediately above `assign`; the panel opens
-above the Control Room and is not modal.
+directly above the Control Room — its bottom edge meets the Control Room's top
+and its right edge lines up with the Control Room's right — and is not modal.
 
 The panel has four sections:
 
@@ -976,10 +977,11 @@ The source lists start with `None` and then use the hardware input names. The
 five level controls cover `-65.0` to `0.0 dB` in `0.5 dB` steps. The settings
 are saved per device in TotalControl's own preferences, not in the current mix.
 
-`OK` applies and saves the values; `Cancel` and `Escape` discard the edits.
-The settings in the dialog are not written while it is open. `OK` applies
-the External Input source and gain and the Solo/PFL modes to the running
-device; `Cancel` and `Escape` leave the current signal paths unchanged.
+Changes apply as you make them — the panel stays open so you can hear the
+effect while you adjust, and the External Input source/gain and the Solo/PFL
+modes reach the running device immediately. `Close` or `Escape` dismisses the
+panel; there is nothing to confirm and nothing to cancel. `default` restores
+the default values.
 
 ### Assigning outputs
 
@@ -1549,10 +1551,18 @@ channels and can route it like any other playback source.
 
 ## Appendix C — MIDI and OSC setup
 
-Remote control lives on one settings page: `Options > TotalControl`,
-section **MIDI AND OSC**, with a MIDI part and an OSC part. Both surfaces
-work on every supported device and personality — they drive the same
-mixer model as the GUI; the device only supplies the writes.
+Remote control has its own dialog: `Options > MIDI and OSC`, with a MIDI
+part and an OSC part. Both surfaces work on every supported device and
+personality — they drive the same mixer model as the GUI; the device only
+supplies the writes.
+
+**What to expect from the settings dialogs.** Changes apply as you make
+them, and the dialog stays open so you can see or hear the effect while you
+adjust — handy for trying a controller port or a monitoring level live.
+There is no `OK` or `Apply` to remember and no `Cancel`: a single `Close`
+(or `Escape`) dismisses the dialog, and everything you changed is already
+saved. A section that is switched off is grayed out; only its `Enable`
+switch stays active until you turn it on.
 
 ### MIDI — a Mackie Control surface
 
@@ -1562,9 +1572,10 @@ same way TotalMix FX can.
 
 1. Connect the surface. A DIN surface goes into the unit's MIDI breakout
    ports; a USB surface connects to the computer directly.
-2. In the MIDI part, enable `Enable MIDI control surface`, choose the
-   surface's ports under `MIDI In` and `MIDI Out` (the unit's own ports
-   appear as `Fireface UC — MIDI 1` etc.), and press `Apply`.
+2. In the MIDI part, turn on `Enable`, then check the ports under `MIDI In`
+   (and `MIDI Out` for feedback). `Port 1` and `Port 2` are the unit's own
+   MIDI ports (the Babyface has only `Port 1`); each checked input runs one
+   controller, and changes take effect immediately.
 3. Move a fader: the matching channel strip moves, and its name turns
    brown while it is in the surface's 8-channel window.
 
@@ -1578,7 +1589,7 @@ pressing one centers it. The full mapping is in
 
 Options: `Enable Mackie protocol` (off leaves only the simple CC/note
 commands below), `Full LCD support`, `Send user defined names`, `Send
-level messages` and `Peak hold`. `MIDI Out` may stay `None` when no
+level messages` and `Peak hold`. Leave `MIDI Out` unchecked when no
 feedback is needed. `Show MIDI debug log` opens the traffic panel.
 
 Without a Mackie surface, any MIDI controller can use the simple
@@ -1598,12 +1609,12 @@ see the MIDI spec §12.
 
 ### OSC
 
-OSC is opt-in. In the OSC part, enable `Enable OSC control surface` and
-choose `OSC 1.96` or `Global`. The input port (default 7001), output port
-(default 9001) and the `Remote controller IP` are in the same section and
-are saved with the other settings. The line above the ports shows this
-host's IP address and host name — the address to point the controller at.
-Disabling the switch stops the surface immediately.
+OSC is opt-in. In the OSC part, turn on `Enable` and choose `OSC 1.96` or
+`Global`. The input port (default 7001), output port (default 9001) and the
+`Remote controller IP` apply as soon as their content is valid and are saved
+with the other settings. The line above the ports shows this host's IP
+address and host name — the address to point the controller at. Disabling
+the switch stops the surface immediately.
 
 While the remote controller IP is 127.0.0.1 the socket stays on loopback.
 Set it to the controller's address (for example an iPad on the LAN) and

@@ -12,7 +12,7 @@ mixer model and the fader curve.
 | Part | Status |
 |---|---|
 | USB-MIDI transport on the Fireface UC | implemented, verified on the wire |
-| USB-MIDI transport on the Fireface UCX | implemented, not verified on the wire |
+| USB-MIDI transport on the Fireface UCX | implemented, verified |
 | USB-MIDI transport on the Babyface-classic | implemented, not verified |
 | Two-port routing | implemented |
 | ALSA rawmidi surface | implemented |
@@ -25,8 +25,8 @@ Not supported:
 | UMP and MIDI 2.0 | not implemented |
 | Clock generation | the driver carries bytes, it does not pace them |
 | Messages larger than 128 bytes | the driver sends one 128-byte chunk per transfer, and a split message is lost |
-| HUI and Eucon | TotalMix FX does not implement them either; the surface protocol is Mackie Control |
-| More than one MIDI remote | the codec is per-remote; the settings page exposes one (§11) |
+| HUI and Eucon | TotalMix FX does not implement them either; the controller protocol is Mackie Control |
+| More than two MIDI remotes, extender linking | the device ports are the remotes; TotalMix FX's four-remote/extender model is open (§13) |
 | Reverb/echo user presets via CC | the mixer model has no FX user presets |
 
 ## Contents
@@ -210,9 +210,9 @@ that the unit refused.
 The driver creates rawmidi devices only. The ALSA core also registers the
 card as a sequencer client with one port for each MIDI port.
 
-The settings page lists every rawmidi port of every card, so a surface
-can connect through the unit's own MIDI ports (breakout cable) or through
-any other MIDI interface, for example a USB surface.
+The MIDI settings use the unit's own rawmidi ports: port 1 is rawmidi
+device 0, port 2 is device 1, on the unit's ALSA card. A controller
+connects through the breakout cable.
 
 ## 5. Outbound messages
 
@@ -491,8 +491,12 @@ or submix change refreshes the whole window. Meters are sent at about
 
 ## 11. TotalControl host
 
-TotalControl is the host: a surface connected to a rawmidi port pair
-drives the TotalControl mixer. The host is one remote in this version.
+TotalControl is the host: a Mackie controller connected to the unit's MIDI
+ports drives the TotalControl mixer. The remotes are the device ports:
+port 1 is remote 1, port 2 is remote 2. The UC and UCX offer two remotes,
+the Babyface-classic one. Each remote has its own navigation and feedback
+state; the options apply to all remotes. Two controllers can run at once,
+one per port.
 
 The host is device-independent: it drives the shared mixer model, and the
 device backend supplies the writes. It is available on every device and
@@ -500,34 +504,36 @@ personality TotalControl supports — UC PC, UC AP, UCX (both transports)
 and Babyface-classic — with the same per-device capability clamps as the
 GUI. On the UC AP personality the driver exposes no MIDI of its own; the
 class driver provides the ports (RME documents AP MIDI as class
-compliant), and the host uses them like any other rawmidi ports. In CC
-mode the whole unit belongs to the class driver and TotalControl does not
-bind it; the unit's own stand-alone MIDI and the iPad app are the control
-paths there, not this host.
+compliant). In CC mode the whole unit belongs to the class driver and
+TotalControl does not bind it; the unit's own stand-alone MIDI and the
+iPad app are the control paths there, not this host.
 
 | Concern | Behaviour |
 |---|---|
-| Transport | one worker per remote opens the chosen rawmidi ports; input bytes are parsed on the UI thread |
+| Transport | one worker per enabled port opens the rawmidi pair; input bytes are parsed on the UI thread |
 | Parser | running status expanded, SysEx framed, realtime passed through |
 | Navigation | per-remote row, window offset (in strips), submix and trim state; not part of the workspace |
 | Actions | dispatched as the ordinary mixer messages, shared with the GUI and OSC |
 | Toggles | resolved against the confirmed model, like OSC |
-| Settings | the MIDI part of the MIDI AND OSC page (§11.1); persisted in host settings |
-| Loopback guard | trips on the detection note, disables the remote, logs |
+| Settings | the MIDI part of the MIDI and OSC dialog (§11.1); persisted in host settings |
+| Loopback guard | trips on the detection note, disables that remote, logs |
 | Background disable | suspends input and feedback while unfocused or hidden |
-| Window marking | the name tint of §8.5 |
+| Window marking | the name tint of §8.5, per remote |
 
 ### 11.1 Settings
 
-The app settings dialog has one MIDI AND OSC page with two parts. The
-MIDI part: enable switch, MIDI In and MIDI Out picklists (None plus every
-rawmidi port of every card), Apply, the option checkboxes of §8.4 (first
-five), and a MIDI debug log. The OSC part is unchanged apart from the
-default receive port 7001, the feedback destination field and the host
-address line; see the GUI spec §1.3.
+`Options > MIDI and OSC` opens the remote-control dialog, separate from
+the app-level TotalControl settings. The MIDI part: an `Enable` checkbox,
+the line "Use a Mackie controller to control the mixer.", `MIDI In` and
+`MIDI Out` checkbox rows (`Port 1`, `Port 2` — one port on the Babyface),
+the option checkboxes of §8.4 (first five), and a MIDI debug log. Each
+checked MIDI In port runs a remote; its feedback goes to the same-numbered
+checked MIDI Out port. Toggling applies immediately. The OSC part is
+unchanged apart from the default receive port 7001, the feedback
+destination field and the host address line; see the GUI spec §1.4.
 
-The remote's ports and options are host settings, not workspace state
-(STATE-SPEC §7.1). The debug log is a bounded ring, shown on demand.
+The remote settings are host settings, not workspace state (STATE-SPEC
+§7.1). The debug log is a bounded ring, shown on demand.
 
 ## 12. Device differences
 

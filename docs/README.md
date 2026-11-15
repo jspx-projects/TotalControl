@@ -39,7 +39,7 @@ in `totalcontrol-layout` are authoritative, and the layout tests keep the
 example and schema in step with them.
 
 Open questions, capture requests and working notes are kept in
-`docs/work/`; raw captures are kept in `docs/captures/`.
+`docs/work/`; raw captures are kept on the NAS at `/media/nas_data/john/Electronica/rme/capture` (see its `MANIFEST.md`).
 
 The specifications are present-tense and describe the current implementation.
 
