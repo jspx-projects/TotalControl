@@ -2275,6 +2275,7 @@ pub enum Message {
     /// Start/stop the virtual 5.1 and 7.1 outputs.
     SetSurround51(bool),
     SetSurround71(bool),
+    SetVuRelease(Option<u32>),
     /// First level: open and pin that destination's second level.
     AssignDestinations(usize),
     /// Pointer entered a first-level destination: switch an unpinned
@@ -2761,6 +2762,9 @@ pub struct TotalControl {
     pub osc_send_text: String,
     /// `--osc` was passed: the command line overrides the saved switch.
     pub osc_cli: bool,
+    /// User override of the RMS bar release ("VU fallback"), in dB/s.
+    /// `None` keeps each device's measured bar release.
+    pub vu_release_db_s: Option<u32>,
     /// Classic RME OSC navigation state: bus, bank, selected channel and
     /// page.  Kept on the UI thread so feedback and `Toggle` resolution see
     /// the same state as the parser.
@@ -3436,6 +3440,7 @@ pub fn new_with_device(
         osc_recv_text: osc_recv_port.to_string(),
         osc_send_text: osc_send_port.to_string(),
         osc_cli,
+        vu_release_db_s: None,
         rme: crate::osc_rme::RmeState::default(),
         osc_tx: None,
         osc_log: VecDeque::new(),
@@ -3570,6 +3575,7 @@ pub(crate) fn attach_device_service(state: &mut TotalControl) {
     state.device = DeviceHandle::Mirror(mirror);
     state.device_updates = updates;
     state.device_service = Some(service);
+    apply_vu_release(state);
 }
 
 /// Rebuild the effective OSC config from the settings switch and ports.
@@ -3675,6 +3681,19 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
     state.host_settings = settings;
 }
 
+/// Publish the "VU fallback" bar release choice on the shared meter bus.
+/// The service applies it to the ballistics' bar release; `None` keeps the
+/// device's measured rate.  The peak hold and peak release are unaffected.
+fn apply_vu_release(state: &TotalControl) {
+    if let Some(bus) = &state.meter_bus {
+        if let Ok(mut m) = bus.lock() {
+            m.vu_release_db_s = state
+                .vu_release_db_s
+                .filter(|v| workspaces::VU_RELEASE_CHOICES.contains(v));
+        }
+    }
+}
+
 /// Capture the complete host-side configuration for a workspace file.
 fn capture_workspace(state: &TotalControl) -> Workspace {
     let mut scene = state
@@ -3775,6 +3794,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         assign: state.assign,
         surround_51: state.surround_51,
         surround_71: state.surround_71,
+        vu_release_db_s: state.vu_release_db_s,
         window_size: state.window_size,
     }
 }
@@ -3892,6 +3912,8 @@ fn apply_workspace_gui(state: &mut TotalControl, workspace: &Workspace) {
     state.assign[CUE_DEST] = Some(cue);
     state.surround_51 = workspace.surround_51;
     state.surround_71 = workspace.surround_71;
+    state.vu_release_db_s = workspace.vu_release_db_s;
+    apply_vu_release(state);
     state.window_size = workspace.window_size;
     state.window_position = workspace.view.window_position;
     state.fullscreen = workspace.view.fullscreen;
@@ -5321,6 +5343,7 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::SetShowOriginalNames(_)
             | Message::SetSurround51(_)
             | Message::SetSurround71(_)
+            | Message::SetVuRelease(_)
             | Message::ApplyControlRoomSettings
     )
 }
@@ -8276,6 +8299,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::CloseOptions
             | Message::SetSurround51(_)
             | Message::SetSurround71(_)
+            | Message::SetVuRelease(_)
             | Message::LineInRefSelected(_)
             | Message::LineInRef58Selected(_)
             | Message::LineOutRefSelected(_)
@@ -10960,6 +10984,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.host_dirty = true;
             sync_surround_bridge(state);
         }
+        Message::SetVuRelease(rate) => {
+            state.vu_release_db_s =
+                rate.filter(|v| workspaces::VU_RELEASE_CHOICES.contains(v));
+            apply_vu_release(state);
+        }
         Message::ToggleAbout => {
             close_top_menus(state);
             state.show_about = !state.show_about;
@@ -12994,6 +13023,53 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);
 
+    let vu_options: Vec<String> = std::iter::once("Device default".to_string())
+        .chain(
+            workspaces::VU_RELEASE_CHOICES
+                .iter()
+                .map(|v| format!("{v} dB/s")),
+        )
+        .collect();
+    let vu_selected = match state.vu_release_db_s {
+        Some(v) if workspaces::VU_RELEASE_CHOICES.contains(&v) => format!("{v} dB/s"),
+        _ => "Device default".to_string(),
+    };
+    let vu = column![
+        section("VU FALLBACK"),
+        row![
+            text("RMS bar release")
+                .color(theme::text_primary())
+                .size(text_size),
+            strip::hint(
+                pick_list(vu_options, Some(vu_selected), move |label| {
+                    let rate = workspaces::VU_RELEASE_CHOICES
+                        .iter()
+                        .find(|v| format!("{v} dB/s") == label)
+                        .copied();
+                    Message::SetVuRelease(rate)
+                })
+                .style(theme::pick_list)
+                .menu_style(theme::menu)
+                .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+                .text_size(text_size),
+                "How fast the RMS bar falls; the peak line is unaffected",
+                scale,
+            ),
+            strip::hint(
+                iced::widget::button(strip::centered_label_auto("Default", text_size))
+                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                    .style(theme::ghost_button)
+                    .on_press(Message::SetVuRelease(None)),
+                "Reset to the unit's measured TotalMix release rate",
+                scale,
+            ),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .width(Length::Fill);
+
     let footer = row![
         iced::widget::Space::new().width(Length::Fill),
         iced::widget::button(strip::centered_label_auto("Close", text_size))
@@ -13004,7 +13080,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     .align_y(iced::Alignment::Center)
     .width(Length::Fill);
 
-    let body = column![header, background, sync, surround, osc, footer]
+    let body = column![header, background, sync, surround, osc, vu, footer]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
     centered_dialog(state, body.into(), Message::ToggleSettings, 520.0)

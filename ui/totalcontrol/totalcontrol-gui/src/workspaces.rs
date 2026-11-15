@@ -145,8 +145,16 @@ pub struct Workspace {
     pub assign: [Option<usize>; 7],
     pub surround_51: bool,
     pub surround_71: bool,
+    /// User override of the RMS bar release ("VU fallback"), in dB/s.
+    /// `None` keeps each device's measured bar release.  GUI display state,
+    /// saved with the workspace; only `VU_RELEASE_CHOICES` are accepted.
+    #[serde(default)]
+    pub vu_release_db_s: Option<u32>,
     pub window_size: Option<(f32, f32)>,
 }
+
+/// The selectable "VU fallback" RMS bar release rates, in dB/s.
+pub const VU_RELEASE_CHOICES: [u32; 4] = [10, 20, 30, 40];
 
 fn fader_ganged_default() -> bool {
     true
@@ -173,6 +181,7 @@ impl Default for Workspace {
             assign: [None; 7],
             surround_51: false,
             surround_71: false,
+            vu_release_db_s: None,
             window_size: None,
         }
     }

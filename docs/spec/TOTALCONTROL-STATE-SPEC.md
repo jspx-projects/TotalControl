@@ -155,7 +155,8 @@ The current workspace restores the durable GUI state:
 - active snapshot and active layout;
 - channel labels and name display;
 - all groups, master sets and the temporary fader group;
-- Control Room and surround state.
+- Control Room and surround state;
+- the meter VU fallback release rate.
 
 The following is transient and is not restored:
 
@@ -167,6 +168,32 @@ The following is transient and is not restored:
 - the actual hidden/tray state (a normal launch opens the window; the session
   autostart entry starts hidden);
 - undo and redo history.
+
+### 6.1 Adding a durable GUI preference
+
+A durable GUI preference is workspace state. It is a normal setting stored
+as a value with a default, not host settings (§7) and not an override layer
+on top of device state. An `Option` whose `None` means "use the device or
+factory default" is a normal setting, like the forced rate.
+
+Wire a new preference through the same path as the existing ones:
+
+| Step | Where |
+|---|---|
+| State field | the application state, initialized to the default |
+| Workspace field | the workspace schema, with a serde default so older files load |
+| Capture | `capture_workspace` copies the state field into the workspace |
+| Restore | the workspace-load path copies it back and applies it |
+| Dirty marking | the message is listed in `changes_prefs`, so the workspace autosaves |
+| Control | the settings UI; the message sets the state field and applies it |
+
+The stored value is validated against the choices the control offers; a
+hand-edited file cannot select a value the UI cannot reach. Device-specific
+defaults (for example the measured meter ballistics) come from the device
+profile or ballistics, not from a second copy in the preference.
+
+Explanation belongs in the manual and in control tooltips, not in GUI help
+text.
 
 ## 7. Host settings
 
