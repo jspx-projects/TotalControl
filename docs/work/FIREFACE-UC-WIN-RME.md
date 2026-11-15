@@ -623,6 +623,36 @@ Next session, in order:
 4. Physical loopback: the only gate for audio-content claims on either
    transport.
 
+## ISO 2x/4x arms (first pair, 2026-11-14/15)
+
+Own-direction-only versus gated at the rate-scaled quanta (URB = period
+= quantum): 96 kHz/q96 and 192 kHz/q192, one 4-minute pair per rate.
+Geometry confirmed from the start lines: `urbs 2 x 96 frames, buffer
+384, period 96` and `urbs 2 x 192 frames, buffer 768, period 192`.
+
+| Pair | Own xruns / skips | Gated xruns / skips |
+|---|---|---|
+| 2x | 41 / 8 | 27 / 10 |
+| 4x | 35 / 10 | 24 / 4 |
+
+The gate lowers xrun lines at both rates (about 30%) but the
+skipped-cycle metric is mixed at 2x (10 versus 8) and lower at 4x.
+One pair per rate cannot support a conclusion; the 2x window also shows
+repeated stream restarts right after the rate switch, which contaminate
+it.
+
+Two instrument findings from this run:
+
+- The frame histogram only had bins 0..8, while 2x packets carry up to
+  13 frames and 4x up to 25. Cadence therefore read 0 Hz at both rates
+  and the cadence guard was blind. The histogram now spans 32 bins and
+  prints 9+ as one bucket.
+- This diagnostic build does not carry the gate counters
+  (`signal_deferred`, `signal_overdue`, `max_pending`), so the corrected
+  expectation `max_pending <= ceil(urb_frames/period_size) + 1` could
+  not be checked. Those counters live on the gate branch and need to be
+  merged into the ISO build before the next 2x/4x pairs.
+
 ## Endpoints that differ from the original UC
 
 
