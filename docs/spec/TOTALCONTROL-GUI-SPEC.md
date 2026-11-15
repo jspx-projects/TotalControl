@@ -214,7 +214,8 @@ it immediately on the first press; submenu items open on the first click.
 `Options > TotalControl`, the tray Settings entry and the `,` shortcut open
 the app-level settings dialog. It is centered with a dimmed scrim, not a
 sidebar popover, and it blocks mouse and keyboard access to the mixer until it
-closes. It holds BACKGROUND, STARTUP SYNC, SURROUND and OSC sections.  Independent options are checkboxes, one-of-many options are radio
+closes. It holds BACKGROUND, STARTUP SYNC, SURROUND, OSC and VU FALLBACK
+sections.  Independent options are checkboxes, one-of-many options are radio
 buttons, and the only footer action is `Close`.
 
 SURROUND has the `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
@@ -232,6 +233,13 @@ is the absolute-channel TotalMix FX 2.1+ address space. Enabling it starts
 the loopback UDP surface; disabling it stops it. The switch, protocol and
 both ports are persisted. The command line `--osc`, `--osc-mode`, `--osc-port`
 and `--osc-send-port` remain a development override.
+
+VU FALLBACK has an `RMS bar release` dropdown (`Device default`, 10, 20, 30,
+40 dB/s) and a `Default` button. The choice sets the RMS bar release rate;
+`Device default` and the `Default` button both restore the unit's measured
+rate (2.7.1). The peak line keeps its own hold and release. The dropdown and
+button carry tooltips; the section has no help text. The choice is workspace
+state (STATE-SPEC §6.1).
 
 ### 1.4 Quick view
 
@@ -494,7 +502,9 @@ measured on its own screen:
 
 On the UC the bar's 25 dB/s is the rate of the device's own RMS
 integrator; the reference keeps that rate below the RMS word's floor.
-The OVR segment lights after three consecutive full-scale samples. The OVR
+The RMS bar release is user-configurable through the VU fallback setting
+(1.3); the peak hold and peak line release are not configurable. The OVR
+segment lights after three consecutive full-scale samples. The OVR
 sample count is a global meter setting (1–15, default three), not a dB
 threshold and not a per-channel value. There is no configurable hold time.
 If the device disconnects, the meters fall to silence with the normal

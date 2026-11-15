@@ -441,9 +441,20 @@ Each meter has two indicators, following TotalMix FX:
   lights after three consecutive full-scale samples (the global default).
 
 Peak hold applies only to the peak line. The RMS bar is not held and keeps
-following the RMS signal. Fall rates follow TotalMix FX's own meters for
-the device: on the UC the bar falls 25 dB/s and the peak line, after its
-hold, 15 dB/s; on the UCX both fall 10 dB/s.
+following the RMS signal. The default fall rates follow TotalMix FX's own
+meters for the device:
+
+| Device | RMS bar release | Peak hold | Peak line release |
+|---|---|---|---|
+| UC | 25 dB/s | 2 s | 15 dB/s |
+| UCX (and devices not yet measured) | 10 dB/s | 2 s | 10 dB/s |
+
+You can change the RMS bar release in **TotalControl settings ▸ VU
+FALLBACK**: pick 10, 20, 30 or 40 dB/s, or press **Default** to return to the
+device's measured rate. A slower release holds the bar up longer (a steadier
+readout); a faster one follows the music more closely. This affects only the
+RMS bar — the peak line keeps its own hold and release. The choice is saved
+with the workspace.
 
 The meter scale runs from -65 dB at the bottom to +6 dB at the top. The
 whole area above 0 dB is red. The ruler has an unlabelled green tick at

@@ -1321,6 +1321,13 @@ pub output_ovr: Option<[bool; 18]>,
     /// The device's TotalMix meter ballistics, for the canvases' bar
     /// release.
     pub ballistics: MeterBallistics,
+    /// The user's "VU fallback" RMS bar release choice, in dB/s.  `None`
+    /// keeps the device's measured bar release.  A normal workspace setting
+    /// published on the shared bus; the service applies it to
+    /// `ballistics.bar_release_db_s`, so the canvases read the ballistics
+    /// unchanged.  Only the bar release is affected — the peak hold and
+    /// peak release keep the device ballistics.
+    pub vu_release_db_s: Option<u32>,
 }
 
 /// A level or held peak above this keeps the meter canvases animating.
@@ -1674,6 +1681,9 @@ fn run(
             merge_over(m.playbacks.iter_mut(), over_flags_pb.as_deref());
             merge_over(m.outputs.iter_mut(), over_flags_out.as_deref());
             m.ballistics = device.meter_ballistics();
+            if let Some(v) = m.vu_release_db_s {
+                m.ballistics.bar_release_db_s = v as f32;
+            }
             let b = m.ballistics;
             hold_peaks(&mut m.input_peaks, &input_peaks, &mut peak_at[0], b, now);
             hold_peaks(
@@ -1900,6 +1910,36 @@ mod tests {
         );
         assert_eq!(ucx.meters().ballistics, MeterBallistics::TOTALMIX_UCX);
         ucx.stop();
+    }
+
+    #[test]
+    fn the_vu_fallback_setting_sets_the_bar_release_only() {
+        let uc = DeviceService::spawn(DeviceHandle::Mock(MockDevice::open_uc().unwrap()));
+        assert!(
+            wait_for(|| uc.meters().at.is_some()),
+            "the UC meter snapshot is written"
+        );
+        let bus = uc.meter_bus();
+        bus.lock().unwrap().vu_release_db_s = Some(20);
+        assert!(
+            wait_for(|| uc.meters().ballistics.bar_release_db_s == 20.0),
+            "the chosen bar release is applied"
+        );
+        let b = uc.meters().ballistics;
+        assert_eq!(b.peak_hold_s, MeterBallistics::TOTALMIX_UC.peak_hold_s);
+        assert_eq!(
+            b.peak_release_db_s,
+            MeterBallistics::TOTALMIX_UC.peak_release_db_s
+        );
+        bus.lock().unwrap().vu_release_db_s = None;
+        assert!(
+            wait_for(|| {
+                uc.meters().ballistics.bar_release_db_s
+                    == MeterBallistics::TOTALMIX_UC.bar_release_db_s
+            }),
+            "None restores the device's measured bar release"
+        );
+        uc.stop();
     }
 
     #[test]
