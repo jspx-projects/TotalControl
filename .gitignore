@@ -12,6 +12,7 @@ __pycache__/
 *.log
 *.pcap
 /rme-probe
+/kernel/test/meter-pair-test
 
 # Fedora RPM build outputs
 packaging/fedora/out/
