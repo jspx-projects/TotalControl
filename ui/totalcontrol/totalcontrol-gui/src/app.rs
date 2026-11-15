@@ -20086,24 +20086,13 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
                     .width(Length::Fixed(out_width))
                     .height(Length::Fixed(strip::STRIP_H * scale)),
             )
-            .push({
-                // The Control Room panel fills the row; when its settings
-                // are open they stack directly above it — bottom edge on the
-                // CR's top, right edge on the CR's right — and rise over the
-                // rows above. The fixed-height container caps the layer so
-                // the row keeps its height while the card overflows upward.
-                let cr = control_room_panel(state, scale, anim_now);
-                let mut col = column![].align_x(iced::Alignment::End);
-                if state.control_room_settings_open {
-                    col = col.push(control_room_settings_panel(state));
-                }
-                col = col.push(cr);
-                container(col)
+            .push(
+                container(control_room_panel(state, scale, anim_now))
                     .width(Length::Fill)
                     .height(Length::Fixed(strip::STRIP_H * scale))
                     .align_x(iced::Alignment::End)
-                    .align_y(iced::Alignment::End)
-            });
+                    .align_y(iced::Alignment::Start),
+            );
         let row = row.width(Length::Fixed(out_width));
         // The Assign menu opens inside this row, so it stays anchored to
         // the Control Room panel whatever the window size or scroll is.
@@ -20181,14 +20170,44 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     } else {
         section_header("HARDWARE OUTPUTS", scale)
     };
+    let body_width = input_width.max(pb_width).max(out_width);
     let body = column![sources, outputs_header, out_row]
         .spacing(theme::SPACE_LG)
         // Give the page's bidirectional scrollable the real row width, so a
         // row wider than the window scrolls instead of clipping its right-hand
         // strips or making the last visible strip look narrower.
-        .width(Length::Fixed(input_width.max(pb_width).max(out_width)));
+        .width(Length::Fixed(body_width));
 
-    (page(body), fx_overlay)
+    // The Control Room settings ride over the whole mixer body, not the
+    // output row: a Stack layer is capped at the base layer's height, and the
+    // row is too short for the form. Over the body the panel can be as tall as
+    // it needs, its bottom edge lands on the Control Room's top (one row height
+    // up from the body bottom) and its right edge on the Control Room's right,
+    // and it scrolls with the mixer so it stays anchored.
+    let page_body: Element<'_, Message> = if state.control_room_settings_open {
+        let right_pad = (body_width - out_width).max(0.0);
+        iced::widget::Stack::new()
+            .push(body)
+            .push(
+                container(control_room_settings_panel(state))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::Alignment::End)
+                    .align_y(iced::Alignment::End)
+                    .padding(iced::Padding {
+                        bottom: strip::STRIP_H * scale,
+                        right: right_pad,
+                        left: 0.0,
+                        top: 0.0,
+                    }),
+            )
+            .width(Length::Fixed(body_width))
+            .into()
+    } else {
+        body.into()
+    };
+
+    (page(page_body), fx_overlay)
 }
 
 /// Submix / Free radio buttons, mirroring TotalMix's Routing Mode option

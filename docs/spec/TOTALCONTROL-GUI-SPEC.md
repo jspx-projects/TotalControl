@@ -1893,10 +1893,11 @@ not the Control Room Main assignment; `PH` always addresses channels 7/8.
 `settings` opens a panel titled `CONTROL ROOM SETTINGS`, anchored above the
 Control Room. Its bottom edge sits on the Control Room's top edge and its
 right edge on the Control Room's right edge; it is about 300 px wide (60% of
-the former width) and shrinks to its content, scrolling only when the content
-exceeds the available height. It is not dimmed. It follows the settings-dialog
-behaviour of §1.1: changes apply as they are made, and `Close` or `Escape`
-dismisses it. There is no draft and no `OK`/`Cancel`.
+the former width) and as tall as its content needs, rising over the rows
+above and scrolling only when it exceeds the available height. It is not
+dimmed. It follows the settings-dialog behaviour of §1.1: changes apply as
+they are made, and `Close` or `Escape` dismisses it. There is no draft and no
+`OK`/`Cancel`.
 
 | Section | Controls |
 |---|---|
