@@ -93,7 +93,9 @@ solo amber.  A fader-linked group tints the caps of its members with its
 colour; the global fader group tints them yellow while it is ganged.
 
 The Control Room closes the Hardware Outputs row, flush with the mixer's right
-edge.
+edge. When the row cannot hold both, the Control Room stays on top and covers
+the right-hand output strips and the `HARDWARE OUTPUTS` title; the page does
+not widen to push the Control Room out of view.
 
 The device card reads:
 

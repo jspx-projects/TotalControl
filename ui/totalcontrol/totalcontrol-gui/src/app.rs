@@ -20136,7 +20136,10 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     let fx_overlay = fx_open && reserve < fx_extent;
     let out_row: Element<'_, Message> = if control_room_available(state) {
         strips_width = out_width;
-        out_width = natural_out.max(available);
+        // The Control Room keeps the right edge.  When the row cannot hold
+        // both, it covers the right-hand output strips instead of widening
+        // the page and pushing itself out of view.
+        out_width = available.max(cr_w);
         // The strips are the row; the Control Room rides above them, pinned
         // to the right edge, so a slideout widening the panel eats into the
         // channel row instead of pushing it.
@@ -20215,18 +20218,24 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     // strips, `control room` starting at the section's leftmost channel.
     let outputs_header: Element<'_, Message> = if control_room_available(state) {
         let cr_w = control_room_visual_width(state, scale, anim_now);
-        // The title starts exactly at the section's left edge — the panel's
-        // own left edge — so the two line up at any window width. The slack
-        // between the strips and the section is the break in the line.
-        let break_w = (out_width - cr_w - strips_width).max(0.0);
-        row![
-            container(section_header("HARDWARE OUTPUTS", scale)).width(Length::Fixed(strips_width)),
-            iced::widget::Space::new().width(Length::Fixed(break_w)),
-            container(section_header("CONTROL ROOM", scale)).width(Length::Fixed(cr_w)),
-        ]
-        .spacing(0.0)
-        .width(Length::Fixed(out_width))
-        .into()
+        // Keep the two titles on their own sections.  The Control Room title
+        // is the top layer, so it covers part of the HARDWARE OUTPUTS title
+        // when the row is too narrow, matching the strip overlay below.
+        iced::widget::Stack::new()
+            .push(
+                container(section_header("HARDWARE OUTPUTS", scale))
+                    .width(Length::Fixed(out_width)),
+            )
+            .push(
+                container(
+                    container(section_header("CONTROL ROOM", scale))
+                        .width(Length::Fixed(cr_w)),
+                )
+                .width(Length::Fill)
+                .align_x(iced::Alignment::End),
+            )
+            .width(Length::Fixed(out_width))
+            .into()
     } else {
         section_header("HARDWARE OUTPUTS", scale)
     };
