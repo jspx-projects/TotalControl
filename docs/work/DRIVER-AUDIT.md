@@ -118,7 +118,8 @@ capture both work on alt 1. The UCX rate write is the family word alone
 on both transports; the multiplier follows the alternate setting.
 
 Implemented in PR #191 (`fix/driver-meter-buffer`). Audible sine
-confirmation and the UC PC S32 regression pass are pending.
+confirmation is done (clean sine on the bench). The UC PC S32 regression
+pass is pending; it needs the UC on the bench.
 
 ## Open protocol items
 
