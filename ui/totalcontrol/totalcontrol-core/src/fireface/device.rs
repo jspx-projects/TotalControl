@@ -528,7 +528,8 @@ impl UcMeterBank {
 
     /// The row bar's device RMS level.  Channels 0..3 use the flag-page
     /// bank and channels 4..17 the data-page header.  The device words are
-    /// pre-fader; the output-meter path applies the row fader for display.
+    /// post-fader and already include the row fader; the display applies
+    /// only the row mute.
     fn output_rms(&self, channel: usize) -> f32 {
         self.output_rms[channel]
     }

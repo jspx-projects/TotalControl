@@ -105,7 +105,7 @@ overwrite a real unit's current workspace.
 
 The application loads the current workspace for the active unit. The scene
 is applied to the device under the existing startup sync rules (readback,
-mismatch prompt and "Always init DSP devices with TotalMix FX settings").
+mismatch prompt and "Always init the device with TotalControl settings").
 The GUI fields are restored as saved. If no unit is connected at start, the
 last active unit's workspace is loaded and is applied when that unit appears;
 a different unit switches to its own current workspace.
@@ -217,7 +217,7 @@ mixer scene, labels, groups, snapshots, layouts or window layout.
 | Files | Last workspace folder |
 
 The OSC receive port defaults to 7001 and the send port to 9001, matching
-TotalMix FX. The MIDI remote is one surface connection; its navigation
+the host application. The MIDI remote is one surface connection; its navigation
 state (row, window, submix, trim) is runtime state, not persisted. The
 remote model is in [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
 
@@ -226,7 +226,7 @@ remote model is in [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
 | Setting | Contents |
 |---|---|
 | Current workspace | The unit's current workspace file |
-| Startup sync | Sync direction and "Always init DSP devices with TotalMix FX settings" |
+| Startup sync | Sync direction and "Always init the device with TotalControl settings" |
 
 Host settings may carry other unit-specific operational values. They must not
 duplicate the mixer scene or a GUI field listed in §6.

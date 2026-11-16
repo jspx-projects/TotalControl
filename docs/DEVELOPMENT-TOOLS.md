@@ -63,7 +63,7 @@ All development switches use the `TOTALCONTROL_` prefix:
 |---|---|
 | `scripts/capture-usbmon.sh` | Capture USB traffic |
 | `tools/parse_capture.py` | Parse a captured stream |
-| `tools/decode-totalmix-capture.py` | Decode TotalMix FX captures |
+| `tools/decode-totalmix-capture.py` | Decode host application captures |
 | `tools/rme-probe.c` | Direct vendor-request probe |
 | `scripts/ffuc-counters.c` | Read driver transport counters |
 | `tools/uc-loopback-phase-probe.sh` | UC loopback phase probe |

@@ -43,5 +43,26 @@ Open questions, capture requests and working notes are kept in
 
 The specifications are present-tense and describe the current implementation.
 
+## Document layering
+
+The documents are layered, and references point downward only. A device
+protocol specification is the lowest level: it describes the device wire
+protocol — transports, registers, request and packet formats, meter pages and
+init sequences — and nothing about the application. It does not name
+TotalControl and does not describe rendering, persistence or host
+orchestration.
+
+The higher-level documents (architecture, GUI, state, profile, OSC and the
+manual) own the host behaviour and reference down into the protocol specs for
+the wire detail. Meter rendering and ballistics belong to the GUI spec, host
+settings and scene restore to the state spec, and runtime ownership to the
+architecture document. A protocol spec states what the device does; the
+higher-level spec states what TotalControl does with it.
+
+The vendor mixer application that drives a device is called the **host
+application** throughout the documentation. The term is vendor-agnostic; the
+OSC dialects are named by vendor and version (for example `RME 1.96` and
+`RME Global`).
+
 RME device manuals are proprietary and are not part of the source
 distribution.

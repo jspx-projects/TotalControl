@@ -4,6 +4,12 @@ This directory contains the device and GUI specifications. Runtime structure
 is defined once in [`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md);
 these documents extend it with device-specific and visible detail.
 
+References point downward only: a device protocol specification describes the
+device wire protocol and names no application behaviour; the GUI, state,
+profile and OSC specifications own the host behaviour and reference the
+protocol specs for the wire detail. See the layering rule in
+[`../README.md`](../README.md).
+
 | Document | Contents |
 |---|---|
 | [TOTALCONTROL-GUI-SPEC.md](TOTALCONTROL-GUI-SPEC.md) | layout, strip controls, panels, gestures, motion and Control Room |

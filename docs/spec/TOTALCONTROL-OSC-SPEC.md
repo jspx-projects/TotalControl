@@ -1,24 +1,24 @@
 # OSC 1.96 and Global OSC control specification
 
-This document defines the two OSC surfaces used to drive TotalMix FX and the
-mapping from those surfaces to the Fireface UCX register protocol.  OSC 1.96
-is the banked classic surface defined by RME's `OscTableTotalMix_240722`,
-dated 2024-07-24.  Global OSC is the absolute-channel surface defined by RME's
-Global OSC table for TotalMix FX 2.1 and later.
+This document defines the two RME OSC surfaces used to drive the host
+application and the mapping from those surfaces to the Fireface UCX register
+protocol.  RME 1.96 is the banked classic surface defined by RME's
+`OscTableTotalMix_240722`, dated 2024-07-24.  RME Global is the absolute-channel
+surface defined by RME's Global OSC table for version 2.1 and later.
 
 | Dialect | Reference | Status |
 |---|---|---|
-| OSC 1.96 | `OscTableTotalMix_240722` | supported |
-| OSC 1.90 | older classic table | not supported |
-| Global OSC | RME Global OSC table (TotalMix FX 2.1+) | separate dialect |
+| RME 1.96 | `OscTableTotalMix_240722` | supported |
+| RME 1.90 | older classic table | not supported |
+| RME Global | RME Global OSC table (2.1+) | separate dialect |
 
 Global OSC is specified in [§13](#13-global-osc) and implemented by
-`totalcontrol-gui/src/osc_global.rs`.  TotalMix FX 2.10 and 2.11 compatibility
+`totalcontrol-gui/src/osc_global.rs`.  RME 2.10 and 2.11 compatibility
 is not a support target; they are only useful as compatibility evidence for
 the 1.96 table.
 
-The document covers protocol behaviour only. Enabling OSC in TotalMix FX and
-configuring the network are operational steps and live outside this
+The document covers protocol behaviour only. Enabling OSC in the host
+application and configuring the network are operational steps and live outside this
 specification.
 
 The OSC surface is device-independent: it drives the shared mixer model,
@@ -51,8 +51,8 @@ destinations).
 | Transport | UDP |
 | Encoding | big-endian |
 | Values | 32-bit float, 32-bit integer, string |
-| Control direction | controller to TotalMix FX |
-| Feedback direction | TotalMix FX to controller |
+| Control direction | controller to the host application |
+| Feedback direction | host application to controller |
 | Fixed ports | none; both directions are configurable |
 | Query request | none |
 | Feedback source port | selected by the operating system |
@@ -60,7 +60,7 @@ destinations).
 A message is a single OSC message or an OSC bundle. Bundles contain
 length-prefixed messages and may be nested.
 
-TotalMix FX sends feedback only when state changes or when a page is selected.
+The host application sends feedback only when state changes or when a page is selected.
 A command that changes no state may produce no reply. The controller reads
 state from feedback; it does not poll.
 
@@ -83,7 +83,7 @@ Display values are separate messages with a `Val` suffix:
 ```
 
 A page prefix selects a control page. Sending any parameter with a page prefix
-that differs from the current page makes TotalMix FX re-send the complete state
+that differs from the current page makes the host application re-send the complete state
 of that page.
 
 ## 3. Address model
@@ -392,8 +392,8 @@ Recorder paths:
 ## 9. Page 4 — Room EQ
 
 Selecting page 4 selects the output bus. `/4/track+` and `/4/track-` move the
-selected output channel; page 2 then edits that output. Room EQ is a TotalMix
-FX host feature; it has no UCX register mapping.
+selected output channel; page 2 then edits that output. Room EQ is a host
+application feature; it has no UCX register mapping.
 
 | Path | Function | Scale |
 |---|---|---|
@@ -434,7 +434,7 @@ Feedback is event-driven. Selecting a new page sends the complete state of
 that page. Bundles may contain several paths in one datagram; the controller
 must not assume one message per datagram or a fixed ordering.
 
-Peak-level feedback is optional. When enabled, TotalMix FX sends the level
+Peak-level feedback is optional. When enabled, the host application sends the level
 paths for the visible channels:
 
 ```text
@@ -619,7 +619,7 @@ literal dB value. The authoritative RME OSC table is
 | `/3/echoWidth` | `0x3c26` | 0 … 100 |
 | `/3/echoVolume` | `0x3c25` | 0.1 dB, signed |
 
-Snapshot, group, recorder, undo and redo operate on TotalMix FX state and do
+Snapshot, group, recorder, undo and redo operate on host application state and do
 not write UCX registers.
 
 ### 12.4 Fader and matrix records
@@ -670,7 +670,7 @@ The UCX state stream on endpoint `0x8d` uses the same word layout.
 
 ## 13. Global OSC
 
-Global OSC is the absolute-channel dialect of TotalMix FX 2.1 and later.  It
+RME Global is the absolute-channel dialect of RME version 2.1 and later.  It
 has no bank, page, track or submix selection state: every input, playback and
 output is addressed by its absolute position, and values use native units.
 
@@ -835,7 +835,7 @@ Global OSC carries Cue in the Control Room namespace:
 
 `N` is the zero-based hardware output channel whose submix is cued;
 `-1` clears Cue. It is the cued output, not the Cue/PFL monitoring target.
-The target remains a TotalMix setting (`Assign → Cue/PFL to`).
+The target remains a host application setting (`Assign → Cue/PFL to`).
 
 Cue replaces the target submix with the cued output's fader and matrix
 records, sets the target FX returns to `-65.0 dB`, and writes the monitor
@@ -870,7 +870,7 @@ listed as device-backed is host-side state or unsupported on the UC.
 | Reverb, echo, DURec | Not available through the UC OSC surface |
 
 Phase is a special case: classic page-2 `/2/phase` produced no UC device
-write, while the TotalMix UI phase control writes request `0x18`.  Do not
+write, while the host application's phase control writes request `0x18`.  Do not
 describe OSC phase as a UC device-backed control.
 
 The UC manual specifies a Peak and RMS meter for every input, playback and
