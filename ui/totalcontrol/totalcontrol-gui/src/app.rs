@@ -13672,14 +13672,14 @@ fn midi_osc_panel(state: &TotalControl) -> Element<'_, Message> {
                 .color(theme::text_primary())
                 .size(text_size),
             dialog::radio_choice(
-                "OSC 1.96",
+                "RME 1.96",
                 state.osc_dialect == crate::osc::OscDialect::Classic,
                 Message::SetOscMode(crate::osc::OscDialect::Classic),
                 osc_on,
                 scale,
             ),
             dialog::radio_choice(
-                "Global",
+                "RME Global",
                 state.osc_dialect == crate::osc::OscDialect::Global,
                 Message::SetOscMode(crate::osc::OscDialect::Global),
                 osc_on,

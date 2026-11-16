@@ -326,7 +326,7 @@ TotalControl offers three views:
   pair appears as its two mono channels. The destination list follows the
   output link state the same way, and a split output selects the chosen
   side. The two strips render and behave like their Mixer counterparts.
-- **Mixer**: all strips on three rows, TotalMix-style.
+- **Mixer**: all strips on three rows, like the host application.
 - **Matrix**: the complete routing grid; drag or scroll a cell to change its
   value, and double-click it to toggle between off and unity. The `Outputs`
   row edits each hardware output channel's own master volume.
@@ -431,7 +431,7 @@ numeric entry field.
 Output strips also carry a **balance** knob that pans the output pair
 between its two channels; it appears only while the pair is linked.
 
-Each meter has two indicators, following TotalMix FX:
+Each meter has two indicators, following the host application:
 
 - the **RMS bar** has a deliberately slow time constant so it shows average
   loudness. It is green below -3 dB, yellow from -3 dB to 0 dB and red above
@@ -443,7 +443,7 @@ Each meter has two indicators, following TotalMix FX:
   lights after three consecutive full-scale samples (the global default).
 
 Peak hold applies only to the peak line. The RMS bar is not held and keeps
-following the RMS signal. The default fall rates follow TotalMix FX's own
+following the RMS signal. The default fall rates follow the host application's own
 meters for the device:
 
 | Device | RMS bar release | Peak hold | Peak line release |
@@ -493,15 +493,11 @@ bar uses the peak word's sine equivalent (peak / √2). The input OVR block
 follows the device's input over word.
 
 The RMS bar is mathematically correct RMS: a full-scale sine reads about
--3 dB on it. TotalMix FX offers an optional **RMS +3 dB** display shift that
-makes the RMS reading and the peak line both read 0 dB for a full-scale
-sine; TotalControl does not apply that shift.
+-3 dB on it. TotalControl does not apply an RMS +3 dB display shift.
 
 TotalControl uses a fixed two-second peak hold and a global OVR trigger of
 three consecutive full-scale samples. OVR is a sample count, not a dB
-threshold. TotalMix FX makes both the hold time (0.1–9.9 s) and the OVR
-sample count (1–15) configurable; TotalControl keeps the two-second hold and
-the three-sample default for now.
+threshold.
 
 The meters show the level as it arrives at the interface. If the host
 (PipeWire) volume is below 0 dB, a full-scale recording reaches the
@@ -526,7 +522,7 @@ strip makes it the *current submix*. After that, every input and playback
 fader edits the **send of that channel into the selected output**, and the
 output's own fader is the master level of that bus.
 
-This is the same model as TotalMix FX:
+This is the same model as the host application:
 
 - The fader of an input or playback strip never changes what the channel
   sends to your recording or other outputs; it changes how loud that
@@ -706,7 +702,7 @@ send to it:
   plays on that output; its fader slot fills green when raised.
 
 The column holds **Reverb** and **Echo**, each with an on/off switch and a
-type menu. Both carry the controls TotalMix FX provides: predelay, room
+type menu. Both carry predelay, room
 scale, cutoffs, width and volume for reverb; delay time with a BPM readout,
 feedback, high cut and width for echo. The delay and BPM readouts are two
 views of one value. The echo block also shows the FX bus level meters.
@@ -778,7 +774,7 @@ row and gives it the fixed Control Room name.
 
 ### The button stack
 
-The buttons are one channel wide, in TotalMix’s order:
+The buttons are one channel wide, in the host application's order:
 
 - **dim**, **recall**, **speaker B**;
 - **mono**, **talkback**, **ext. input**, **mute FX**;
@@ -1337,8 +1333,7 @@ cargo run -p totalcontrol-layout --bin channel-preview -- \
 
 ## 16. Running in the background
 
-With a system tray, closing the window keeps TotalControl running, as TotalMix
-does: the front-panel DIM button and the restore of your mix after a replug
+With a system tray, closing the window keeps TotalControl running: the front-panel DIM button and the restore of your mix after a replug
 are TotalControl's job while it runs. The tray icon toggles the window; its menu
 has dim, recall mix 1–8, settings and quit. `totalcontrol --minimized` starts
 hidden. Settings can start TotalControl with your session, hidden in the tray;
@@ -1473,14 +1468,14 @@ it. `i.o.` means loaded and `n.o.` means an empty slot. Loading a setup while
 connected changes only the front-panel parameters — input gains and output
 volumes — not the routing. `CC` activates after a power cycle.
 
-The six slots are written from TotalMix FX, **Options → Store current State
+The six slots are written from the host application, **Options → Store current State
 into Device → Setup 1–6**. The host does not upload a mix; the unit snapshots
 its current internal state, including routing, EQ, FX, references and options.
 TotalControl leaves the six device slots untouched. Its own **Mix 1–8**
 snapshots are host files, not the unit's setups.
 
 If the unit reports an error at power-up and every user slot still shows
-`n.o.` after TotalMix has stored it, the unit's setup memory has not passed
+`n.o.` after the host application has stored it, the unit's setup memory has not passed
 its self-test. `FA` may still load because it comes from the firmware. In that
 case the six device slots are unavailable; keep using host mixes and Mix 1–8
 and have the unit serviced.
@@ -1567,8 +1562,7 @@ switch stays active until you turn it on.
 ### MIDI — a Mackie Control surface
 
 TotalControl can be driven by a Mackie Control compatible surface (Mackie
-Control, Behringer BCF2000 in "MC C" mode, X-Touch, and many others), the
-same way TotalMix FX can.
+Control, Behringer BCF2000 in "MC C" mode, X-Touch, and many others).
 
 1. Connect the surface. A DIN surface goes into the unit's MIDI breakout
    ports; a USB surface connects to the computer directly.
@@ -1625,10 +1619,10 @@ feedback port.
 `Show OSC debug log` below the enable switch opens the traffic panel; it
 is greyed out until OSC is enabled and closes when OSC is switched off.
 
-`OSC 1.96` is the banked TotalMix FX 1.96 address space. The older 1.90
-classic surface is not supported. `Global` is the absolute-channel TotalMix FX
+`RME 1.96` is the banked RME 1.96 address space. The older 1.90
+classic surface is not supported. `RME Global` is the absolute-channel RME
 2.1+ surface: channels are addressed by their 0-based position and continuous
-values use native units instead of the OSC 1.96 normalized scale. The selected
+values use native units instead of the RME 1.96 normalized scale. The selected
 mode is saved with the other settings.
 
 The command line remains a development override:

@@ -203,7 +203,7 @@ when this driver does not hold it; the claim policy and the coexistence are in
 [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md) §3.
 
 In class-compliant mode the whole unit belongs to the class driver, and RME's
-TotalMix FX for iPad app controls the mixer over SysEx on MIDI port 2 (observed
+iPad app controls the mixer over SysEx on MIDI port 2 (observed
 on the UCX II; assumed for the UCX).  The unit also implements stand-alone MIDI
 control with the UCX additions STOP = Dim and F1–F6 = Setup 1–6; see the MIDI
 spec §12.  The MIDI protocol and the Mackie Control host are generic and live
@@ -421,7 +421,7 @@ value.
 | `0x3d20` | control-room Main pair | read-only; 0 = AN1/2 in the tested state |
 | `0x3d21` | control-room Speaker B pair | read-only; 2 = AN3/4 in the normal state |
 | `0x3d22` | unknown | 0 in the tested states |
-| `0x3d40` | host-session/runtime flag | read-only; 0 in a Linux-only session, 1 after a TotalMix session |
+| `0x3d40` | host-session/runtime flag | read-only; 0 in a Linux-only session, 1 after a host-application session |
 | `0x3d41`, `0x3d42` | unknown | read-only, 0 in the tested states |
 | `0x3d43` | unknown boolean | writable 0/1 |
 | `0x3d44` | unknown index/sentinel | writable; −1, 0 and 2 accepted |
@@ -505,7 +505,7 @@ stereo pairs.
 
 ### 5.2 Outputs
 
-The DSP pair order is Phones-first. The display row is TotalMix order.
+The DSP pair order is Phones-first. The display row is the host application's order.
 
 | Internal pair | Display row | Name | DSP pair |
 |---|---|---|---|
@@ -746,7 +746,7 @@ index = DSP output channel 0..17
 
 The flag is per DSP output channel. A split output pair writes one index; a
 linked pair writes both indices and uses the left side as the pair value. The
-whole 30-entry bank is available; TotalMix refreshes all 30 entries when it
+whole 30-entry bank is available; the host application refreshes all 30 entries when it
 changes a loopback state.
 
 ### 7.4 Cue
@@ -912,7 +912,7 @@ The `0x1b` quad is:
 
 ### 11.4 Application reconnect
 
-When TotalMix FX opens with the USB driver already attached, it does not
+When the host application opens with the USB driver already attached, it does not
 reissue `SET_CONFIGURATION`, `SET_INTERFACE` or the `0x16`/`0x1b` vendor
 initialisation. It writes:
 

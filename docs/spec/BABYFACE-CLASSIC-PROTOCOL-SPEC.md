@@ -76,7 +76,7 @@ descriptors are not captured. The driver exposes one ALSA rawmidi device.
 The unit has no stand-alone MIDI control: its stand-alone mode is a
 fixed-routing AD/DA converter mode. In class-compliant mode (firmware 200 and
 later, Select+Recall at power-on) the whole unit belongs to the class driver
-and the MIDI port is class compliant and SysEx-capable; RME's TotalMix FX for
+and the MIDI port is class compliant and SysEx-capable; RME's
 iPad app then controls the mixer over SysEx on the MIDI port.
 
 The MIDI protocol and the Mackie Control host are generic and live in

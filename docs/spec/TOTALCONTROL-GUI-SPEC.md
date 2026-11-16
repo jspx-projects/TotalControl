@@ -562,7 +562,7 @@ bar is mathematically correct RMS, so a full-scale sine reads about -3 dB;
 no RMS +3 dB shift is applied. There is no separate red guide across the
 meter bar.
 
-The ballistics follow the reference application's meters for the device,
+The ballistics follow the host application's meters for the device,
 measured on its own screen:
 
 | Device | RMS bar release | Peak hold | Peak line release |
@@ -576,7 +576,9 @@ The RMS bar release is user-configurable through the VU fallback setting
 (1.3); the peak hold and peak line release are not configurable. The OVR
 segment lights after three consecutive full-scale samples. The OVR
 sample count is a global meter setting (1–15, default three), not a dB
-threshold and not a per-channel value. There is no configurable hold time.
+threshold and not a per-channel value. The device's OVR count field spans
+0–15; TotalControl exposes 1–15, while the host application exposes only 1–10.
+There is no configurable hold time.
 If the device disconnects, the meters fall to silence with the normal
 release instead of freezing at their last reading.
 
@@ -584,11 +586,17 @@ Input and playback meters are pre-fader and post-trim: the trim changes the
 reading, the send fader and selected submix do not. Hardware output meters
 are post-fader and go to zero when the output is muted. The Fireface UC and
 UCX take both the RMS bar and the peak line from their hardware meter
-pages. The UC's device RMS words are pre-fader: AN1..AN4 use the flag-page
-bank and AN5/6 through ADAT7/8 use the data-page header. TotalControl
-applies the row's output fader and mute for the displayed post-fader
-output meter. The peak line and OVR block come from the device's output
+pages. The UC's device output RMS words are post-fader and already include
+the row fader: AN1..AN4 use the flag-page bank and AN5/6 through ADAT7/8
+use the data-page header. TotalControl displays them directly and applies
+the row mute. The peak line and OVR block come from the device's output
 record for all output rows.
+
+The UC meter page and word layout are in
+`FIREFFACE-UC-PROTOCOL-SPEC.md` §12. On the UC a zero RMS power word at the
+floor falls back to the peak word's sine equivalent (`peak / sqrt(2)`); the
+red band above 0 dB on playback and output rows follows the output record's
+OVR count.
 
 #### 2.7.2 Fader scale
 
@@ -725,7 +733,7 @@ gap empty, so B1 keeps the same height on every channel kind.
 
 A channel in the active MIDI remote's window shows its name (T1) in the
 remote tint, a brown tone, in both the expanded and the collapsed layout.
-The tint marks the channels the surface currently controls, like TotalMix;
+The tint marks the channels the surface currently controls, like the host application;
 it is not a selection and does not change on hover. The window and the
 remote are defined in
 [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
@@ -1301,7 +1309,7 @@ strips have no Dynamics.
 
 Gain, attack and release are shared between compressor and expander.
 
-The panel follows the new TotalMix FX layout: the amplitude graph spans the
+The panel follows the host application's layout: the amplitude graph spans the
 top, the shared Gain/Attack/Release knobs sit below it, then the
 Compressor/Expander columns and the Auto Level row. Compressor aligns with
 Attack and Expander with Release. Threshold and ratio are grouped as one
@@ -1454,7 +1462,7 @@ and to each mono block of a split output.
 ### 8.1 Routing mode: Submix and Free
 
 The Options panel carries a `routing` selector — `submix` or `free` — matching
-TotalMix FX's View Options > Routing Mode (UC manual §26.5.1). The same
+the host application's View Options > Routing Mode (UC manual §26.5.1). The same
 selector appears in the Matrix header.
 
 | Mode | What a channel's fader edits | Submix selector |
@@ -1577,7 +1585,7 @@ selects only that channel's bus: only its strip takes the active surface, and
 the input/playback send faders read and write that mono matrix column. A
 linked output pair keeps the pair-level submix and stereo send model.
 
-| Term | Normal mixing desk | TotalMix FX | TotalControl |
+| Term | Normal mixing desk | Host application | TotalControl |
 |---|---|---|---|
 | Input gain / trim | Preamp trim before the channel fader and meter | Hardware preamp gain; the T button is Trim Gain mode, not a separate gain stage | Trim pre-gain, common to every send of the channel |
 | Channel fader | One per channel, feeding the bus assignment | None | None |
@@ -1588,8 +1596,8 @@ linked output pair keeps the pair-level submix and stereo send model.
 | Input VU tap | After input gain/trim, before the channel fader | After preamp gain and optional Post FX, before the send fader; T does not change it | After trim, before the send fader |
 | Output VU tap | Post-fader bus or output | Post-fader output bus | Post-fader output bus |
 
-In TotalMix, T is the **Trim Gain** mode: it gangs the sends of one channel.
-It is not a pre-gain and does not move the input VU. TotalMix therefore has
+In the host application, T is the **Trim Gain** mode: it gangs the sends of one channel.
+It is not a pre-gain and does not move the input VU. The host application therefore has
 an input VU after the preamp and optional FX, not “before trim”.
 
 In TotalControl, T is a true pre-fader trim. The send fader displays the post-trim
@@ -1605,7 +1613,7 @@ input -> input stage / sensitivity -> preamp / trim -> channel VU
       -> channel fader -> pan -> bus assignment -> bus sum
       -> bus master -> output VU -> output
 
-TotalMix FX:
+Host application:
 input -> input stage / reference -> preamp gain (where present) -> ADC
       -> input VU (post-preamp; Post FX optional)
       -> send fader for the selected output -> bus sum
@@ -1618,7 +1626,7 @@ input -> input stage / reference -> preamp gain (where present) -> ADC
 ```
 
 The preamp gain is present on the UCX analog inputs 1–4. Digital inputs enter
-after the preamp stage. In TotalMix, T is a send-fader mode, not a gain stage.
+after the preamp stage. In the host application, T is a send-fader mode, not a gain stage.
 In TotalControl, trim is a host-side pre-fader gain after the ADC.
 
 Control Room destinations (Main, Speaker B, Phones) are ordinary output buses

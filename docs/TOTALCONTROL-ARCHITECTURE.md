@@ -275,7 +275,7 @@ notify_osc() / notify_osc_raw()
     -> OscOutbound
     -> worker
     -> RmeFeedback::translate()
-    -> TotalMix paths
+    -> RME OSC paths
     -> UDP
 ```
 
@@ -283,7 +283,7 @@ notify_osc() / notify_osc_raw()
 resends the current page after `/setBankStart`, `/setOffsetInBank` or
 `/setSubmix`, and suppresses sends outside the visible bank or selected submix.
 
-OSC uses the TotalMix FX dialect because its bank/page/submix model maps onto
+OSC uses the RME dialect because its bank/page/submix model maps onto
 the mixer's channel rows and send matrix. The address space is defined in
 `spec/TOTALCONTROL-OSC-SPEC.md`.
 

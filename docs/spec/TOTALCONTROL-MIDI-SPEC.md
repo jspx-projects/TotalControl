@@ -25,8 +25,8 @@ Not supported:
 | UMP and MIDI 2.0 | not implemented |
 | Clock generation | the driver carries bytes, it does not pace them |
 | Messages larger than 128 bytes | the driver sends one 128-byte chunk per transfer, and a split message is lost |
-| HUI and Eucon | TotalMix FX does not implement them either; the controller protocol is Mackie Control |
-| More than two MIDI remotes, extender linking | the device ports are the remotes; TotalMix FX's four-remote/extender model is open (§13) |
+| HUI and Eucon | not implemented; the controller protocol is Mackie Control |
+| More than two MIDI remotes, extender linking | the device ports are the remotes; the host application's four-remote/extender model is open (§13) |
 | Reverb/echo user presets via CC | the mixer model has no FX user presets |
 
 ## Contents
@@ -105,7 +105,7 @@ The code index number is a USB-MIDI 1.0 code in both directions:
 | `0xe` | 3 | pitch bend |
 | `0xf` | 1 | single byte |
 
-The high nibble selects the port. On the UC, TotalMix FX sends the packet
+The high nibble selects the port. On the UC, the host application sends the packet
 `9f 7f 5a` on the selected port periodically while a MIDI remote output is
 enabled; it is the loopback-detection note (§8.6).
 
@@ -178,7 +178,7 @@ personality the driver is required.
 
 In CC mode the whole unit re-enumerates with class descriptors and
 belongs to `snd-usb-audio`; this driver does not bind class interfaces.
-On the UCX and Babyface, RME's TotalMix FX for iPad app then controls the
+On the UCX and Babyface, RME's iPad app then controls the
 unit's mixer over SysEx on MIDI port 2 (observed on the UCX II; assumed
 for the UCX, §13).
 
@@ -269,7 +269,7 @@ SysEx, handshake) are all below this limit.
 
 ## 8. MIDI remote control model
 
-This is the TotalMix FX remote model, implemented by TotalControl. The
+This is the host application's remote model, implemented by TotalControl. The
 note and CC values are the Mackie Control Universal map (§9); the
 meanings are RME's.
 
@@ -309,7 +309,7 @@ the remote selects it in the GUI.
 | F9 | select Main Out and cue it |
 | F10–F12 | cue Phones 1–3 (device-dependent, §12) |
 | Fader touch | carried, no action |
-| Transport, zoom, scrub, save, undo, shift, assignment buttons | no TotalMix meaning; ignored |
+| Transport, zoom, scrub, save, undo, shift, assignment buttons | no host application meaning; ignored |
 
 In Trim Gains mode the strip faders write the channel trim in dB instead
 of the send volume; outputs keep their volume. A linked stereo pair is
@@ -371,7 +371,7 @@ enable switch; the remaining options keep their defaults in this version
 ### 8.5 Window marking
 
 The channels in the remote's window show their name field in the remote
-tint (brown), like TotalMix. Channels hidden by the channel layout are
+tint (brown), like the host application. Channels hidden by the channel layout are
 skipped in the window.
 
 ### 8.6 Loopback detection
@@ -550,7 +550,7 @@ The remote settings are host settings, not workspace state (STATE-SPEC
 
 Stand-alone MIDI control is a unit mode, not a TotalControl feature: with
 the unit disconnected from the computer, the unit itself acts as the
-Mackie host. It is enabled from TotalMix FX (Options, Enable MIDI Control)
+Mackie host. It is enabled from the host application (Options, Enable MIDI Control)
 and persists in the unit. It covers the faders and pans of rows 1 and 3,
 input mute, ganging via Select, submix selection and LED/display
 feedback; the playback row is skipped, and Talkback, Dim, Mono, Solo and
@@ -575,8 +575,8 @@ while it is in this mode.
 5. Live-surface verification of the host: handshake, LCD, meters and the
    option interactions (trim × submix-linked × submix-selection row)
    against a real surface.
-6. Multi-remote and extender: up to four remotes forming one block, as
-   in TotalMix FX. The codec is per-remote; the settings page exposes
+6. Multi-remote and extender: up to four remotes forming one block.
+   The codec is per-remote; the settings page exposes
    one.
 7. FX user presets via `B2/B3 0C`: needs the reverb/echo user-preset
    model first.
