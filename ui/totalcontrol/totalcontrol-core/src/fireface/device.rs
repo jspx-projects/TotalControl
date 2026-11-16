@@ -7750,6 +7750,8 @@ mod tests {
         info: DeviceInfo,
         writes: Arc<Mutex<Vec<Write>>>,
         levels: Arc<Mutex<u32>>,
+        /// Artificial device pacing: every word burst sleeps this long.
+        write_delay_ms: Arc<std::sync::atomic::AtomicU64>,
     }
 
     impl MockTransport {
@@ -7782,6 +7784,7 @@ mod tests {
                     info,
                     writes: Arc::clone(&writes),
                     levels,
+                    write_delay_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 },
                 writes,
             )
@@ -7801,6 +7804,12 @@ mod tests {
             index: u16,
             _data: &[u8],
         ) -> Result<Vec<u8>, Error> {
+            let ms = self
+                .write_delay_ms
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if ms > 0 {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
             self.writes
                 .lock()
                 .unwrap()
@@ -7815,6 +7824,12 @@ mod tests {
         }
 
         fn write_words(&self, words: &[(u16, u16)]) -> Result<(), Error> {
+            let ms = self
+                .write_delay_ms
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if ms > 0 {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
             self.writes
                 .lock()
                 .unwrap()
@@ -7862,6 +7877,47 @@ mod tests {
             Fireface::from_transport_with_writer(Box::new(t), info, true).unwrap(),
             writes,
         )
+    }
+
+    fn open_delayed(
+        model: Model,
+        delay_ms: u64,
+        async_writer: bool,
+    ) -> (Fireface, Arc<Mutex<Vec<Write>>>) {
+        let (t, writes) = MockTransport::new(model);
+        t.write_delay_ms
+            .store(delay_ms, std::sync::atomic::Ordering::Relaxed);
+        let info = t.info.clone();
+        (
+            Fireface::from_transport_with_writer(Box::new(t), info, async_writer)
+                .unwrap(),
+            writes,
+        )
+    }
+
+    /// Reproduction evidence for the host audit: with a device that paces
+    /// its word bursts, a UC live write blocks the caller for the pacing
+    /// duration, while the UCX writer thread already absorbs it. The fix
+    /// routes UC writes through the writer too; this test then inverts to
+    /// assert a prompt return on both models.
+    #[test]
+    fn uc_live_writes_block_the_caller_while_ucx_writes_are_queued() {
+        let (mut uc, _writes) = open_delayed(Model::Uc, 300, true);
+        let t0 = std::time::Instant::now();
+        uc.set_volume(ChannelId::Output(0), 0, 0.5).unwrap();
+        let uc_elapsed = t0.elapsed();
+        assert!(
+            uc_elapsed >= Duration::from_millis(250),
+            "the UC write blocked the caller for {uc_elapsed:?}"
+        );
+
+        let (mut ucx, _writes2) = open_delayed(Model::Ucx, 300, true);
+        let t1 = std::time::Instant::now();
+        ucx.set_volume(ChannelId::Output(0), 0, 0.5).unwrap();
+        assert!(
+            t1.elapsed() < Duration::from_millis(100),
+            "the UCX write queued promptly"
+        );
     }
 
     #[test]
