@@ -179,6 +179,12 @@ mechanism, FX returns and unsupported controls.
   `jspx-projects/TotalControl`. Never open, update, or comment on a pull
   request in any other repository without explicit permission for that
   specific action each time.
+- Communication with other contributors requires the user's approval first.
+  This includes PR/issue comments that mention or address a contributor,
+  review requests, and messages on any coordination channel. Draft the
+  message for the user to approve; do not send it unprompted. A direct
+  instruction from the user to contact a specific contributor approves that
+  one communication.
 - The UI is part of this repository. Do not add an external TotalControl development
   remote; the imported upstream history is on `archive/tuxmix-upstream`.
 - Preserve the user scene and `~/.config/totalcontrol/gui.json`. Leave the device on
