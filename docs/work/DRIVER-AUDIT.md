@@ -117,9 +117,10 @@ and capture completed zero URBs. With the authentic block, playback and
 capture both work on alt 1. The UCX rate write is the family word alone
 on both transports; the multiplier follows the alternate setting.
 
-Implemented in PR #191 (`fix/driver-meter-buffer`). Audible sine
-confirmation is done (clean sine on the bench). The UC PC S32 regression
-pass is pending; it needs the UC on the bench.
+Implemented in PR #191 (`fix/driver-meter-buffer`). Verified on the
+bench: clean sine on IF5, a clean IF5 music session (q1024, zero health
+deltas), and a clean ISO music regression (44.1 kHz, q48). The UC PC
+S32 regression pass is pending; it needs the UC on the bench.
 
 ## Open protocol items
 
