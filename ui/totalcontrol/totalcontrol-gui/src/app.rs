@@ -12058,8 +12058,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::ControlRoomMono(on) => {
-            state.device.settings_mut().mono = on;
-            state.device.sync_settings_to_device();
+            // The setter owns the state transition.  Setting settings.mono
+            // first made the UC setter return early without rewriting the
+            // monitor matrix.
             if let Err(e) = state.device.set_mono(on) {
                 fail(state, "mono", &e);
             }
@@ -19380,7 +19381,10 @@ fn control_room_panel(
                 "mono",
                 theme::TEXT_MD,
                 settings.mono,
-                Some(Message::ControlRoomMono(!settings.mono)),
+                settings
+                    .main_out
+                    .is_some()
+                    .then_some(Message::ControlRoomMono(!settings.mono)),
             ),
             slot(
                 "talkback",

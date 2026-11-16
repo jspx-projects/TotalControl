@@ -2122,7 +2122,11 @@ impl Fireface {
                 "Mono needs an assigned monitor output".into(),
             ));
         };
-        if on == self.settings.mono {
+        // The saved matrix is the real “Mono is applied” marker.  A stale
+        // settings flag alone must not suppress the first rewrite: a scene
+        // restore or a caller that pre-set the flag can leave it true while
+        // the monitor matrix is still stereo.
+        if self.settings.mono == on && self.uc_monitor_saved.is_some() == on {
             return Ok(());
         }
         if !on {
@@ -10858,6 +10862,25 @@ mod tests {
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
         let (value, index) = uc::matrix_word(gain, 4 * 36 + 19);
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+    }
+
+    #[test]
+    fn uc_mono_rewrites_when_the_settings_flag_is_already_set() {
+        // The GUI used to set `settings.mono` before calling the setter.
+        // That must not suppress the first matrix rewrite.
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_main_out(Some(3)).unwrap(); // Phones 7/8
+        dev.settings.mono = true;
+        writes.lock().unwrap().clear();
+        dev.set_mono(true).unwrap();
+        let w = writes.lock().unwrap();
+        assert!(
+            w.iter().any(|write| {
+                matches!(write, Write::Vendor(protocol::req::MIXER, _, idx)
+                    if matches!((*idx & 0x3fff) as usize / 36, 6 | 7))
+            }),
+            "Mono must rewrite the active Phones pair even with a stale flag"
+        );
     }
 
     #[test]
