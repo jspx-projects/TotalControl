@@ -183,8 +183,8 @@ change the request set.
 | `0x1d` | OUT | Stream-open word |
 | `0x20` | OUT | Global enable |
 
-The host reads `0x11`, `0x1c` and `0x17` as data; the data stage of `0x17` is
-two bytes and of the other two is four bytes.  Every other request the host
+The host reads `0x10`, `0x11`, `0x1c` and `0x17` as data.  The data stage of
+`0x17` is two bytes; the other three carry four bytes.  Every other request the host
 sends carries no data stage.
 
 ### 2.1 Firmware identification
@@ -255,7 +255,7 @@ initial stream opens directly after the probe sequence; the engine start
 commits the rate (§9).
 
 A rate change closes the stream with `0x13 0x000f/0xc000`, writes the new
-`0x10` rate family and the `0x10 / 1487 = 0x0001` commit, waits 200 ms, then
+`0x10` rate family and the `0x10 / 1487` options commit (§9), waits 200 ms, then
 opens with:
 
 | Request | Value / index |
@@ -512,13 +512,47 @@ Rate selection uses `0x10`, `wIndex 48`:
 | 192.0 kHz | `0x0020` |
 
 The word selects the 32 kHz, 44.1 kHz or 48 kHz family; the stream multiplier
-follows the active stream.  A selection is followed by
-`0x10 / wIndex 1487 = 0x0001`.
+follows the active stream.  A selection is followed by the options commit,
+`0x10 / wIndex 1487`.
 
-The options word at `wIndex 1487` has base `0x0001` and carries clock source
-(bits 1–3), word-clock single-speed (bit 6), SPDIF professional (bit 7) and
-optical output format (bit 10; set for SPDIF, clear for ADAT).  `SPDIF In TMS`
-is host-side and has no bit in this word.
+The options word at `wIndex 1487` carries word clock input termination
+(bit 0), clock source (bits 1–3), word-clock single-speed (bit 6), SPDIF
+professional (bit 7) and optical output format (bit 10; set for SPDIF, clear
+for ADAT).  All bits clear is Internal clock, termination off, SPDIF Consumer
+and optical ADAT.  `SPDIF In TMS` is host-side and has no bit in this word.
+
+The Windows reference host (RME driver 1.1.68, firmware 138) writes the whole
+options word with `wIndex 1487` for every settings change, and again 30–45 ms
+after every rate-family write.  It never reads `0x10`.  Measured writes, one
+setting changed at a time:
+
+| Change | Other settings | Options commit |
+|---|---|---|
+| SPDIF Consumer to Professional | defaults | `0x0080 / 1487` |
+| Word In Termination on | SPDIF Professional | `0x0081 / 1487` |
+| Single Speed on | SPDIF Professional | `0x00c0 / 1487` |
+| optical output ADAT to SPDIF | SPDIF Professional | `0x0480 / 1487` |
+| clock source Internal to SPDIF coaxial | SPDIF Professional, optical SPDIF | `0x0482 / 1487` |
+| every setting back to its default | | `0x0000 / 1487` |
+
+A rate change to 44.1 kHz with SPDIF Professional and optical output SPDIF
+writes `0x0010 / 0x0030`, then `0x0480 / 1487`, and `0x11` then reports the
+44.1 kHz family (`0x01f0ff00`).  Bit 0 is not needed for the commit to
+apply.
+
+The options commit writes back the options word the device holds.  The
+host reads `0x10` as four bytes, little-endian.  It keeps the bits under
+`0x05cf` and writes them with `wIndex 1487`.  The commit applies the rate
+family and leaves clock source and output formats as the mixer set them.
+
+The read form returns the bits under `0x05cf` as last written.  The
+clock-source bits report the selected source, not the locked one.  Bits
+4–5 carry the active rate family, as in the `wIndex 48` word.  The other
+bits of the read form are not decoded.  Verified on firmware 138, PC
+personality, at 44.1, 48 and 96 kHz, with no signal at the digital inputs.
+
+With clock source SPDIF and no signal at that input, the unit streams at
+the host rate.  Verified at 44.1 and 48 kHz on firmware 138.
 
 Pitch/varispeed uses request `0x1b` with four DDS words.  Each DDS word is
 split as `wValue` = bits 31..16 and the `wIndex` high byte = bits 15..8; the
@@ -837,8 +871,9 @@ init sequence does not set it.
    drives is not identified; a loopback on that output decides it.
 4. MIDI on the AP personality.  The AP interface table has no MIDI row; the
    AP descriptor has not been captured.
-5. The read form of `0x10`.  "EP0 request map" lists it as write or read;
-   the implemented host only writes it.
+5. The read form of `0x10` outside the options bits and the rate family.
+   §9 decodes the bits under `0x05cf` and bits 4–5; the other bits are not
+   decoded.
 6. The PC interrupt URB size.  The 48/96/192 sample-frame size is the host's
    choice; the device contract is the packet size and the rate class.
 7. The AP header phase field on the UCX.  The 12-bit position, 11-bit phase

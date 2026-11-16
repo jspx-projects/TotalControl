@@ -20,7 +20,9 @@ decode features, host-side measurement questions, and optional consolidation.
 Spec `FIREFFACE-UC-PROTOCOL-SPEC.md` §11.11. Each needs a capture before code.
 
 1. **Interfaces 3, 4 roles.** Endpoints present, unclaimed/undecoded.
-2. **Read form of `0x10`.** Only the write is implemented.
+2. **Read form of `0x10` outside the options bits and the rate family.** The
+   bits under `0x05cf` read back as written and the rate commit uses them;
+   bits 4-5 carry the rate family; the other bits are undecoded.
 3. **Status bytes 0 and 1.** Front-panel events use bytes 2/3; 0/1 undecoded.
 4. **Bulk role of `0x03`/`0x84` at 1x/2x.** Bulk there, interrupt at 4x; the
    bulk role is undecoded.

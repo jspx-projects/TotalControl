@@ -392,12 +392,14 @@ static int ffuc_set_rate_family(struct ffuc *chip, unsigned int rate)
 
 static int ffuc_uc_set_rate(struct ffuc *chip, unsigned int rate)
 {
+	__le32 cur;
+	u16 opts;
 	u32 dds;
 	int ret;
 
 	dev_info(&chip->dev->dev, "UC rate -> %u Hz (iso=%d)\n", rate,
 		 chip->iso);
-	/* Windows UC PC uses only 0x10/48 (family) + 0x10/1487=1 (commit).
+	/* Windows UC PC uses only 0x10/48 (family) + the 0x10/1487 commit.
 	 * The DDS word is needed by the ISO/Mac personality, not the
 	 * interrupt/Windows one; sending it there can override the committed
 	 * family and leave the device silent. */
@@ -423,12 +425,22 @@ static int ffuc_uc_set_rate(struct ffuc *chip, unsigned int rate)
 		 ffuc_rate_family(rate) << 4, ret);
 	if (ret < 0)
 		return ret;
-	/* Windows commits every rate change with 0x10 / wIndex 1487 /
-	 * wValue 1.  Without this the new family is written but not applied;
-	 * the stream can run while the device output stays closed. */
-	ret = ffuc_vendor_send(chip, FFUC_REQ_SETTINGS, 0x0001, 1487,
-			       NULL, 0);
-	dev_info(&chip->dev->dev, "UC rate commit 0x0001/1487 ret=%d\n", ret);
+	/* Windows commits every rate change with 0x10 / wIndex 1487, the
+	 * options mask.  Without the commit the new family is written but not
+	 * applied; the stream can run while the device output stays closed.
+	 * The commit rewrites every option bit, and the options (clock
+	 * source, word clock, SPDIF and optical output format) belong to the
+	 * mixer application.  Commit the word the device already holds, so a
+	 * stream start does not reset what the application set. */
+	ret = ffuc_vendor_recv(chip, FFUC_REQ_SETTINGS, 0, 0, &cur,
+			       sizeof(cur));
+	if (ret < 0)
+		return ret;
+	opts = le32_to_cpu(cur) & FFUC_UC_OPTIONS_MASK;
+	ret = ffuc_vendor_send(chip, FFUC_REQ_SETTINGS, opts,
+			       FFUC_UC_OPTIONS_MASK, NULL, 0);
+	dev_info(&chip->dev->dev, "UC rate commit 0x%04x/1487 ret=%d\n",
+		 opts, ret);
 	return ret;
 }
 
