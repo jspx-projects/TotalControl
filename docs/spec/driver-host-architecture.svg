@@ -182,14 +182,14 @@
   <circle cx="270" cy="778" r="9" fill="#555"/><text class="id" x="270" y="782" text-anchor="middle">H3</text>
   <text class="label" x="430" y="786" text-anchor="middle">device service thread</text>
   <text class="small" x="270" y="810">owns the Fireface handle (U2)</text>
-  <text class="small" x="270" y="828">applies commands (F2)</text>
+  <text class="small" x="270" y="828">applies commands: model + enqueue (F2)</text>
   <text class="small" x="270" y="846">drains events (F3), decodes the model</text>
   <text class="small" x="270" y="864">publishes C2 and C3</text>
 
   <rect class="sub" x="256" y="964" width="340" height="64" rx="4"/>
   <circle cx="270" cy="978" r="9" fill="#555"/><text class="id" x="270" y="982" text-anchor="middle">H4</text>
-  <text class="label" x="430" y="986" text-anchor="middle">IF1 writer thread</text>
-  <text class="small" x="270" y="1006">paced word bursts (UCX today)</text>
+  <text class="label" x="430" y="986" text-anchor="middle">control-I/O worker</text>
+  <text class="small" x="270" y="1006">all F2 I/O, ordered and paced</text>
   <path class="ctl" d="M426,944 L426,964"/><text class="tiny" x="432" y="958">F2</text>
 
   <rect class="sub" x="640" y="764" width="288" height="180" rx="4"/>
@@ -212,8 +212,6 @@
   <path class="ev" d="M596,910 L640,910"/><text class="tiny" x="602" y="902">C3</text>
   <path class="wake" d="M596,934 L640,934"/><text class="tiny" x="602" y="930">C4</text>
 
-  <text class="tiny" x="256" y="1056">C1 Command queue · C2 Snapshot (model) · C3 MeterSnapshot (meter bus) · C4 wake edges.</text>
-  <text class="tiny" x="256" y="1072">Channel semantics and cadence: TOTALCONTROL-ARCHITECTURE.md §5.</text>
-  <text class="tiny" x="256" y="1088">Audited defect: H3 performs blocking F2 I/O on the same thread as the F3 drain.</text>
-  <text class="tiny" x="256" y="1104">Proposed fix: all F2 I/O moves to H4; H3 becomes model + enqueue + drain.</text>
+  <text class="tiny" x="256" y="1056">C1 Command queue (bounded, coalescing) · C2 Snapshot (model) · C3 MeterSnapshot (meter bus) · C4 wake edges.</text>
+  <text class="tiny" x="256" y="1072">Channel semantics and cadence: TOTALCONTROL-ARCHITECTURE.md §5. Design rationale: DRIVER-DESIGN.md §15.</text>
 </svg>

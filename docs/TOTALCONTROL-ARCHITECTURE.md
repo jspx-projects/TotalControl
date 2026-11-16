@@ -175,14 +175,18 @@ instead of the real handle (H5).
 
 **Goal of H3.** The kernel meter pump (K6) is reader-triggered and
 backpressured: it advances only while H3 drains the event FIFO (K8).
-H3 therefore exists to move device information into userspace promptly
-and continuously, without blocking the kernel side, and to keep all
-device I/O off the UI thread. One thread owns the handle, so control
-writes and the event drain are serialized against the device.
+H3 moves device information into userspace promptly and continuously,
+without blocking the kernel side, and keeps all device I/O off the UI
+thread. H3 applies commands as model updates plus queued I/O; the
+control-I/O worker (H4) executes every F2 operation in submission order
+and owns the pacing, so the drain never waits on control writes. One
+worker serves the Fireface and Babyface-classic backends; each supplies
+its I/O surface, the orchestration is shared. The design rationale is
+in [`spec/DRIVER-DESIGN.md`](spec/DRIVER-DESIGN.md) §15.
 
 The service loop:
 
-1. drains `Command`s from the UI (C1);
+1. applies commands from C1 as model updates plus queued I/O (H4);
 2. calls `device.poll_events()` (F3);
 3. reads input, playback and output meters;
 4. captures the model every 50 ms and publishes a `Snapshot` when it
@@ -193,7 +197,7 @@ The service loop:
 
 | Channel | Direction | Payload | Cadence | Semantics |
 |---|---|---|---|---|
-| C1 Command queue | H5 → H3 | `SetVolume`, `SetMute`, `ApplyScene`, `Run(closure)` | on user action | setters queue and return; unbounded today (audited) |
+| C1 Command queue | H5 → H3 | `SetVolume`, `SetMute`, `ApplyScene`, `Run(closure)` | on user action | bounded (256), coalescing latest-value commands; senders block when full; Stop preempts |
 | C2 Snapshot | H3 → H5 | the device model: scene, settings, connection, hardware volume, panel selection | 20 Hz, on change | the mirror updates on arrival; confirm-on-snapshot, not optimistic |
 | C3 MeterSnapshot | H3 → H5 canvases | latest per-channel levels, peak-hold, OVR flags, transport counters, ballistics | every loop pass (~120 Hz) | a shared latest-value bus, not a queue; canvases read it directly, no view rebuild |
 | C4 wake edges | H3 → H5 | notification only | on meter activity edges | starts canvas animation after silence; carries no data |

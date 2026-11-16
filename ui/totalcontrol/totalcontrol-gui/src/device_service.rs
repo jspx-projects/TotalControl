@@ -16,18 +16,20 @@
 
 #![allow(dead_code)]
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use totalcontrol_core::{
-    ChannelId, DeviceSettings, Dynamics, Echo, Error, InputChannel, InputLevel,
-    PlaybackChannel, OutputChannel, RmeDevice, Reverb, Scene, Sensitivity, TalkbackConfig,
-};
-use totalcontrol_core::fireface::abi::HwdepCounters;
-use totalcontrol_core::channel::{EqBandType, InputEq};
 use tokio::sync::Notify;
+use totalcontrol_core::channel::{EqBandType, InputEq};
+use totalcontrol_core::fireface::abi::HwdepCounters;
+use totalcontrol_core::{
+    ChannelId, DeviceSettings, Dynamics, Echo, Error, InputChannel, InputLevel, OutputChannel,
+    PlaybackChannel, Reverb, RmeDevice, Scene, Sensitivity, TalkbackConfig,
+};
 
 use crate::app::DeviceHandle;
 use crate::widgets::fader::MeterBallistics;
@@ -78,6 +80,111 @@ pub enum Command {
     /// setters that have no dedicated variant.
     Run(Box<dyn FnOnce(&mut DeviceHandle) + Send>),
     Stop,
+}
+
+/// The bounded, coalescing command inbox (C1). Latest-value commands
+/// (volume, mute, scene) replace their pending predecessor; other
+/// commands queue in order. Senders block while the inbox is full
+/// (backpressure). Stop preempts the queue through a flag.
+pub struct CommandInbox {
+    queue: Mutex<VecDeque<Command>>,
+    cv: Condvar,
+    stop: AtomicBool,
+}
+
+const COMMAND_CAP: usize = 256;
+
+impl CommandInbox {
+    fn new() -> Self {
+        Self {
+            queue: Mutex::new(VecDeque::new()),
+            cv: Condvar::new(),
+            stop: AtomicBool::new(false),
+        }
+    }
+
+    fn send(&self, command: Command) -> bool {
+        if self.stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        let mut q = self.queue.lock().unwrap();
+        let replace = match &command {
+            Command::SetVolume(ch, out, _) => q.iter().position(
+                |c| matches!(c, Command::SetVolume(ch2, out2, _) if ch2 == ch && out2 == out),
+            ),
+            Command::SetMute(ch, _) => q
+                .iter()
+                .position(|c| matches!(c, Command::SetMute(ch2, _) if ch2 == ch)),
+            Command::ApplyScene(_) => q.iter().position(|c| matches!(c, Command::ApplyScene(_))),
+            _ => None,
+        };
+        if let Some(pos) = replace {
+            q[pos] = command;
+            self.cv.notify_one();
+            return true;
+        }
+        while q.len() >= COMMAND_CAP {
+            if self.stop.load(Ordering::Relaxed) {
+                return false;
+            }
+            q = self.cv.wait(q).unwrap();
+        }
+        q.push_back(command);
+        self.cv.notify_one();
+        true
+    }
+
+    fn recv_timeout(&self, timeout: Duration) -> Option<Command> {
+        let mut q = self.queue.lock().unwrap();
+        if q.is_empty() && !self.stop.load(Ordering::Relaxed) {
+            q = self.cv.wait_timeout(q, timeout).unwrap().0;
+        }
+        let cmd = q.pop_front();
+        if cmd.is_some() {
+            self.cv.notify_all();
+        }
+        cmd
+    }
+
+    fn drain(&self) -> Vec<Command> {
+        let cmds: Vec<Command> = self.queue.lock().unwrap().drain(..).collect();
+        if !cmds.is_empty() {
+            self.cv.notify_all();
+        }
+        cmds
+    }
+
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.cv.notify_all();
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.queue.lock().unwrap().len()
+    }
+}
+
+/// The sending half of a [`CommandInbox`], held by the mirror.
+#[derive(Clone)]
+pub struct CommandSender(Arc<CommandInbox>);
+
+impl CommandSender {
+    pub fn send(&self, command: Command) -> Result<(), ()> {
+        if self.0.send(command) {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn request_stop(&self) {
+        self.0.request_stop();
+    }
 }
 
 /// Static properties of the device, captured once when the service starts.
@@ -141,7 +248,7 @@ pub struct Snapshot {
 pub struct Mirror {
     scene: Scene,
     info: DeviceInfo,
-    commands: Sender<Command>,
+    commands: CommandSender,
     meters: Arc<Mutex<MeterSnapshot>>,
     connected: bool,
     hardware_volume: Option<f32>,
@@ -151,7 +258,7 @@ pub struct Mirror {
 impl Mirror {
     pub fn new(
         initial: Snapshot,
-        commands: Sender<Command>,
+        commands: CommandSender,
         meters: Arc<Mutex<MeterSnapshot>>,
     ) -> Self {
         Self {
@@ -478,8 +585,7 @@ impl RmeDevice for Mirror {
             // zero cell is no routing.
             return (cell.gain > 0.0).then_some(cell.gain);
         }
-        scene_matrix_default(&self.scene, &self.info, channel, block)
-            .filter(|gain| *gain > 0.0)
+        scene_matrix_default(&self.scene, &self.info, channel, block).filter(|gain| *gain > 0.0)
     }
 
     fn set_matrix_cell(
@@ -552,12 +658,7 @@ impl RmeDevice for Mirror {
         &mut self.scene.settings
     }
 
-    fn set_volume(
-        &mut self,
-        channel: ChannelId,
-        output: usize,
-        volume: f32,
-    ) -> Result<(), Error> {
+    fn set_volume(&mut self, channel: ChannelId, output: usize, volume: f32) -> Result<(), Error> {
         self.commands
             .send(Command::SetVolume(channel, output, volume))
             .map_err(|_| stopped())?;
@@ -736,12 +837,7 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
-    fn set_output_volume(
-        &mut self,
-        pair: usize,
-        which: usize,
-        volume: f32,
-    ) -> Result<(), Error> {
+    fn set_output_volume(&mut self, pair: usize, which: usize, volume: f32) -> Result<(), Error> {
         self.run(move |d| {
             let _ = d.set_output_volume(pair, which, volume);
         });
@@ -775,12 +871,7 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
-    fn set_input_balance(
-        &mut self,
-        pair: usize,
-        output: usize,
-        balance: i8,
-    ) -> Result<(), Error> {
+    fn set_input_balance(&mut self, pair: usize, output: usize, balance: i8) -> Result<(), Error> {
         self.run(move |d| {
             let _ = d.set_input_balance(pair, output, balance);
         });
@@ -1013,8 +1104,6 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
-
-
     fn set_an12(&mut self, on: bool) -> Result<(), Error> {
         self.run(move |d| {
             let _ = d.set_an12(on);
@@ -1057,12 +1146,7 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
-    fn set_eq_band_type(
-        &mut self,
-        idx: usize,
-        band: usize,
-        kind: EqBandType,
-    ) -> Result<(), Error> {
+    fn set_eq_band_type(&mut self, idx: usize, band: usize, kind: EqBandType) -> Result<(), Error> {
         self.run(move |d| {
             let _ = d.set_eq_band_type(idx, band, kind);
         });
@@ -1143,9 +1227,6 @@ impl RmeDevice for Mirror {
         });
         Ok(())
     }
-
-
-
 
     fn set_eq_for_record(&mut self, on: bool) -> Result<(), Error> {
         self.run(move |d| {
@@ -1295,17 +1376,17 @@ pub struct MeterSnapshot {
     pub input_peaks: [f32; 18],
     pub playback_peaks: [f32; 18],
     pub output_peaks: [f32; 18],
-/// Device-backed input OVR flags: the analog low-word event or the digital
-/// over tag.  `None` means the backend has no input OVR word; the fader
-/// falls back to its peak threshold.
-pub input_ovr: Option<[bool; 18]>,
-/// Device-backed playback OVR flags, gated per the record's own
-/// consecutive-over count (the device counts the samples above full
-/// scale itself).  `None` means the backend has no OVR word; the fader
-/// falls back to its peak threshold.
-pub playback_ovr: Option<[bool; 18]>,
-/// Device-backed hardware-output OVR flags.
-pub output_ovr: Option<[bool; 18]>,
+    /// Device-backed input OVR flags: the analog low-word event or the digital
+    /// over tag.  `None` means the backend has no input OVR word; the fader
+    /// falls back to its peak threshold.
+    pub input_ovr: Option<[bool; 18]>,
+    /// Device-backed playback OVR flags, gated per the record's own
+    /// consecutive-over count (the device counts the samples above full
+    /// scale itself).  `None` means the backend has no OVR word; the fader
+    /// falls back to its peak threshold.
+    pub playback_ovr: Option<[bool; 18]>,
+    /// Device-backed hardware-output OVR flags.
+    pub output_ovr: Option<[bool; 18]>,
     pub fx: [f32; 2],
     pub fx_overload: [bool; 2],
     /// Whether the device is still connected.  A disconnected device has no
@@ -1345,10 +1426,7 @@ const OVR_FULL_SCALE_SAMPLES: u8 = 3;
 /// the snapshot is the device's per-window count compared with the
 /// global OVR sample preference; the host runs no sample counting of
 /// its own.
-fn over_flags(
-    held: &mut Option<[bool; 18]>,
-    fresh: Option<&[u8]>,
-) {
+fn over_flags(held: &mut Option<[bool; 18]>, fresh: Option<&[u8]>) {
     let Some(fresh) = fresh else {
         *held = None;
         return;
@@ -1374,7 +1452,7 @@ fn meter_activity(m: &MeterSnapshot) -> bool {
 
 /// A running device service.
 pub struct DeviceService {
-    commands: Sender<Command>,
+    commands: CommandSender,
     snapshot: Arc<Mutex<Snapshot>>,
     meters: Arc<Mutex<MeterSnapshot>>,
     updates: Option<Receiver<Snapshot>>,
@@ -1407,7 +1485,8 @@ impl DeviceService {
             at: Instant::now(),
         }));
         let meters = Arc::new(Mutex::new(MeterSnapshot::default()));
-        let (commands, rx) = mpsc::channel();
+        let inbox = Arc::new(CommandInbox::new());
+        let commands = CommandSender(Arc::clone(&inbox));
         let (updates_tx, updates_rx) = mpsc::channel();
 
         let thread_snapshot = Arc::clone(&snapshot);
@@ -1417,7 +1496,7 @@ impl DeviceService {
             .spawn(move || {
                 run(
                     &mut device,
-                    rx,
+                    inbox,
                     thread_snapshot,
                     thread_meters,
                     updates_tx,
@@ -1446,7 +1525,7 @@ impl DeviceService {
     }
 
     /// A clone of the command sender, for a `Mirror`.
-    pub fn command_sender(&self) -> Sender<Command> {
+    pub fn command_sender(&self) -> CommandSender {
         self.commands.clone()
     }
 
@@ -1465,9 +1544,10 @@ impl DeviceService {
         self.commands.send(command).is_ok()
     }
 
-    /// Ask the thread to stop and wait for it.
+    /// Ask the thread to stop and wait for it. Stop preempts any queued
+    /// backlog.
     pub fn stop(mut self) {
-        let _ = self.commands.send(Command::Stop);
+        self.commands.request_stop();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -1476,7 +1556,7 @@ impl DeviceService {
 
 impl Drop for DeviceService {
     fn drop(&mut self) {
-        let _ = self.commands.send(Command::Stop);
+        self.commands.request_stop();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -1552,7 +1632,7 @@ fn capture_info(device: &DeviceHandle) -> DeviceInfo {
 
 fn run(
     device: &mut DeviceHandle,
-    rx: Receiver<Command>,
+    inbox: Arc<CommandInbox>,
     snapshot: Arc<Mutex<Snapshot>>,
     meters: Arc<Mutex<MeterSnapshot>>,
     updates: Sender<Snapshot>,
@@ -1568,18 +1648,24 @@ fn run(
     let mut peak_at = [[(Instant::now(), 0.0); 18]; 3];
 
     loop {
+        if inbox.stopped() {
+            break;
+        }
         // The timeout paces the polling loop at about 120 Hz while still
         // waking immediately for a command.
-        match rx.recv_timeout(Duration::from_millis(8)) {
-            Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Ok(command) => apply(device, command),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        match inbox.recv_timeout(Duration::from_millis(8)) {
+            Some(Command::Stop) => break,
+            Some(command) => apply(device, command),
+            None => {}
         }
-        while let Ok(command) = rx.try_recv() {
+        for command in inbox.drain() {
             if matches!(command, Command::Stop) {
                 return;
             }
             apply(device, command);
+        }
+        if inbox.stopped() {
+            break;
         }
 
         // State/status events feed the model and the front panel.
@@ -1825,8 +1911,11 @@ fn apply(device: &mut DeviceHandle, command: Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{mirror_matrix_blocks, Command, DeviceService, MeterBallistics};
+    use super::{
+        mirror_matrix_blocks, Command, CommandInbox, DeviceService, MeterBallistics, COMMAND_CAP,
+    };
     use crate::app::DeviceHandle;
+    use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
     use totalcontrol_core::{ChannelId, MockDevice, RmeDevice};
@@ -1894,10 +1983,11 @@ mod tests {
         service.stop();
     }
 
-    /// Reproduction evidence for the audit item "the event drain shares
-    /// the service thread with blocking control work". A slow command
-    /// freezes meter publication for its whole duration. The fix inverts
-    /// this test: publication continues while a slow command runs.
+    /// A `Run` closure executes on the service thread; an intentionally
+    /// slow closure pauses publication for its duration. Device I/O is
+    /// queued on the control-I/O worker (core regression test
+    /// `live_writes_return_before_the_device_pacing`); this test guards
+    /// the loop's structural property.
     #[test]
     fn a_slow_command_freezes_meter_publication() {
         let service = DeviceService::spawn(mock());
@@ -1928,11 +2018,10 @@ mod tests {
         service.stop();
     }
 
-    /// Reproduction evidence for the audit item "the unbounded command
-    /// queue applies stale commands late". A volume move queued behind
-    /// slow work lands only after the whole backlog drains. The fix
-    /// (bounded queue with coalescing) must keep the latest value's lag
-    /// small.
+    /// `Run` closures execute serially on the service thread, so a
+    /// volume move queued behind intentionally slow closures lands after
+    /// them. Latest-value commands coalesce in the inbox; arbitrary
+    /// closures keep their order.
     #[test]
     fn a_command_backlog_delays_later_commands() {
         let service = DeviceService::spawn(mock());
@@ -1958,6 +2047,67 @@ mod tests {
             "the backlog delayed the volume move by {lag:?}"
         );
         service.stop();
+    }
+
+    #[test]
+    fn stop_preempts_a_command_backlog() {
+        let service = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| !service.snapshot().scene.outputs.is_empty()),
+            "the service starts"
+        );
+        for _ in 0..50 {
+            assert!(service.send(Command::Run(Box::new(|_| {
+                thread::sleep(Duration::from_millis(25));
+            }))));
+        }
+        let t0 = Instant::now();
+        service.stop();
+        assert!(
+            t0.elapsed() < Duration::from_millis(300),
+            "stop preempted the backlog in {:?}",
+            t0.elapsed()
+        );
+    }
+
+    #[test]
+    fn the_inbox_coalesces_latest_value_commands() {
+        let inbox = CommandInbox::new();
+        for k in 0..50 {
+            assert!(inbox.send(Command::SetVolume(ChannelId::Output(0), 0, k as f32 / 50.0)));
+        }
+        assert!(inbox.send(Command::SetVolume(ChannelId::Output(1), 0, 0.9)));
+        assert!(inbox.send(Command::SetMute(ChannelId::Input(0), true)));
+        assert!(inbox.send(Command::SetMute(ChannelId::Input(0), false)));
+        assert_eq!(inbox.len(), 3, "one slot per key, latest value wins");
+        let cmds = inbox.drain();
+        match &cmds[0] {
+            Command::SetVolume(ChannelId::Output(0), 0, v) => {
+                assert!((v - 49.0 / 50.0).abs() < 1e-6, "the latest volume survives");
+            }
+            _ => panic!("expected the latest volume"),
+        }
+        assert!(matches!(
+            cmds[2],
+            Command::SetMute(ChannelId::Input(0), false)
+        ));
+    }
+
+    #[test]
+    fn the_inbox_backpressures_when_full() {
+        let inbox = Arc::new(CommandInbox::new());
+        for _ in 0..COMMAND_CAP {
+            assert!(inbox.send(Command::Run(Box::new(|_| {}))));
+        }
+        assert_eq!(inbox.len(), COMMAND_CAP);
+        let sender = Arc::clone(&inbox);
+        std::thread::scope(|s| {
+            let h = s.spawn(move || sender.send(Command::Run(Box::new(|_| {}))));
+            thread::sleep(Duration::from_millis(50));
+            assert!(!h.is_finished(), "the sender waits while the inbox is full");
+            inbox.drain();
+            assert!(h.join().unwrap(), "the sender proceeds once space frees");
+        });
     }
 
     /// Bench evidence for the audit claim "a stalled control path drops
@@ -2031,6 +2181,9 @@ mod tests {
                 thread::sleep(Duration::from_millis(5));
             }
             floods += 1;
+            // A realistic scene-apply cadence: the worker drains each
+            // scene's paced bursts within this gap.
+            thread::sleep(Duration::from_millis(250));
         }
         let _ = service.send(Command::SetVolume(ChannelId::Output(17), 0, orig17));
         let done = tx.clone();
@@ -2355,4 +2508,3 @@ mod tests {
         service.stop();
     }
 }
-

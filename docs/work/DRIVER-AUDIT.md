@@ -99,13 +99,35 @@ Reproduction evidence (UCX, ISO, firmware 46):
 
 | Item | Priority | Impact | Status |
 |---|---|---|---|
-| Event drain shares the thread with blocking control work (synchronous EP0 calls, up to the 1 s kernel timeout) | P1 | A stalled control path delays `poll_events`. Reproduced: 629 ms publication freeze during a scene apply; meters and model go stale. Event drops require a stall beyond the ~1 s FIFO fill time. | reproduced — host PR |
-| Blocking writer flush (`flush_write_batch` waits for the paced writer) | P1 | A vendor request after queued words waits 16 ms per 63-word burst; a scene is many bursts, so the service thread stalls hundreds of ms. Same freeze class during scene applies. | reproduced (same freeze) — host PR |
-| UC control writes run inline on the service thread | P1 | The UC has no writer thread; a control burst blocks the loop directly. Same stall class as the two rows above. One fix cluster: event-drain independence. | open — host PR |
-| Unbounded command queue | P1 | Reproduced: a 15 s firehose built minutes of backlog, applied stale commands late, and defeated `Stop`; ~90k event drops followed. Bounded queue with coalescing/backpressure. | reproduced — host PR |
+| Event drain shares the thread with blocking control work (synchronous EP0 calls, up to the 1 s kernel timeout) | P1 | A stalled control path delays `poll_events`. Reproduced: 629 ms publication freeze during a scene apply; meters and model go stale. Event drops require a stall beyond the ~1 s FIFO fill time. | done — drain/worker separation |
+| Blocking writer flush (`flush_write_batch` waits for the paced writer) | P1 | A vendor request after queued words waits 16 ms per 63-word burst; a scene is many bursts, so the service thread stalls hundreds of ms. Same freeze class during scene applies. | done — ordered scene batches, no flush wait |
+| UC control writes run inline on the service thread | P1 | The UC has no writer thread; a control burst blocks the loop directly. Same stall class as the two rows above. One fix cluster: event-drain independence. | done — UC writes queue on the worker |
+| Unbounded command queue | P1 | Reproduced: a 15 s firehose built minutes of backlog, applied stale commands late, and defeated `Stop`; ~90k event drops followed. Bounded queue with coalescing/backpressure. | done — bounded coalescing C1 and worker queue |
 | Single meter reader is host discipline only | P2 | A second hwdep reader breaks the UC pair phase model: each reader samples pages, pairs misalign, `PHASE_LOST` flags and wrong RMS/peak pairing follow. Driver enforcement or an explicit ABI contract. | open — later |
 | Connect policy writes host settings on connect | P2 | Front-panel changes made while the host was away are overwritten. Already flagged for a separate investigation. | open — later |
 | Snapshot cadence (50 ms) | P3 | Fast front-panel moves can alias between captures; the UI confirms at 20 Hz. Acceptable today; event-driven capture is the refinement. | optional |
+
+### Fix result (this PR)
+
+- H3 applies commands as model updates plus queued I/O; H4 (the shared
+  control-I/O worker) executes all F2 operations in order and owns the
+  pacing. The Babyface-classic backend shares the worker through its
+  own sink; the orchestration is no longer duplicated.
+- Scene batches carry words and vendor ops in one ordered command; the
+  mid-scene flush fragmentation (which stretched one scene to ~600 ms
+  of device time) is gone.
+- C1 and the worker queue are bounded and coalescing; Stop preempts.
+- Bench acceptance (UCX, ISO, 59 scene+drag floods in 15 s): longest
+  publication freeze **0 ns**, zero new `events_dropped`. Core suite
+  314 passed, GUI suite 447 passed, including the inverted regression
+  tests (prompt live writes on UC and UCX, stop preemption, coalescing,
+  backpressure).
+- Remaining waits, recorded as open items in the driver design: a
+  control read during a large scene apply waits for the remaining
+  pacing (drain-pumping while a read reply is pending is the
+  refinement); sustained overload beyond the device pace applies
+  backpressure to the service thread; the burst-pacing gap is still a
+  fixed sleep on the worker.
 
 ### Recommended order
 
