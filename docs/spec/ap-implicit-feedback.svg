@@ -59,7 +59,7 @@
   <rect class="sub" x="400" y="110" width="220" height="60" rx="4"/>
   <circle cx="414" cy="124" r="10" fill="#555"/><text class="id" x="414" y="128" text-anchor="middle">K1.1</text>
   <text class="label" x="520" y="132" text-anchor="middle">IN record</text>
-  <text class="small" x="510" y="152" text-anchor="middle">position + frames per packet</text>
+  <text class="small" x="510" y="152" text-anchor="middle">position · frames · phase</text>
 
   <rect class="sub" x="400" y="210" width="220" height="60" rx="4"/>
   <circle cx="414" cy="224" r="10" fill="#555"/><text class="id" x="414" y="228" text-anchor="middle">K1.2</text>

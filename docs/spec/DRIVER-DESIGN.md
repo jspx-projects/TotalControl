@@ -220,8 +220,8 @@ playback clock reference. The loop:
 
 1. **A1.** D1 delivers IN packets; the header carries position, phase
    and frame count.
-2. **A2.** K1.1 records every IN packet's position and frame count in
-   K1.2 (`fb[]`), indexed by packet number.
+2. **A2.** K1.1 records every IN packet's position, frame count and
+   phase in K1.2 (`fb[]`), indexed by packet number.
 3. **A3.** K1.3 reads the entry `fb_delay` packets behind the current
    OUT packet.
 4. **A4.** K1.3 places the OUT lead word at the recorded position plus
@@ -230,13 +230,27 @@ playback clock reference. The loop:
 This is implicit feedback: the device's captured clock schedules
 playback, keeping the two directions aligned.
 
+**What drives the loop.** Two device fields schedule the OUT stream:
+the position anchors the lead word (K1.3 initializes its lead counter
+from the recorded position plus `out_lead`, then advances it by the
+frames sent), and the frame count is mirrored per packet. The mirroring
+is the rate lock: a device clock running slightly fast occasionally
+captures one extra frame in a microframe, the count carries that
+add/drop, and OUT reproduces it. The long-term OUT rate therefore
+equals the device's capture rate, fractional part included.
+
+The phase accumulator is recorded in `fb[]` and exposed for
+diagnostics; the scheduler mirrors the frame count, which already
+carries the add/drop. Whether the macOS reference host additionally
+consumes phase for fractional prediction is an open item (§12).
+
 Parameters and fields:
 
 | Term | Definition | Used by |
 |---|---|---|
-| IN position | the device's capture buffer position; anchors the feedback timeline | K1.1, K1.3 |
-| IN phase | fractional-sample accumulator; predicts frame add/drop at the wrap | K1.1 |
-| IN frame count | frames in this packet | K1.3 mirrors it |
+| IN position | the device's capture buffer position; anchors the feedback timeline | K1.3 lead anchor |
+| IN frame count | frames in this packet; carries the clock's add/drop | K1.3 mirrors it (rate lock) |
+| IN phase | fractional-sample accumulator | K1.1 records it; diagnostics |
 | OUT lead word | the buffer position this OUT packet plays at; keeps the device's output latch fed | K1.3 |
 | `fb_delay` | how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
 | `out_lead` | margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
@@ -552,6 +566,7 @@ driver's transports. The owning sections carry the full detail:
 | IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
 | DDS quad rate dependence: the quad is written once at connect; rate changes write the family word alone across the captured 44.1↔48 transitions | UCX IF5 | a connect capture at a 32 kHz-family rate |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
+| Phase consumption by the reference host: the scheduler records the IN phase accumulator and mirrors the frame count, which carries the add/drop; whether the macOS host additionally consumes phase for fractional prediction is unverified | ISO | a kext disassembly of the OUT scheduling path |
 | MIDI port 2 physical output: packets carry both ports | UC | a loopback on the candidate output |
 
 ### Metering
