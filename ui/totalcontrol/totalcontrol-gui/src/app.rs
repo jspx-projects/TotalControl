@@ -16820,6 +16820,12 @@ fn settings_popover(
             .spacing(theme::SPACE_TIGHT * scale)
             .width(Length::Fill);
         col = col.push(settings_slot(Some(stereo), SETTINGS_ROW_CTRL, scale));
+        // Rows 2–5 are empty on a playback strip.  Keeping them here puts
+        // Width at the same height as on every input channel.
+        col = col.push(settings_label_slot(None, SETTINGS_ROW_TEXT, scale));
+        col = col.push(settings_slot(None, SETTINGS_ROW_PICK, scale));
+        col = col.push(settings_slot(None, SETTINGS_ROW_CTRL, scale));
+        col = col.push(settings_slot(None, SETTINGS_ROW_KNOB, scale));
         let width_knob = (caps.channel_width && p.stereo_linked).then(|| {
             let modifiers = state.modifiers;
             let value = state.device.playbacks()[i].width;
@@ -16870,7 +16876,7 @@ fn settings_popover(
             )
         });
         col = col.push(settings_slot(send, SETTINGS_ROW_KNOB, scale));
-        // Row 4 — MS proc.  The transform is per stereo pair.
+        // Row 8 — MS proc.  The transform is per stereo pair.
         let ms_on = state.device.playbacks()[i].ms_proc;
         let ms = (caps.ms_proc && p.stereo_linked).then(|| {
             hint(
@@ -16885,7 +16891,7 @@ fn settings_popover(
             )
         });
         col = col.push(settings_slot(ms, SETTINGS_ROW_CTRL, scale));
-        // Row 5 — playback has no phase.
+        // Row 9 — playback has no phase.
         col = col.push(settings_slot(None, SETTINGS_ROW_CTRL, scale));
         return settings_card(col, width, scale);
     }

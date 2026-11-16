@@ -991,13 +991,13 @@ Empty rows keep the height of the control the grid reserves for them.
 | Row | Software playback | Hardware output |
 |---|---|---|
 | 1 | `stereo` | `stereo` |
-| 2 | `width` | reference label |
-| 3 | `send FX` | reference dropdown |
-| 4 | `MS proc` | `return FX` |
-| 5 | `Ø L` `Ø R` | `Ø L` `Ø R` |
-| 6 | — | `no trim` |
-| 7 | — | space |
-| 8 | — | `talkback` |
+| 2 | space | reference label |
+| 3 | space | reference dropdown |
+| 4 | space | `return FX` |
+| 5 | space | `Ø L` `Ø R` |
+| 6 | `width` | `no trim` |
+| 7 | `send FX` | space |
+| 8 | `MS proc` | `talkback` |
 | 9 | — | `loopback` |
 
 The row heights are shared across channel types. A missing control keeps its
@@ -1010,7 +1010,7 @@ reference group; `talkback` is omitted on Control Room channels.
 | Input 3/4 | Stereo, `ref.`, Inst + reference dropdown, Gain, Width, Send FX, MS Proc, Ø L / R Ø |
 | Inputs 5–8 | Stereo, `ref.`, reference dropdown, two empty rows, Width, Send FX, MS Proc, Ø L / R Ø |
 | Inputs 9+ | Stereo, four empty rows, Width, Send FX, MS Proc, Ø L / R Ø |
-| Software playback | Stereo, Width, Send FX, MS Proc, phase slot |
+| Software playback | Stereo, four empty rows, Width, Send FX, MS Proc, phase slot |
 | Hardware output | Stereo, `ref.`, reference dropdown, Return FX, Ø L / R Ø, No Trim, space, Talkback, Loopback |
 
 - 48 V and AutoSet are available on inputs 1/2; Inst and a gain knob on 3/4;
