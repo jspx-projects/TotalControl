@@ -1642,7 +1642,7 @@ cadence_skip:
 /*
  * ISO OUT packet:
  *   UCX: frames interleaved, each frame = lead word + nch float32 samples.
- *        The first frame's lead word is the ring position the packet plays
+ *        The first frame's lead word is the stream position the packet plays
  *        at (mod 3072).  Writing all lead words keeps every frame
  *        self-describing and matches the UCX's own format.
  *   UC:  frames interleaved, each frame = lead word + nch float32 samples;

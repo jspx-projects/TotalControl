@@ -50,12 +50,72 @@ directly.
 
 ![Driver and host architecture](driver-host-architecture.svg)
 
-The recommended host architecture is a device service thread that owns the
-hwdep handle, plus a UI-side mirror. The service drains commands, polls
-events and meters, and publishes snapshots. The UI queues commands and
-reads the mirror; it never blocks on the device. The runtime structure is
-defined in
+The diagram's blocks carry stable IDs. The tables below define each
+block and each path; the normative text references the IDs.
+
+### 1.1 Blocks
+
+| ID | Block | Responsibility | Source |
+|---|---|---|---|
+| D1 | audio OUT/IN | the device's streaming endpoints (IF0 ISO or IF5 interrupt) | device |
+| D2 | EP0 vendor | the device's control request endpoint | device |
+| D3 | IF1 words OUT | register-word sink, bulk `0x0c` | device |
+| D4 | IF1 state IN | state-echo source, bulk `0x8d` | device |
+| D5 | IF1 meters IN | meter-heartbeat source, bulk `0x85` | device |
+| D6 | status IN | status ticker and output-latch bit, `0x8b` | device |
+| D7 | IF2 USB-MIDI | MIDI packet endpoints | device |
+| D8/D9 | IF3 / IF4 page stream | firmware programming and page stream; unclaimed | device |
+| K1 | URB engine | submits and completes audio URBs; ISO implicit feedback (§4.3) or interrupt handshake (§4.4); cadence and continuity guards | `ffuc.c` |
+| K2 | ALSA PCM | the coherent PCM buffer and the duplex period gate (§4.2); fed exclusively by K1 | `ffuc.c` |
+| K3 | EP0 passthrough | one synchronous vendor request per `VENDOR` ioctl, bounded by the USB timeout | `ffuc-hwdep.c` |
+| K4 | IF1 word writer | one `WRITE_WORDS` burst per ioctl, ≤63 words, odd parity added | `ffuc-hwdep.c` |
+| K5 | state reader | resubmits the `0x8d` URB; emits STATE events | `ffuc-hwdep.c` |
+| K6 | meter pump | reader-triggered `0x85` submission with backpressure (§5.1); UC pair model | `ffuc-hwdep.c` |
+| K7 | status + watchdog | the `0x8b` URB; STATUS and LATCH events; the output-latch watchdog (§4.6) | `ffuc.c` |
+| K8 | event FIFO | the 64 KiB event queue; `read()`/`poll()` drain it; a full FIFO drops events | `ffuc-hwdep.c` |
+| K9 | USB-MIDI engine | bulk MIDI transfers, one stream per transfer | `ffuc-midi.c` |
+| K10 | recovery | marks the engine broken and restarts it (§4.6) | `ffuc.c` |
+| U1 | ALSA PCM node | `hw:<card>,0` | ALSA |
+| U2 | hwdep node | `/dev/snd/hwC<card>D0`; INFO/VENDOR/WRITE_WORDS/COUNTERS ioctls and the event stream | `ffuc-hwdep.c` |
+| U3 | rawmidi nodes | one per logical MIDI port | ALSA |
+| H1 | PipeWire / DAW | the ALSA PCM client | host |
+| H2 | MIDI clients | rawmidi clients | host |
+| H3 | device service thread | owns the device handle; applies commands as model updates plus queued I/O; drains events; publishes snapshots | host |
+| H4 | control-I/O worker | executes all control I/O (word bursts, vendor requests, ordered scene batches) in submission order; owns the pacing | host |
+| H5 | UI thread | the mirror and the canvases | host |
+
+H3–H5 and the host channels C1–C4 are defined in
 [`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §5.
+
+### 1.2 Paths
+
+| Path | Route | Payload | Direction |
+|---|---|---|---|
+| F1 audio | D1 ↔ K1 ↔ K2 ↔ U1 ↔ H1 | sample frames; period signals pace H1 | bidirectional |
+| F2 control | H3/H4 → U2 → K3/K4 → D2/D3 | vendor requests and register words | host to device |
+| F3 events | D4/D5/D6 → K5/K6/K7 → K8 → U2 → H3 | STATE, METER, STATUS, LATCH events | device to host |
+| F4 MIDI | D7 ↔ K9 ↔ U3 ↔ H2 | USB-MIDI packets | bidirectional |
+
+F1 carries audio only; F2 and F3 share U2 but are independent: ioctls
+never wait on the event drain, and the drain never waits on an ioctl
+held by another reader.
+
+### 1.3 Invariants
+
+1. **Single control owner.** U2 is the control owner while the module is
+   bound; the host opens it exclusively for control (H3).
+2. **Prompt drain.** K6 submits the next meter page only while K8 is
+   below its high-water mark (backpressure). H3 drains K8 promptly; a
+   stalled H3 pauses K6 and, beyond the FIFO capacity, drops events
+   (`events_dropped`).
+3. **Single meter reader.** One reader drains F3; concurrent readers
+   break the UC pair phase (§5.1).
+4. **Control ordering.** F2 operations reach the device in submission
+   order; a vendor request never overtakes queued words.
+5. **Bounded control.** K3 and K4 ioctls are synchronous and bounded;
+   F3 reads wait interruptibly.
+6. **Recovery is an xrun.** K10 restarts the engine; H1 re-prepares
+   (§4.6).
 
 ## 2. Device descriptors and quirks
 
@@ -154,36 +214,64 @@ correctness mechanism.
 
 ![AP implicit feedback loop](ap-implicit-feedback.svg)
 
-The ISO IN header carries a position and a phase accumulator. The driver
-records every IN packet's position and frame count in a feedback buffer
-(`fb[]`), indexed by packet number. The OUT path reads the feedback entry
-`fb_delay` packets behind the current OUT packet and places the OUT lead
-word accordingly. This is implicit feedback: the device's captured clock
-schedules playback, keeping the two directions aligned.
+The diagram details K1 on path F1; block IDs continue §1.1. The device
+captures and plays from one clock, so the captured stream is the
+playback clock reference. The loop:
 
-Fields that assist dropout prevention:
+1. **A1.** D1 delivers IN packets; the header carries position, phase
+   and frame count.
+2. **A2.** K1.1 records every IN packet's position, frame count and
+   phase in K1.2 (`fb[]`), indexed by packet number.
+3. **A3.** K1.3 reads the entry `fb_delay` packets behind the current
+   OUT packet.
+4. **A4.** K1.3 places the lead word at the recorded position plus
+   `out_lead`, mirrors the frame count, and sends the packet to D1.
 
-| Field | Role |
-|---|---|
-| IN position | the device's capture buffer position; anchors the feedback timeline |
-| IN phase | fractional-sample accumulator; predicts frame add/drop at the wrap |
-| IN frame count | frames in this packet; the OUT path mirrors it |
-| OUT lead word | the buffer position this OUT packet plays at; keeps the device's output latch fed |
-| `out_lead` | host-side margin added to the mirrored position; absorbs scheduling jitter |
-| `fb_delay` | how far OUT lags IN; covers the URBs in flight |
-| cadence | mean frames/packet * 8000; detects a rate mismatch |
-| output-latch bit | status byte 3 bit 7; the device signals that its output latch ran dry |
+This is implicit feedback: the device's captured clock schedules
+playback, keeping the two directions aligned.
 
-How the vendor likely uses them: the macOS reference host reads the IN
-position/phase to schedule OUT packets against the device clock, and uses
-the output-latch status to detect underrun. The Windows interrupt path uses
-the session words and the status ticker. The driver's ISO path reproduces
-the macOS implicit-feedback model; the interrupt path reproduces the
-Windows session model.
+**What drives the loop.** Two device fields schedule the OUT stream:
+the position anchors the lead word (K1.3 initializes its lead counter
+from the recorded position plus `out_lead`, then advances it by the
+frames sent), and the frame count is mirrored per packet. The mirroring
+is the rate lock: a device clock running slightly fast occasionally
+captures one extra frame in a microframe, the count carries that
+add/drop, and OUT reproduces it. The long-term OUT rate therefore
+equals the device's capture rate, fractional part included.
 
-The cadence guard is a diagnostic: a sustained disagreement between the
-packet cadence and `chip->rate` marks a rate mismatch. Recovery is the
-watchdog's role.
+The phase is recorded in `fb[]` and exposed for diagnostics; the
+scheduler mirrors the frame count, which already carries the add/drop.
+Whether the macOS reference host additionally consumes phase for
+fractional prediction is an open item (§12).
+
+The field names below are the protocol-spec terms; the bit layouts and
+the phase law live in
+[`FIREFFACE-UC-PROTOCOL-SPEC.md`](FIREFFACE-UC-PROTOCOL-SPEC.md) §11.6
+and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
+§12.1.
+
+| Term | Definition | Used by |
+|---|---|---|
+| position | the stream position modulo 8192 (UC) / 3072 (UCX); anchors the feedback timeline | K1.3 lead anchor |
+| frame count | frames in this packet; carries the clock's add/drop | K1.3 mirrors it (rate lock) |
+| phase | 14-bit fractional-sample accumulator in units of 1/10000 sample, modulus 10000 (UC; UCX: 11-bit) | K1.1 records it; diagnostics |
+| lead word | the stream position an OUT frame plays at; keeps the device's output latch fed | K1.3 |
+| `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
+| `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
+
+Guards:
+
+| Guard | Input | Action |
+|---|---|---|
+| K1.4 cadence (A5) | mean frames/packet × 8000 against `chip->rate` | diagnostic: a sustained disagreement marks a rate mismatch |
+| K1.5 continuity (A8) | URB start-frame sequence | a discontinuity marks the engine broken → K10 |
+| K7 latch watchdog (A6, A7) | D6 status byte 3 bit 7 | a latched output while playback runs, after the grace, marks the engine broken → K10 |
+| URB error burst | completion status | above `FFUC_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
+
+The macOS reference host reads the position and phase to schedule OUT
+packets against the device clock and uses the output-latch status to
+detect underrun. The driver's ISO path reproduces that model; the
+interrupt path (§4.4) reproduces the Windows session model.
 
 ### 4.4 Interrupt transport (PC mode)
 
@@ -220,7 +308,7 @@ Status and watchdog:
 
 | Aspect | PC mode (interrupt) | AP mode (ISO) |
 |---|---|---|
-| Playback clock reference | interrupt handshake: the device accepts OUT URBs at its own rate | implicit feedback: IN position/phase schedule the OUT lead word (§4.3) |
+| Playback clock reference | interrupt handshake: the device accepts OUT URBs at its own rate | implicit feedback: the position anchors the lead word, the frame count locks the rate (§4.3) |
 | OUT payload | sample words | lead word + sample words |
 | IN payload | sample words | header (position, phase, frame count) + planar frames |
 | URB granularity | `urb_frames` per URB, scaled by rate band | up to 8 packets per URB, one per microframe |
@@ -245,6 +333,23 @@ the engine. The host sees an xrun and re-prepares.
 ## 5. Control transports and hwdep ABI
 
 The hwdep ABI is versioned (`FFUC_ABI_VERSION`). The host checks it at open.
+
+U2 carries two transfer modes with opposite characteristics:
+
+| | F2: ioctl | F3: read()/poll() |
+|---|---|---|
+| Initiative | host commands the device | device produces information; the host consumes it |
+| Shape | one command → one USB transaction → result | drain of events already in K8 |
+| Timing | synchronous, bounded by the USB timeout | immediate when events are queued |
+| Load | bursty, a few per user action | continuous: ~245 meter packets/s plus state and status, ~98% of the read load |
+| Continuity | none; writes may be queued and paced, ordering preserved | hard: K6 advances only while H3 drains; K8 holds ~1 s, then drops |
+
+`ioctl` is the Linux device-command syscall: a typed, synchronous
+request/response into the driver. `read()` is a stream drain that causes
+no device transaction. The host protects F3 continuity by keeping F2's
+pacing waits off the drain thread: control writes queue on the
+control-I/O worker (H4); control reads execute through the worker with
+a bounded reply wait (§5.2).
 
 | ioctl | Function |
 |---|---|
@@ -281,6 +386,8 @@ pair phase model.
 The host:
 
 - drains the event FIFO promptly; a stalled reader drops events;
+- keeps the F3 drain independent of F2 pacing: control writes queue on
+  the control-I/O worker, and the drain thread performs model work only;
 - keeps one meter reader;
 - chooses a buffer/quantum that covers the URB queue plus margin;
 - checks engine state before control writes that assume a running engine;
@@ -368,7 +475,7 @@ Terms used here are defined in the sections referenced.
   runs in disconnect and again in `private_free`. A reader that passed the
   disconnected check could race the FIFO free. Cleanup should be ordered
   against hwdep unregistration.
-- **[ISO]** The **ISO continuity check** (`ffuc_iso_contiguous`, §4.6)
+- **[ISO]** The **ISO continuity check** (K1.5, `ffuc_iso_contiguous`, §4.3)
   verifies URB start-frame continuity. Its log counter is module-global,
   shared across devices and endpoints. It should be per-endpoint.
 - **[all]** The **hwdep read path** (§5) allocates a temporary buffer per
@@ -388,12 +495,14 @@ Terms used here are defined in the sections referenced.
 
 ### Host interaction
 
-The **service loop** is the host thread that owns the hwdep handle
+The **service loop** (H3) applies commands as model updates plus queued
+I/O and drains events; the control-I/O worker (H4) owns all pacing
 ([`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §5).
-It drains commands and events on one thread. A blocking control burst can
-delay event draining and drop events. Separating control writes from the
-event drain would keep the meter/state pump responsive under heavy write
-load. **[host]**
+One wait remains on the drain thread: a **control read** (vendor read)
+executes through the worker behind queued writes, so a read issued
+during a large scene apply waits for the remaining pacing. Reads are
+rare (connect, settings); draining events while a read reply is pending
+is the refinement.
 
 ### Heuristic waits
 
@@ -435,9 +544,8 @@ Host (TotalControl) driver-communication work:
 
 | Item | Scope |
 |---|---|
-| Separate control writes from the event drain in the service loop | host |
-| Bound the command queue with backpressure | host |
-| Replace the UCX burst-pacing sleep with bounded flow control | host, UCX |
+| Drain events while a control-read reply is pending, so reads during a scene apply never pause the drain | host |
+| Replace the burst-pacing sleep with bounded flow control | host |
 | Enforce or document the single meter reader for the UC pair model | host, UC |
 - Expose the status URB counter; verify the INFO output/playback fields.
 - Run `sparse` (`make C=1`) and lockdep/UBSAN on the module; fix warnings.
@@ -467,6 +575,7 @@ driver's transports. The owning sections carry the full detail:
 | IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
 | DDS quad rate dependence: the quad is written once at connect; rate changes write the family word alone across the captured 44.1↔48 transitions | UCX IF5 | a connect capture at a 32 kHz-family rate |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
+| Phase consumption by the reference host: the scheduler records the phase accumulator and mirrors the frame count, which carries the add/drop; whether the macOS host additionally consumes phase for fractional prediction is unverified | ISO | a kext disassembly of the OUT scheduling path |
 | MIDI port 2 physical output: packets carry both ports | UC | a loopback on the candidate output |
 
 ### Metering
@@ -502,17 +611,30 @@ A new device is a descriptor entry plus, where the streaming sequence
 differs, an `ffuc_ops` implementation. The shared PCM/URB path stays
 model-independent.
 
-### 14.1 Evidence first
+### 14.1 Minimum evidence gate
 
-Capture the device before writing code:
+A new device is accepted only when every personality it exposes has the
+minimum evidence below, captured from the reference host and the device
+itself. The evidence must support implementing the personality the way
+this driver works: the transport-keyed wire format (§3), the authentic
+mode setup, and delegation through the descriptor/quirk/ops mechanism
+(§2). A personality without its minimum evidence is not implemented.
 
-- USB descriptors: configurations, interfaces, alternate settings,
-  endpoint addresses and packet sizes.
-- The streaming wire format: sample word format, packet layout, any header
-  or lead word, channel counts per rate band.
-- The control transports: EP0 vendor requests, any bulk register/meter
-  channel, the status endpoint.
-- The init and rate sequences from the reference host.
+| Area | Minimum evidence, per personality |
+|---|---|
+| Descriptors | configurations, interfaces, alternate settings, endpoint addresses, transfer types and packet sizes, captured on Linux (the Windows capture path carries no descriptor payloads) |
+| Streaming layout | sample word format; packet layout (planar or interleaved); the ISO IN header bit layout with position wrap modulus and phase law, or the interrupt URB geometry; the OUT lead-word semantics; channel counts per rate band (1x/2x/4x) |
+| Mode setup | the reference host's cold-connect block in order: channel-init slot ranges and format values, settings/enable words, any clock/DDS words and settles; the stream open/close words |
+| Rate sequence | the rate words (family, commit, DDS as applicable), which personality takes which, and the rate-readback form if one exists |
+| Session timing | any device-mandated gap, measured, with the failure that occurs without it |
+| Control transport | the EP0 request map (read and write forms); the register-word channel with addressing, parity and burst limit; the device's burst drain behaviour (the pacing bound) |
+| Metering | the meter endpoint, packet size and layout; the page/heartbeat structure and its phase rules |
+| Status | the status endpoint and payload; the output-latch bit if the personality has one |
+| Format pairing | the channel-init format choice verified with matching wire samples; the transport-keyed default (interrupt S32, ISO float32) plays clean, or a capture establishes the exception |
+
+Verification before merge, per personality: clean playback and capture
+at 1x with content check, the supported rate bands and transitions,
+suspend/resume and hotplug, with the transport counters recorded.
 
 Document every register/offset in a protocol specification. Mark uncertain
 mappings as open items; the driver carries only verified behaviour.
@@ -563,3 +685,44 @@ scenes. Follow `docs/CONTRIBUTING-NEW-DEVICE.md` for the host integration.
 - Host: add encoding tests for the new protocol module.
 - Hardware: verify each rate band, both directions, suspend/resume and
   hotplug. Preserve the user scene and configuration.
+
+## 15. Design rationale
+
+The reasons behind the design, kept separate from the model itself.
+
+1. **Transport-keyed wire format (§3).** Each personality's reference
+   host pairs a native format with its transport: Windows/interrupt
+   with S32, macOS/ISO with float32. One rule covers every device, and
+   the device accepts either format when the channel-init value matches,
+   so the rule is a policy choice rather than a per-device exception.
+2. **Implicit feedback by frame-count mirroring (§4.3).** The device
+   captures and plays from one clock. Mirroring the captured frame count
+   locks the long-term OUT rate to that clock, fractional add/drop
+   included; the position anchors the lead word. The phase accumulator
+   is recorded because it is the device's own fractional view, available
+   for diagnostics and future refinement.
+3. **Drain/worker separation (§5, §5.2).** F3 carries ~98% of the hwdep
+   read load and has a hard continuity requirement: the meter pump
+   advances only while the host drains, and the FIFO holds about one
+   second. F2 is bursty and each ioctl waits on a USB round-trip. Giving
+   F3 a thread that never waits on F2 pacing keeps the pump fed and the
+   FIFO below its drop threshold under any control load.
+4. **Bounded coalescing queues (C1 and the worker queue).** A fader drag
+   means "the latest value", not a history of values; coalescing matches
+   that intent and keeps queue depth independent of drag speed. The
+   bounds turn pathological overload into backpressure instead of
+   unbounded memory and minutes of stale work. Stop preempts because
+   shutdown must not wait for a backlog.
+5. **Ordered scene batches (§5).** A scene is one ordered command of
+   words and vendor writes. Keeping vendor ops inside the batch preserves
+   their place without fragmenting the scene into many paced bursts, so
+   the device-time stays one scene's worth of pacing and the queue holds
+   scenes, not fragments.
+6. **The duplex period gate (§4.2).** The follower's pointer must be
+   current when the reader wakes; signalling both directions together at
+   the later boundary guarantees that, and the two-deferral release
+   bounds the added latency to about one URB.
+7. **One shared worker, per-backend sinks.** Orchestration (ordering,
+   coalescing, pacing, backpressure) is device-independent; only the
+   I/O surface differs. Sharing the worker across the Fireface and
+   Babyface-classic backends keeps one implementation of the hard parts.

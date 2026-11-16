@@ -1,365 +1,217 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg
-   width="920"
-   height="600"
-   viewBox="0 0 920 600"
-   font-family="sans-serif"
-   version="1.1"
-   id="svg35"
-   sodipodi:docname="driver-host-architecture.svg"
-   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
-   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
-   xmlns="http://www.w3.org/2000/svg"
-   xmlns:svg="http://www.w3.org/2000/svg">
-  <sodipodi:namedview
-     id="namedview35"
-     pagecolor="#ffffff"
-     bordercolor="#000000"
-     borderopacity="0.25"
-     inkscape:showpageshadow="2"
-     inkscape:pageopacity="0.0"
-     inkscape:pagecheckerboard="0"
-     inkscape:deskcolor="#d1d1d1"
-     inkscape:zoom="1.7465537"
-     inkscape:cx="361.2829"
-     inkscape:cy="354.41222"
-     inkscape:window-width="3072"
-     inkscape:window-height="1700"
-     inkscape:window-x="0"
-     inkscape:window-y="0"
-     inkscape:window-maximized="1"
-     inkscape:current-layer="svg35" />
-  <defs
-     id="defs1">
-    <marker
-       id="arrow"
-       markerWidth="10"
-       markerHeight="10"
-       refX="8"
-       refY="3"
-       orient="auto"
-       markerUnits="strokeWidth">
-      <path
-         d="M0,0 L8,3 L0,6 Z"
-         fill="#444"
-         id="path1" />
+<svg xmlns="http://www.w3.org/2000/svg" width="1150" height="1180" viewBox="0 0 1150 1180" font-family="sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#444"/>
+    </marker>
+    <marker id="arrowg" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2a6"/>
+    </marker>
+    <marker id="arrowb" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#36c"/>
     </marker>
   </defs>
-  <style
-     id="style1">
-    .box { fill:#f7f7f9; stroke:#555; stroke-width:1.5; rx:6; }
+  <style>
+    .box { fill:#f7f7f9; stroke:#555; stroke-width:1.5; }
     .sub { fill:#ffffff; stroke:#888; stroke-width:1; }
     .title { font-size:16px; font-weight:bold; fill:#222; }
     .label { font-size:13px; fill:#222; }
     .small { font-size:11px; fill:#555; }
+    .tiny { font-size:10px; fill:#666; }
+    .id { font-size:11px; font-weight:bold; fill:#fff; }
     .edge { stroke:#444; stroke-width:1.5; fill:none; marker-end:url(#arrow); }
     .edge2 { stroke:#444; stroke-width:1.5; fill:none; marker-end:url(#arrow); marker-start:url(#arrow); }
+    .ev { stroke:#2a6; stroke-width:1.5; fill:none; marker-end:url(#arrowg); }
+    .ctl { stroke:#36c; stroke-width:1.5; fill:none; marker-end:url(#arrowb); }
+    .wake { stroke:#999; stroke-width:1.2; fill:none; stroke-dasharray:4 3; marker-end:url(#arrow); }
   </style>
-  <!-- Device -->
-  <rect
-     class="box"
-     x="300"
-     y="20"
-     width="320"
-     height="60"
-     rx="6"
-     id="rect1" />
-  <text
-     class="title"
-     x="460"
-     y="45"
-     text-anchor="middle"
-     id="text1">RME device</text>
-  <text
-     class="small"
-     x="460"
-     y="65"
-     text-anchor="middle"
-     id="text2">USB audio + control transports</text>
-  <!-- Kernel -->
-  <rect
-     class="box"
-     x="120"
-     y="140"
-     width="680"
-     height="120"
-     rx="6"
-     id="rect2" />
-  <text
-     class="title"
-     x="140"
-     y="165"
-     id="text3">Kernel: snd-fireface-uc (transport driver)</text>
-  <rect
-     class="sub"
-     x="140"
-     y="180"
-     width="150"
-     height="60"
-     rx="4"
-     id="rect3" />
-  <text
-     class="label"
-     x="215"
-     y="205"
-     text-anchor="middle"
-     id="text4">URB engine</text>
-  <text
-     class="small"
-     x="215"
-     y="225"
-     text-anchor="middle"
-     id="text5">ISO / interrupt</text>
-  <rect
-     class="sub"
-     x="310"
-     y="180"
-     width="150"
-     height="60"
-     rx="4"
-     id="rect5" />
-  <text
-     class="label"
-     x="385"
-     y="205"
-     text-anchor="middle"
-     id="text6">ALSA PCM</text>
-  <text
-     class="small"
-     x="385"
-     y="225"
-     text-anchor="middle"
-     id="text7">hw:&lt;card&gt;,0</text>
-  <rect
-     class="sub"
-     x="480"
-     y="180"
-     width="150"
-     height="60"
-     rx="4"
-     id="rect7" />
-  <text
-     class="label"
-     x="555"
-     y="205"
-     text-anchor="middle"
-     id="text8">hwdep node</text>
-  <text
-     class="small"
-     x="555"
-     y="225"
-     text-anchor="middle"
-     id="text9">control + events</text>
-  <rect
-     class="sub"
-     x="650"
-     y="180"
-     width="130"
-     height="60"
-     rx="4"
-     id="rect9" />
-  <text
-     class="label"
-     x="715"
-     y="205"
-     text-anchor="middle"
-     id="text10">rawmidi</text>
-  <text
-     class="small"
-     x="715"
-     y="225"
-     text-anchor="middle"
-     id="text11">USB-MIDI</text>
-  <!-- Device <-> Kernel edges -->
-  <path
-     class="edge2"
-     d="M380,80 L380,140"
-     id="path11" />
-  <text
-     class="small"
-     x="385"
-     y="115"
-     id="text12">audio URBs</text>
-  <path
-     class="edge2"
-     d="M540,80 L540,140"
-     id="path12" />
-  <text
-     class="small"
-     x="545"
-     y="115"
-     id="text13">EP0 / IF1 / events</text>
-  <!-- PipeWire -->
-  <rect
-     class="box"
-     x="20"
-     y="300"
-     width="180"
-     height="70"
-     rx="6"
-     id="rect13" />
-  <text
-     class="title"
-     x="110"
-     y="330"
-     text-anchor="middle"
-     id="text14">PipeWire / DAW</text>
-  <text
-     class="small"
-     x="110"
-     y="350"
-     text-anchor="middle"
-     id="text15">ALSA PCM client</text>
-  <path
-     class="edge2"
-     d="M200,335 L385,335 L385,240"
-     id="path15" />
-  <text
-     class="small"
-     x="250"
-     y="325"
-     id="text16">PCM buffer</text>
-  <!-- Host box -->
-  <rect
-     class="box"
-     x="240"
-     y="300"
-     width="615.91321"
-     height="280"
-     rx="5.5992107"
-     id="rect16" />
-  <text
-     class="title"
-     x="260"
-     y="325"
-     id="text17">Host (recommended: device service + mirror)</text>
-  <!-- Service thread -->
-  <rect
-     class="sub"
-     x="260"
-     y="345"
-     width="218.12448"
-     height="215"
-     rx="2.9083264"
-     id="rect17" />
-  <text
-     class="label"
-     x="275"
-     y="370"
-     font-weight="bold"
-     id="text18">Device service thread</text>
-  <text
-     class="small"
-     x="275"
-     y="395"
-     id="text19">owns the Fireface handle</text>
-  <text
-     class="small"
-     x="275"
-     y="415"
-     id="text20">drains Command queue</text>
-  <text
-     class="small"
-     x="275"
-     y="435"
-     id="text21">poll_events() / meters</text>
-  <text
-     class="small"
-     x="275"
-     y="455"
-     id="text22">publishes Snapshot on change</text>
-  <text
-     class="small"
-     x="275"
-     y="475"
-     id="text23">publishes MeterSnapshot</text>
-  <text
-     class="small"
-     x="275"
-     y="500"
-     id="text24">single owner of hwdep I/O</text>
-  <!-- UI thread -->
-  <rect
-     class="sub"
-     x="580"
-     y="345"
-     width="224.99515"
-     height="215"
-     rx="2.9999354"
-     id="rect24" />
-  <text
-     class="label"
-     x="595"
-     y="370"
-     font-weight="bold"
-     id="text25">UI thread</text>
-  <text
-     class="small"
-     x="595"
-     y="395"
-     id="text26">holds a Mirror, not the handle</text>
-  <text
-     class="small"
-     x="595"
-     y="415"
-     id="text27">setters queue a Command</text>
-  <text
-     class="small"
-     x="595"
-     y="435"
-     id="text28">model updates on Snapshot</text>
-  <text
-     class="small"
-     x="595"
-     y="455"
-     id="text29">view reads Mirror getters</text>
-  <text
-     class="small"
-     x="595"
-     y="475"
-     id="text30">canvases read MeterSnapshot</text>
-  <text
-     class="small"
-     x="595"
-     y="500"
-     id="text31">never blocks on the device</text>
-  <!-- hwdep <-> service -->
-  <path
-     class="edge2"
-     d="M555,240 L555,300 L410,300 L410,345"
-     id="path31" />
-  <text
-     class="small"
-     x="560"
-     y="285"
-     id="text32">ioctl / read / poll</text>
-  <!-- service <-> UI -->
-  <path
-     class="edge"
-     d="m 516,402 h 20"
-     id="path32" />
-  <text
-     class="small"
-     x="497"
-     y="390"
-     id="text33">Snapshot</text>
-  <path
-     class="edge"
-     d="M 536,472 H 516"
-     id="path33" />
-  <text
-     class="small"
-     x="497"
-     y="460"
-     id="text34">Command</text>
-  <path
-     class="edge"
-     d="m 516,522 h 20"
-     id="path34" />
-  <text
-     class="small"
-     x="492"
-     y="510"
-     id="text35">MeterSnapshot</text>
+
+  <text class="tiny" x="40" y="14">Blocks: D = device · K = kernel · U = userspace interface · H = host.   Paths: F1 audio (black) · F2 control (blue) · F3 events (green) · F4 MIDI (black).   Host channels: C1–C4.</text>
+  <text class="tiny" x="40" y="28">Behaviour, invariants and channel semantics: docs/spec/DRIVER-DESIGN.md §1 and docs/TOTALCONTROL-ARCHITECTURE.md §5.</text>
+
+  <!-- ══════════ device ══════════ -->
+  <rect class="box" x="40" y="40" width="1070" height="130" rx="6"/>
+  <text class="title" x="56" y="62">RME device</text>
+
+  <rect class="sub" x="56" y="74" width="168" height="66" rx="4"/>
+  <circle cx="70" cy="88" r="9" fill="#555"/><text class="id" x="70" y="92" text-anchor="middle">D1</text>
+  <text class="label" x="146" y="96" text-anchor="middle">audio OUT/IN</text>
+  <text class="small" x="140" y="114" text-anchor="middle">IF0 ISO · IF5 interrupt</text>
+  <text class="tiny" x="140" y="128" text-anchor="middle">0x01 OUT · 0x82 IN</text>
+
+  <rect class="sub" x="240" y="74" width="128" height="66" rx="4"/>
+  <circle cx="254" cy="88" r="9" fill="#555"/><text class="id" x="254" y="92" text-anchor="middle">D2</text>
+  <text class="label" x="310" y="96" text-anchor="middle">EP0 vendor</text>
+  <text class="small" x="304" y="114" text-anchor="middle">0x40 / 0xC0</text>
+
+  <rect class="sub" x="384" y="74" width="128" height="66" rx="4"/>
+  <circle cx="398" cy="88" r="9" fill="#555"/><text class="id" x="398" y="92" text-anchor="middle">D3</text>
+  <text class="label" x="454" y="96" text-anchor="middle">IF1 words OUT</text>
+  <text class="small" x="448" y="114" text-anchor="middle">bulk 0x0c</text>
+
+  <rect class="sub" x="528" y="74" width="128" height="66" rx="4"/>
+  <circle cx="542" cy="88" r="9" fill="#555"/><text class="id" x="542" y="92" text-anchor="middle">D4</text>
+  <text class="label" x="598" y="96" text-anchor="middle">IF1 state IN</text>
+  <text class="small" x="592" y="114" text-anchor="middle">bulk 0x8d</text>
+
+  <rect class="sub" x="672" y="74" width="128" height="66" rx="4"/>
+  <circle cx="686" cy="88" r="9" fill="#555"/><text class="id" x="686" y="92" text-anchor="middle">D5</text>
+  <text class="label" x="742" y="96" text-anchor="middle">IF1 meters IN</text>
+  <text class="small" x="736" y="114" text-anchor="middle">bulk 0x85</text>
+
+  <rect class="sub" x="816" y="74" width="128" height="66" rx="4"/>
+  <circle cx="830" cy="88" r="9" fill="#555"/><text class="id" x="830" y="92" text-anchor="middle">D6</text>
+  <text class="label" x="886" y="96" text-anchor="middle">status IN</text>
+  <text class="small" x="880" y="114" text-anchor="middle">0x8b · IF4/IF5</text>
+
+  <rect class="sub" x="960" y="74" width="134" height="66" rx="4"/>
+  <circle cx="974" cy="88" r="9" fill="#555"/><text class="id" x="974" y="92" text-anchor="middle">D7</text>
+  <text class="label" x="1033" y="96" text-anchor="middle">IF2 USB-MIDI</text>
+  <text class="small" x="1027" y="114" text-anchor="middle">0x07 OUT · 0x86 IN</text>
+
+  <text class="tiny" x="56" y="158">D8 IF3 firmware programming · D9 IF4 page stream (UC PC): present on the device, unclaimed by the driver.</text>
+
+  <!-- device ↔ kernel -->
+  <path class="edge2" d="M140,140 L140,252"/><text class="tiny" x="146" y="200">F1</text>
+  <path class="edge2" d="M304,140 L304,252"/><text class="tiny" x="310" y="200">F2</text>
+  <path class="ctl" d="M448,252 L448,140"/><text class="tiny" x="454" y="200">F2</text>
+  <path class="ev" d="M592,140 L592,252"/><text class="tiny" x="598" y="200">F3</text>
+  <path class="ev" d="M736,140 L736,252"/><text class="tiny" x="742" y="200">F3</text>
+  <path class="ev" d="M880,140 L880,252"/><text class="tiny" x="886" y="200">F3</text>
+  <path class="edge2" d="M1027,140 L1027,252"/><text class="tiny" x="1033" y="200">F4</text>
+
+  <!-- ══════════ kernel ══════════ -->
+  <rect class="box" x="40" y="252" width="1070" height="300" rx="6"/>
+  <text class="title" x="56" y="274">Kernel: snd-fireface-uc</text>
+
+  <rect class="sub" x="56" y="288" width="168" height="64" rx="4"/>
+  <circle cx="70" cy="302" r="9" fill="#555"/><text class="id" x="70" y="306" text-anchor="middle">K1</text>
+  <text class="label" x="146" y="310" text-anchor="middle">URB engine</text>
+  <text class="small" x="140" y="330" text-anchor="middle">ISO feedback /</text>
+  <text class="small" x="140" y="344" text-anchor="middle">interrupt handshake</text>
+
+  <rect class="sub" x="240" y="288" width="128" height="64" rx="4"/>
+  <circle cx="254" cy="302" r="9" fill="#555"/><text class="id" x="254" y="306" text-anchor="middle">K3</text>
+  <text class="label" x="310" y="310" text-anchor="middle">EP0 passthrough</text>
+  <text class="small" x="304" y="330" text-anchor="middle">VENDOR ioctl</text>
+
+  <rect class="sub" x="384" y="288" width="128" height="64" rx="4"/>
+  <circle cx="398" cy="302" r="9" fill="#555"/><text class="id" x="398" y="306" text-anchor="middle">K4</text>
+  <text class="label" x="454" y="310" text-anchor="middle">IF1 word writer</text>
+  <text class="small" x="448" y="330" text-anchor="middle">WRITE_WORDS ioctl</text>
+
+  <rect class="sub" x="528" y="288" width="128" height="64" rx="4"/>
+  <circle cx="542" cy="302" r="9" fill="#555"/><text class="id" x="542" y="306" text-anchor="middle">K5</text>
+  <text class="label" x="598" y="310" text-anchor="middle">state reader</text>
+  <text class="small" x="592" y="330" text-anchor="middle">0x8d URB</text>
+
+  <rect class="sub" x="672" y="288" width="128" height="64" rx="4"/>
+  <circle cx="686" cy="302" r="9" fill="#555"/><text class="id" x="686" y="306" text-anchor="middle">K6</text>
+  <text class="label" x="742" y="310" text-anchor="middle">meter pump</text>
+  <text class="small" x="736" y="330" text-anchor="middle">0x85 URB</text>
+
+  <rect class="sub" x="816" y="288" width="128" height="64" rx="4"/>
+  <circle cx="830" cy="302" r="9" fill="#555"/><text class="id" x="830" y="306" text-anchor="middle">K7</text>
+  <text class="label" x="886" y="310" text-anchor="middle">status + watchdog</text>
+  <text class="small" x="880" y="330" text-anchor="middle">0x8b URB</text>
+
+  <rect class="sub" x="960" y="288" width="134" height="64" rx="4"/>
+  <circle cx="974" cy="302" r="9" fill="#555"/><text class="id" x="974" y="306" text-anchor="middle">K9</text>
+  <text class="label" x="1033" y="310" text-anchor="middle">USB-MIDI engine</text>
+  <text class="small" x="1027" y="330" text-anchor="middle">bulk OUT/IN</text>
+
+  <rect class="sub" x="56" y="412" width="168" height="64" rx="4"/>
+  <circle cx="70" cy="426" r="9" fill="#555"/><text class="id" x="70" y="430" text-anchor="middle">K2</text>
+  <text class="label" x="146" y="434" text-anchor="middle">ALSA PCM</text>
+  <text class="small" x="140" y="452" text-anchor="middle">buffer + period gate</text>
+  <path class="edge2" d="M140,352 L140,412"/><text class="tiny" x="146" y="388">F1</text>
+
+  <rect class="sub" x="528" y="412" width="416" height="64" rx="4"/>
+  <circle cx="542" cy="426" r="9" fill="#555"/><text class="id" x="542" y="430" text-anchor="middle">K8</text>
+  <text class="label" x="742" y="434" text-anchor="middle">event FIFO</text>
+  <text class="small" x="736" y="452" text-anchor="middle">METER · STATE · STATUS · LATCH</text>
+  <path class="ev" d="M592,352 L592,412"/><text class="tiny" x="598" y="388">F3</text>
+  <path class="ev" d="M736,352 L736,412"/><text class="tiny" x="742" y="388">F3</text>
+  <path class="ev" d="M880,352 L880,412"/><text class="tiny" x="886" y="388">F3</text>
+
+  <path class="ctl" d="M304,352 L304,588"/>
+  <path class="ctl" d="M448,352 L448,588"/>
+  <path class="ev" d="M736,476 L736,588"/>
+  <text class="tiny" x="56" y="540">K10 recovery: URB error burst · ISO discontinuity · output latch → engine restart</text>
+
+  <!-- ══════════ userspace interfaces ══════════ -->
+  <rect class="sub" x="56" y="588" width="168" height="52" rx="4"/>
+  <circle cx="70" cy="602" r="9" fill="#555"/><text class="id" x="70" y="606" text-anchor="middle">U1</text>
+  <text class="label" x="146" y="610" text-anchor="middle">ALSA PCM node</text>
+  <text class="small" x="140" y="628" text-anchor="middle">hw:&lt;card&gt;,0</text>
+  <path class="edge2" d="M140,476 L140,588"/><text class="tiny" x="146" y="540">F1</text>
+
+  <rect class="sub" x="240" y="588" width="704" height="52" rx="4"/>
+  <circle cx="254" cy="602" r="9" fill="#555"/><text class="id" x="254" y="606" text-anchor="middle">U2</text>
+  <text class="label" x="598" y="610" text-anchor="middle">hwdep node</text>
+  <text class="small" x="592" y="628" text-anchor="middle">/dev/snd/hwC&lt;card&gt;D0 · INFO/VENDOR/WRITE_WORDS/COUNTERS + read()/poll()</text>
+  <path class="edge2" d="M304,552 L304,588"/>
+  <path class="edge2" d="M448,552 L448,588"/>
+  <path class="ev" d="M736,552 L736,588"/>
+
+  <rect class="sub" x="960" y="588" width="134" height="52" rx="4"/>
+  <circle cx="974" cy="602" r="9" fill="#555"/><text class="id" x="974" y="606" text-anchor="middle">U3</text>
+  <text class="label" x="1033" y="610" text-anchor="middle">rawmidi nodes</text>
+  <text class="small" x="1027" y="628" text-anchor="middle">one per port</text>
+  <path class="edge2" d="M1027,352 L1027,588"/><text class="tiny" x="1033" y="480">F4</text>
+
+  <!-- ══════════ host ══════════ -->
+  <rect class="box" x="40" y="688" width="1070" height="470" rx="6"/>
+  <text class="title" x="56" y="710">Host (Linux userspace)</text>
+
+  <rect class="sub" x="56" y="726" width="168" height="64" rx="4"/>
+  <circle cx="70" cy="740" r="9" fill="#555"/><text class="id" x="70" y="744" text-anchor="middle">H1</text>
+  <text class="label" x="146" y="748" text-anchor="middle">PipeWire / DAW</text>
+  <text class="small" x="140" y="768" text-anchor="middle">ALSA PCM client</text>
+  <path class="edge2" d="M140,640 L140,726"/><text class="tiny" x="146" y="688">F1</text>
+
+  <rect class="sub" x="960" y="726" width="134" height="64" rx="4"/>
+  <circle cx="974" cy="740" r="9" fill="#555"/><text class="id" x="974" y="744" text-anchor="middle">H2</text>
+  <text class="label" x="1033" y="748" text-anchor="middle">MIDI clients</text>
+  <text class="small" x="1027" y="768" text-anchor="middle">rawmidi I/O</text>
+  <path class="edge2" d="M1027,640 L1027,726"/><text class="tiny" x="1033" y="688">F4</text>
+
+  <rect class="box" x="240" y="726" width="704" height="412" rx="6"/>
+  <text class="title" x="256" y="748">TotalControl</text>
+
+  <rect class="sub" x="256" y="764" width="340" height="180" rx="4"/>
+  <circle cx="270" cy="778" r="9" fill="#555"/><text class="id" x="270" y="782" text-anchor="middle">H3</text>
+  <text class="label" x="430" y="786" text-anchor="middle">device service thread</text>
+  <text class="small" x="270" y="810">owns the Fireface handle (U2)</text>
+  <text class="small" x="270" y="828">applies commands: model + enqueue (F2)</text>
+  <text class="small" x="270" y="846">drains events (F3), decodes the model</text>
+  <text class="small" x="270" y="864">publishes C2 and C3</text>
+
+  <rect class="sub" x="256" y="964" width="340" height="64" rx="4"/>
+  <circle cx="270" cy="978" r="9" fill="#555"/><text class="id" x="270" y="982" text-anchor="middle">H4</text>
+  <text class="label" x="430" y="986" text-anchor="middle">control-I/O worker</text>
+  <text class="small" x="270" y="1006">all F2 I/O, ordered and paced</text>
+  <path class="ctl" d="M426,944 L426,964"/><text class="tiny" x="432" y="958">F2</text>
+
+  <rect class="sub" x="640" y="764" width="288" height="180" rx="4"/>
+  <circle cx="654" cy="778" r="9" fill="#555"/><text class="id" x="654" y="782" text-anchor="middle">H5</text>
+  <text class="label" x="790" y="786" text-anchor="middle">UI thread</text>
+  <text class="small" x="654" y="810">Mirror (model getters)</text>
+  <text class="small" x="654" y="828">setters queue C1</text>
+  <text class="small" x="654" y="846">view reads C2</text>
+  <text class="small" x="654" y="864">fader canvases read C3</text>
+
+  <!-- H3 ↔ U2 -->
+  <path class="ev" d="M420,640 L420,764"/><text class="tiny" x="426" y="700">F3 read()/poll()</text>
+  <path class="ctl" d="M330,764 L330,640"/><text class="tiny" x="256" y="700">F2 ioctl</text>
+  <!-- H4 → U2 -->
+  <path class="ctl" d="M256,996 L228,996 L228,614 L240,614"/><text class="tiny" x="170" y="990">F2 bursts</text>
+
+  <!-- channels -->
+  <path class="ctl" d="M640,806 L596,806"/><text class="tiny" x="602" y="798">C1</text>
+  <path class="ev" d="M596,860 L640,860"/><text class="tiny" x="602" y="852">C2</text>
+  <path class="ev" d="M596,910 L640,910"/><text class="tiny" x="602" y="902">C3</text>
+  <path class="wake" d="M596,934 L640,934"/><text class="tiny" x="602" y="930">C4</text>
+
+  <text class="tiny" x="256" y="1056">C1 Command queue (bounded, coalescing) · C2 Snapshot (model) · C3 MeterSnapshot (meter bus) · C4 wake edges.</text>
+  <text class="tiny" x="256" y="1072">Channel semantics and cadence: TOTALCONTROL-ARCHITECTURE.md §5. Design rationale: DRIVER-DESIGN.md §15.</text>
 </svg>

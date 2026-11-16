@@ -7,6 +7,7 @@
 //! See `docs/PROTOCOL-COMPLETE.md` and `docs/HWDEP-ABI.md`.
 
 pub mod abi;
+pub(crate) mod control_worker;
 pub mod device;
 pub mod dump;
 pub mod hwdep;
@@ -16,6 +17,6 @@ pub mod settings;
 
 pub use device::{ControlTransport, DeviceIdentity, DeviceInfo, Fireface, Model, ReadableState};
 pub use dump::UcxDump;
-pub use models::{profile_for_personality, Personality};
 pub use hwdep::{class_compliant_cards, enumerate, ClassCompliantCard, Direction, Event, Hwdep};
+pub use models::{profile_for_personality, Personality};
 pub use settings::ChannelSettings;

@@ -30,6 +30,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::capabilities::DeviceCapabilities;
@@ -40,6 +41,7 @@ use crate::channel::{
 use crate::device::{DeviceSettings, RmeDevice};
 use crate::error::Error;
 use crate::fireface::abi::{EV_METER, MODEL_BABYFACE_CLASSIC};
+use crate::fireface::control_worker::{AsyncWriter, ControlSink};
 use crate::fireface::hwdep::{Direction, Hwdep};
 use crate::mock::MockDevice;
 use crate::profiles::babyface_classic::PROFILE;
@@ -130,10 +132,41 @@ fn describe(addr: u16, level: u32) -> String {
     format!("{src} -> {} = {db}", OUT_NAMES.get(out).unwrap_or(&"?"))
 }
 
+/// Shares the Babyface hwdep handle with the control-I/O worker, so
+/// worker writes and backend reads stay serialized on one handle.
+struct HwdepSink(Arc<Mutex<Hwdep>>);
+
+impl ControlSink for HwdepSink {
+    fn vendor(
+        &self,
+        request: u8,
+        direction: Direction,
+        value: u16,
+        index: u16,
+        data: &[u8],
+    ) -> Result<Vec<u8>, crate::error::Error> {
+        self.0
+            .lock()
+            .unwrap()
+            .vendor(request, direction, value, index, data)
+            .map_err(crate::error::Error::Io)
+    }
+
+    fn write_words(&self, words: &[(u16, u16)]) -> Result<(), crate::error::Error> {
+        self.0
+            .lock()
+            .unwrap()
+            .write_words(words)
+            .map_err(crate::error::Error::Io)
+    }
+}
+
 /// The Babyface-classic (vendor mode) over `snd-fireface-uc`.
 pub struct BabyfaceClassic {
     state: MockDevice,
-    hw: Hwdep,
+    hw: Arc<Mutex<Hwdep>>,
+    /// Shared control-I/O worker (H4); vendor writes queue here.
+    worker: Option<Arc<AsyncWriter>>,
     firmware: Option<u32>,
     serial: Option<String>,
     /// Last level sent per `0x12` address.
@@ -269,10 +302,14 @@ impl BabyfaceClassic {
         for out in state.outputs_mut() {
             out.volume = 1.0;
         }
+        let hw = Arc::new(Mutex::new(hw));
+        let worker = AsyncWriter::new(Arc::new(Mutex::new(Box::new(HwdepSink(Arc::clone(&hw))))))
+            .map(Arc::new);
         let mut dev = Self {
             state,
             meters: RefCell::new(DspMeters::default()),
             hw,
+            worker,
             firmware,
             serial,
             sent: RefCell::new(HashMap::new()),
@@ -288,7 +325,7 @@ impl BabyfaceClassic {
     /// The stream rate follows the host; show what the driver runs at.
     fn refresh_rate(&mut self) {
         self.last_rate_poll.set(Some(Instant::now()));
-        if let Ok(info) = self.hw.info() {
+        if let Ok(info) = self.hw.lock().unwrap().info() {
             if info.rate > 0 {
                 self.state.settings_mut().sample_rate = info.rate;
             }
@@ -326,7 +363,14 @@ impl BabyfaceClassic {
     }
 
     fn vendor_out(&self, request: u8, value: u16, index: u16) -> std::io::Result<()> {
+        if let Some(worker) = &self.worker {
+            return worker
+                .send_vendor(request, Direction::Out, value, index, &[])
+                .map_err(|e| std::io::Error::other(format!("{e:?}")));
+        }
         self.hw
+            .lock()
+            .unwrap()
             .vendor(request, Direction::Out, value, index, &[])
             .map(|_| ())
     }
@@ -486,9 +530,10 @@ impl BabyfaceClassic {
     /// Reads every pending driver event and folds meter packets in.
     fn pump_meters(&self) {
         let mut meters = self.meters.borrow_mut();
+        let hw = self.hw.lock().unwrap();
         for _ in 0..512 {
-            match self.hw.wait(Duration::ZERO) {
-                Ok(true) => match self.hw.read_event() {
+            match hw.wait(Duration::ZERO) {
+                Ok(true) => match hw.read_event() {
                     Ok(e) if e.kind == EV_METER => meters.apply(&e.data),
                     Ok(_) => {}
                     Err(_) => break,
@@ -509,7 +554,7 @@ impl RmeDevice for BabyfaceClassic {
     }
 
     fn is_connected(&self) -> bool {
-        self.hw.is_connected()
+        self.hw.lock().unwrap().is_connected()
     }
 
     fn open() -> Result<Self, Error> {
