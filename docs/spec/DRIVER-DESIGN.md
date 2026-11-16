@@ -48,6 +48,15 @@ The firmware programming USB interface (IF3) and the page stream USB
 interface (IF4) remain unclaimed; the firmware update tool uses IF3
 directly.
 
+![Driver and host architecture](driver-host-architecture.svg)
+
+The recommended host architecture is a device service thread that owns the
+hwdep handle, plus a UI-side mirror. The service drains commands, polls
+events and meters, and publishes snapshots. The UI queues commands and
+reads the mirror; it never blocks on the device. The runtime structure is
+defined in
+[`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §5.
+
 ## 2. Device descriptors and quirks
 
 `struct ffuc_device_desc` is the per-device table. USB IDs point at
@@ -145,6 +154,8 @@ The gate adds at most about one URB of latency at any period size. It is a
 correctness mechanism.
 
 ### 4.3 ISO implicit feedback and dropout prevention
+
+![AP implicit feedback loop](ap-implicit-feedback.svg)
 
 The ISO IN header carries a position and a phase accumulator. The driver
 records every IN packet's position and frame count in a feedback buffer
@@ -312,6 +323,13 @@ risks or tuning questions, not shipped behaviour.
   exposed.
 - `INFO.outputs` uses the playback channel count; on Babyface-classic the
   hardware output count differs. Verify the ABI field semantics.
+
+### Host interaction
+
+- The recommended host service loop drains commands and events on one
+  thread. A blocking control burst can delay event draining and drop
+  events. Separating control writes from the event drain would keep the
+  meter/state pump responsive under heavy write load.
 
 ### Heuristic waits
 

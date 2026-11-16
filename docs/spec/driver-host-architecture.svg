@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="600" viewBox="0 0 920 600" font-family="sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#444"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill:#f7f7f9; stroke:#555; stroke-width:1.5; rx:6; }
+    .sub { fill:#ffffff; stroke:#888; stroke-width:1; }
+    .title { font-size:16px; font-weight:bold; fill:#222; }
+    .label { font-size:13px; fill:#222; }
+    .small { font-size:11px; fill:#555; }
+    .edge { stroke:#444; stroke-width:1.5; fill:none; marker-end:url(#arrow); }
+    .edge2 { stroke:#444; stroke-width:1.5; fill:none; marker-end:url(#arrow); marker-start:url(#arrow); }
+  </style>
+
+  <!-- Device -->
+  <rect class="box" x="300" y="20" width="320" height="60" rx="6"/>
+  <text class="title" x="460" y="45" text-anchor="middle">RME device</text>
+  <text class="small" x="460" y="65" text-anchor="middle">USB audio + control transports</text>
+
+  <!-- Kernel -->
+  <rect class="box" x="120" y="140" width="680" height="120" rx="6"/>
+  <text class="title" x="140" y="165">Kernel: snd-fireface-uc (transport driver)</text>
+  <rect class="sub" x="140" y="180" width="150" height="60" rx="4"/>
+  <text class="label" x="215" y="205" text-anchor="middle">URB engine</text>
+  <text class="small" x="215" y="225" text-anchor="middle">ISO / interrupt</text>
+  <rect class="sub" x="310" y="180" width="150" height="60" rx="4"/>
+  <text class="label" x="385" y="205" text-anchor="middle">ALSA PCM</text>
+  <text class="small" x="385" y="225" text-anchor="middle">hw:&lt;card&gt;,0</text>
+  <rect class="sub" x="480" y="180" width="150" height="60" rx="4"/>
+  <text class="label" x="555" y="205" text-anchor="middle">hwdep node</text>
+  <text class="small" x="555" y="225" text-anchor="middle">control + events</text>
+  <rect class="sub" x="650" y="180" width="130" height="60" rx="4"/>
+  <text class="label" x="715" y="205" text-anchor="middle">rawmidi</text>
+  <text class="small" x="715" y="225" text-anchor="middle">USB-MIDI</text>
+
+  <!-- Device <-> Kernel edges -->
+  <path class="edge2" d="M380,80 L380,140"/>
+  <text class="small" x="385" y="115">audio URBs</text>
+  <path class="edge2" d="M540,80 L540,140"/>
+  <text class="small" x="545" y="115">EP0 / IF1 / events</text>
+
+  <!-- PipeWire -->
+  <rect class="box" x="20" y="300" width="180" height="70" rx="6"/>
+  <text class="title" x="110" y="330" text-anchor="middle">PipeWire / DAW</text>
+  <text class="small" x="110" y="350" text-anchor="middle">ALSA PCM client</text>
+  <path class="edge2" d="M200,335 L385,335 L385,240"/>
+  <text class="small" x="250" y="325">PCM buffer</text>
+
+  <!-- Host box -->
+  <rect class="box" x="240" y="300" width="660" height="280" rx="6"/>
+  <text class="title" x="260" y="325">Host (recommended: device service + mirror)</text>
+
+  <!-- Service thread -->
+  <rect class="sub" x="260" y="345" width="300" height="215" rx="4"/>
+  <text class="label" x="275" y="370" font-weight="bold">Device service thread</text>
+  <text class="small" x="275" y="395">owns the Fireface handle</text>
+  <text class="small" x="275" y="415">drains Command queue</text>
+  <text class="small" x="275" y="435">poll_events() / meters</text>
+  <text class="small" x="275" y="455">publishes Snapshot on change</text>
+  <text class="small" x="275" y="475">publishes MeterSnapshot</text>
+  <text class="small" x="275" y="500">single owner of hwdep I/O</text>
+
+  <!-- UI thread -->
+  <rect class="sub" x="580" y="345" width="300" height="215" rx="4"/>
+  <text class="label" x="595" y="370" font-weight="bold">UI thread</text>
+  <text class="small" x="595" y="395">holds a Mirror, not the handle</text>
+  <text class="small" x="595" y="415">setters queue a Command</text>
+  <text class="small" x="595" y="435">model updates on Snapshot</text>
+  <text class="small" x="595" y="455">view reads Mirror getters</text>
+  <text class="small" x="595" y="475">canvases read MeterSnapshot</text>
+  <text class="small" x="595" y="500">never blocks on the device</text>
+
+  <!-- hwdep <-> service -->
+  <path class="edge2" d="M555,240 L555,300 L410,300 L410,345"/>
+  <text class="small" x="560" y="285">ioctl / read / poll</text>
+
+  <!-- service <-> UI -->
+  <path class="edge" d="M560,400 L580,400"/>
+  <text class="small" x="565" y="392">Snapshot</text>
+  <path class="edge" d="M580,470 L560,470"/>
+  <text class="small" x="565" y="462">Command</text>
+  <path class="edge" d="M560,520 L580,520"/>
+  <text class="small" x="560" y="512">MeterSnapshot</text>
+</svg>
