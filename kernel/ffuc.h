@@ -73,6 +73,8 @@
 #define FFUC_STATUS_LEN		4
 #define FFUC_STATUS_OUT_LATCHED	0x80
 #define FFUC_STATUS_GRACE_MS	20
+/* UCX IF5 settings-group settle, measured in the E2b connect capture. */
+#define FFUC_UCX_IF5_SETTLE_MS	100
 #define FFUC_RESTART_SETTLE_MS	250	/* UC: minimum engine stop -> start gap */
 
 #define FFUC_MAX_EPS		2	/* endpoints per direction (alt 3) */
