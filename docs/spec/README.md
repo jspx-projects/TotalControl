@@ -12,6 +12,7 @@ protocol specs for the wire detail. See the layering rule in
 
 | Document | Contents |
 |---|---|
+| [DRIVER-DESIGN.md](DRIVER-DESIGN.md) | kernel transport contract, URB engines, hwdep ABI, quirks, recovery and driver extension |
 | [TOTALCONTROL-GUI-SPEC.md](TOTALCONTROL-GUI-SPEC.md) | layout, strip controls, panels, gestures, motion and Control Room |
 | [TOTALCONTROL-STATE-SPEC.md](TOTALCONTROL-STATE-SPEC.md) | state ownership, current workspace, autosave, restore, host settings and layout files |
 | [TOTALCONTROL-DEVICE-PROFILE-SPEC.md](TOTALCONTROL-DEVICE-PROFILE-SPEC.md) | profile table, selection, host operations, capabilities and scene compatibility |

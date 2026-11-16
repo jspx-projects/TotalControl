@@ -96,7 +96,9 @@ the protocol or behaviour from the section alone.
 Authoritative files:
 
 - `docs/TOTALCONTROL-ARCHITECTURE.md` — runtime layers, device service, data
-  flow, state ownership, driver and latency model.
+  flow, state ownership and host latency model.
+- `docs/spec/DRIVER-DESIGN.md` — kernel transport contract, URB engines,
+  hwdep ABI, quirks, recovery and driver extension.
 - `docs/spec/TOTALCONTROL-GUI-SPEC.md` — visible UI, panels, gestures and
   visible state.
 - `docs/spec/TOTALCONTROL-STATE-SPEC.md` — state ownership, current
@@ -210,6 +212,10 @@ mechanism, FX returns and unsupported controls.
   automates a checkout-build swap.
 - Verify with `cargo test -p totalcontrol-core --lib --features alsa` and
   `cargo test -p totalcontrol-gui`.
+- When a change resolves or advances a published open work item — a
+  `docs/work/` backlog row, a capture request, or an issue — update that item
+  in the same branch and pull request: mark it done or remove the request. An
+  open item left unchanged invites a second implementation of the same work.
 - Do not replace device-backed behaviour with host-side approximations. If the
   unit supports something and the register is unknown, add it to
   `docs/work/` and request a capture.
