@@ -2246,8 +2246,6 @@ static int ffuc_engine_start(struct ffuc *chip)
 		}
 	if (READ_ONCE(chip->disconnected))
 		return -ENODEV;
-	for (e = 0; e < 2; e++)
-		WARN_ON_ONCE(!chip->eps[e][0].buf_size);
 
 	chip->urb_frames = ffuc_urb_frames(chip, chip->rate);
 	if (chip->iso)
