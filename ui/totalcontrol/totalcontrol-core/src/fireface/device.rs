@@ -2555,10 +2555,15 @@ impl Fireface {
                 self.settings.spdif_professional = v & 0x0080 != 0;
                 self.settings.optical_out_spdif = v & 0x0400 != 0;
                 self.settings.word_clock_single_speed = v & 0x0040 != 0;
+                self.settings.word_clock_termination = v & 0x0001 != 0;
             }
         }
     }
 
+    /// The UC options word (`0x10` / wIndex 1487): word clock input
+    /// termination (bit 0), clock source (bits 1-3), word clock single
+    /// speed (bit 6), SPDIF professional (bit 7), optical output SPDIF
+    /// (bit 10).  All bits clear is the unit's default.
     fn uc_options_word(&self) -> u16 {
         let clock = match self.settings.clock_source.as_str() {
             "SPDIF Coaxial" | "SPDIF" => 1,
@@ -2567,7 +2572,10 @@ impl Fireface {
             "LTC" => 4,
             _ => 0,
         };
-        let mut v = 0x0001 | ((clock & 7) << 1);
+        let mut v = (clock & 7) << 1;
+        if self.settings.word_clock_termination {
+            v |= 0x0001;
+        }
         if self.settings.spdif_professional {
             v |= 0x0080;
         }
@@ -3413,16 +3421,15 @@ impl Fireface {
         }
     }
 
-    /// Word-clock input termination (`0x008` in the UCX options word).
-    /// The UC has no termination bit.
+    /// Word-clock input termination: bit 0 of the UC options word,
+    /// `0x008` in the UCX one.
     pub fn set_word_clock_termination(&mut self, on: bool) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Word clock termination does not exist on the UC".into(),
-            ));
-        }
         self.settings.word_clock_termination = on;
-        self.ucx_write_options()
+        if self.is_uc() {
+            self.uc_write_options()
+        } else {
+            self.ucx_write_options()
+        }
     }
 
     /// Mark one hardware output as a Talkback receiver.  The flag is
@@ -7093,6 +7100,7 @@ impl RmeDevice for Fireface {
         let device_line_out = self.settings.line_out_ref;
         let device_phones = self.settings.phones_ref;
         let device_wc_single = self.settings.word_clock_single_speed;
+        let device_wc_term = self.settings.word_clock_termination;
         let device_reverb = self.settings.reverb;
         let device_echo = self.settings.echo;
 
@@ -7256,6 +7264,7 @@ impl RmeDevice for Fireface {
             self.settings.line_out_ref = device_line_out;
             self.settings.phones_ref = device_phones;
             self.settings.word_clock_single_speed = device_wc_single;
+            self.settings.word_clock_termination = device_wc_term;
         }
         if self.settings.reverb.is_none() {
             self.settings.reverb = device_reverb;
@@ -7629,6 +7638,9 @@ mod tests {
         info: DeviceInfo,
         writes: Arc<Mutex<Vec<Write>>>,
         levels: Arc<Mutex<u32>>,
+        /// The `0x10` word a settings read returns; `None` answers empty,
+        /// so the read at open leaves the defaults.
+        settings: Arc<Mutex<Option<u32>>>,
         /// Artificial device pacing: every word burst sleeps this long.
         write_delay_ms: Arc<std::sync::atomic::AtomicU64>,
     }
@@ -7663,6 +7675,7 @@ mod tests {
                     info,
                     writes: Arc::clone(&writes),
                     levels,
+                    settings: Arc::new(Mutex::new(None)),
                     write_delay_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 },
                 writes,
@@ -7698,6 +7711,11 @@ mod tests {
                     return Ok(self.levels.lock().unwrap().to_le_bytes().to_vec());
                 }
                 *self.levels.lock().unwrap() = value as u32;
+            }
+            if request == protocol::req::SETTINGS && direction == Direction::In {
+                if let Some(word) = *self.settings.lock().unwrap() {
+                    return Ok(word.to_le_bytes().to_vec());
+                }
             }
             Ok(Vec::new())
         }
@@ -11029,8 +11047,64 @@ mod tests {
         let w = writes.lock().unwrap();
         // Line In -10 dBV: bits 9:8 = 11, base 0x3000 -> 0x3780.
         assert!(w.contains(&Write::Vendor(protocol::req::LEVELS, 0x3780, 0x0fc0)));
-        // Options word: commit + SPDIF professional, wIndex 1487.
-        assert!(w.contains(&Write::Vendor(protocol::req::SETTINGS, 0x0081, 1487)));
+        // Options word: SPDIF professional alone, wIndex 1487.  Bit 0 is
+        // word clock termination, not a commit flag.
+        assert!(w.contains(&Write::Vendor(protocol::req::SETTINGS, 0x0080, 1487)));
+    }
+
+    fn open_uc_with_settings(word: u32) -> (Fireface, Arc<Mutex<Vec<Write>>>) {
+        let (t, writes) = MockTransport::new(Model::Uc);
+        *t.settings.lock().unwrap() = Some(word);
+        let info = t.info.clone();
+        (Fireface::from_transport(Box::new(t), info).unwrap(), writes)
+    }
+
+    #[test]
+    fn uc_word_clock_termination_is_options_bit_0() {
+        // Measured from RME's Windows driver on firmware 138: Word In
+        // Termination on commits 0x0081 with SPDIF professional set, off
+        // commits 0x0080; every option at its default commits 0x0000.
+        let (mut dev, writes) = open(Model::Uc);
+        writes.lock().unwrap().clear();
+        dev.set_word_clock_termination(true).unwrap();
+        dev.set_spdif_professional(true).unwrap();
+        dev.set_word_clock_termination(false).unwrap();
+        dev.set_spdif_professional(false).unwrap();
+        let w: Vec<_> = writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|x| match x {
+                Write::Vendor(r, v, 1487) if *r == protocol::req::SETTINGS => Some(*v),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(w, vec![0x0001, 0x0081, 0x0080, 0x0000]);
+    }
+
+    #[test]
+    fn uc_reads_word_clock_termination_at_open() {
+        let (dev, _) = open_uc_with_settings(0x4a21);
+        assert!(dev.settings.word_clock_termination);
+        assert!(!dev.settings.spdif_professional);
+        let (dev, _) = open_uc_with_settings(0x4aa0);
+        assert!(!dev.settings.word_clock_termination);
+        assert!(dev.settings.spdif_professional);
+    }
+
+    #[test]
+    fn uc_scene_apply_keeps_the_device_termination() {
+        let (mut dev, writes) = open_uc_with_settings(0x4a21);
+        let mut scene = dev.capture_scene();
+        scene.settings.word_clock_termination = false;
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        assert!(dev.settings.word_clock_termination);
+        assert!(!writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|x| matches!(x, Write::Vendor(protocol::req::SETTINGS, _, 1487))));
     }
 
     #[test]
