@@ -316,6 +316,21 @@ the engine. The host sees an xrun and re-prepares.
 
 The hwdep ABI is versioned (`FFUC_ABI_VERSION`). The host checks it at open.
 
+U2 carries two transfer modes with opposite characteristics:
+
+| | F2: ioctl | F3: read()/poll() |
+|---|---|---|
+| Initiative | host commands the device | device produces information; the host consumes it |
+| Shape | one command → one USB transaction → result | drain of events already in K8 |
+| Timing | synchronous, bounded by the USB timeout | immediate when events are queued |
+| Load | bursty, a few per user action | continuous: ~245 meter packets/s plus state and status, ~98% of the read load |
+| Continuity | none; writes may be queued and paced, ordering preserved | hard: K6 advances only while H3 drains; K8 holds ~1 s, then drops |
+
+`ioctl` is the Linux device-command syscall: a typed, synchronous
+request/response into the driver. `read()` is a stream drain that causes
+no device transaction. The host therefore protects F3 continuity by
+keeping F2's blocking waits off the drain thread (§5.2).
+
 | ioctl | Function |
 |---|---|
 | `INFO` | identity, capabilities, endpoint numbers, rate, firmware |
