@@ -977,6 +977,7 @@ impl WriteBatchGuard {
     }
 
     /// Wait until the writer has sent everything queued so far.
+    #[cfg(test)]
     fn wait(&self) -> Result<(), Error> {
         match &self.writer {
             Some(writer) => writer.flush(),
@@ -984,26 +985,14 @@ impl WriteBatchGuard {
         }
     }
 
-    /// Queue the batch.  Live controls return here; the writer paces the
-    /// transfer off the UI thread.
+    /// Queue the batch.  Live controls and scene applies return here;
+    /// the worker paces the transfer off the service thread.
     fn finish(mut self) -> Result<(), Error> {
         self.active = false;
         if !self.owns {
             return Ok(());
         }
         let result = self.flush();
-        *self.batch.lock().unwrap() = None;
-        result
-    }
-
-    /// Queue the batch and wait for the device writes to finish.  Scene
-    /// apply uses this so its completion and errors stay synchronous.
-    fn finish_wait(mut self) -> Result<(), Error> {
-        self.active = false;
-        if !self.owns {
-            return Ok(());
-        }
-        let result = self.flush().and_then(|()| self.wait());
         *self.batch.lock().unwrap() = None;
         result
     }
@@ -1049,13 +1038,21 @@ fn finish_live_batch<T>(
 
 enum WriterCommand {
     Words(Vec<(u16, u16)>),
+    Vendor {
+        request: u8,
+        direction: Direction,
+        value: u16,
+        index: u16,
+        data: Vec<u8>,
+        reply: Option<Sender<Result<Vec<u8>, String>>>,
+    },
     Flush(Sender<Result<(), String>>),
     Shutdown,
 }
 
-/// Pacer for real-unit IF1 writes.  The UI thread queues words and returns;
-/// this thread owns the burst cadence, so a fader or gain drag never sleeps
-/// inside `update`.
+/// Control-I/O worker (H4).  The service thread queues words and vendor
+/// requests and returns; this thread executes them in submission order
+/// and owns the burst cadence, so the event drain never waits on pacing.
 struct AsyncWriter {
     tx: Sender<WriterCommand>,
     join: Mutex<Option<JoinHandle<()>>>,
@@ -1065,7 +1062,7 @@ impl AsyncWriter {
     fn new(transport: Arc<Mutex<Box<dyn ControlTransport>>>) -> Option<Self> {
         let (tx, rx) = mpsc::channel();
         match thread::Builder::new()
-            .name("totalcontrol-if1-writer".into())
+            .name("totalcontrol-control-io".into())
             .spawn(move || writer_loop(rx, transport))
         {
             Ok(join) => Some(Self {
@@ -1073,7 +1070,7 @@ impl AsyncWriter {
                 join: Mutex::new(Some(join)),
             }),
             Err(e) => {
-                log::warn!("Starting the IF1 writer failed: {e:?}");
+                log::warn!("Starting the control-I/O worker failed: {e:?}");
                 None
             }
         }
@@ -1083,6 +1080,52 @@ impl AsyncWriter {
         self.tx
             .send(WriterCommand::Words(words))
             .map_err(|_| writer_stopped())
+    }
+
+    fn send_vendor(
+        &self,
+        request: u8,
+        direction: Direction,
+        value: u16,
+        index: u16,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        self.tx
+            .send(WriterCommand::Vendor {
+                request,
+                direction,
+                value,
+                index,
+                data: data.to_vec(),
+                reply: None,
+            })
+            .map_err(|_| writer_stopped())
+    }
+
+    fn request_vendor(
+        &self,
+        request: u8,
+        direction: Direction,
+        value: u16,
+        index: u16,
+        data: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        let (tx, rx) = mpsc::channel();
+        self.tx
+            .send(WriterCommand::Vendor {
+                request,
+                direction,
+                value,
+                index,
+                data: data.to_vec(),
+                reply: Some(tx),
+            })
+            .map_err(|_| writer_stopped())?;
+        match rx.recv() {
+            Ok(Ok(bytes)) => Ok(bytes),
+            Ok(Err(e)) => Err(Error::Io(std::io::Error::other(e))),
+            Err(_) => Err(writer_stopped()),
+        }
     }
 
     fn flush(&self) -> Result<(), Error> {
@@ -1114,48 +1157,93 @@ fn writer_stopped() -> Error {
 fn writer_loop(rx: Receiver<WriterCommand>, transport: Arc<Mutex<Box<dyn ControlTransport>>>) {
     let mut pending: Vec<(u16, u16)> = Vec::new();
     loop {
-        match rx.recv() {
-            Ok(WriterCommand::Words(words)) => {
-                pending.extend(words);
-                // Coalesce everything already queued before spending the
-                // burst gap, then send it as one paced batch.
-                loop {
-                    match rx.try_recv() {
-                        Ok(WriterCommand::Words(more)) => {
-                            pending.extend(more);
-                            if pending.len() >= UCX_WRITE_CHUNK {
-                                break;
-                            }
-                        }
-                        Ok(WriterCommand::Flush(reply)) => {
-                            let result = flush_pending(&transport, &mut pending);
-                            let _ = reply.send(result);
-                        }
-                        Ok(WriterCommand::Shutdown) => {
-                            let _ = flush_pending(&transport, &mut pending);
-                            return;
-                        }
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => {
-                            let _ = flush_pending(&transport, &mut pending);
-                            return;
-                        }
-                    }
-                }
-                let _ = flush_pending(&transport, &mut pending);
-            }
-            Ok(WriterCommand::Flush(reply)) => {
-                let result = flush_pending(&transport, &mut pending);
-                let _ = reply.send(result);
-            }
-            Ok(WriterCommand::Shutdown) => {
-                let _ = flush_pending(&transport, &mut pending);
-                return;
-            }
+        let cmd = match rx.recv() {
+            Ok(cmd) => cmd,
             Err(_) => {
                 let _ = flush_pending(&transport, &mut pending);
                 return;
             }
+        };
+        match cmd {
+            WriterCommand::Words(words) => {
+                pending.extend(words);
+                // Coalesce everything already queued before spending the
+                // burst gap, then send it as one paced batch. A non-word
+                // command ends the coalescing and executes in order.
+                let mut next = None;
+                while pending.len() < UCX_WRITE_CHUNK {
+                    match rx.try_recv() {
+                        Ok(WriterCommand::Words(more)) => pending.extend(more),
+                        Ok(other) => {
+                            next = Some(other);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = flush_pending(&transport, &mut pending);
+                if let Some(other) = next {
+                    if writer_exec(&transport, &mut pending, other) {
+                        return;
+                    }
+                }
+            }
+            other => {
+                if writer_exec(&transport, &mut pending, other) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Execute one non-word command in submission order. Words queued ahead
+/// of a vendor request or flush are sent first. Returns true on shutdown.
+fn writer_exec(
+    transport: &Arc<Mutex<Box<dyn ControlTransport>>>,
+    pending: &mut Vec<(u16, u16)>,
+    cmd: WriterCommand,
+) -> bool {
+    match cmd {
+        WriterCommand::Words(words) => {
+            pending.extend(words);
+            let _ = flush_pending(transport, pending);
+            false
+        }
+        WriterCommand::Vendor {
+            request,
+            direction,
+            value,
+            index,
+            data,
+            reply,
+        } => {
+            let _ = flush_pending(transport, pending);
+            let result = transport
+                .lock()
+                .unwrap()
+                .vendor(request, direction, value, index, &data)
+                .map_err(|e| format!("{e:?}"));
+            match reply {
+                Some(reply) => {
+                    let _ = reply.send(result);
+                }
+                None => {
+                    if let Err(e) = result {
+                        log::warn!("Vendor write 0x{request:02x} failed: {e}");
+                    }
+                }
+            }
+            false
+        }
+        WriterCommand::Flush(reply) => {
+            let result = flush_pending(transport, pending);
+            let _ = reply.send(result);
+            false
+        }
+        WriterCommand::Shutdown => {
+            let _ = flush_pending(transport, pending);
+            true
         }
     }
 }
@@ -1493,17 +1581,28 @@ impl Fireface {
         if self.dry_run {
             return Ok(());
         }
-        // A vendor request cannot be reordered behind queued IF1 words.
+        // The worker executes queued words before this request (F2
+        // ordering); the service thread does not wait for the pacing.
         self.flush_write_batch()?;
-        self.transport()
-            .vendor(req, Direction::Out, value, index, &[])?;
-        Ok(())
+        match &self.async_writer {
+            Some(writer) => writer.send_vendor(req, Direction::Out, value, index, &[]),
+            None => self
+                .transport()
+                .vendor(req, Direction::Out, value, index, &[])
+                .map(|_| ()),
+        }
     }
 
     fn vendor_in(&self, req: u8, value: u16, index: u16, len: usize) -> Result<Vec<u8>, Error> {
         self.flush_write_batch()?;
-        self.transport()
-            .vendor(req, Direction::In, value, index, &vec![0u8; len])
+        match &self.async_writer {
+            Some(writer) => {
+                writer.request_vendor(req, Direction::In, value, index, &vec![0u8; len])
+            }
+            None => self
+                .transport()
+                .vendor(req, Direction::In, value, index, &vec![0u8; len]),
+        }
     }
 
     fn write_word(&self, addr: u16, value: u16) -> Result<(), Error> {
@@ -1516,7 +1615,7 @@ impl Fireface {
             }
             return self.send_or_queue(&[(addr, value)]);
         }
-        let result = self.transport().write_words(&[(addr, value)]);
+        let result = self.send_or_queue(&[(addr, value)]);
         if let Err(e) = &result {
             log::warn!("IF1 word write 0x{addr:04x}=0x{value:04x} failed: {e:?}");
         }
@@ -1533,7 +1632,7 @@ impl Fireface {
             }
             return self.send_or_queue(words);
         }
-        let result = self.transport().write_words(words);
+        let result = self.send_or_queue(words);
         if let Err(e) = &result {
             log::warn!(
                 "IF1 burst of {} words starting 0x{:04x} failed: {e:?}",
@@ -1544,8 +1643,8 @@ impl Fireface {
         result
     }
 
-    /// Hand a live UCX write to the writer, or send it inline when no
-    /// writer is running (tests, and the synchronous fallback).
+    /// Hand a live write to the control-I/O worker, or send it inline
+    /// when no worker is running (tests, and the synchronous fallback).
     fn send_or_queue(&self, words: &[(u16, u16)]) -> Result<(), Error> {
         match &self.async_writer {
             Some(writer) => writer.send_words(words.to_vec()),
@@ -1645,12 +1744,12 @@ impl Fireface {
             }
         };
         if let Some(writer) = &self.async_writer {
-            // A vendor request must not overtake words already queued by
-            // a live control change.
+            // The worker sends these words before any later queued
+            // operation, so ordering holds without a blocking wait.
             if !words.is_empty() {
                 writer.send_words(words)?;
             }
-            return writer.flush();
+            return Ok(());
         }
         if words.is_empty() {
             return Ok(());
@@ -7673,7 +7772,7 @@ impl RmeDevice for Fireface {
             self.set_sample_rate(self.settings.sample_rate)?;
         }
         let result = match batch {
-            Some(batch) => batch.finish_wait(),
+            Some(batch) => batch.finish(),
             None => Ok(()),
         };
         if result.is_ok() && self.profile.capabilities().pitch {
@@ -7895,20 +7994,17 @@ mod tests {
         )
     }
 
-    /// Reproduction evidence for the host audit: with a device that paces
-    /// its word bursts, a UC live write blocks the caller for the pacing
-    /// duration, while the UCX writer thread already absorbs it. The fix
-    /// routes UC writes through the writer too; this test then inverts to
-    /// assert a prompt return on both models.
+    /// Regression test for the control-I/O worker (H4): with a device
+    /// that paces its word bursts and vendor requests, a live write on
+    /// either model returns promptly because the worker owns the pacing.
     #[test]
-    fn uc_live_writes_block_the_caller_while_ucx_writes_are_queued() {
+    fn live_writes_return_before_the_device_pacing() {
         let (mut uc, _writes) = open_delayed(Model::Uc, 300, true);
         let t0 = std::time::Instant::now();
         uc.set_volume(ChannelId::Output(0), 0, 0.5).unwrap();
-        let uc_elapsed = t0.elapsed();
         assert!(
-            uc_elapsed >= Duration::from_millis(250),
-            "the UC write blocked the caller for {uc_elapsed:?}"
+            t0.elapsed() < Duration::from_millis(100),
+            "the UC write queued promptly"
         );
 
         let (mut ucx, _writes2) = open_delayed(Model::Ucx, 300, true);
@@ -8602,6 +8698,7 @@ mod tests {
         writes.lock().unwrap().clear();
         dev.set_gain(0, 10).unwrap();
         dev.set_sample_rate(48_000).unwrap();
+        dev.flush_writer().unwrap();
         let w = writes.lock().unwrap();
         let words = w
             .iter()
