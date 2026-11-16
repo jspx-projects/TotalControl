@@ -20105,12 +20105,8 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
 
     // The Control Room is flush with the right edge of the mixer area, the
     // way TotalMix keeps it against the Control Strip, rather than packed
-    // after the last output strip. When the strips are wider than the
-    // window it stays at the end of the row and the page scrolls.
+    // after the last output strip.
     let scale = state.ui_scale;
-    // Width of the channel strips alone, so the HARDWARE OUTPUTS rule stops
-    // at the last channel instead of running into the Control Room.
-    let mut strips_width = 0.0f32;
     let cr_w = control_room_visual_width(state, scale, anim_now);
     let natural_out = if control_room_available(state) {
         out_width + theme::SPACE_MD + cr_w
@@ -20135,7 +20131,6 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     let available = main_space - reserve;
     let fx_overlay = fx_open && reserve < fx_extent;
     let out_row: Element<'_, Message> = if control_room_available(state) {
-        strips_width = out_width;
         // The Control Room keeps the right edge.  When the row cannot hold
         // both, it covers the right-hand output strips instead of widening
         // the page and pushing itself out of view.
