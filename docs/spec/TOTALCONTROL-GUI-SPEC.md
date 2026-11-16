@@ -1191,7 +1191,7 @@ Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
 wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
 Every change is written immediately to the device.
 
-The panel is 480 px wide at scale 1 and its caption column is 120 px. It is
+The panel is 360 px wide at scale 1 and its caption column is 110 px. It is
 only as tall as its content, capped at the window height. Longer labels wrap
 rather than widening the column; `Single speed:` sits above `word clock`.
 

@@ -13081,7 +13081,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     // Caption column shared by every labelled row, so the controls line up.
     // "Single speed:" wraps above "word clock", so the column only needs the
     // longest remaining caption.
-    const LABEL_W: f32 = 120.0;
+    const LABEL_W: f32 = 110.0;
     let section = |label: &'static str| -> Element<'static, Message> {
         row![
             text(label).color(theme::text_sec()).size(text_size),
@@ -13105,7 +13105,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     .align_y(iced::Alignment::Center);
 
     let mut body = column![header]
-        .spacing(theme::SPACE_XL * scale)
+        .spacing(theme::SPACE_LG * scale)
         .width(Length::Fill);
 
     // One device-owned group for every model: identity, clock, sample rate
@@ -13246,7 +13246,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
             .size(text_size),
         );
     }
-    popover(state, body.into(), Message::ToggleDevicePanel, 480.0)
+    popover(state, body.into(), Message::ToggleDevicePanel, 360.0)
 }
 
 /// The card of the Audio Configuration inspector, docked immediately left
@@ -14148,13 +14148,6 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
 
     let mut body = column![
         section("DEVICE"),
-        text(if ucx {
-            "Kept in the saved scene; written only when changed here."
-        } else {
-            "Read from the unit at connect; written only when changed here."
-        })
-        .color(theme::text_sec())
-        .size(text_size),
         row![
             caption("Clock source"),
             field(pick_list(
