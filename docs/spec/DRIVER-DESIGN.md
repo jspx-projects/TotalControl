@@ -214,36 +214,46 @@ correctness mechanism.
 
 ![AP implicit feedback loop](ap-implicit-feedback.svg)
 
-The ISO IN header carries a position and a phase accumulator. The driver
-records every IN packet's position and frame count in a feedback buffer
-(`fb[]`), indexed by packet number. The OUT path reads the feedback entry
-`fb_delay` packets behind the current OUT packet and places the OUT lead
-word accordingly. This is implicit feedback: the device's captured clock
-schedules playback, keeping the two directions aligned.
+The diagram details K1 on path F1; block IDs continue §1.1. The device
+captures and plays from one clock, so the captured stream is the
+playback clock reference. The loop:
 
-Fields that assist dropout prevention:
+1. **A1.** D1 delivers IN packets; the header carries position, phase
+   and frame count.
+2. **A2.** K1.1 records every IN packet's position and frame count in
+   K1.2 (`fb[]`), indexed by packet number.
+3. **A3.** K1.3 reads the entry `fb_delay` packets behind the current
+   OUT packet.
+4. **A4.** K1.3 places the OUT lead word at the recorded position plus
+   `out_lead`, mirrors the frame count, and sends the packet to D1.
 
-| Field | Role |
-|---|---|
-| IN position | the device's capture buffer position; anchors the feedback timeline |
-| IN phase | fractional-sample accumulator; predicts frame add/drop at the wrap |
-| IN frame count | frames in this packet; the OUT path mirrors it |
-| OUT lead word | the buffer position this OUT packet plays at; keeps the device's output latch fed |
-| `out_lead` | host-side margin added to the mirrored position; absorbs scheduling jitter |
-| `fb_delay` | how far OUT lags IN; covers the URBs in flight |
-| cadence | mean frames/packet * 8000; detects a rate mismatch |
-| output-latch bit | status byte 3 bit 7; the device signals that its output latch ran dry |
+This is implicit feedback: the device's captured clock schedules
+playback, keeping the two directions aligned.
 
-How the vendor likely uses them: the macOS reference host reads the IN
-position/phase to schedule OUT packets against the device clock, and uses
-the output-latch status to detect underrun. The Windows interrupt path uses
-the session words and the status ticker. The driver's ISO path reproduces
-the macOS implicit-feedback model; the interrupt path reproduces the
-Windows session model.
+Parameters and fields:
 
-The cadence guard is a diagnostic: a sustained disagreement between the
-packet cadence and `chip->rate` marks a rate mismatch. Recovery is the
-watchdog's role.
+| Term | Definition | Used by |
+|---|---|---|
+| IN position | the device's capture buffer position; anchors the feedback timeline | K1.1, K1.3 |
+| IN phase | fractional-sample accumulator; predicts frame add/drop at the wrap | K1.1 |
+| IN frame count | frames in this packet | K1.3 mirrors it |
+| OUT lead word | the buffer position this OUT packet plays at; keeps the device's output latch fed | K1.3 |
+| `fb_delay` | how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
+| `out_lead` | margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
+
+Guards:
+
+| Guard | Input | Action |
+|---|---|---|
+| K1.4 cadence (A5) | mean frames/packet × 8000 against `chip->rate` | diagnostic: a sustained disagreement marks a rate mismatch |
+| K1.5 continuity (A8) | URB start-frame sequence | a discontinuity marks the engine broken → K10 |
+| K7 latch watchdog (A6, A7) | D6 status byte 3 bit 7 | a latched output while playback runs, after the grace, marks the engine broken → K10 |
+| URB error burst | completion status | above `FFUC_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
+
+The macOS reference host reads the IN position/phase to schedule OUT
+packets against the device clock and uses the output-latch status to
+detect underrun. The driver's ISO path reproduces that model; the
+interrupt path (§4.4) reproduces the Windows session model.
 
 ### 4.4 Interrupt transport (PC mode)
 
@@ -428,7 +438,7 @@ Terms used here are defined in the sections referenced.
   runs in disconnect and again in `private_free`. A reader that passed the
   disconnected check could race the FIFO free. Cleanup should be ordered
   against hwdep unregistration.
-- **[ISO]** The **ISO continuity check** (`ffuc_iso_contiguous`, §4.6)
+- **[ISO]** The **ISO continuity check** (K1.5, `ffuc_iso_contiguous`, §4.3)
   verifies URB start-frame continuity. Its log counter is module-global,
   shared across devices and endpoints. It should be per-endpoint.
 - **[all]** The **hwdep read path** (§5) allocates a temporary buffer per

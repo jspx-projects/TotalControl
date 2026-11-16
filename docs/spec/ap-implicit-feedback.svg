@@ -1,7 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="920" height="560" viewBox="0 0 920 560" font-family="sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="680" viewBox="0 0 920 680" font-family="sans-serif">
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L8,3 L0,6 Z" fill="#444"/>
+    </marker>
+    <marker id="arrowg" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2a6"/>
+    </marker>
+    <marker id="arrowr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#c66"/>
     </marker>
   </defs>
   <style>
@@ -10,71 +16,101 @@
     .title { font-size:16px; font-weight:bold; fill:#222; }
     .label { font-size:13px; fill:#222; }
     .small { font-size:11px; fill:#555; }
-    .edge { stroke:#444; stroke-width:1.5; fill:none; marker-end:url(#arrow); }
-    .loop { stroke:#2a6; stroke-width:2; fill:none; marker-end:url(#arrow); }
-    .warn { stroke:#c66; stroke-width:1.5; fill:none; marker-end:url(#arrow); }
+    .tiny { font-size:10px; fill:#666; }
+    .id { font-size:11px; font-weight:bold; fill:#fff; }
+    .loop { stroke:#2a6; stroke-width:2; fill:none; marker-end:url(#arrowg); }
+    .guard { stroke:#c66; stroke-width:1.5; fill:none; marker-end:url(#arrowr); }
+    .clock { stroke:#999; stroke-width:1.2; fill:none; stroke-dasharray:4 3; }
   </style>
 
-  <text class="title" x="460" y="30" text-anchor="middle">AP mode: implicit feedback regulates playback against the device clock</text>
+  <text class="title" x="460" y="28" text-anchor="middle">AP mode: ISO implicit feedback (path F1, detail of K1)</text>
+  <text class="tiny" x="40" y="48">green A1–A4 = the feedback loop · red A5–A8 = guards · block IDs continue docs/spec/driver-host-architecture.svg; behaviour: DRIVER-DESIGN.md §4.3</text>
 
-  <!-- Device -->
-  <rect class="box" x="40" y="70" width="240" height="380" rx="6"/>
-  <text class="title" x="160" y="100" text-anchor="middle">RME device (AP)</text>
-  <rect class="sub" x="60" y="120" width="200" height="90" rx="4"/>
-  <text class="label" x="160" y="145" text-anchor="middle">IN packets</text>
-  <text class="small" x="160" y="168" text-anchor="middle">position (13 bit)</text>
-  <text class="small" x="160" y="186" text-anchor="middle">phase (14 bit accumulator)</text>
-  <text class="small" x="160" y="204" text-anchor="middle">frame count</text>
-  <rect class="sub" x="60" y="300" width="200" height="90" rx="4"/>
-  <text class="label" x="160" y="325" text-anchor="middle">OUT packets</text>
-  <text class="small" x="160" y="348" text-anchor="middle">lead word = play position</text>
-  <text class="small" x="160" y="366" text-anchor="middle">+ sample words</text>
-  <text class="small" x="160" y="384" text-anchor="middle">output latch</text>
+  <!-- device -->
+  <rect class="box" x="40" y="70" width="260" height="470" rx="6"/>
+  <text class="title" x="56" y="94">RME device</text>
 
-  <!-- Driver -->
-  <rect class="box" x="380" y="70" width="500" height="380" rx="6"/>
-  <text class="title" x="400" y="100">Kernel driver</text>
+  <rect class="sub" x="56" y="110" width="228" height="90" rx="4"/>
+  <circle cx="70" cy="124" r="9" fill="#555"/><text class="id" x="70" y="128" text-anchor="middle">D1</text>
+  <text class="label" x="176" y="132" text-anchor="middle">IN packets (capture)</text>
+  <text class="small" x="170" y="152" text-anchor="middle">header: position · phase ·</text>
+  <text class="small" x="170" y="167" text-anchor="middle">frame count</text>
+  <text class="small" x="170" y="182" text-anchor="middle">+ planar sample words</text>
 
-  <rect class="sub" x="400" y="120" width="220" height="90" rx="4"/>
-  <text class="label" x="510" y="145" text-anchor="middle">feedback buffer fb[]</text>
-  <text class="small" x="510" y="168" text-anchor="middle">record IN position/frames</text>
-  <text class="small" x="510" y="186" text-anchor="middle">indexed by packet number</text>
+  <rect class="sub" x="56" y="300" width="228" height="90" rx="4"/>
+  <circle cx="70" cy="314" r="9" fill="#555"/><text class="id" x="70" y="318" text-anchor="middle">D1</text>
+  <text class="label" x="176" y="322" text-anchor="middle">OUT packets (playback)</text>
+  <text class="small" x="170" y="342" text-anchor="middle">lead word + sample words</text>
+  <text class="small" x="170" y="357" text-anchor="middle">output latch</text>
 
-  <rect class="sub" x="650" y="120" width="210" height="90" rx="4"/>
-  <text class="label" x="755" y="145" text-anchor="middle">cadence guard</text>
-  <text class="small" x="755" y="168" text-anchor="middle">mean frames/pkt × 8000</text>
-  <text class="small" x="755" y="186" text-anchor="middle">detects rate mismatch</text>
+  <path class="clock" d="M170,300 L170,200"/>
+  <text class="tiny" x="176" y="255">one device clock</text>
+  <text class="tiny" x="176" y="268">captures and plays</text>
 
-  <rect class="sub" x="400" y="250" width="220" height="100" rx="4"/>
-  <text class="label" x="510" y="275" text-anchor="middle">OUT fill</text>
-  <text class="small" x="510" y="298" text-anchor="middle">read fb[k − fb_delay]</text>
-  <text class="small" x="510" y="316" text-anchor="middle">lead = position + out_lead</text>
-  <text class="small" x="510" y="334" text-anchor="middle">mirror frame count</text>
+  <rect class="sub" x="56" y="440" width="228" height="60" rx="4"/>
+  <circle cx="70" cy="454" r="9" fill="#555"/><text class="id" x="70" y="458" text-anchor="middle">D6</text>
+  <text class="label" x="176" y="462" text-anchor="middle">status endpoint</text>
+  <text class="small" x="170" y="482" text-anchor="middle">byte 3 bit 7: output latch</text>
 
-  <rect class="sub" x="650" y="250" width="210" height="100" rx="4"/>
-  <text class="label" x="755" y="275" text-anchor="middle">latch watchdog</text>
-  <text class="small" x="755" y="298" text-anchor="middle">status byte 3 bit 7</text>
-  <text class="small" x="755" y="316" text-anchor="middle">output ran dry</text>
-  <text class="small" x="755" y="334" text-anchor="middle">→ recover_work</text>
+  <!-- driver -->
+  <rect class="box" x="380" y="70" width="500" height="570" rx="6"/>
+  <text class="title" x="396" y="94">K1 URB engine (ISO)</text>
 
-  <rect class="sub" x="400" y="380" width="460" height="50" rx="4"/>
-  <text class="label" x="630" y="410" text-anchor="middle">engine restart on broken URB queue / latch / error burst</text>
+  <rect class="sub" x="400" y="110" width="220" height="60" rx="4"/>
+  <circle cx="414" cy="124" r="10" fill="#555"/><text class="id" x="414" y="128" text-anchor="middle">K1.1</text>
+  <text class="label" x="520" y="132" text-anchor="middle">IN record</text>
+  <text class="small" x="510" y="152" text-anchor="middle">position + frames per packet</text>
 
-  <!-- Loop edges -->
-  <path class="loop" d="M260,165 L400,165"/>
-  <text class="small" x="285" y="155">IN header</text>
-  <path class="loop" d="M510,210 L510,250"/>
-  <text class="small" x="515" y="235">fb_delay behind</text>
-  <path class="loop" d="M400,300 L260,345"/>
-  <text class="small" x="280" y="315">OUT lead + samples</text>
+  <rect class="sub" x="400" y="210" width="220" height="60" rx="4"/>
+  <circle cx="414" cy="224" r="10" fill="#555"/><text class="id" x="414" y="228" text-anchor="middle">K1.2</text>
+  <text class="label" x="520" y="232" text-anchor="middle">feedback buffer fb[]</text>
+  <text class="small" x="510" y="252" text-anchor="middle">indexed by packet number</text>
 
-  <!-- cadence / watchdog -->
-  <path class="edge" d="M620,165 L650,165"/>
-  <path class="warn" d="M755,210 L755,250"/>
-  <path class="warn" d="M755,350 L755,380"/>
-  <path class="warn" d="M630,350 L630,380"/>
+  <rect class="sub" x="400" y="310" width="220" height="80" rx="4"/>
+  <circle cx="414" cy="324" r="10" fill="#555"/><text class="id" x="414" y="328" text-anchor="middle">K1.3</text>
+  <text class="label" x="520" y="332" text-anchor="middle">OUT fill</text>
+  <text class="small" x="510" y="352" text-anchor="middle">read fb[k − fb_delay]</text>
+  <text class="small" x="510" y="367" text-anchor="middle">lead = position + out_lead</text>
+  <text class="small" x="510" y="382" text-anchor="middle">mirror the frame count</text>
 
-  <text class="small" x="460" y="490">The device clock is the reference. The driver schedules OUT packets fb_delay packets behind the</text>
-  <text class="small" x="460" y="508">captured IN position, adds out_lead margin, and mirrors the IN frame count. The phase accumulator</text>
-  <text class="small" x="460" y="526">predicts frame add/drop at the wrap. Cadence and latch are guards; recovery restarts the engine.</text>
+  <rect class="sub" x="660" y="110" width="200" height="60" rx="4"/>
+  <circle cx="674" cy="124" r="10" fill="#555"/><text class="id" x="674" y="128" text-anchor="middle">K1.4</text>
+  <text class="label" x="766" y="132" text-anchor="middle">cadence guard</text>
+  <text class="small" x="760" y="152" text-anchor="middle">frames/pkt × 8000 vs rate</text>
+
+  <rect class="sub" x="660" y="210" width="200" height="60" rx="4"/>
+  <circle cx="674" cy="224" r="10" fill="#555"/><text class="id" x="674" y="228" text-anchor="middle">K1.5</text>
+  <text class="label" x="766" y="232" text-anchor="middle">ISO continuity check</text>
+  <text class="small" x="760" y="252" text-anchor="middle">URB start-frame sequence</text>
+
+  <rect class="sub" x="660" y="310" width="200" height="80" rx="4"/>
+  <circle cx="674" cy="324" r="10" fill="#555"/><text class="id" x="674" y="328" text-anchor="middle">K7</text>
+  <text class="label" x="766" y="332" text-anchor="middle">latch watchdog</text>
+  <text class="small" x="760" y="352" text-anchor="middle">latched while playback runs,</text>
+  <text class="small" x="760" y="367" text-anchor="middle">after the grace period</text>
+
+  <rect class="sub" x="400" y="560" width="460" height="60" rx="4"/>
+  <circle cx="414" cy="574" r="10" fill="#555"/><text class="id" x="414" y="578" text-anchor="middle">K10</text>
+  <text class="label" x="636" y="582" text-anchor="middle">recovery: engine restart (host sees xrun)</text>
+  <text class="small" x="630" y="602" text-anchor="middle">also triggered by a URB error burst (§4.6)</text>
+
+  <!-- feedback loop -->
+  <path class="loop" d="M284,150 L400,140"/>
+  <text class="tiny" x="300" y="132">A1 IN header</text>
+  <path class="loop" d="M510,170 L510,210"/>
+  <text class="tiny" x="516" y="195">A2 record</text>
+  <path class="loop" d="M510,270 L510,310"/>
+  <text class="tiny" x="516" y="295">A3 fb[k − fb_delay]</text>
+  <path class="loop" d="M400,350 L284,345"/>
+  <text class="tiny" x="300" y="332">A4 lead + samples</text>
+
+  <!-- guards -->
+  <path class="guard" d="M620,140 L660,140"/>
+  <text class="tiny" x="624" y="132">A5</text>
+  <path class="guard" d="M300,470 L700,470 L700,390"/>
+  <text class="tiny" x="380" y="462">A6 latch bit</text>
+  <path class="guard" d="M820,390 L820,560"/>
+  <text class="tiny" x="826" y="480">A7</text>
+  <path class="guard" d="M860,240 L872,240 L872,590 L860,590"/>
+  <text class="tiny" x="876" y="420">A8</text>
 </svg>
