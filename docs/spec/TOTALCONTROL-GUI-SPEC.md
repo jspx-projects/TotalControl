@@ -2043,5 +2043,6 @@ beyond the window.
   rises with the trim value. Output meters remain post-fader.
 - Width is host-side and has no width register: it rewrites the pair's
   matrix cells. Playback stereo/mono, No Trim and Talkback receive are
-  host-side and do not produce device writes. Mono writes the monitor flags
-  `0x3f9e` and `0x3f98`.
+  host-side and do not produce device writes. On the UCX Mono writes the
+  monitor flags `0x3f9e` and `0x3f98`; on the UC it rewrites the active
+  monitor pair's matrix cells.
