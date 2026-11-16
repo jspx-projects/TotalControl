@@ -969,21 +969,50 @@ Output packet:
 
 ### 12.2 Interrupt interface 5
 
-- Alt 1: 48 kHz.
-- Alt 2: 18 words at 1x, 14 at 2x.
-- Alt 3: two endpoints, 6 words each.
-- 32-bit integer samples, no ISO header.
-- URB size 1024 frames.
+- Alt 1: 1x rates (44.1/48 kHz verified), 18 words/frame, 576 B packets.
+- Alt 2: 2x, 14 words/frame (ADAT SMUX).
+- Alt 3: 4x, two endpoints, 6 words each.
+- S32 samples, no ISO header.
+- URB size 1024 frames is the host's choice.
+
+The reference host selects alt 1 once at connect and streams 1x on it.
+The 2x/4x alternate selection is an open item (§12.4).
 
 ### 12.3 Stream setup
 
+ISO path (interface 0), the shipped init:
+
 ```text
-channel init 0x16 (18 inputs and 18 playback channels)
+channel init 0x16 (18 inputs and 18 playback channels), value 1 (float32)
 settings     0x10 value 0x0800 index 0xb800
 enable       0x20 value 0x0001 index 0x0000
 ```
 
-Start:
+Interrupt path (interface 5): SET_INTERFACE(5, alt 1), then the connect
+driver block in order (E2b replug capture):
+
+| Count | Request | wIndex | wValue | Role |
+|---|---|---|---|---|
+| 60 | `0x16` | 0..29, 32..61 | 0x0000 | channel init, S32 |
+| 1 | `0x1b` | 0x0000 | 0xc350 | DDS/clock quad, word 0 |
+| 1 | `0x1b` | 0x2d01 | 0x8db9 | word 1 |
+| 1 | `0x1b` | 0x5502 | 0x8235 | word 2 |
+| 1 | `0x1b` | 0x0003 | 0x7d00 | word 3 |
+| 1 | `0x10` | 0x05ff | 0x0028 | settings |
+| 1 | `0x17` | 0x0fc0 | 0x3c00 | gain reference |
+| 2 | `0x10` | 0x3000 | 0x0000 | settings group |
+| 1 | `0x10` | 0x0800 | 0x0800 | settings group |
+| 1 | `0x10` | 0x0800 | 0x0000 | settings group |
+| 1 | `0x10` | 0x3000 | 0x2000 | settings group |
+| — | — | — | — | 100 ms settle |
+| 1 | `0x10` | 0x3000 | 0x0000 | settings group |
+| 5 | `0x10` | 0x0800 | 0x0800 | settings group |
+
+The `0x16` value follows the wire-format pairing (0 = S32, 1 = float32).
+The DDS quad is written once at connect; a rate change writes the family
+word alone. The settings-group field semantics are an open item (§12.4).
+
+Interrupt stream start:
 
 ```text
 settings 0x10  0x8000 / 0x8000
@@ -991,13 +1020,25 @@ settings 0x10  0x8000 / 0x8000
 unmute mask    request 0x14
 ```
 
-Stop:
+Interrupt stream stop:
 
 ```text
 mute mask      request 0x13
 ```
 
 The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
+
+### 12.4 Open streaming items
+
+1. The 2x/4x alternate selection on interface 5: alt 1 is the verified
+   1x path; a reference-host capture streaming at 96/192 kHz decides
+   alt 2/3.
+2. DDS quad rate dependence: the quad is written once at connect and
+   stays unchanged across the captured 44.1↔48 kHz transitions; a
+   connect capture at a 32 kHz-family rate decides the other bands.
+3. Settings-group field semantics: the `0x10` indices 0x3000/0x0800
+   carry the mode setup; the bit meanings are undecoded.
+4. The `0x10` 0x0028/0x05ff word at connect: role undecoded.
 
 ## 13. Metering
 

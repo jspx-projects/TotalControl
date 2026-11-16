@@ -87,11 +87,45 @@ Verified current state:
 | Connect-policy investigation | Host settings written on connect can overwrite front-panel changes; already flagged separately. |
 | Replace UCX burst pacing with bounded flow control | Needs a device-visible drain condition or a capture that bounds the gap. |
 
+## Wire-format decision (verified)
+
+The wire format is keyed to the transport as a driver policy decision:
+interrupt personalities carry S32 (the Windows reference pairing), ISO
+personalities carry float32 (the macOS reference pairing). The device
+accepts either format when the `0x16` channel-init value matches; the
+init value derives from the resolved wire format for every model.
+`FFUC_QUIRK_INT32_SAMPLES` is removed.
+
+Bench evidence (UCX firmware 46, IF5, 48 kHz):
+
+- float32 wire on IF5 distorts ("not a sine"): the float bit patterns
+  decode as low-level garbage under S32.
+- S32 wire with the matching `0x16=0` init plays with zero transport
+  errors; capture delivers a full clean stream (silent inputs at
+  −84 dBFS peak).
+
+## UCX IF5 mode setup (verified)
+
+The interrupt personality requires the Windows mode-setup block at
+connect (E2b replug capture, `win-20261027-ucx-transport` on the NAS):
+60-slot `0x16` init, the DDS/clock quad, the gain-ref word, and the
+settings group with a measured 100 ms settle. The reference host
+streams 1x on alt 1.
+
+With the previous Mac-style 36-slot init, alt 1 was silent at the DAC
+and capture completed zero URBs. With the authentic block, playback and
+capture both work on alt 1. The UCX rate write is the family word alone
+on both transports; the multiplier follows the alternate setting.
+
+Implemented in PR #191 (`fix/driver-meter-buffer`). Audible sine
+confirmation and the UC PC S32 regression pass are pending.
+
 ## Open protocol items
 
 Listed with scope and deciding evidence in
-`docs/spec/DRIVER-DESIGN.md` §12; the owning protocol specifications
-carry the detail. Includes the UCX IF5 wire-format question: IF5 keeps
-S32 per the documented Windows protocol while every other personality
-follows the host-OS rule (float32 on Linux); a float32 loopback test on
-IF5 decides whether the exception stays.
+`docs/spec/DRIVER-DESIGN.md` §12 and
+`docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` §12.4. The UCX IF5 items:
+2x/4x alternate selection (needs a 96/192 kHz reference capture), DDS
+quad rate dependence beyond the 44.1↔48 family (needs a 32 kHz-family
+connect capture), settings-group bit semantics, and the UC PC 60-slot
+init alignment.

@@ -81,7 +81,6 @@ Quirks:
 | Quirk | Meaning |
 |---|---|
 | `ALT_RESELECT` | select alt 0 then alt N at engine start (clears the UCX IF5 output latch) |
-| `INT32_SAMPLES` | device requires S32 wire format (UCX IF5) |
 | `STATUS_LATCH` | status byte 3 bit 7 is the output-latch watchdog |
 | `IF5_PRE_START` | send `0x10 0x8000` + `0x1d` before audio |
 | `IF5_PLAYBACK_MASK` | request 19/20 channel mask; IN URBs are 73728 bytes |
@@ -94,15 +93,19 @@ callback; the shared PCM/URB path stays model-independent.
 
 | Personality | Transport | Wire | Notes |
 |---|---|---|---|
-| UC PC | interrupt IF0 | float32 (Linux/macOS), S32 (Windows reference host) | status ticker IF5; session words after a live rate change |
+| UC PC | interrupt IF0 | S32 | status ticker IF5; session words after a live rate change |
 | UC AP | ISO IF0 | float32 | IN header + planar frames; OUT per-frame lead word |
 | UCX IF0 | ISO IF0 | float32 | default UCX path |
-| UCX IF5 | interrupt IF5 | S32 | opt-in `ucx_if5=1` |
+| UCX IF5 | interrupt IF5 | S32 | opt-in `ucx_if5=1`; Windows mode-setup block, alt 1 at 1x |
 | Babyface-classic | ISO IF0 | float32 | UCX-family packet format; 12 capture / 14 playback words at 1x |
 
-The wire format is resolved at probe (`ffuc_wire_s32`). The host imposes the
-format through the channel-init value; the kernel converts between the wire
-format and the ALSA format.
+The wire format is keyed to the transport: interrupt personalities carry
+S32 (the Windows reference pairing), ISO personalities carry float32
+(the macOS reference pairing). The device accepts either format when the
+channel-init value matches. The driver resolves the format at probe
+(`ffuc_wire_s32`) and writes the matching `0x16` value, so wire and init
+always agree. The kernel converts between the wire format and the ALSA
+format.
 
 The transport operation of each personality is defined in §4.3 (AP mode),
 §4.4 (PC mode) and the comparison in §4.5.
@@ -461,7 +464,9 @@ driver's transports. The owning sections carry the full detail:
 | Bulk role of `0x03`/`0x84` at 1x/2x; they are interrupt at 4x | UC PC | a capture of the bulk traffic at 1x/2x |
 | Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
 | AP header phase on the UCX: the 12-bit position, 11-bit phase and 3072 wrap are the implemented mapping | UCX IF0 | a UCX capture; on the UC the accumulator is verified at 48 kHz, isolated add/drop events away from the wrap are unattributed |
-| UCX IF5 wire format: S32 per the documented Windows protocol; the host-OS rule (float32 on Linux) is the candidate alternative | UCX IF5 | a float32 channel-init loopback test on IF5, or a reference-host capture |
+| IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
+| DDS quad rate dependence: the quad is written once at connect; rate changes write the family word alone across the captured 44.1↔48 transitions | UCX IF5 | a connect capture at a 32 kHz-family rate |
+| UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
 | MIDI port 2 physical output: packets carry both ports | UC | a loopback on the candidate output |
 
 ### Metering
@@ -530,8 +535,9 @@ Add an entry to `ffuc_devices[]` and a USB ID to `ffuc_ids[]`:
 | `quirks` | only behaviour the shared path must select |
 | `ops` | `init`, `set_rate`, `stream_start`, `stream_stop`, `hw_mute` |
 
-The wire format is resolved at probe by `ffuc_wire_s32()`. A device that
-requires S32 carries `INT32_SAMPLES`; the default is float32.
+The wire format is resolved at probe by `ffuc_wire_s32()` from the
+transport: interrupt carries S32, ISO carries float32. The matching
+`0x16` channel-init value is derived from the same decision.
 
 ### 14.3 Ops and quirks
 
