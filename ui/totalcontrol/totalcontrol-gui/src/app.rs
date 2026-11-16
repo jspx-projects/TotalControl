@@ -14929,9 +14929,9 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             ));
     }
     if uc || ucx {
-        // Both options words carry the output format.  The UCX adds
-        // word-clock input termination and EQ+D for Record (H67/H68/H75,
-        // H71/H101).
+        // Both options words carry the output format and word-clock input
+        // termination (UC bit 0, UCX 0x008).  The UCX adds EQ+D for Record
+        // (H67/H68/H75, H71/H101).
         body = body
             .push(check_row(
                 "Single speed word clock",
@@ -14949,19 +14949,18 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 ["Consumer", "Professional"],
                 settings.spdif_professional,
                 Message::SpdifProfessionalChanged,
+            ))
+            .push(check_row(
+                "Word clock in",
+                settings.word_clock_termination,
+                Message::WordClockTerminationChanged(!settings.word_clock_termination),
             ));
         if ucx {
-            body = body
-                .push(check_row(
-                    "Word clock in",
-                    settings.word_clock_termination,
-                    Message::WordClockTerminationChanged(!settings.word_clock_termination),
-                ))
-                .push(check_row(
-                    "EQ for Record",
-                    settings.eq_for_record,
-                    Message::EqForRecordChanged(!settings.eq_for_record),
-                ));
+            body = body.push(check_row(
+                "EQ for Record",
+                settings.eq_for_record,
+                Message::EqForRecordChanged(!settings.eq_for_record),
+            ));
         }
     }
     if state.device.firmware().is_some() {
