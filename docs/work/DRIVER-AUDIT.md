@@ -18,39 +18,51 @@ open risks and the host work priorities.
   streaming in the recent channel-controls and buffer-size PRs. This
   audit added no new hardware captures.
 
-## Certain errors — fixed
+## Certain errors — fixed (PR #191, merged)
 
-Both are fixed in the fix PR that accompanies this note; they are not
-open items.
+| Error | Impact if unfixed | Status |
+|---|---|---|
+| Meter URB coherent buffer allocated `2 * meter_len`, freed `meter_len` in the error path and cleanup | DMA mapping leak per teardown: half the IOVA range stays mapped (IOMMU) or half the bounce slots leak (swiotlb); DMA-API-debug size-mismatch warning. Teardown only, no streaming effect. | done |
+| `ucx_if5` static initializer | checkpatch error; style only | done |
+| UCX IF5 sent S32 wire with the float `0x16` init value | Format mismatch passes only the sample sign bit: audible distortion on IF5 | done |
+| UCX IF5 used the Mac-style connect init | The Windows personality stayed outside its mode: alt 1 silent at the DAC, capture completed zero URBs | done |
 
-| Error | Status |
-|---|---|
-| Meter URB coherent buffer allocated `2 * meter_len`, freed `meter_len` in the error path and cleanup | done |
-| `ucx_if5` static initializer (checkpatch error) | done |
+## Priority scheme
+
+- **P1** — a failure mode reachable in normal use; fix in the next PR.
+- **P2** — degraded behaviour under load or in a specific configuration; scheduled.
+- **P3** — diagnostics, performance or cosmetic; cleanup.
 
 ## Open driver risks
 
 Scope labels: all = every personality; ISO = UC AP, UCX IF0,
 Babyface-classic; status = personalities with a status endpoint.
 
-| Item | Scope | Status | Notes |
-|---|---|---|---|
-| Duplex period gate deferral counters read/incremented without a shared lock | all | open | Hypothesis: concurrent URB completions on different CPUs race the counters. The period signal is under the stream lock; the gate decision is not. KCSAN/lockdep runs and a serialized or atomic gate decide it. |
-| hwdep cleanup runs in disconnect and again in `private_free` | all | open | A reader past the disconnected check could race the FIFO free. Order cleanup against hwdep unregistration. |
-| ISO continuity log counter is module-global | ISO | open | Shared across devices and endpoints; move to per-endpoint state. |
-| hwdep read path allocates a buffer per event | all | optional | Per-reader preallocation removes the allocation from the event path. |
-| Verbose PCM trigger-stop diagnostics | all | optional | Move to debugfs, ratelimit, or a module parameter. |
-| Buffer poison memsets the PCM buffer on every prepare | all | optional | Diagnostic; make it a module parameter. |
-| `COUNTERS.status_urbs` reports zero | status | open | Expose the status URB counter. |
-| `INFO.outputs` reports the playback channel count | Babyface-classic | needs-verification | The hardware output count differs; verify the ABI field semantics. |
+| Item | Scope | Priority | Impact | Status |
+|---|---|---|---|---|
+| Duplex period gate deferral counters read/incremented without a shared lock | all | P1 | Hypothesis: concurrent URB completions on different CPUs race the counters, so the gate can wake the follower with a stale pointer — the dropout class the gate exists to prevent. The period signal is under the stream lock; the gate decision is not. KCSAN/lockdep runs decide it. | open |
+| hwdep cleanup runs in disconnect and again in `private_free` | all | P1 | A reader past the disconnected check can race the FIFO free on hot-unplug: potential use-after-free. Order cleanup against hwdep unregistration. | open |
+| `INFO.outputs` reports the playback channel count | Babyface-classic | P2 | The hardware output count differs; a host sizing output state by this field maps meters/levels wrongly. Verify the ABI field semantics before Babyface production use. | needs-verification |
+| hwdep read path allocates a buffer per event (`GFP_KERNEL`) | all | P2 | CPU overhead on every event in the drain path; direct-reclaim latency under memory pressure; a failed allocation fails the read. Per-reader preallocation removes it. | optional |
+| ISO continuity log counter is module-global | ISO | P3 | The 12-message log throttle is shared across devices and endpoints; continuity diagnostics go silent everywhere after the first 12. Diagnostics only. | open |
+| Verbose PCM trigger-stop diagnostics | all | P3 | Unratelimited `dev_info` on every stop: dmesg noise that buries real errors; on a serial console each line stretches the stop path by milliseconds. No effect while streaming. | optional |
+| Buffer poison memsets the PCM buffer on every prepare | all | P3 | One whole-buffer memset at stream start (tens of µs at large buffers) plus cache pollution. Already a module parameter (`ffuc_poison`, default on); the remaining decision is the production default. | optional |
+| `COUNTERS.status_urbs` reports zero | status | P3 | The host cannot observe status-URB health; the device sheet counter is incomplete. | open |
 
 ## Heuristic waits
 
-| Wait | Scope | Status | Notes |
+| Wait | Scope | Priority | Impact | Status |
+|---|---|---|---|---|
+| Session gaps (250/200/200 ms) | `WIN_SESSION` | P2 | Device-mandated timing, verified in Windows reference-host captures. Removing a gap without a readiness condition leaves the unit silent or wedged (verified failure). A readiness poll needs a capture of a device-visible condition first. | needs-capture |
+| Meter/state pump: 4 ms delayed work, 10 ms retry | all | P2 | Up to 4 ms added latency per page plus workqueue jitter under load; caps the page rate near 250/s (the UCX runs ~245/s, at the ceiling); a CPU wakeup every 4 ms. Resubmit from completion; preserve the UC pair-boundary pause. | optional |
+| UCX burst-pacing gap (host) | host, UCX | P2 | Throughput ceiling ~63 words per 16 ms; a full scene takes hundreds of ms. Tighter gaps overflow the device receive FIFO (verified at 5 ms). Flow control needs a device-visible drain condition or a bounding capture. | needs-capture |
+
+## Tooling
+
+| Item | Priority | Impact | Status |
 |---|---|---|---|
-| Session gaps (250/200/200 ms) | `WIN_SESSION` | open | Device-mandated timing, verified in Windows reference-host captures. A readiness poll needs a capture of a device-visible readiness condition first. |
-| Meter/state pump: 4 ms delayed work, 10 ms retry | all | optional | Resubmit from completion where backpressure allows; preserve the UC pair-boundary pause. |
-| UCX burst-pacing gap (host) | host, UCX | open | Fixed sleep between `WRITE_WORDS` bursts; replace with bounded flow control or keep as a named quirk. |
+| `sparse` (`make C=1`), lockdep and KCSAN/UBSAN runs | P1 | The evidence base for the two race items above; sparse is not installed yet. | open |
+| checkpatch block-comment warnings | P3 | Kernel style compliance for upstream review. | optional |
 
 ## Host (TotalControl) communication
 
@@ -70,22 +82,24 @@ Verified current state:
 - The single meter reader is host discipline; the driver does not
   enforce it.
 
-### Immediate — next PR
+### Host issues — priority and impact
 
-| Item | Reason |
-|---|---|
-| Keep the event drain independent of blocking control work: bound or move the synchronous EP0 calls, flush waits and UC writes | A stalled control path delays event draining and drops events; the UC meter pair phase depends on prompt draining. |
-| Bound the command queue with backpressure or coalescing | A drag can queue writes faster than the device accepts them. |
-| Make the writer flush non-blocking for the event drain, or drain events while a flush is pending | The flush wait is the remaining path where burst pacing stalls the service thread. |
+| Item | Priority | Impact | Status |
+|---|---|---|---|
+| Event drain shares the thread with blocking control work (synchronous EP0 calls, up to the 1 s kernel timeout) | P1 | A stalled control path delays `poll_events`; the 64 KiB event FIFO fills and drops events. Front-panel moves are lost, the model goes stale, meters freeze during heavy writes. | open — host PR |
+| Blocking writer flush (`flush_write_batch` waits for the paced writer) | P1 | A vendor request after queued words waits 16 ms per 63-word burst; a scene is many bursts, so the service thread stalls hundreds of ms. Same event-drop class during scene applies. | open — host PR |
+| UC control writes run inline on the service thread | P1 | The UC has no writer thread; a control burst blocks the loop directly. Same stall class as the two rows above. One fix cluster: event-drain independence. | open — host PR |
+| Unbounded command queue | P1 | A drag queues commands faster than the device accepts them; the backlog applies stale commands late, the mirror lags, memory grows without bound. Bounded queue with coalescing/backpressure. | open — host PR |
+| Single meter reader is host discipline only | P2 | A second hwdep reader breaks the UC pair phase model: each reader samples pages, pairs misalign, `PHASE_LOST` flags and wrong RMS/peak pairing follow. Driver enforcement or an explicit ABI contract. | open — later |
+| Connect policy writes host settings on connect | P2 | Front-panel changes made while the host was away are overwritten. Already flagged for a separate investigation. | open — later |
+| Snapshot cadence (50 ms) | P3 | Fast front-panel moves can alias between captures; the UI confirms at 20 Hz. Acceptable today; event-driven capture is the refinement. | optional |
 
-### Later
+### Recommended order
 
-| Item | Reason |
-|---|---|
-| Exclusive meter reader: driver enforcement or explicit ABI contract | A second reader breaks the UC pair phase model. |
-| Snapshot cadence for fast front-panel moves | The 50 ms capture can alias fast moves; acceptable today. |
-| Connect-policy investigation | Host settings written on connect can overwrite front-panel changes; already flagged separately. |
-| Replace UCX burst pacing with bounded flow control | Needs a device-visible drain condition or a capture that bounds the gap. |
+1. Host PR: the P1 cluster (event-drain independence, bounded command
+   queue, non-blocking flush, UC writes through the writer).
+2. Kernel follow-up PR: the two P1 races, with KCSAN/lockdep evidence.
+3. P2 items as scheduled; P3 as cleanup.
 
 ## Wire-format decision (verified)
 
