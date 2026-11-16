@@ -69,6 +69,11 @@ the protocol or behaviour from the section alone.
   terms. Write the content directly; do not dress it in framing language
   ("in designer's words", "as the vendor would say") that is not part of
   the model.
+- Write authoritative, positive statements. Define a thing by what it is
+  and what it does. Remove negated framing such as "transport driver, not
+  a mixer"; state "transport driver" and let the boundary table carry the
+  ownership. Exception: an open item or TODO may state what is excluded
+  when that narrows the possibilities for future investigation.
 - Keep byte/word layout tables: address ranges, sizes, counts and laws
   within the section. A layout described in prose instead of a table is a
   defect. State how much of each page/structure is decoded and what
@@ -96,7 +101,9 @@ the protocol or behaviour from the section alone.
 Authoritative files:
 
 - `docs/TOTALCONTROL-ARCHITECTURE.md` — runtime layers, device service, data
-  flow, state ownership, driver and latency model.
+  flow, state ownership and host latency model.
+- `docs/spec/DRIVER-DESIGN.md` — kernel transport contract, URB engines,
+  hwdep ABI, quirks, recovery and driver extension.
 - `docs/spec/TOTALCONTROL-GUI-SPEC.md` — visible UI, panels, gestures and
   visible state.
 - `docs/spec/TOTALCONTROL-STATE-SPEC.md` — state ownership, current
@@ -210,6 +217,10 @@ mechanism, FX returns and unsupported controls.
   automates a checkout-build swap.
 - Verify with `cargo test -p totalcontrol-core --lib --features alsa` and
   `cargo test -p totalcontrol-gui`.
+- When a change resolves or advances a published open work item — a
+  `docs/work/` backlog row, a capture request, or an issue — update that item
+  in the same branch and pull request: mark it done or remove the request. An
+  open item left unchanged invites a second implementation of the same work.
 - Do not replace device-backed behaviour with host-side approximations. If the
   unit supports something and the register is unknown, add it to
   `docs/work/` and request a capture.
