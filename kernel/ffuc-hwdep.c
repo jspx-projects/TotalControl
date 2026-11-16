@@ -595,7 +595,7 @@ int ffuc_transport_setup(struct ffuc *chip)
 			usb_free_urb(chip->meter_urb);
 			chip->meter_urb = NULL;
 			if (chip->meter_buf)
-				usb_free_coherent(chip->dev, d->meter_len,
+				usb_free_coherent(chip->dev, 2 * d->meter_len,
 						  chip->meter_buf,
 						  chip->meter_dma);
 			chip->meter_buf = NULL;
@@ -701,7 +701,7 @@ void ffuc_hwdep_cleanup(struct ffuc *chip)
 		chip->meter_urb = NULL;
 	}
 	if (chip->meter_buf) {
-		usb_free_coherent(chip->dev, chip->desc->meter_len,
+		usb_free_coherent(chip->dev, 2 * chip->desc->meter_len,
 				  chip->meter_buf, chip->meter_dma);
 		chip->meter_buf = NULL;
 	}

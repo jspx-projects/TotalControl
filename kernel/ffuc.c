@@ -27,7 +27,7 @@ static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
 static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 static unsigned int urb_frames = 48;
 static unsigned int nurbs = 2;
-static bool ucx_if5 = false;
+static bool ucx_if5;
 static unsigned int ucx_if5_frames = 1024;
 static unsigned int fixed_rate;
 /* q48 instrumentation (test/uc-q48-instrumentation).  Poison the PCM rings
@@ -69,17 +69,13 @@ static const struct ffuc_mode ffuc_pc_modes[] = {
 	{ .alt = 3, .neps = 2, .words = 6, .pkt_frames = 32 },	/* 4x */
 };
 
-/* UCX interrupt transport (interface 5), as captured from the Windows
- * driver on the bench unit:
- *   - alt 1 (576 B) accepts 48 kHz but is SILENT at the DAC;
- *   - alt 2 (896 B) is the working 1x/2x path;
- *   - alt 3 (4 x 768 B) is the 4x path.
- * 1x keeps 18 words/frame; 2x uses 14 (ADAT SMUX).  The old driver used
- * 18 at 2x, untested; the descriptor arithmetic says 14.  See
- * docs/PROTOCOL-COMPLETE.md TODO #11.
- */
+/* UCX interrupt transport (interface 5).  The Windows reference host
+ * selects alt 1 once at connect and streams 44.1/48 kHz on it (E2b/E5,
+ * win-20261027-ucx-transport).  Alt 2 carries 2x (14 words, ADAT SMUX);
+ * alt 3 is the 4x path with two capture endpoints.  The 2x/4x alternate
+ * selection awaits a capture. */
 static const struct ffuc_mode ffuc_ucx_if5_modes[] = {
-	{ .alt = 2, .neps = 1, .words = 18, .pkt_frames = 8 },
+	{ .alt = 1, .neps = 1, .words = 18, .pkt_frames = 8 },
 	{ .alt = 2, .neps = 1, .words = 14, .pkt_frames = 16 },
 	{ .alt = 3, .neps = 2, .words = 6, .pkt_frames = 32 },
 };
@@ -310,11 +306,11 @@ void ffuc_release_interface(struct usb_interface *intf)
  * format: 0 = S32, 1 = float32.  It must equal the wire format the host
  * sends (ffuc_wire_s32); a mismatch passes only the sample sign bit and
  * distorts the audio.  The value is therefore derived from the resolved
- * wire format, not stored per range.  On Linux the host is float-native,
- * so both UC personalities use the 36-slot init (18 inputs + 18 outputs)
- * with float32.  The Windows host instead writes a 60-slot block with S32
- * (documented in the protocol spec); the slot count does not affect the
- * format pairing.
+ * wire format, not stored per range.  Both UC personalities use the
+ * 36-slot init (18 inputs + 18 outputs); the interrupt personality pairs
+ * it with S32 and the ISO personality with float32.  The Windows host
+ * instead writes a 60-slot block with S32 (documented in the protocol
+ * spec); the slot count does not affect the format pairing.
  */
 static const struct ffuc_init_range ffuc_uc_chan_init[] = {
 	{ .first = 0,    .count = 18 },
@@ -326,15 +322,19 @@ static const struct ffuc_init_range ffuc_ucx_chan_init[] = {
 	{ .first = 0x20, .count = FFUC_MAX_CHANNELS },
 };
 
-/* Write the descriptor's 0x16 slot ranges.  On the UC the wValue is the
- * channel sample format and follows the wire format (0 = S32, 1 = float32);
- * other models keep the documented float init value pending verification
- * of the same pairing. */
+/* UCX interrupt init covers 60 slots: 0..29 and 32..61 (E2b capture). */
+static const struct ffuc_init_range ffuc_ucx_if5_chan_init[] = {
+	{ .first = 0,    .count = 30 },
+	{ .first = 0x20, .count = 30 },
+};
+
+/* Write the descriptor's 0x16 slot ranges.  The wValue is the channel
+ * sample format and follows the resolved wire format (0 = S32,
+ * 1 = float32). */
 static int ffuc_uc_chan_init_write(struct ffuc *chip)
 {
 	const struct ffuc_init_range *range;
-	u16 value = (chip->model == FFUC_MODEL_UC && chip->s32_samples) ?
-		    0x0000 : 0x0001;
+	u16 value = chip->s32_samples ? 0x0000 : 0x0001;
 	unsigned int i, r;
 	int ret;
 
@@ -351,8 +351,8 @@ static int ffuc_uc_chan_init_write(struct ffuc *chip)
 }
 
 /* UC init: 36 channel slots, then the settings word and the global enable.
- * Used by both UC personalities on Linux, where the wire format is
- * float32 (the host-native format). */
+ * Used by both UC personalities; the wire format follows the transport
+ * rule (S32 interrupt, float32 ISO). */
 static int ffuc_uc_init(struct ffuc *chip)
 {
 	int ret;
@@ -432,12 +432,11 @@ static int ffuc_uc_set_rate(struct ffuc *chip, unsigned int rate)
 	return ret;
 }
 
-/* UC Mac/personality and UCX: rate family is a masked control write.
- * The interrupt transport additionally takes the vendor DDS word. */
+/* UCX: the rate family is one masked control write on both transports;
+ * the multiplier follows the streaming alternate setting (E8/E9: a rate
+ * change writes the family word alone). */
 static int ffuc_ucx_set_rate(struct ffuc *chip, unsigned int rate)
 {
-	if (!chip->iso)
-		return ffuc_uc_set_rate(chip, rate);
 	return ffuc_set_rate_family(chip, rate);
 }
 
@@ -573,18 +572,82 @@ static const struct ffuc_ops ffuc_ucx_ops = {
 	.hw_mute = ffuc_ucx_hw_mute,
 };
 
-/* Resolve the wire sample format once at probe.  The wire format follows
- * the host OS's native audio format: Linux and macOS are float-native
- * (float32), Windows is integer-PCM-native (S32).  This driver runs on
- * Linux, so the UC personalities carry float32; the host imposes the
- * format through the 0x16 init value, which ffuc_uc_chan_init_write
- * derives from this decision so the two can never mismatch.  The UCX
- * interrupt transport keeps S32 per its documented protocol (a candidate
- * host-OS-rule exception pending verification).  A device that strictly
- * requires S32 carries FFUC_QUIRK_INT32_SAMPLES. */
+/* UCX interrupt (IF5) connect init, captured from the Windows driver
+ * (E2b replug, win-20261027-ucx-transport): the 60-slot channel init,
+ * the DDS/clock quad, the gain-ref word and the settings group.  The
+ * quad is written once at connect; a rate change writes the family word
+ * alone.  The settings group carries a ~100 ms settle between the
+ * 0x3000 writes, measured in the capture. */
+static int ffuc_ucx_if5_init(struct ffuc *chip)
+{
+	static const u16 dds[4][2] = {
+		{ 0xc350, 0x0000 }, { 0x8db9, 0x2d01 },
+		{ 0x8235, 0x5502 }, { 0x7d00, 0x0003 },
+	};
+	static const u16 grp_pre[5][2] = {
+		{ 0x0000, 0x3000 }, { 0x0000, 0x3000 },
+		{ 0x0800, 0x0800 }, { 0x0000, 0x0800 },
+		{ 0x2000, 0x3000 },
+	};
+	static const u16 grp_post[6][2] = {
+		{ 0x0000, 0x3000 },
+		{ 0x0800, 0x0800 }, { 0x0800, 0x0800 },
+		{ 0x0800, 0x0800 }, { 0x0800, 0x0800 },
+		{ 0x0800, 0x0800 },
+	};
+	int ret, i;
+
+	ret = ffuc_uc_chan_init_write(chip);
+	if (ret < 0)
+		return ret;
+	for (i = 0; i < 4; i++) {
+		ret = ffuc_vendor_send(chip, FFUC_REQ_DDS, dds[i][0],
+				       dds[i][1], NULL, 0);
+		if (ret < 0)
+			return ret;
+	}
+	ret = ffuc_vendor_send(chip, FFUC_REQ_SETTINGS, 0x0028, 0x05ff,
+			       NULL, 0);
+	if (ret < 0)
+		return ret;
+	ret = ffuc_vendor_send(chip, FFUC_REQ_LEVELS, 0x3c00, 0x0fc0,
+			       NULL, 0);
+	if (ret < 0)
+		return ret;
+	for (i = 0; i < 5; i++) {
+		ret = ffuc_vendor_send(chip, FFUC_REQ_SETTINGS, grp_pre[i][0],
+				       grp_pre[i][1], NULL, 0);
+		if (ret < 0)
+			return ret;
+	}
+	msleep(FFUC_UCX_IF5_SETTLE_MS);
+	for (i = 0; i < 6; i++) {
+		ret = ffuc_vendor_send(chip, FFUC_REQ_SETTINGS,
+				       grp_post[i][0], grp_post[i][1],
+				       NULL, 0);
+		if (ret < 0)
+			return ret;
+	}
+	return 0;
+}
+
+static const struct ffuc_ops ffuc_ucx_if5_ops = {
+	.init = ffuc_ucx_if5_init,
+	.set_rate = ffuc_ucx_set_rate,
+	.stream_start = ffuc_ucx_stream_start,
+	.stream_stop = ffuc_ucx_stream_stop,
+	.hw_mute = ffuc_ucx_hw_mute,
+};
+
+/* Resolve the wire sample format once at probe.  The format is keyed to
+ * the transport: the interrupt personalities carry S32 (the Windows
+ * reference pairing) and the ISO personalities carry float32 (the macOS
+ * reference pairing).  The device accepts either format when the 0x16
+ * channel-init value matches; ffuc_uc_chan_init_write derives that value
+ * from this decision so the two can never mismatch. */
 static bool ffuc_wire_s32(const struct ffuc *chip)
 {
-	return chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES;
+	return !chip->iso;
 }
 
 /* -- per-device descriptors ------------------------------------------ */
@@ -734,7 +797,6 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.iface = 5,
 		.transport = FFUC_XPORT_INTERRUPT,
 		.quirks = FFUC_QUIRK_ALT_RESELECT |
-			  FFUC_QUIRK_INT32_SAMPLES |
 			  FFUC_QUIRK_IF5_PRE_START |
 			  FFUC_QUIRK_IF5_PLAYBACK_MASK,
 		.model = FFUC_MODEL_UCX,
@@ -756,9 +818,9 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 244,
-		.chan_init = ffuc_ucx_chan_init,
-		.n_chan_init = ARRAY_SIZE(ffuc_ucx_chan_init),
-		.ops = &ffuc_ucx_ops,
+		.chan_init = ffuc_ucx_if5_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_ucx_if5_chan_init),
+		.ops = &ffuc_ucx_if5_ops,
 	}, {
 		.name = "Fireface UCX",
 		.shortname = "Fireface UCX",
@@ -799,7 +861,6 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.iface = 5,
 		.transport = FFUC_XPORT_INTERRUPT,
 		.quirks = FFUC_QUIRK_ALT_RESELECT |
-			  FFUC_QUIRK_INT32_SAMPLES |
 			  FFUC_QUIRK_IF5_PRE_START |
 			  FFUC_QUIRK_IF5_PLAYBACK_MASK,
 		.model = FFUC_MODEL_UCX,
@@ -821,9 +882,9 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_channels = 18,
 		.max_rate = 192000,
 		.meter_len = 244,
-		.chan_init = ffuc_ucx_chan_init,
-		.n_chan_init = ARRAY_SIZE(ffuc_ucx_chan_init),
-		.ops = &ffuc_ucx_ops,
+		.chan_init = ffuc_ucx_if5_chan_init,
+		.n_chan_init = ARRAY_SIZE(ffuc_ucx_if5_chan_init),
+		.ops = &ffuc_ucx_if5_ops,
 	}, {
 		/* ISO audio, MIDI and the IF1 0x85 DSP meter read-back.  The
 		 * IF1 bulk OUT 0x0a carries EQ blocks and is not exposed yet;
@@ -865,9 +926,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.iface = 0,
 		.transport = FFUC_XPORT_INTERRUPT,
 		/* The output latch clears only on an alt 0 -> alt N reselect,
-		 * as on the UCX.  The wire format follows the host OS (float32
-		 * on Linux), like every UC; the earlier firmware-keyed S32 was
-		 * the Windows-host behaviour, not a device requirement. */
+		 * as on the UCX.  The wire format follows the transport rule
+		 * (S32 on the interrupt personality). */
 		.quirks = FFUC_QUIRK_STATUS_LATCH |
 			  FFUC_QUIRK_ALT_RESELECT |
 			  FFUC_QUIRK_WIN_SESSION,

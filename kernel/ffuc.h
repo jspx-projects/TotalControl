@@ -73,6 +73,8 @@
 #define FFUC_STATUS_LEN		4
 #define FFUC_STATUS_OUT_LATCHED	0x80
 #define FFUC_STATUS_GRACE_MS	20
+/* UCX IF5 settings-group settle, measured in the E2b connect capture. */
+#define FFUC_UCX_IF5_SETTLE_MS	100
 #define FFUC_RESTART_SETTLE_MS	250	/* UC: minimum engine stop -> start gap */
 
 #define FFUC_MAX_EPS		2	/* endpoints per direction (alt 3) */
@@ -134,7 +136,6 @@
 
 /* quirks */
 #define FFUC_QUIRK_ALT_RESELECT		BIT(0)	/* alt 0 then alt N at start */
-#define FFUC_QUIRK_INT32_SAMPLES	BIT(1)	/* device requires S32 wire, not float */
 #define FFUC_QUIRK_STATUS_LATCH		BIT(2)	/* status byte 3 bit 7 */
 #define FFUC_QUIRK_IF5_PRE_START	BIT(3)	/* 0x10 0x8000 + 0x1d before audio */
 #define FFUC_QUIRK_IF5_PLAYBACK_MASK	BIT(4)	/* req 19/20 channel mask */
