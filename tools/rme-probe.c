@@ -86,6 +86,43 @@ static void hexdump(const void *data, size_t len, size_t max)
 	fputc('\n', stdout);
 }
 
+/* Parse a hex byte string ("00 01 ff", "00:01:ff" or "0001ff"). */
+static int parse_hex_bytes(const char *s, unsigned char *out, size_t max,
+			   size_t *len)
+{
+	size_t n = 0;
+	int hi = -1;
+
+	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+		s += 2;
+	for (; *s; s++) {
+		int v;
+
+		if (*s == ' ' || *s == ':' || *s == ',' || *s == '-')
+			continue;
+		if (*s >= '0' && *s <= '9')
+			v = *s - '0';
+		else if (*s >= 'a' && *s <= 'f')
+			v = *s - 'a' + 10;
+		else if (*s >= 'A' && *s <= 'F')
+			v = *s - 'A' + 10;
+		else
+			return -1;
+		if (hi < 0) {
+			hi = v;
+			continue;
+		}
+		if (n >= max)
+			return -1;
+		out[n++] = (unsigned char)((hi << 4) | v);
+		hi = -1;
+	}
+	if (hi >= 0)
+		return -1;
+	*len = n;
+	return 0;
+}
+
 static uint32_t le32(const unsigned char *p)
 {
 	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
@@ -571,6 +608,10 @@ static void cmd_bulk(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	int iface = 1, alt = 0, len = 512, count = 4, timeout = 500;
 	unsigned long ep = 0x85;
 	const char *out = NULL;
+	const char *data = NULL;
+	size_t payload = 0;
+	int xfer_len;
+	bool len_set = false;
 	bool hex = true;
 	unsigned char *buf;
 	libusb_device_handle *h;
@@ -584,12 +625,15 @@ static void cmd_bulk(libusb_context *ctx, uint16_t vid, uint16_t pid,
 			alt = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--ep") && i + 1 < argc)
 			ep = strtoul(argv[++i], NULL, 0);
-		else if (!strcmp(argv[i], "--len") && i + 1 < argc)
+		else if (!strcmp(argv[i], "--len") && i + 1 < argc) {
 			len = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "--count") && i + 1 < argc)
+			len_set = true;
+		} else if (!strcmp(argv[i], "--count") && i + 1 < argc)
 			count = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--timeout") && i + 1 < argc)
 			timeout = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--data") && i + 1 < argc)
+			data = argv[++i];
 		else if (!strcmp(argv[i], "--out") && i + 1 < argc)
 			out = argv[++i];
 		else if (!strcmp(argv[i], "--no-hex"))
@@ -617,26 +661,47 @@ static void cmd_bulk(libusb_context *ctx, uint16_t vid, uint16_t pid,
 	buf = malloc((size_t)len);
 	if (!buf)
 		die("out of memory");
+	memset(buf, 0, (size_t)len);
+	xfer_len = len;
+	if (data) {
+		if (parse_hex_bytes(data, buf, (size_t)len, &payload) < 0)
+			die("invalid --data");
+		if (!len_set)
+			xfer_len = (int)payload;
+	}
 	if (out) {
 		f = fopen(out, "wb");
 		if (!f)
 			die("cannot open %s: %s", out, strerror(errno));
 	}
 
-	printf("bulk IF%d alt %d ep 0x%02lx, len %d, count %d\n",
-	       iface, alt, ep, len, count);
+	printf("bulk IF%d alt %d ep 0x%02lx (%s), len %d, count %d\n",
+	       iface, alt, ep, (ep & 0x80) ? "IN" : "OUT", xfer_len, count);
+	if (data) {
+		printf("  payload %zu byte(s): ", payload);
+		hexdump(buf, payload, 64);
+	}
 	for (int i = 0; i < count; i++) {
 		int xfer = 0;
+		struct timespec ts;
+		double t_ms;
 
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		t_ms = ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 		r = libusb_bulk_transfer(h, (unsigned char)ep, buf,
-					 (int)len, &xfer, timeout);
+					 (int)xfer_len, &xfer, timeout);
 		if (r < 0) {
-			printf("  [%d] %s\n", i, libusb_error_name(r));
+			printf("  [%d] %8.1fms %s\n", i, t_ms,
+			       libusb_error_name(r));
 			continue;
 		}
-		printf("  [%d] %d bytes\n", i, xfer);
-		if (hex)
-			hexdump(buf, (size_t)xfer, 128);
+		if (ep & 0x80) {
+			printf("  [%d] %8.1fms %d bytes\n", i, t_ms, xfer);
+			if (hex)
+				hexdump(buf, (size_t)xfer, 128);
+		} else {
+			printf("  [%d] %8.1fms sent %d bytes\n", i, t_ms, xfer);
+		}
 		if (f) {
 			uint32_t n = (uint32_t)xfer;
 
@@ -2089,11 +2154,13 @@ static void usage(const char *argv0)
 	       "                       generic vendor IN request (read-only)\n"
 	       "  write <req> [value] [index] --yes\n"
 	       "                       generic vendor OUT request (0x40)\n"
-	       "  bulk [options]       read a bulk/interrupt IN endpoint\n"
+	       "  bulk [options]       read a bulk/interrupt IN endpoint, or send\n"
+	       "                       --data to an OUT endpoint\n"
 	       "      --iface N        default 1\n"
 	       "      --alt N          default 0\n"
 	       "      --ep HEX         default 0x85\n"
 	       "      --len N          default 512\n"
+	       "      --data HEX       payload for an OUT endpoint (overrides --len)\n"
 	       "      --count N        default 4\n"
 	       "      --timeout MS     default 500\n"
 	       "      --out FILE       raw transfers (u32 len + data)\n"
