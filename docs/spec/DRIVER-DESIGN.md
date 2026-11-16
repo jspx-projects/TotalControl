@@ -81,7 +81,7 @@ Quirks:
 | Quirk | Meaning |
 |---|---|
 | `ALT_RESELECT` | select alt 0 then alt N at engine start (clears the UCX IF5 output latch) |
-| `INT32_SAMPLES` | device requires S32 wire format |
+| `INT32_SAMPLES` | device requires S32 wire format (UCX IF5) |
 | `STATUS_LATCH` | status byte 3 bit 7 is the output-latch watchdog |
 | `IF5_PRE_START` | send `0x10 0x8000` + `0x1d` before audio |
 | `IF5_PLAYBACK_MASK` | request 19/20 channel mask; IN URBs are 73728 bytes |
@@ -104,17 +104,11 @@ The wire format is resolved at probe (`ffuc_wire_s32`). The host imposes the
 format through the channel-init value; the kernel converts between the wire
 format and the ALSA format.
 
-PC vs AP limitations:
+The transport operation of each personality is defined in §4.3 (AP mode),
+§4.4 (PC mode) and the comparison in §4.5.
 
-- PC uses interrupt URBs and the Windows session words. A live rate change
-  arms `session_reopen`/`uc_session`; later opens/closes replay the session
-  trio/close word. The Windows-personality gaps are device-mandated timing
-  (see §7).
-- AP uses ISO implicit feedback. The IN header carries position and phase;
-  the OUT lead word places playback against the captured clock. There is no
-  Windows session settle on AP.
-- The UC keeps its rate family across personality switches; a USB reset
-  restores the 1x multiplier and forces a session replay on PC.
+The UC keeps its rate family across personality switches; a USB reset
+restores the 1x multiplier and forces a session replay on PC.
 
 ## 4. Streaming engine
 
@@ -153,7 +147,7 @@ Counters: `signal_deferred`, `signal_overdue`, `max_pending`, `delta_zero`,
 The gate adds at most about one URB of latency at any period size. It is a
 correctness mechanism.
 
-### 4.3 ISO implicit feedback and dropout prevention
+### 4.3 ISO implicit feedback (AP mode)
 
 ![AP implicit feedback loop](ap-implicit-feedback.svg)
 
@@ -188,18 +182,62 @@ The cadence guard is a diagnostic: a sustained disagreement between the
 packet cadence and `chip->rate` marks a rate mismatch. Recovery is the
 watchdog's role.
 
-### 4.4 Recovery and watchdog
+### 4.4 Interrupt transport (PC mode)
 
-- URB errors above `FFUC_MAX_URB_ERRORS` mark the engine broken and queue
-  `recover_work`.
-- ISO URB queue discontinuity (`ffuc_iso_contiguous`) marks the engine
-  broken.
-- The status latch watchdog arms after `FFUC_STATUS_GRACE_MS`; a latched
-  output while playback runs marks the engine broken.
-- `recover_work` stops the streams, stops the engine, and restarts it if
-  any direction is prepared.
+The interrupt personalities (UC PC, UCX IF5) carry sample words only: an
+OUT URB holds `urb_frames` playback frames, an IN URB holds up to
+`urb_frames` capture frames.
 
-Recovery restarts the engine. The host sees an xrun and re-prepares.
+Regulation is the interrupt endpoint handshake. The device accepts an OUT
+URB when its output stage can consume it, and delivers an IN URB when a
+capture block is ready. The driver keeps `nurbs` URBs queued per direction.
+On completion it refills the OUT URB from the PCM buffer at the stream
+position and resubmits immediately. The completion cadence follows the
+device clock; the host is paced by the period signals (§4.2). The cadence
+diagnostics `in_gaps` / `out_gaps` count completion intervals longer than
+three nominal URB durations.
+
+Rate and session handling on the UC:
+
+- The rate write is the family word plus the commit word. The DDS word is
+  part of the ISO rate sequence only.
+- A live rate change closes the session, writes the rate, and replays the
+  session trio on the next open. The `WIN_SESSION` gaps (§7) apply.
+
+Status and watchdog:
+
+- The UC PC status ticker (interrupt, IF5) stays open while the card is
+  bound; it carries front-panel events. The UCX IF5 ticker reports
+  stream-period ticks and stops with the engine.
+- On `STATUS_LATCH` personalities, status byte 3 bit 7 is the output-latch
+  watchdog. A latched output while playback runs, after the
+  `FFUC_STATUS_GRACE_MS` grace, marks the engine broken (§4.6).
+
+### 4.5 Transport comparison
+
+| Aspect | PC mode (interrupt) | AP mode (ISO) |
+|---|---|---|
+| Playback clock reference | interrupt handshake: the device accepts OUT URBs at its own rate | implicit feedback: IN position/phase schedule the OUT lead word (§4.3) |
+| OUT payload | sample words | lead word + sample words |
+| IN payload | sample words | header (position, phase, frame count) + planar frames |
+| URB granularity | `urb_frames` per URB, scaled by rate band | up to 8 packets per URB, one per microframe |
+| UC rate sequence | family + commit; session close/reopen with `WIN_SESSION` gaps | DDS + family + commit; session words back-to-back |
+| UCX rate sequence | family + commit (IF5) | family (IF0) |
+| UC status transport | interrupt ticker IF5, always open | bulk IF4 |
+| Output-latch watchdog | `STATUS_LATCH` personalities | UC AP carries no latch quirk; UCX IF0 uses the ISO guards |
+| Dropout detection | `out_gaps`, output latch, URB errors | cadence guard, ISO continuity, URB errors |
+
+### 4.6 Recovery and watchdog
+
+A broken engine queues `recover_work`, which stops the streams, stops the
+engine, and restarts it if any direction is prepared. Recovery restarts
+the engine. The host sees an xrun and re-prepares.
+
+| Trigger | Scope |
+|---|---|
+| URB error burst above `FFUC_MAX_URB_ERRORS`, or a failed resubmit | all personalities |
+| ISO URB queue discontinuity (`ffuc_iso_contiguous`) | ISO personalities |
+| Output latch while playback runs, after the `FFUC_STATUS_GRACE_MS` grace | `STATUS_LATCH` personalities (UC PC, UCX IF5) |
 
 ## 5. Control transports and hwdep ABI
 
@@ -302,68 +340,142 @@ that model is defined in
 These items narrow the remaining investigation. They are implementation
 risks or tuning questions, not shipped behaviour.
 
+Scope labels used in this section and in the TODO:
+
+| Label | Personalities |
+|---|---|
+| all | every personality |
+| ISO | UC AP, UCX IF0, Babyface-classic |
+| `WIN_SESSION` | UC PC, UC Win, UCX IF5 |
+| UC | UC PC and UC AP |
+| status | personalities with a status endpoint (all except Babyface-classic) |
+| host | TotalControl, independent of personality |
+
 ### Driver risks
 
-- The duplex period gate reads and increments `deferrals` without a lock
-  shared across directions. Concurrent URB completions on different CPUs
-  could race the gate counters. The signal itself is under the stream lock;
-  the gate decision is not.
-- `ffuc_hwdep_cleanup` runs in disconnect and again in `private_free`. A
-  reader that passed the disconnected check could race the FIFO free.
-  Cleanup should be ordered against hwdep unregistration.
-- `ffuc_iso_contiguous` uses a module-global `start_logged` counter shared
-  across devices/endpoints. It should be per-endpoint.
-- The hwdep read path allocates a temporary buffer per event. A per-reader
-  buffer would remove the allocation from the event path.
-- The PCM trigger stop path emits verbose diagnostic logs on every stop.
-  These should be debugfs/ratelimited or behind a diagnostic parameter.
-- `ffuc_poison` memsets the whole PCM buffer on every prepare. This is a
-  diagnostic; it should be optional for production.
-- `COUNTERS.status_urbs` is always zero; the status URB counter is not
-  exposed.
-- `INFO.outputs` uses the playback channel count; on Babyface-classic the
-  hardware output count differs. Verify the ABI field semantics.
+Terms used here are defined in the sections referenced.
+
+- **[all]** The **duplex period gate** (§4.2) is the wake rule that signals
+  both running directions together. Its **deferral counters** (§4.2) count
+  withheld wakes per direction. The gate reads and increments these
+  counters without a lock shared across directions. Concurrent URB
+  completions on different CPUs could race the counters. The period signal
+  itself is under the stream lock; the gate decision is not.
+- **[all]** The **event FIFO** (§5) is freed by `ffuc_hwdep_cleanup`, which
+  runs in disconnect and again in `private_free`. A reader that passed the
+  disconnected check could race the FIFO free. Cleanup should be ordered
+  against hwdep unregistration.
+- **[ISO]** The **ISO continuity check** (`ffuc_iso_contiguous`, §4.6)
+  verifies URB start-frame continuity. Its log counter is module-global,
+  shared across devices and endpoints. It should be per-endpoint.
+- **[all]** The **hwdep read path** (§5) allocates a temporary buffer per
+  event. A per-reader buffer would remove the allocation from the event
+  path.
+- **[all]** The **PCM trigger stop** path (§4) emits verbose diagnostic
+  logs on every stop. These belong in debugfs, ratelimited, or behind a
+  diagnostic parameter.
+- **[all]** **Buffer poison** (`ffuc_poison`) memsets the whole PCM buffer
+  on every prepare (§4.1). It is a diagnostic; production should make it
+  optional.
+- **[status]** The **COUNTERS** ioctl (§5) reports `status_urbs` as zero;
+  the status URB counter is unexposed.
+- **[Babyface-classic]** The **INFO** ioctl (§5) reports `outputs` as the
+  playback channel count. On Babyface-classic the hardware output count
+  differs. Verify the ABI field semantics.
 
 ### Host interaction
 
-- The recommended host service loop drains commands and events on one
-  thread. A blocking control burst can delay event draining and drop
-  events. Separating control writes from the event drain would keep the
-  meter/state pump responsive under heavy write load.
+The **service loop** is the host thread that owns the hwdep handle
+([`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §5).
+It drains commands and events on one thread. A blocking control burst can
+delay event draining and drop events. Separating control writes from the
+event drain would keep the meter/state pump responsive under heavy write
+load. **[host]**
 
 ### Heuristic waits
 
-The timed gaps in §7 are device-mandated but currently fixed sleeps. The
-status/meter pump uses 4 ms delayed work and 10 ms retry. The host burst
-pacing uses a fixed gap. These should be replaced by deterministic
-readiness/flow-control where the device exposes it, or documented as
-device-mandated timing where it does not.
+A **heuristic wait** is a fixed sleep used where a readiness condition or
+flow control could decide the next step.
+
+- The session gaps (§7) are device-mandated timing, implemented as fixed
+  sleeps. **[`WIN_SESSION`]**
+- The **meter pump** (§5.1) resubmits pages from a 4 ms delayed work and
+  retries a paused pump after 10 ms. The pair-boundary pause is UC-specific;
+  the pump itself serves every personality. **[all]**
+- **Burst pacing** is the fixed gap the host inserts between `WRITE_WORDS`
+  bursts (§5). It applies to the UCX write path. **[host, UCX]**
+
+Each wait should become a deterministic readiness poll or bounded flow
+control where the device exposes a condition, or stay a named quirk with
+capture evidence where it does not.
 
 ## 11. TODO / future optimizations
 
-- Replace fixed session gaps with a bounded poll of a device-visible
-  readiness condition where one exists; keep documented quirks where the
-  device has no acknowledgement.
-- Add a rate-readiness poll after the rate commit instead of assuming the
-  write took effect.
-- Serialize the duplex gate decision or make the deferral counters atomic.
-- Order hwdep cleanup against card unregistration; remove the double
-  cleanup path.
-- Move ISO continuity logging to per-endpoint state.
-- Preallocate the hwdep read buffer per reader.
-- Make buffer poison and verbose stop diagnostics optional module parameters.
-- Resubmit meter/state URBs from completion where backpressure allows,
-  instead of a fixed 4 ms delayed work.
+Scope labels are defined in §10.
+
+| Item | Scope |
+|---|---|
+| Replace fixed session gaps with a bounded poll of a device-visible readiness condition where one exists; keep documented quirks where the device has no acknowledgement | `WIN_SESSION` |
+| Add a rate-readiness poll after the rate commit word (UC PC, UC AP, UCX IF5 send it; UCX IF0 commits the family alone) | UC, UCX IF5 |
+| Serialize the duplex gate decision or make the deferral counters atomic | all |
+| Order hwdep cleanup against card unregistration; remove the double cleanup path | all |
+| Move ISO continuity logging to per-endpoint state | ISO |
+| Preallocate the hwdep read buffer per reader | all |
+| Make buffer poison and verbose stop diagnostics optional module parameters | all |
+| Resubmit meter/state URBs from completion where backpressure allows, instead of a fixed 4 ms delayed work; preserve the UC pair-boundary pause | all |
+| Expose the status URB counter | status |
+| Verify the INFO output/playback field semantics | Babyface-classic |
+| Run `sparse` (`make C=1`) and lockdep/UBSAN on the module; fix warnings | all |
+| Reduce checkpatch block-comment warnings to meet kernel style | all |
+
+Host (TotalControl) driver-communication work:
+
+| Item | Scope |
+|---|---|
+| Separate control writes from the event drain in the service loop | host |
+| Bound the command queue with backpressure | host |
+| Replace the UCX burst-pacing sleep with bounded flow control | host, UCX |
+| Enforce or document the single meter reader for the UC pair model | host, UC |
 - Expose the status URB counter; verify the INFO output/playback fields.
 - Run `sparse` (`make C=1`) and lockdep/UBSAN on the module; fix warnings.
 - Reduce checkpatch block-comment warnings to meet kernel style.
 
 ## 12. Open protocol items
 
-The phase/position fields and meter page phase are documented in the UC
-protocol specification. Items that remain unverified there stay open there.
-The driver forwards raw packets and exposes the counters; the host owns the
-decoding.
+The driver forwards raw packets and exposes the counters; the host owns
+the decoding. The items below are the protocol gaps that touch the
+driver's transports. The owning sections carry the full detail:
+[`FIREFFACE-UC-PROTOCOL-SPEC.md`](FIREFFACE-UC-PROTOCOL-SPEC.md) §11.10
+(transport) and §12 (metering),
+[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md) §13 (MIDI).
+
+### Transport
+
+| Item | Scope | Evidence that decides it |
+|---|---|---|
+| AP descriptor: the AP interface and packet rows are the implemented mapping | UC AP | a descriptor capture of the AP personality |
+| AP MIDI: the driver exposes rawmidi where the descriptor carries USB-MIDI | UC AP | the AP descriptor capture; RME documents the ports as class compliant |
+| Page stream field meanings on IF4; the driver leaves IF4 unclaimed | UC PC | a capture of the page stream with a known device state |
+| Read form of request `0x10`; the implemented path writes it | UC | a reference-host capture that reads it |
+| Status bytes 0 and 1; front-panel events use bytes 2 and 3 | UC PC | a capture correlating bytes 0/1 with a device action |
+| Bulk role of `0x03`/`0x84` at 1x/2x; they are interrupt at 4x | UC PC | a capture of the bulk traffic at 1x/2x |
+| Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
+| AP header phase on the UCX: the 12-bit position, 11-bit phase and 3072 wrap are the implemented mapping | UCX IF0 | a UCX capture; on the UC the accumulator is verified at 48 kHz, isolated add/drop events away from the wrap are unattributed |
+| UCX IF5 wire format: S32 per the documented Windows protocol; the host-OS rule (float32 on Linux) is the candidate alternative | UCX IF5 | a float32 channel-init loopback test on IF5, or a reference-host capture |
+| MIDI port 2 physical output: packets carry both ports | UC | a loopback on the candidate output |
+
+### Metering
+
+The UC pair model (§5.1) is implemented and verified on the interrupt
+personality. These items remain open in the metering specification:
+
+| Item | Scope | Evidence that decides it |
+|---|---|---|
+| Beat words (bytes 4..8): observed formats vary; they carry no page identity and no synchronisation role | UC | a session-level correlation capture |
+| RMS-then-peak pair order on AP: alternation is verified there; the order is carried from the interrupt verification | UC AP | a live AP capture with a decidable signal |
+| Header status-slot values and RMS slot-internal engine fields: they drift within a session and track no input signal | UC | an inventory capture with controlled inputs |
+| Slip cause: hypothesis is a meter-endpoint data-toggle reset on the alternate-setting change; a usbmon capture across 48->96 kHz showed no duplicate page, so the slip is intermittent | UC | a bus-analyser trace at data-toggle level across a slipping engine start; the shape check realigns regardless |
+| Shape check with live ADAT 3..7: decidable with live AN5/SPDIF (748/748 heartbeats) | UC | an ADAT source carrying signal on ADAT 3..7 |
 
 ## 13. Code map
 
