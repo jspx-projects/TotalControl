@@ -1894,6 +1894,40 @@ mod tests {
         service.stop();
     }
 
+    /// Reproduction evidence for the audit item "the event drain shares
+    /// the service thread with blocking control work". A slow command
+    /// freezes meter publication for its whole duration. The fix inverts
+    /// this test: publication continues while a slow command runs.
+    #[test]
+    fn a_slow_command_freezes_meter_publication() {
+        let service = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| service.meters().at.is_some()),
+            "the meter snapshot is written"
+        );
+
+        assert!(service.send(Command::Run(Box::new(|_| {
+            thread::sleep(Duration::from_millis(500));
+        }))));
+
+        // Publication normally advances every loop pass (~8 ms). Two
+        // equal samples 80 ms apart mean the loop is stalled.
+        assert!(
+            wait_for(|| {
+                let a = service.meters().at;
+                thread::sleep(Duration::from_millis(80));
+                a == service.meters().at
+            }),
+            "meter publication froze while the slow command ran"
+        );
+        let frozen_at = service.meters().at.unwrap();
+        assert!(
+            wait_for(|| service.meters().at.unwrap() > frozen_at + Duration::from_millis(300)),
+            "publication resumes after the command completes"
+        );
+        service.stop();
+    }
+
     #[test]
     fn the_meter_bus_carries_the_device_ballistics() {
         let uc = DeviceService::spawn(DeviceHandle::Mock(MockDevice::open_uc().unwrap()));
