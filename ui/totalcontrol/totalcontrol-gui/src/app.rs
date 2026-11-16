@@ -3829,6 +3829,10 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
     };
     scene.settings.pitch_percent = state.device.settings().pitch_percent;
     scene.settings.dim_amount_db = state.control_room.main_dim_db;
+    // The Control Room assignment is the source of truth for Main and
+    // Speaker B.  Keep the saved scene in step so a restore has both.
+    scene.settings.main_out = state.assign[0];
+    scene.settings.main_b_out = state.assign[1];
     let snapshots: [WorkspaceSnapshot; 8] = std::array::from_fn(|i| WorkspaceSnapshot {
         name: state
             .snapshot_names
@@ -12058,6 +12062,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::ControlRoomMono(on) => {
+            // The Control Room assignment is authoritative.  A service
+            // snapshot can lag behind it, so apply the Main assignment
+            // before Mono needs a monitor pair.
+            if state.device.settings().main_out != state.assign[0] {
+                if let Err(e) = apply_control_room_assignments(state) {
+                    fail(state, "assign", &e);
+                    return Task::none();
+                }
+            }
             // The setter owns the state transition.  Setting settings.mono
             // first made the UC setter return early without rewriting the
             // monitor matrix.
@@ -19381,8 +19394,11 @@ fn control_room_panel(
                 "mono",
                 theme::TEXT_MD,
                 settings.mono,
-                settings
-                    .main_out
+                state
+                    .assign
+                    .first()
+                    .copied()
+                    .flatten()
                     .is_some()
                     .then_some(Message::ControlRoomMono(!settings.mono)),
             ),
@@ -21651,6 +21667,16 @@ mod tests {
         let workspace = capture_workspace(&state);
         assert!(workspace.surround_51);
         assert!(workspace.surround_71);
+    }
+
+    #[test]
+    fn the_saved_scene_carries_the_control_room_assignments() {
+        let mut state = new(true, None, None);
+        state.assign[0] = Some(3);
+        state.assign[1] = Some(1);
+        let workspace = capture_workspace(&state);
+        assert_eq!(workspace.scene.settings.main_out, Some(3));
+        assert_eq!(workspace.scene.settings.main_b_out, Some(1));
     }
 
     #[test]
