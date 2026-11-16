@@ -84,12 +84,25 @@ Verified current state:
 
 ### Host issues — priority and impact
 
+Reproduction evidence (UCX, ISO, firmware 46):
+
+- The stall test (`a_slow_command_freezes_meter_publication`) freezes
+  meter publication for the whole slow command on the mock service.
+- The backlog test (`a_command_backlog_delays_later_commands`) delays a
+  volume move by the full backlog duration.
+- Bench stress (`bench_stress_event_drops`, 24 scene+drag floods in
+  15 s): longest publication freeze 629 ms, zero new `events_dropped`.
+- An unbounded firehose (3000 scene applies queued in 15 s) built
+  minutes of backlog, defeated `Stop`, and accumulated ~90k event
+  drops. The 64 KiB FIFO fills in about 1 s at the UCX meter rate; a
+  629 ms freeze stays below that, the firehose far exceeded it.
+
 | Item | Priority | Impact | Status |
 |---|---|---|---|
-| Event drain shares the thread with blocking control work (synchronous EP0 calls, up to the 1 s kernel timeout) | P1 | A stalled control path delays `poll_events`; the 64 KiB event FIFO fills and drops events. Front-panel moves are lost, the model goes stale, meters freeze during heavy writes. | open — host PR |
-| Blocking writer flush (`flush_write_batch` waits for the paced writer) | P1 | A vendor request after queued words waits 16 ms per 63-word burst; a scene is many bursts, so the service thread stalls hundreds of ms. Same event-drop class during scene applies. | open — host PR |
+| Event drain shares the thread with blocking control work (synchronous EP0 calls, up to the 1 s kernel timeout) | P1 | A stalled control path delays `poll_events`. Reproduced: 629 ms publication freeze during a scene apply; meters and model go stale. Event drops require a stall beyond the ~1 s FIFO fill time. | reproduced — host PR |
+| Blocking writer flush (`flush_write_batch` waits for the paced writer) | P1 | A vendor request after queued words waits 16 ms per 63-word burst; a scene is many bursts, so the service thread stalls hundreds of ms. Same freeze class during scene applies. | reproduced (same freeze) — host PR |
 | UC control writes run inline on the service thread | P1 | The UC has no writer thread; a control burst blocks the loop directly. Same stall class as the two rows above. One fix cluster: event-drain independence. | open — host PR |
-| Unbounded command queue | P1 | A drag queues commands faster than the device accepts them; the backlog applies stale commands late, the mirror lags, memory grows without bound. Bounded queue with coalescing/backpressure. | open — host PR |
+| Unbounded command queue | P1 | Reproduced: a 15 s firehose built minutes of backlog, applied stale commands late, and defeated `Stop`; ~90k event drops followed. Bounded queue with coalescing/backpressure. | reproduced — host PR |
 | Single meter reader is host discipline only | P2 | A second hwdep reader breaks the UC pair phase model: each reader samples pages, pairs misalign, `PHASE_LOST` flags and wrong RMS/peak pairing follow. Driver enforcement or an explicit ABI contract. | open — later |
 | Connect policy writes host settings on connect | P2 | Front-panel changes made while the host was away are overwritten. Already flagged for a separate investigation. | open — later |
 | Snapshot cadence (50 ms) | P3 | Fast front-panel moves can alias between captures; the UI confirms at 20 Hz. Acceptable today; event-driven capture is the refinement. | optional |

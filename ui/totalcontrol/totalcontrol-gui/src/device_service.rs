@@ -1928,6 +1928,129 @@ mod tests {
         service.stop();
     }
 
+    /// Reproduction evidence for the audit item "the unbounded command
+    /// queue applies stale commands late". A volume move queued behind
+    /// slow work lands only after the whole backlog drains. The fix
+    /// (bounded queue with coalescing) must keep the latest value's lag
+    /// small.
+    #[test]
+    fn a_command_backlog_delays_later_commands() {
+        let service = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| !service.snapshot().scene.outputs.is_empty()),
+            "the initial snapshot arrives"
+        );
+
+        for _ in 0..20 {
+            assert!(service.send(Command::Run(Box::new(|_| {
+                thread::sleep(Duration::from_millis(25));
+            }))));
+        }
+        let t0 = Instant::now();
+        assert!(service.send(Command::SetVolume(ChannelId::Output(0), 0, 0.77)));
+        assert!(
+            wait_for(|| (service.snapshot().scene.outputs[0].volume - 0.77).abs() < 0.001),
+            "the volume command eventually applies"
+        );
+        let lag = t0.elapsed();
+        assert!(
+            lag >= Duration::from_millis(400),
+            "the backlog delayed the volume move by {lag:?}"
+        );
+        service.stop();
+    }
+
+    /// Bench evidence for the audit claim "a stalled control path drops
+    /// device events". Run on a real unit:
+    ///   cargo test -p totalcontrol-gui bench_stress_event_drops -- --ignored --nocapture
+    /// Applies the current scene plus a 40-step volume drag on output 17,
+    /// waits for each flood to drain, and repeats for 15 s. Reports the
+    /// longest meter-publication freeze and the kernel event-drop counter
+    /// delta. A freeze without drops narrows the claim; drops confirm it.
+    /// Output 17's original volume is restored at the end.
+    #[test]
+    #[ignore]
+    fn bench_stress_event_drops() {
+        let device = match DeviceHandle::open_real() {
+            Some(d) => d,
+            None => {
+                eprintln!("no real device present; nothing to measure");
+                return;
+            }
+        };
+        let service = DeviceService::spawn(device);
+        assert!(wait_for(|| service.snapshot().connected), "device connects");
+        let scene = service.snapshot().scene;
+        let orig17 = scene.outputs[17].volume;
+        eprintln!("output 17 volume before stress: {orig17}");
+
+        let start = Instant::now();
+        let mut drops0 = None;
+        let mut longest_freeze = Duration::ZERO;
+        let mut last_at = None;
+        let mut freeze_start = None;
+        let mut floods = 0u32;
+        let (tx, rx) = std::sync::mpsc::channel();
+        while start.elapsed() < Duration::from_secs(15) {
+            let _ = service.send(Command::ApplyScene(Box::new(scene.clone())));
+            for k in 0..40 {
+                let v = 0.3 + 0.4 * (k as f32 / 40.0);
+                let _ = service.send(Command::SetVolume(ChannelId::Output(17), 0, v));
+            }
+            let done = tx.clone();
+            let _ = service.send(Command::Run(Box::new(move |_| {
+                let _ = done.send(());
+            })));
+            // Sample publication while this flood drains.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                let m = service.meters();
+                if let Some(c) = &m.counters {
+                    if drops0.is_none() {
+                        drops0 = Some(c.events_dropped);
+                    }
+                }
+                match (last_at, m.at) {
+                    (Some(prev), Some(now)) if now == prev => {
+                        if freeze_start.is_none() {
+                            freeze_start = Some(Instant::now());
+                        }
+                        if let Some(fs) = freeze_start {
+                            longest_freeze = longest_freeze.max(fs.elapsed());
+                        }
+                    }
+                    (_, Some(now)) => {
+                        last_at = Some(now);
+                        freeze_start = None;
+                    }
+                    _ => {}
+                }
+                if rx.try_recv().is_ok() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            floods += 1;
+        }
+        let _ = service.send(Command::SetVolume(ChannelId::Output(17), 0, orig17));
+        let done = tx.clone();
+        let _ = service.send(Command::Run(Box::new(move |_| {
+            let _ = done.send(());
+        })));
+        let _ = rx.recv_timeout(Duration::from_secs(3));
+        let drops1 = service
+            .meters()
+            .counters
+            .map(|c| c.events_dropped)
+            .unwrap_or(0);
+        eprintln!(
+            "stress: {floods} floods in 15 s, longest publication freeze {longest_freeze:?}, \
+             events_dropped {} -> {drops1}",
+            drops0.unwrap_or(0)
+        );
+        service.stop();
+    }
+
     #[test]
     fn the_meter_bus_carries_the_device_ballistics() {
         let uc = DeviceService::spawn(DeviceHandle::Mock(MockDevice::open_uc().unwrap()));
