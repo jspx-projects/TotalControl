@@ -19,7 +19,11 @@ LDLIBS += -lm
 
 all: rme-probe
 
-rme-probe: tools/rme-probe.c third_party/libusb/libusb.h
+# The vendored libusb header is optional; pkg-config's system libusb is the
+# default.  The hwdep backend includes the driver's uapi header.
+VENDORED_LIBUSB := $(wildcard third_party/libusb/libusb.h)
+
+rme-probe: tools/rme-probe.c kernel/ffuc-uapi.h $(VENDORED_LIBUSB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/rme-probe.c $(LDFLAGS) $(LDLIBS)
 
 clean:
