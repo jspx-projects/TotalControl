@@ -27,7 +27,7 @@ static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
 static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 static unsigned int urb_frames = 48;
 static unsigned int nurbs = 2;
-static bool ucx_if5 = false;
+static bool ucx_if5;
 static unsigned int ucx_if5_frames = 1024;
 static unsigned int fixed_rate;
 /* q48 instrumentation (test/uc-q48-instrumentation).  Poison the PCM rings
@@ -310,11 +310,11 @@ void ffuc_release_interface(struct usb_interface *intf)
  * format: 0 = S32, 1 = float32.  It must equal the wire format the host
  * sends (ffuc_wire_s32); a mismatch passes only the sample sign bit and
  * distorts the audio.  The value is therefore derived from the resolved
- * wire format, not stored per range.  On Linux the host is float-native,
- * so both UC personalities use the 36-slot init (18 inputs + 18 outputs)
- * with float32.  The Windows host instead writes a 60-slot block with S32
- * (documented in the protocol spec); the slot count does not affect the
- * format pairing.
+ * wire format, not stored per range.  Both UC personalities use the
+ * 36-slot init (18 inputs + 18 outputs); the interrupt personality pairs
+ * it with S32 and the ISO personality with float32.  The Windows host
+ * instead writes a 60-slot block with S32 (documented in the protocol
+ * spec); the slot count does not affect the format pairing.
  */
 static const struct ffuc_init_range ffuc_uc_chan_init[] = {
 	{ .first = 0,    .count = 18 },
@@ -326,15 +326,13 @@ static const struct ffuc_init_range ffuc_ucx_chan_init[] = {
 	{ .first = 0x20, .count = FFUC_MAX_CHANNELS },
 };
 
-/* Write the descriptor's 0x16 slot ranges.  On the UC the wValue is the
- * channel sample format and follows the wire format (0 = S32, 1 = float32);
- * other models keep the documented float init value pending verification
- * of the same pairing. */
+/* Write the descriptor's 0x16 slot ranges.  The wValue is the channel
+ * sample format and follows the resolved wire format (0 = S32,
+ * 1 = float32). */
 static int ffuc_uc_chan_init_write(struct ffuc *chip)
 {
 	const struct ffuc_init_range *range;
-	u16 value = (chip->model == FFUC_MODEL_UC && chip->s32_samples) ?
-		    0x0000 : 0x0001;
+	u16 value = chip->s32_samples ? 0x0000 : 0x0001;
 	unsigned int i, r;
 	int ret;
 
@@ -351,8 +349,8 @@ static int ffuc_uc_chan_init_write(struct ffuc *chip)
 }
 
 /* UC init: 36 channel slots, then the settings word and the global enable.
- * Used by both UC personalities on Linux, where the wire format is
- * float32 (the host-native format). */
+ * Used by both UC personalities; the wire format follows the transport
+ * rule (S32 interrupt, float32 ISO). */
 static int ffuc_uc_init(struct ffuc *chip)
 {
 	int ret;
@@ -573,18 +571,15 @@ static const struct ffuc_ops ffuc_ucx_ops = {
 	.hw_mute = ffuc_ucx_hw_mute,
 };
 
-/* Resolve the wire sample format once at probe.  The wire format follows
- * the host OS's native audio format: Linux and macOS are float-native
- * (float32), Windows is integer-PCM-native (S32).  This driver runs on
- * Linux, so the UC personalities carry float32; the host imposes the
- * format through the 0x16 init value, which ffuc_uc_chan_init_write
- * derives from this decision so the two can never mismatch.  The UCX
- * interrupt transport keeps S32 per its documented protocol (a candidate
- * host-OS-rule exception pending verification).  A device that strictly
- * requires S32 carries FFUC_QUIRK_INT32_SAMPLES. */
+/* Resolve the wire sample format once at probe.  The format is keyed to
+ * the transport: the interrupt personalities carry S32 (the Windows
+ * reference pairing) and the ISO personalities carry float32 (the macOS
+ * reference pairing).  The device accepts either format when the 0x16
+ * channel-init value matches; ffuc_uc_chan_init_write derives that value
+ * from this decision so the two can never mismatch. */
 static bool ffuc_wire_s32(const struct ffuc *chip)
 {
-	return chip->desc->quirks & FFUC_QUIRK_INT32_SAMPLES;
+	return !chip->iso;
 }
 
 /* -- per-device descriptors ------------------------------------------ */
@@ -734,7 +729,6 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.iface = 5,
 		.transport = FFUC_XPORT_INTERRUPT,
 		.quirks = FFUC_QUIRK_ALT_RESELECT |
-			  FFUC_QUIRK_INT32_SAMPLES |
 			  FFUC_QUIRK_IF5_PRE_START |
 			  FFUC_QUIRK_IF5_PLAYBACK_MASK,
 		.model = FFUC_MODEL_UCX,
@@ -799,7 +793,6 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.iface = 5,
 		.transport = FFUC_XPORT_INTERRUPT,
 		.quirks = FFUC_QUIRK_ALT_RESELECT |
-			  FFUC_QUIRK_INT32_SAMPLES |
 			  FFUC_QUIRK_IF5_PRE_START |
 			  FFUC_QUIRK_IF5_PLAYBACK_MASK,
 		.model = FFUC_MODEL_UCX,
@@ -865,9 +858,8 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.iface = 0,
 		.transport = FFUC_XPORT_INTERRUPT,
 		/* The output latch clears only on an alt 0 -> alt N reselect,
-		 * as on the UCX.  The wire format follows the host OS (float32
-		 * on Linux), like every UC; the earlier firmware-keyed S32 was
-		 * the Windows-host behaviour, not a device requirement. */
+		 * as on the UCX.  The wire format follows the transport rule
+		 * (S32 on the interrupt personality). */
 		.quirks = FFUC_QUIRK_STATUS_LATCH |
 			  FFUC_QUIRK_ALT_RESELECT |
 			  FFUC_QUIRK_WIN_SESSION,
