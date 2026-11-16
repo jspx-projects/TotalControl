@@ -163,17 +163,47 @@ support.
 
 ## 5. Device service and mirror
 
+The block diagram in
+[`spec/driver-host-architecture.svg`](spec/driver-host-architecture.svg)
+maps the device interfaces (D), the driver blocks (K), the userspace
+interfaces (U) and the host blocks (H); the driver design §1 defines
+them. This section owns the host blocks H3–H5 and the channels C1–C4.
+
 In the running application the device normally lives on the
-`totalcontrol-device-service` thread. The UI holds a `Mirror` instead of the
-real handle.
+`totalcontrol-device-service` thread (H3). The UI holds a `Mirror`
+instead of the real handle (H5).
+
+**Goal of H3.** The kernel meter pump (K6) is reader-triggered and
+backpressured: it advances only while H3 drains the event FIFO (K8).
+H3 therefore exists to move device information into userspace promptly
+and continuously, without blocking the kernel side, and to keep all
+device I/O off the UI thread. One thread owns the handle, so control
+writes and the event drain are serialized against the device.
 
 The service loop:
 
-1. drains `Command`s from the UI;
-2. calls `device.poll_events()`;
+1. drains `Command`s from the UI (C1);
+2. calls `device.poll_events()` (F3);
 3. reads input, playback and output meters;
-4. captures the model every 50 ms and publishes a `Snapshot` when it changed;
-5. publishes meters separately through a shared `MeterSnapshot`.
+4. captures the model every 50 ms and publishes a `Snapshot` when it
+   changed (C2);
+5. publishes meters separately through a shared `MeterSnapshot` (C3).
+
+### 5.1 Host channels
+
+| Channel | Direction | Payload | Cadence | Semantics |
+|---|---|---|---|---|
+| C1 Command queue | H5 → H3 | `SetVolume`, `SetMute`, `ApplyScene`, `Run(closure)` | on user action | setters queue and return; unbounded today (audited) |
+| C2 Snapshot | H3 → H5 | the device model: scene, settings, connection, hardware volume, panel selection | 20 Hz, on change | the mirror updates on arrival; confirm-on-snapshot, not optimistic |
+| C3 MeterSnapshot | H3 → H5 canvases | latest per-channel levels, peak-hold, OVR flags, transport counters, ballistics | every loop pass (~120 Hz) | a shared latest-value bus, not a queue; canvases read it directly, no view rebuild |
+| C4 wake edges | H3 → H5 | notification only | on meter activity edges | starts canvas animation after silence; carries no data |
+
+**Meter terminology chain.** The *meter heartbeat* is the device's page
+pair on D5 (UC: RMS then peak; UCX/Babyface: one self-describing
+packet). K6 turns it into a METER event in K8. H3 decodes the event
+into per-channel levels and publishes the latest values on C3. C3
+holds the current state with peak-hold; it is not a queue of
+heartbeats.
 
 The UI sends commands such as `SetVolume`, `SetMute`, `ApplyScene`, or a
 `Run(closure)` for controls without a dedicated command. Setters on the mirror

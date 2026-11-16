@@ -50,12 +50,72 @@ directly.
 
 ![Driver and host architecture](driver-host-architecture.svg)
 
-The recommended host architecture is a device service thread that owns the
-hwdep handle, plus a UI-side mirror. The service drains commands, polls
-events and meters, and publishes snapshots. The UI queues commands and
-reads the mirror; it never blocks on the device. The runtime structure is
-defined in
+The diagram's blocks carry stable IDs. The tables below define each
+block and each path; the normative text references the IDs.
+
+### 1.1 Blocks
+
+| ID | Block | Responsibility | Source |
+|---|---|---|---|
+| D1 | audio OUT/IN | the device's streaming endpoints (IF0 ISO or IF5 interrupt) | device |
+| D2 | EP0 vendor | the device's control request endpoint | device |
+| D3 | IF1 words OUT | register-word sink, bulk `0x0c` | device |
+| D4 | IF1 state IN | state-echo source, bulk `0x8d` | device |
+| D5 | IF1 meters IN | meter-heartbeat source, bulk `0x85` | device |
+| D6 | status IN | status ticker and output-latch bit, `0x8b` | device |
+| D7 | IF2 USB-MIDI | MIDI packet endpoints | device |
+| D8/D9 | IF3 / IF4 page stream | firmware programming and page stream; unclaimed | device |
+| K1 | URB engine | submits and completes audio URBs; ISO implicit feedback (§4.3) or interrupt handshake (§4.4); cadence and continuity guards | `ffuc.c` |
+| K2 | ALSA PCM | the coherent PCM buffer and the duplex period gate (§4.2); fed exclusively by K1 | `ffuc.c` |
+| K3 | EP0 passthrough | one synchronous vendor request per `VENDOR` ioctl, bounded by the USB timeout | `ffuc-hwdep.c` |
+| K4 | IF1 word writer | one `WRITE_WORDS` burst per ioctl, ≤63 words, odd parity added | `ffuc-hwdep.c` |
+| K5 | state reader | resubmits the `0x8d` URB; emits STATE events | `ffuc-hwdep.c` |
+| K6 | meter pump | reader-triggered `0x85` submission with backpressure (§5.1); UC pair model | `ffuc-hwdep.c` |
+| K7 | status + watchdog | the `0x8b` URB; STATUS and LATCH events; the output-latch watchdog (§4.6) | `ffuc.c` |
+| K8 | event FIFO | the 64 KiB event queue; `read()`/`poll()` drain it; a full FIFO drops events | `ffuc-hwdep.c` |
+| K9 | USB-MIDI engine | bulk MIDI transfers, one stream per transfer | `ffuc-midi.c` |
+| K10 | recovery | marks the engine broken and restarts it (§4.6) | `ffuc.c` |
+| U1 | ALSA PCM node | `hw:<card>,0` | ALSA |
+| U2 | hwdep node | `/dev/snd/hwC<card>D0`; INFO/VENDOR/WRITE_WORDS/COUNTERS ioctls and the event stream | `ffuc-hwdep.c` |
+| U3 | rawmidi nodes | one per logical MIDI port | ALSA |
+| H1 | PipeWire / DAW | the ALSA PCM client | host |
+| H2 | MIDI clients | rawmidi clients | host |
+| H3 | device service thread | owns the device handle; applies commands, drains events, publishes snapshots | host |
+| H4 | IF1 writer thread | paced word bursts (UCX today) | host |
+| H5 | UI thread | the mirror and the canvases | host |
+
+H3–H5 and the host channels C1–C4 are defined in
 [`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §5.
+
+### 1.2 Paths
+
+| Path | Route | Payload | Direction |
+|---|---|---|---|
+| F1 audio | D1 ↔ K1 ↔ K2 ↔ U1 ↔ H1 | sample frames; period signals pace H1 | bidirectional |
+| F2 control | H3/H4 → U2 → K3/K4 → D2/D3 | vendor requests and register words | host to device |
+| F3 events | D4/D5/D6 → K5/K6/K7 → K8 → U2 → H3 | STATE, METER, STATUS, LATCH events | device to host |
+| F4 MIDI | D7 ↔ K9 ↔ U3 ↔ H2 | USB-MIDI packets | bidirectional |
+
+F1 carries audio only; F2 and F3 share U2 but are independent: ioctls
+never wait on the event drain, and the drain never waits on an ioctl
+held by another reader.
+
+### 1.3 Invariants
+
+1. **Single control owner.** U2 is the control owner while the module is
+   bound; the host opens it exclusively for control (H3).
+2. **Prompt drain.** K6 submits the next meter page only while K8 is
+   below its high-water mark (backpressure). H3 drains K8 promptly; a
+   stalled H3 pauses K6 and, beyond the FIFO capacity, drops events
+   (`events_dropped`).
+3. **Single meter reader.** One reader drains F3; concurrent readers
+   break the UC pair phase (§5.1).
+4. **Control ordering.** F2 operations reach the device in submission
+   order; a vendor request never overtakes queued words.
+5. **Bounded control.** K3 and K4 ioctls are synchronous and bounded;
+   F3 reads wait interruptibly.
+6. **Recovery is an xrun.** K10 restarts the engine; H1 re-prepares
+   (§4.6).
 
 ## 2. Device descriptors and quirks
 
