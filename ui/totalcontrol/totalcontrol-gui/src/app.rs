@@ -14437,7 +14437,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .map(|now| now.saturating_sub(state.graph_xruns_baseline.unwrap_or(now)));
     body = body.push(
         row![
-            strip::hint(caption("Xruns (PipeWire)"), "PipeWire graph xruns.", scale),
+            strip::hint(caption("Xruns"), "PipeWire graph xruns.", scale),
             iced::widget::Space::new().width(Length::Fill),
             text(xruns.map(|n| n.to_string()).unwrap_or_else(|| "—".into()))
                 .size(text_size)

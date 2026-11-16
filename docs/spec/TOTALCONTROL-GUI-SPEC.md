@@ -1241,7 +1241,7 @@ connected device's nine rates, keeping the previous value. On disconnect or a
 clean exit it restores that value if the list is still the one it wrote. No
 persistent PipeWire configuration file is installed.
 
-Above the driver rows, `Xruns (PipeWire)` counts the PipeWire graph xruns
+Above the driver rows, `Xruns` counts the PipeWire graph xruns
 for the RME output node, sampled once a second while the drawer is open.
 It is reset with the same button as the driver rows.
 
@@ -1966,7 +1966,7 @@ The displayed line is not an acoustic measurement. The PC calibration is a
 full-duplex electrical loopback (output 5 to input 5); the evidence is in
 `docs/work/UC-RTL-LOOPBACK.md`.
 
-Below it, **Xruns (PipeWire)** shows the PipeWire graph xrun count for the
+Below it, **Xruns** shows the PipeWire graph xrun count for the
 RME output node, above the driver rows. It is sampled once a second while
 the drawer is open and reset with the driver baselines.
 

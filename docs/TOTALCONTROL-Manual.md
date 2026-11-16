@@ -1280,7 +1280,7 @@ adjusted by the queue difference without another cable measurement. Rates
 outside the calibrated set use the model estimate. A different firmware or
 device path needs a new calibration.
 
-Below the latency line, **Xruns (PipeWire)** counts the PipeWire graph
+Below the latency line, **Xruns** counts the PipeWire graph
 xruns for the RME output node. This is an audio-graph counter, not a USB
 transport counter. It is sampled once a second and reset with the same
 button as the driver counters.
