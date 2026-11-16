@@ -69,6 +69,11 @@ the protocol or behaviour from the section alone.
   terms. Write the content directly; do not dress it in framing language
   ("in designer's words", "as the vendor would say") that is not part of
   the model.
+- Write authoritative, positive statements. Define a thing by what it is
+  and what it does. Remove negated framing such as "transport driver, not
+  a mixer"; state "transport driver" and let the boundary table carry the
+  ownership. Exception: an open item or TODO may state what is excluded
+  when that narrows the possibilities for future investigation.
 - Keep byte/word layout tables: address ranges, sizes, counts and laws
   within the section. A layout described in prose instead of a table is a
   defect. State how much of each page/structure is decoded and what

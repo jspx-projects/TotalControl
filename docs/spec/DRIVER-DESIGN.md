@@ -3,9 +3,8 @@
 This document describes the `snd-fireface-uc` kernel module: what it owns,
 how it streams audio, how it talks to the host, and how to extend it to
 another RME device. It is the low-level driver reference. Device protocol
-encodings live in the protocol specifications; host-app policy lives in the
-host-app specifications. This document does not describe mixer panels,
-scenes or GUI behaviour.
+encodings live in the protocol specifications. Mixer panels, scenes and GUI
+behaviour belong to the host specifications.
 
 Terminology:
 
@@ -14,36 +13,46 @@ Terminology:
 | host | Any userspace client of the driver's PCM/hwdep interface: TotalControl, a command-line tool, or the vendor reference host on Windows or macOS. |
 | reference host | The vendor's host driver, used as protocol evidence. |
 | transport | The USB streaming path: interrupt or isochronous. |
+| USB interface | A numbered `bInterfaceNumber` in the active configuration (IF0 audio, IF1 state/meter, IF2 MIDI, IF3 firmware programming, IF4 page stream, IF5 status). The protocol specifications own the numbering. |
+| userspace interface | An ALSA node the host opens: PCM, hwdep or rawmidi. |
 | personality | A device firmware/USB variant: UC PC, UC AP, UCX IF0, UCX IF5, Babyface-classic. |
 | engine | The running URB set for one card. |
 | quirk | A descriptor flag that selects a device-specific transport behaviour. |
 
+Terms follow the USB core and ALSA conventions. Driver-specific terms are
+defined above.
+
 ## 1. Boundary
 
-The kernel module is a transport driver, not a mixer.
+The kernel module is a transport driver. The host owns the device model and
+policy.
 
-| Layer | Owns | Does not own |
-|---|---|---|
-| `kernel/ffuc.c` | USB probe, descriptor table, alt/rate selection, URB engines, ALSA PCM, status/latch watchdog, recovery, suspend/resume | mixer model, matrix, faders, EQ, meters, scenes |
-| `kernel/ffuc-hwdep.c` | raw EP0 vendor requests, IF1 word bursts, meter/state readers, event queue, backpressure | parsing register values or meter layouts |
-| `kernel/ffuc-midi.c` | USB-MIDI rawmidi ports | MIDI policy |
-| host | device model, protocol semantics, routing, scenes, meter decoding | USB/PCM transport |
+| Layer | Owns |
+|---|---|
+| `kernel/ffuc.c` | USB probe, descriptor table, alt/rate selection, URB engines, ALSA PCM, status/latch watchdog, recovery, suspend/resume |
+| `kernel/ffuc-hwdep.c` | raw EP0 vendor requests, IF1 word bursts, meter/state readers, event queue, backpressure |
+| `kernel/ffuc-midi.c` | USB-MIDI rawmidi ports |
+| host | device model, protocol semantics, routing, scenes, meter decoding |
 
-The kernel creates no ALSA mixer controls. The only interfaces are:
+The kernel exposes these userspace interfaces:
 
 - the ALSA PCM device (`hw:<card>,0`);
 - one `snd-hwdep` control node per card (`/dev/snd/hwC<card>D0`);
 - rawmidi ports where the device has USB-MIDI.
 
-The host opens the hwdep node and implements the device model. Direct
-libusb control while the module is bound is unsupported; the hwdep node is
-the single owner.
+The host opens the hwdep node and implements the device model. The hwdep
+node is the single control owner while the module is bound.
+
+The driver claims the audio, state/meter, MIDI and status USB interfaces.
+The firmware programming USB interface (IF3) and the page stream USB
+interface (IF4) remain unclaimed; the firmware update tool uses IF3
+directly.
 
 ## 2. Device descriptors and quirks
 
 `struct ffuc_device_desc` is the per-device table. USB IDs point at
 descriptors through `.driver_info`. Each probe allocates its own
-`struct ffuc`; no model state is global.
+`struct ffuc`; model state is per-card.
 
 A descriptor carries:
 
@@ -63,26 +72,14 @@ Quirks:
 | Quirk | Meaning |
 |---|---|
 | `ALT_RESELECT` | select alt 0 then alt N at engine start (clears the UCX IF5 output latch) |
-| `INT32_SAMPLES` | device requires S32 wire format, not float32 |
+| `INT32_SAMPLES` | device requires S32 wire format |
 | `STATUS_LATCH` | status byte 3 bit 7 is the output-latch watchdog |
 | `IF5_PRE_START` | send `0x10 0x8000` + `0x1d` before audio |
 | `IF5_PLAYBACK_MASK` | request 19/20 channel mask; IN URBs are 73728 bytes |
 | `WIN_SESSION` | Windows-personality session timing: stop->start settle and close->rate / close->trio gaps |
 
-Do not add model-specific branches to the shared PCM/URB path unless they
-are a descriptor quirk or an `ffuc_ops` callback.
-
-### Adding a device
-
-1. Add a descriptor entry: USB ID, interface, endpoints, modes, channel
-   counts, meter length, init ranges.
-2. If the streaming sequence differs, add an `ffuc_ops` implementation.
-3. Add quirks only for behaviour that the shared path must select.
-4. Add the host-app profile and protocol module separately.
-5. Document every new register/offset in the protocol specification and
-   mark uncertain items as open.
-6. Add encoding tests in the host; add a kernel transport test if the
-   URB path changes.
+Model-specific behaviour belongs in a descriptor quirk or an `ffuc_ops`
+callback; the shared PCM/URB path stays model-independent.
 
 ## 3. Personalities and wire formats
 
@@ -112,75 +109,73 @@ PC vs AP limitations:
 
 ## 4. Streaming engine
 
-### 4.1 URB and ring geometry
+### 4.1 URB and buffer geometry
 
 Module parameters: `urb_frames` (default 48), `nurbs` (default 2),
 `ucx_if5_frames` (default 1024), `fixed_rate`.
 
 - Interrupt: one URB carries `urb_frames` scaled by the rate band
-  (1x/2x/4x). The ring covers `(nurbs + 2) * urb_frames`, rounded up to
-  whole periods.
+  (1x/2x/4x). The PCM buffer covers `(nurbs + 2) * urb_frames`, rounded up
+  to whole periods.
 - ISO: one URB carries up to 8 packets, one per 125 us microframe. The
-  feedback delay is `(nurbs + 1) * iso_packets`. The UCX ring also covers
-  the output lead plus two URBs of margin.
+  feedback delay is `(nurbs + 1) * iso_packets`. The UCX PCM buffer also
+  covers the output lead plus two URBs of margin.
 - The period floor is one URB. The graph quantum follows at 48 frames and
   above.
 
-The ring must cover the URBs already in flight plus margin; otherwise a
-completion overwrites unread capture frames or sends unwritten playback
-frames. The driver counts these as `in_overruns` / `out_underruns`; it does
-not prevent them. Prevention is the host's buffer/quantum choice.
+The PCM buffer covers the URBs already in flight plus margin. A completion
+that overwrites unread capture frames or sends unwritten playback frames is
+counted as `in_overruns` / `out_underruns`. The host prevents these through
+its buffer/quantum choice.
 
 ### 4.2 Period signalling gate
 
-A period signal announces one completed period. The driver never signals a
-direction for zero completed periods (`delta_zero` counts violations).
+A period signal announces one completed period. A direction is signalled
+only when its period index advanced (`delta_zero` counts violations).
 
 In duplex, the wake is withheld until both running directions have completed
-a period, so the follower's pointer is not stale when the reader wakes. A
-direction whose wake has been withheld twice signals alone, so a stalled
-stream cannot hold the other hostage. Single-direction operation signals at
-its own boundary.
+a period, so the follower's pointer is current when the reader wakes. A
+direction whose wake has been withheld twice signals alone, releasing the
+other direction. Single-direction operation signals at its own boundary.
 
 Counters: `signal_deferred`, `signal_overdue`, `max_pending`, `delta_zero`,
 `hw_ptr_mismatch`.
 
 The gate adds at most about one URB of latency at any period size. It is a
-correctness mechanism, not a tuning knob.
+correctness mechanism.
 
 ### 4.3 ISO implicit feedback and dropout prevention
 
 The ISO IN header carries a position and a phase accumulator. The driver
-records every IN packet's position and frame count in a feedback ring
+records every IN packet's position and frame count in a feedback buffer
 (`fb[]`), indexed by packet number. The OUT path reads the feedback entry
 `fb_delay` packets behind the current OUT packet and places the OUT lead
 word accordingly. This is implicit feedback: the device's captured clock
-schedules playback, so the two directions do not drift.
+schedules playback, keeping the two directions aligned.
 
 Fields that assist dropout prevention:
 
 | Field | Role |
 |---|---|
-| IN position | the device's capture ring position; anchors the feedback timeline |
+| IN position | the device's capture buffer position; anchors the feedback timeline |
 | IN phase | fractional-sample accumulator; predicts frame add/drop at the wrap |
 | IN frame count | frames in this packet; the OUT path mirrors it |
-| OUT lead word | the ring position this OUT packet plays at; keeps the device's output latch fed |
+| OUT lead word | the buffer position this OUT packet plays at; keeps the device's output latch fed |
 | `out_lead` | host-side margin added to the mirrored position; absorbs scheduling jitter |
 | `fb_delay` | how far OUT lags IN; covers the URBs in flight |
-| cadence | mean frames/packet * 8000; detects a rate write that did not take effect |
+| cadence | mean frames/packet * 8000; detects a rate mismatch |
 | output-latch bit | status byte 3 bit 7; the device signals that its output latch ran dry |
 
-How the vendor likely uses them: the macOS reference host reads the IN position/phase
-to schedule OUT packets against the device clock, and uses the output-latch
-status to detect underrun. The Windows interrupt path has no IN header; it
-relies on the session words and the status ticker. The driver's ISO path
-reproduces the macOS implicit-feedback model; the interrupt path reproduces
-the Windows session model.
+How the vendor likely uses them: the macOS reference host reads the IN
+position/phase to schedule OUT packets against the device clock, and uses
+the output-latch status to detect underrun. The Windows interrupt path uses
+the session words and the status ticker. The driver's ISO path reproduces
+the macOS implicit-feedback model; the interrupt path reproduces the
+Windows session model.
 
 The cadence guard is a diagnostic: a sustained disagreement between the
-packet cadence and `chip->rate` means the rate write did not take effect or
-the device was reprogrammed externally. It does not itself recover the
-stream.
+packet cadence and `chip->rate` marks a rate mismatch. Recovery is the
+watchdog's role.
 
 ### 4.4 Recovery and watchdog
 
@@ -193,8 +188,7 @@ stream.
 - `recover_work` stops the streams, stops the engine, and restarts it if
   any direction is prepared.
 
-Recovery is a restart, not a sample-accurate repair. The host sees an xrun
-and re-prepares.
+Recovery restarts the engine. The host sees an xrun and re-prepares.
 
 ## 5. Control transports and hwdep ABI
 
@@ -224,26 +218,24 @@ The event FIFO is 64 KiB. A full FIFO drops events and increments
 The UC meter endpoint is reader-triggered. The driver submits the next page
 only while the FIFO is below the high-water mark; it pauses at a pair
 boundary. A reader that drains below the low-water mark resumes the pump.
-The last reader closing stops the pump and drains the partner page so the
-device's page phase is not shifted for the next session.
+The last reader closing stops the pump and drains the partner page to
+preserve the device's page phase for the next session.
 
-Only one meter reader should drain the stream. Concurrent readers break the
-pair phase model. The host owns this discipline; the driver does not
-enforce a single reader.
+The host owns the single-reader discipline; concurrent readers break the
+pair phase model.
 
 ### 5.2 Host obligations
 
-The host must:
+The host:
 
-- drain the event FIFO promptly; a stalled reader drops events;
-- keep one meter reader;
-- choose a buffer/quantum that covers the URB queue plus margin;
-- not issue control writes that assume a running engine without checking
-  state;
-- treat recovery as an xrun and re-prepare;
-- not use direct libusb while the module is bound.
+- drains the event FIFO promptly; a stalled reader drops events;
+- keeps one meter reader;
+- chooses a buffer/quantum that covers the URB queue plus margin;
+- checks engine state before control writes that assume a running engine;
+- treats recovery as an xrun and re-prepares;
+- uses the hwdep node as the control owner.
 
-The driver must not block the host: control ioctls are synchronous but
+The driver keeps the host responsive: control ioctls are synchronous but
 bounded; event reads wait interruptibly; the meter pump is backpressured.
 
 ## 6. MIDI
@@ -262,20 +254,19 @@ The UC Windows-personality path uses three timed gaps:
 
 | Gap | Value | Reason |
 |---|---|---|
-| stop -> start settle | 250 ms | a start immediately after the close word leaves the unit silent |
-| close -> rate write | 200 ms | the rate write after a close wedges the unit |
-| close -> session trio | 200 ms | a back-to-back reopen leaves the unit silent |
+| stop -> start settle | 250 ms | minimum gap the device requires after the close word before a start |
+| close -> rate write | 200 ms | minimum gap the device requires after the close word before the rate write |
+| close -> session trio | 200 ms | minimum gap the device requires after the close word before the session trio |
 
-These are device-mandated timing measured on the Windows reference-host captures.
-They are not arbitrary host tuning. The AP personality does not use them.
+These are device-mandated timing measured on the Windows reference-host
+captures. The AP personality sends the session words back-to-back.
 
 Design principle: prefer a deterministic readiness condition over a timed
 guess. Where the device exposes a status that can be polled (rate index,
-session state, output latch), the driver should poll it with a bounded
-timeout instead of sleeping a fixed interval. Where the device provides no
-acknowledgement, the wait is a documented device quirk with capture
-evidence, not a scattered magic number. See the TODO section for the
-readiness-poll work.
+session state, output latch), the driver polls it with a bounded timeout.
+Where the device provides no acknowledgement, the wait is a documented
+device quirk with capture evidence, expressed as a named quirk constant.
+See the TODO section for the readiness-poll work.
 
 ## 8. Suspend, resume and hotplug
 
@@ -289,22 +280,18 @@ readiness-poll work.
 
 ## 9. Latency inputs
 
-The driver does not compute round-trip latency. It exposes the queue
-geometry (`urb_frames`, `nurbs`, `iso_packets`, `fb_delay`, `out_lead`) and
-the transport counters. The host owns the latency estimate and its
-loopback calibration; that model is defined in
+The driver exposes the queue geometry (`urb_frames`, `nurbs`,
+`iso_packets`, `fb_delay`, `out_lead`) and the transport counters. The host
+computes round-trip latency from these inputs and its loopback calibration;
+that model is defined in
 [`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §10.
 
-## 10. Audit findings
+## 10. Open items
 
-### Fixed in this branch
+These items narrow the remaining investigation. They are implementation
+risks or tuning questions, not shipped behaviour.
 
-- Meter URB buffer was allocated as `2 * meter_len` but freed as
-  `meter_len` in the error path and cleanup. The free size now matches the
-  allocation.
-- `ucx_if5` static initializer removed (checkpatch error).
-
-### Open defects / risks
+### Driver risks
 
 - The duplex period gate reads and increments `deferrals` without a lock
   shared across directions. Concurrent URB completions on different CPUs
@@ -319,7 +306,7 @@ loopback calibration; that model is defined in
   buffer would remove the allocation from the event path.
 - The PCM trigger stop path emits verbose diagnostic logs on every stop.
   These should be debugfs/ratelimited or behind a diagnostic parameter.
-- `ffuc_poison` memsets the whole PCM ring on every prepare. This is a
+- `ffuc_poison` memsets the whole PCM buffer on every prepare. This is a
   diagnostic; it should be optional for production.
 - `COUNTERS.status_urbs` is always zero; the status URB counter is not
   exposed.
@@ -346,7 +333,7 @@ device-mandated timing where it does not.
   cleanup path.
 - Move ISO continuity logging to per-endpoint state.
 - Preallocate the hwdep read buffer per reader.
-- Make ring poison and verbose stop diagnostics optional module parameters.
+- Make buffer poison and verbose stop diagnostics optional module parameters.
 - Resubmit meter/state URBs from completion where backpressure allows,
   instead of a fixed 4 ms delayed work.
 - Expose the status URB counter; verify the INFO output/playback fields.
@@ -356,9 +343,9 @@ device-mandated timing where it does not.
 ## 12. Open protocol items
 
 The phase/position fields and meter page phase are documented in the UC
-protocol specification. Items that remain unverified there stay open there;
-this document does not restate them as driver facts. The driver forwards
-raw packets and exposes the counters; the host owns the decoding.
+protocol specification. Items that remain unverified there stay open there.
+The driver forwards raw packets and exposes the counters; the host owns the
+decoding.
 
 ## 13. Code map
 
@@ -366,10 +353,77 @@ raw packets and exposes the counters; the host owns the decoding.
 |---|---|
 | descriptor table, quirks, modes | `kernel/ffuc.c` |
 | URB engines, period gate, ISO feedback | `kernel/ffuc.c` |
-| PCM ops, ring geometry | `kernel/ffuc.c` |
+| PCM ops, buffer geometry | `kernel/ffuc.c` |
 | status/latch watchdog, recovery | `kernel/ffuc.c` |
 | hwdep ABI, event queue, meter pump | `kernel/ffuc-hwdep.c`, `kernel/ffuc-uapi.h` |
 | meter heartbeat pairing | `kernel/ffuc-meter-pair.h` |
 | USB-MIDI | `kernel/ffuc-midi.c` |
 | host ABI binding | `ui/totalcontrol/totalcontrol-core/src/fireface/abi.rs` |
 | host protocol/model | `ui/totalcontrol/totalcontrol-core/src/fireface/` |
+
+## 14. Adding support for a device
+
+A new device is a descriptor entry plus, where the streaming sequence
+differs, an `ffuc_ops` implementation. The shared PCM/URB path stays
+model-independent.
+
+### 14.1 Evidence first
+
+Capture the device before writing code:
+
+- USB descriptors: configurations, interfaces, alternate settings,
+  endpoint addresses and packet sizes.
+- The streaming wire format: sample word format, packet layout, any header
+  or lead word, channel counts per rate band.
+- The control transports: EP0 vendor requests, any bulk register/meter
+  channel, the status endpoint.
+- The init and rate sequences from the reference host.
+
+Document every register/offset in a protocol specification. Mark uncertain
+mappings as open items; the driver carries only verified behaviour.
+
+### 14.2 Descriptor
+
+Add an entry to `ffuc_devices[]` and a USB ID to `ffuc_ids[]`:
+
+| Field | Source |
+|---|---|
+| `vendor`, `product`, `iface` | USB descriptors |
+| `transport` | interrupt or ISO |
+| `audio_iface`, `out_ep`, `in_ep` | streaming interface |
+| `status_iface`, `status_ep`, `status_bulk` | status ticker, if present |
+| `state_iface`, `state_out_ep`, `state_in_ep`, `meter_in_ep` | bulk control/meter channel, if present |
+| `midi_iface`, `midi_out_ep`, `midi_in_ep`, `midi_ports` | USB-MIDI, if present |
+| `modes[]` | one `ffuc_mode` per alternate setting: words, out_words, pkt_frames, in_mps, out_mps, max_frames |
+| `max_channels`, `max_playback`, `max_rate`, `meter_len` | channel counts and meter packet size |
+| `chan_init[]`, `n_chan_init` | `0x16` slot ranges |
+| `quirks` | only behaviour the shared path must select |
+| `ops` | `init`, `set_rate`, `stream_start`, `stream_stop`, `hw_mute` |
+
+The wire format is resolved at probe by `ffuc_wire_s32()`. A device that
+requires S32 carries `INT32_SAMPLES`; the default is float32.
+
+### 14.3 Ops and quirks
+
+Implement `ffuc_ops` only for the sequences that differ from the existing
+models. Reuse an existing ops table where the sequence matches.
+
+Add a quirk only when the shared path must branch on a device property.
+Name the quirk after the behaviour, document the capture that establishes
+it, and keep the timing constants named.
+
+### 14.4 Host side
+
+Add the host profile and protocol module separately. The driver exposes raw
+transports and counters; the host owns the device model, meter decoding and
+scenes. Follow `docs/CONTRIBUTING-NEW-DEVICE.md` for the host integration.
+
+### 14.5 Tests
+
+- Kernel: build with `make -C kernel`, run `make -C kernel test`, run
+  `checkpatch.pl` and `sparse` (`make C=1`).
+- Transport: verify URB geometry, period signalling and recovery on the
+  device; record the counters.
+- Host: add encoding tests for the new protocol module.
+- Hardware: verify each rate band, both directions, suspend/resume and
+  hotplug. Preserve the user scene and configuration.
