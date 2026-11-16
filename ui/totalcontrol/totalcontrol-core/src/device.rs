@@ -332,6 +332,8 @@ pub trait RmeDevice {
             loopback: self.loopback_supported(),
             no_trim: false,
             talkback: false,
+            dim: true,
+            speaker_b: true,
             phase: self.phase_supported(),
             phase_without_eq: false,
             output_phase: false,
@@ -455,7 +457,9 @@ pub trait RmeDevice {
     /// the cell gain.
     fn matrix_cell_routed(&self, channel: ChannelId, pair: usize) -> bool {
         self.matrix_cell(channel, pair * 2).is_some_and(|g| g > 0.0)
-            || self.matrix_cell(channel, pair * 2 + 1).is_some_and(|g| g > 0.0)
+            || self
+                .matrix_cell(channel, pair * 2 + 1)
+                .is_some_and(|g| g > 0.0)
     }
 
     /// Every pair a source is routed into, in pair order.
@@ -1011,7 +1015,11 @@ pub trait RmeDevice {
     /// linked stereo bus. `true` (linked) if `pair` has no explicit entry
     /// in `DeviceSettings::output_link` yet — TotalMix's own default.
     fn output_linked(&self, pair: usize) -> bool {
-        self.settings().output_link.get(pair).copied().unwrap_or(true)
+        self.settings()
+            .output_link
+            .get(pair)
+            .copied()
+            .unwrap_or(true)
     }
 
     /// Sets whether output pair `pair` is linked. Linking uses the left
@@ -1229,7 +1237,11 @@ pub trait RmeDevice {
                 channel.balance[block] = balance;
             }
         } else {
-            self.set_volume(ChannelId::Input(if which == 0 { l } else { r }), output, volume)?;
+            self.set_volume(
+                ChannelId::Input(if which == 0 { l } else { r }),
+                output,
+                volume,
+            )?;
         }
         Ok(())
     }
@@ -1238,12 +1250,7 @@ pub trait RmeDevice {
     /// The pair level is the louder channel; the quieter side is
     /// attenuated, exactly as [`output_balance_to_volumes`] does for an
     /// output pair.
-    fn set_input_balance(
-        &mut self,
-        pair: usize,
-        output: usize,
-        balance: i8,
-    ) -> Result<(), Error> {
+    fn set_input_balance(&mut self, pair: usize, output: usize, balance: i8) -> Result<(), Error> {
         let (l, r) = (pair * 2, pair * 2 + 1);
         let left = self.volume(ChannelId::Input(l), output)?;
         let right = self.volume(ChannelId::Input(r), output)?;
@@ -1380,7 +1387,11 @@ pub trait RmeDevice {
                 channel.balance[block] = balance;
             }
         } else {
-            self.set_volume(ChannelId::Playback(if which == 0 { l } else { r }), output, volume)?;
+            self.set_volume(
+                ChannelId::Playback(if which == 0 { l } else { r }),
+                output,
+                volume,
+            )?;
         }
         Ok(())
     }

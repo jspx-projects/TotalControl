@@ -910,6 +910,10 @@ The `0x1b` quad is:
 (0x7d00, 0x0003)
 ```
 
+These are the same four DDS words as the UC. A pitch change scales the quad
+as `base / (1 + pitch / 100)` and writes all four words. The control is the
+host varispeed setting, not the family selection in §11.1.
+
 ### 11.4 Application reconnect
 
 When the host application opens with the USB driver already attached, it does not
@@ -1098,9 +1102,9 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | FX Return | yes |
 | Reverb and Echo | yes |
 | Output reference Level | no |
-| Pitch | no |
+| Pitch | yes, four `0x1b` DDS words when clock master |
 | Width | host-side |
-| MS processing | register only |
+| MS processing | yes, `NN05` and matrix |
 | AN 1>2 | no |
 | Input Link | host setting |
 | EQ for Record | yes |

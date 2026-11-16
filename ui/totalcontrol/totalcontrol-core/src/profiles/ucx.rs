@@ -197,6 +197,7 @@ const INPUT_OPS: OperationSet = OperationSet::new(
         Operation::Dynamics,
         Operation::FxSend,
         Operation::Width,
+        Operation::Ms,
         Operation::Gain,
         Operation::Phantom,
         Operation::Instrument,
@@ -218,6 +219,7 @@ const PLAYBACK_OPS: OperationSet = OperationSet::new(
         Operation::Link,
         Operation::FxSend,
         Operation::Width,
+        Operation::Ms,
     ],
     &[],
 );
@@ -253,6 +255,7 @@ const GLOBALS: GlobalSet = GlobalSet::new(
         GlobalControl::Dim,
         GlobalControl::SpeakerB,
         GlobalControl::Mono,
+        GlobalControl::Pitch,
     ],
     &[],
 );
@@ -364,5 +367,13 @@ mod tests {
     fn totalmix_hardware_output_row() {
         // The display row skips the Phones block; TotalControl appends it last.
         assert_eq!(CHANNELS.output_order, &[1, 2, 3, 0, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn ucx_capabilities_match_the_shared_width_ms_and_pitch_paths() {
+        let caps = super::ISO.capabilities();
+        assert!(caps.channel_width);
+        assert!(caps.ms_proc);
+        assert!(caps.pitch);
     }
 }

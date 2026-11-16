@@ -1020,11 +1020,17 @@ reference group; `talkback` is omitted on Control Room channels.
 - Width is a pair control, -1.00 … 1.00: 1.00 full stereo, 0.00 mono and
   -1.00 swapped channels. It rewrites the pair's 2x2 send matrix in every
   routing that carries a live send; silent routings are untouched. Inputs and
-  software playback share it.
+  software playback share it. It is hidden on a mono input pair and on a
+  split software-playback pair.
 - MS Proc is a pair button on inputs and software playback. On the UCX it
   writes `NN05` on both input channels and rewrites the same 2x2 send matrix
-  with the M/S encoder (`L' = (L + R) / 2`, `R' = (L - R) / 2`); software
-  playback rewrites the matrix only. A mono input pair cannot enable it.
+  with the M/S encoder (`L' = (L + R) / 2`, `R' = (L - R) / 2`); the UC
+  writes the matrix only. Software playback rewrites the matrix only on both
+  devices. It is hidden on a mono input pair and on a split
+  software-playback pair.
+- The `ref.` label is shown only when the reference dropdown below it is
+  shown. The UC has no per-channel reference control, so the UC input and
+  output panels show neither.
 - One control spans the panel content width; two controls share it with one
   gap, so their combined width equals a single control. `stereo`, `48V`,
   `autoset`, `no trim`, `loopback` and a phase pair therefore all end at the
@@ -1161,12 +1167,13 @@ sheet shows that value. A value is written when it changes there.
 |---|---|---|
 | Clock source | yes | yes |
 | Sample rate | yes | yes, when the device owns the rate |
+| Pitch | yes | yes |
 | Line In reference | yes | — |
 | Line Out reference | yes | — |
 | Phones reference | yes | — |
 | Optical | yes | yes |
 | SPDIF | yes | yes |
-| Single speed word clock | yes | yes |
+| Single speed:<br>word clock | yes | yes |
 | Word clock in | — | yes |
 | EQ for Record | — | yes |
 | Firmware | yes | yes |
@@ -1178,8 +1185,15 @@ control shares one left edge, and every dropdown has the same width.
 
 The options rows belong to the unit's own group. The UC offers five clock
 sources, including LTC; the UCX offers four: Internal, SPDIF coax., Optical
-and Word. Host-side modes (`MS Proc`, `AN 1>2`, `Input Link`) appear in the
-GLOBAL grid, apart from the device-owned rows.
+and Word.
+
+Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
+wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
+Every change is written immediately to the device.
+
+The panel is 480 px wide at scale 1 and its caption column is 120 px. It is
+only as tall as its content, capped at the window height. Longer labels wrap
+rather than widening the column; `Single speed:` sits above `word clock`.
 
 On the UCX the options word, the reference levels and the 48 V/Inst/Level
 switches have no readback. The saved scene value is written at connect and the
@@ -1209,7 +1223,9 @@ connected device's fixed rates: 32, 44.1, 48, 64, 88.2, 96, 128, 176.4 and
 running at, in every mode. In Follow mode it also shows `Mode` and `Source`;
 `Source` reads `<application> · <rate>` for the stream setting the graph, and
 reads `Waiting for playback` with the last graph rate when no stream feeds SW
-playback 1/2. The source is always SW playback 1/2, never the focused strip.
+playback 1/2. A reverse-DNS PipeWire application name is reduced to its final
+component, so `io.github.celluloid_player.Celluloid` reads `Celluloid`. The
+source is always SW playback 1/2, never the focused strip.
 
 Follow uses the stream linked to `playback_AUX0`/`playback_AUX1`, including a
 player feeding a TotalControl 5.1/7.1 sink through the sink's input stream, not

@@ -266,16 +266,18 @@ When the channels do not all fit, one slider at the lower right scrolls all
 three rows together, so the routing picture stays aligned.
 
 The device card in the sidebar reads `Internal, <sample rate>, <buffer>` and
-opens the Audio Configuration panel immediately left of the CONTROLS sidebar, which carries clock
-source, sample rate, the digital input formats and firmware and serial
-information.
+opens the Audio Configuration panel immediately left of the CONTROLS sidebar,
+which carries clock source, sample rate, pitch, the digital input formats and
+firmware and serial information.
 
 The sample-rate control has three kinds of choice:
 
 - **Auto (PipeWire)** lets PipeWire choose the graph rate.
 - **Follow SW playback 1/2** makes the rate follow the player feeding software
-  playback 1/2. The engine section names the application and its rate. With
-  nothing playing it reads `Waiting for playback` and keeps the last rate.
+  playback 1/2. The engine section names the application and its rate. A
+  reverse-DNS name is shortened to the application name, so
+  `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing
+  playing it reads `Waiting for playback` and keeps the last rate.
 - A fixed rate (32, 44.1, 48, 64, 88.2, 96, 128, 176.4 or 192 kHz) forces that
   rate.
 
@@ -283,6 +285,11 @@ The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A followed rate change is a runtime change, so it does not add an undo step or
 mark the workspace dirty. The chosen mode is remembered in the application
 preferences, not in a workspace.
+
+The `Pitch` slider changes the speed and pitch of the whole interface from
+-5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Hold Shift for 0.01 % steps.
+Double-click the slider to return to 0.0 %. Pitch is written to the device
+as soon as it changes.
 
 ### About dialog
 
@@ -613,9 +620,14 @@ Notes:
   written from the saved mix. It follows the stereo link and follows the
   unit's physical encoder when one is turned on the hardware.
 - **Width** narrows or widens the pair: `1.00` full stereo, `0.00` mono,
-  `-1.00` swapped channels.
-- **MS proc** encodes or decodes the pair as mid/side.
+  `-1.00` swapped channels. It is hidden on a mono input pair and on a split
+  software-playback pair.
+- **MS proc** encodes or decodes the pair as mid/side. It is hidden on a
+  mono input pair and on a split software-playback pair.
 - **Phase** is the `Ø` button; engaged phase shows green.
+- The `ref.` label appears only with the reference dropdown below it. The UC
+  has no per-channel reference control, so its channel panels show no `ref.`
+  label.
 - The **send FX** knob and the strip's thin FX fader are the same control;
   the **return FX** knob on outputs is the return level of the FX bus.
 - The **reference dropdown** sets the input or output reference level. For

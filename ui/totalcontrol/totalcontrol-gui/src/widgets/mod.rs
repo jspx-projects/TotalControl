@@ -7,5 +7,6 @@ pub mod knob;
 pub mod layout;
 pub mod panel_icon;
 pub mod pause_mark;
+pub mod pitch_slider;
 pub mod splitter;
 pub mod strip;
