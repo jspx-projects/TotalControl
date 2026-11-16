@@ -417,6 +417,18 @@ stop-to-start settle and the close-to-write gaps) is a descriptor quirk,
 `FFUC_QUIRK_WIN_SESSION`, measured on the UC_WIN_RME unit; the AP
 personality sends the session words without those gaps.
 
+The wire sample format follows the host OS's native audio format: Linux and
+macOS are float-native (float32), Windows is integer-PCM-native (S32). This
+driver runs on Linux, so it carries float32; the device is told the format
+through the channel-init value (UC request `0x16`, `0 = S32`, `1 = float32`),
+which the driver derives from the wire format so the two never mismatch. A
+mismatch passes only the sample sign bit and distorts the audio. The format
+is not readable back from the device; the host imposes it and the device
+default is overridden. A device that strictly requires S32 is an
+evidence-backed descriptor exception (`FFUC_QUIRK_INT32_SAMPLES`), not a
+default; the UCX interrupt transport is the current such case. Per-device
+wire formats and init sequences are in the device protocol specs.
+
 The gate makes a false availability report impossible: a reader can never be
 told that a period completed when no period did. A follower direction whose
 period signal arrives late therefore sees a position that never exceeds the

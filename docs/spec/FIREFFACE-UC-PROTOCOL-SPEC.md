@@ -31,12 +31,16 @@ The PC personalities differ in the interrupt transport:
 | PC product | Sample words | Engine start |
 |---|---|---|
 | `UC_PC`, `UC_PC_RME` | float32 | alt N; alt reselect only on a rate-band change |
-| `UC_WIN_RME`, firmware 138 and later | S32 | alt 0, then alt N, on every start |
-| `UC_WIN_RME`, firmware below 138 | float32 | alt 0, then alt N, on every start |
+| `UC_WIN_RME` | float32 | alt 0, then alt N, on every start |
 
-The `UC_WIN_RME` descriptor selects S32 from firmware 138.  Below 138 it
-carries float32.  An unread firmware follows the descriptor.  Every other
-UC descriptor uses the format in the table.
+The wire sample format follows the host OS's native audio format: Linux
+and macOS are float-native (float32), Windows is integer-PCM-native (S32).
+This driver runs on Linux, so every UC personality carries float32.  The
+host imposes the format on the device through the channel-init value
+(§2.1); the device powers up in a default that the init overrides.  The
+Windows host writes S32 on the PC personality with a 60-slot init block
+(§2.2); that is the Windows-host reference, not a device requirement.  A
+device that strictly requires S32 is an evidence-backed exception.
 
 On `UC_WIN_RME` the output latch clears only on the alt 0 → alt N reselect.
 Every UC engine start follows the previous engine stop by at least
@@ -75,14 +79,31 @@ written to the device on connect and on each change.
 
 ### 2.1 Channel initialization
 
-The UC probe writes request `0x16` with `wValue 0x0001` for slots `0..17` and
-`32..49` (36 writes).  Slots `18..31` and `50..63` are not written.  The slot
-ranges and values are per-device data; they are not derived from the channel
-count.
+Request `0x16` initializes one channel slot.  The `wValue` is the channel
+sample format:
+
+| `wValue` | Sample format |
+|---|---|
+| `0x0000` | S32 |
+| `0x0001` | float32 |
+
+The value must equal the wire sample format (§1).  A mismatch passes only
+the sample sign bit and distorts the audio.  The driver derives the value
+from the resolved wire format, so the two always agree.
+
+The slot ranges depend on the host:
+
+| Host | Slots | `wValue` |
+|---|---|---|
+| Linux / macOS (this driver) | `0..17` and `32..49` (36) | `0x0001` (float32) |
+| Windows | `0..29` and `32..61` (60) | `0x0000` (S32) |
+
+The slot count does not affect the format pairing; both ranges play clean
+when the value matches the wire format.
 
 ### 2.2 Probe and stream open
 
-The implemented probe sequence is:
+The shipped probe sequence, used by both UC personalities on Linux, is:
 
 | Order | Request | Value |
 |---|---|---|
@@ -90,8 +111,18 @@ The implemented probe sequence is:
 | 2 | `0x10` | `0x0800 / 0xb800` |
 | 3 | `0x20` | `0x0001 / 0x0000` |
 
-The initial 48 kHz stream opens directly after this sequence.  Both UC
-personalities, PC/interrupt and AP/ISO, use this same known-good sequence.
+The Windows-host PC probe sequence (reference) is:
+
+| Order | Request | Value |
+|---|---|---|
+| 1 | `0x16` | `0x0000`, slots `0..29` and `32..61` |
+| 2 | `0x1b` | the four DDS words (§7) |
+| 3 | `0x10` | the masked settings group: `0x0000/0x3000` ×2, `0x0800/0x0800`, `0x0000/0x0800`, `0x2000/0x3000`, `0x0000/0x3000`, `0x0800/0x0800` ×5 |
+
+The Windows PC block has no `0x20` and no `0x0800/0xb800`.  The settings
+group carries a ~120 ms gap between its fifth and sixth writes.  The
+initial stream opens directly after the probe sequence; the engine start
+commits the rate (§7).
 
 A rate change closes the stream with `0x13 0x000f/0xc000`, writes the new
 `0x10` rate family and the `0x10 / 1487 = 0x0001` commit, waits 200 ms, then
@@ -103,13 +134,9 @@ opens with:
 | `0x1d` | `0x0000 / 0x0000` |
 | `0x14` | `0x000f / 0xc000` |
 
-The Windows PC driver probe instead writes 60 `0x16` values of `0x0000` for
-slots `0..29` and `32..61`, four `0x1b` DDS words and eleven `0x10` settings
-words.  Its WDM stream open adds `0x10 0x8000/0x8000`, `0x1d` and `0x14`.
-No nonzero `0x16` restore follows the Windows clear.  Replaying the Windows
-clear without the Windows later state produces the wrong rate and distorted
-audio; the Linux initial path does not use it, and that later state is not
-decoded.  The shipped UC init is the sequence above.
+The WDM stream open on the PC personality adds `0x10 0x8000/0x8000`, `0x1d`
+and `0x14`.  No nonzero `0x16` restore follows the channel init; the wire
+format paired with the matching init value is the complete configuration.
 
 ## 3. Matrix and channel words
 
@@ -336,9 +363,10 @@ Inst, reference levels, clock source and optical format.
 
 The mixer group is written from the TotalControl scene: matrix, pans, faders,
 mutes, loopback, output levels and output balance.  The kernel probe writes
-the 36 `0x16` channel slots and the `0x10`/`0x20` words from §2.2.  The host
-scene apply then writes 30 loopback entries, one `0x17` switch reset, four
-`0x1a` preamps, 18 `0x1a` output levels and 666 `0x12` matrix/master words.
+the personality's `0x16` channel slots and the accompanying words from
+§2.2.  The host scene apply then writes 30 loopback entries, one `0x17`
+switch reset, four `0x1a` preamps, 18 `0x1a` output levels and 666 `0x12`
+matrix/master words.
 
 Front-panel gain and output-level changes arrive on `0x8b` and update the
 live model.  Byte 3 bit 7 is present on captured output frames and does not
@@ -969,9 +997,9 @@ words `0..13` carry channels `1..14`.  At 4x, playback endpoint 0 and capture
 endpoint 0 carry words `0..5` for channels `1..6`.  Playback endpoint 1 and
 capture endpoint 1 carry words `0..5` for channels `7..12`.
 
-The sample word is float32 on the PC and PC RME variants, and on
-`UC_WIN_RME` below firmware 138.  It is S32 on `UC_WIN_RME` from firmware
-138.  Sample words are little-endian.
+The sample word is float32 on Linux, the host-native format (§1); the
+Windows host uses S32 on the PC personality.  Sample words are
+little-endian.
 
 One URB carries 48 sample frames at 1x, 96 at 2x and 192 at 4x.  That is six
 maximum-size packets.  Two URBs are in flight per endpoint.  The IN URBs are

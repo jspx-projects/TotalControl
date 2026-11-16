@@ -134,11 +134,7 @@
 
 /* quirks */
 #define FFUC_QUIRK_ALT_RESELECT		BIT(0)	/* alt 0 then alt N at start */
-#define FFUC_QUIRK_INT32_SAMPLES	BIT(1)	/* IF5 sends S32, not float */
-/* The UC_WIN_RME descriptor selects S32 from this firmware revision.  Below
- * it the same descriptor carries float32. */
-#define FFUC_UC_S32_FIRMWARE		138
-#define FFUC_QUIRK_INT32_BY_FIRMWARE	BIT(5)	/* S32 only from 138 upward */
+#define FFUC_QUIRK_INT32_SAMPLES	BIT(1)	/* device requires S32 wire, not float */
 #define FFUC_QUIRK_STATUS_LATCH		BIT(2)	/* status byte 3 bit 7 */
 #define FFUC_QUIRK_IF5_PRE_START	BIT(3)	/* 0x10 0x8000 + 0x1d before audio */
 #define FFUC_QUIRK_IF5_PLAYBACK_MASK	BIT(4)	/* req 19/20 channel mask */
@@ -214,10 +210,11 @@ struct ffuc_ops {
 	int (*hw_mute)(struct ffuc *chip, bool mute);
 };
 
-/* One run of 0x16 channel-initialization writes.  The sequence differs
- * between device models, so it is data in the device descriptor. */
+/* One run of 0x16 channel-initialization writes.  The slot ranges differ
+ * between device models and personalities, so they are data in the device
+ * descriptor.  The wValue (channel sample format) is derived from the wire
+ * format at init time, not stored here. */
 struct ffuc_init_range {
-	u16 value;
 	u16 first;
 	u16 count;
 };
