@@ -25,8 +25,8 @@ use crate::channel::{
     OutputChannel, PlaybackChannel, Reverb, Sensitivity,
 };
 use crate::device::{
-    DeviceSettings, RmeDevice, TalkbackConfig, output_balance_from_volumes,
-    output_balance_to_volumes,
+    output_balance_from_volumes, output_balance_to_volumes, DeviceSettings, RmeDevice,
+    TalkbackConfig,
 };
 use crate::error::Error;
 use crate::scene::{MatrixOverride, Scene};
@@ -291,19 +291,29 @@ impl MeterBank {
     }
 
     fn input(&self, i: usize) -> f32 {
-        let p = self.inputs_a.get(i).copied().unwrap_or(0)
+        let p = self
+            .inputs_a
+            .get(i)
+            .copied()
+            .unwrap_or(0)
             .max(self.inputs_b.get(i).copied().unwrap_or(0));
         db_to_linear(protocol::power_dbfs(p))
     }
 
     fn input_peak(&self, i: usize) -> f32 {
-        let p = self.inputs_a_peak.get(i).copied().unwrap_or(0)
+        let p = self
+            .inputs_a_peak
+            .get(i)
+            .copied()
+            .unwrap_or(0)
             .max(self.inputs_b_peak.get(i).copied().unwrap_or(0));
         db_to_linear(protocol::peak_dbfs(p))
     }
 
     fn playback(&self, i: usize) -> f32 {
-        db_to_linear(protocol::power_dbfs(self.playback.get(i).copied().unwrap_or(0)))
+        db_to_linear(protocol::power_dbfs(
+            self.playback.get(i).copied().unwrap_or(0),
+        ))
     }
 
     fn playback_peak(&self, i: usize) -> f32 {
@@ -453,8 +463,7 @@ impl UcMeterBank {
             // A status value can sit below the full-scale check.  A real
             // RMS word cannot exceed the matching output peak word.
             let peak = db_to_linear(
-                protocol::uc_playback_dbfs(packet.output(channel))
-                    .unwrap_or(f32::NEG_INFINITY),
+                protocol::uc_playback_dbfs(packet.output(channel)).unwrap_or(f32::NEG_INFINITY),
             );
             if rms > 0.0 && (peak <= 0.0 || rms > peak * 1.01) {
                 continue;
@@ -482,16 +491,13 @@ impl UcMeterBank {
 
     fn apply_rms(&mut self, packet: &UcRmsPacket) {
         for channel in 0..18 {
-            self.input_rms[channel] =
-                protocol::uc_playback_rms_linear(packet.input(channel));
+            self.input_rms[channel] = protocol::uc_playback_rms_linear(packet.input(channel));
         }
         for channel in 0..18 {
-            self.playback_rms[channel] =
-                protocol::uc_playback_rms_linear(packet.playback(channel));
+            self.playback_rms[channel] = protocol::uc_playback_rms_linear(packet.playback(channel));
         }
         for channel in 0..protocol::UC_OUTPUT_RMS_CHANNELS {
-            self.output_rms[channel] =
-                protocol::uc_playback_rms_linear(packet.output(channel));
+            self.output_rms[channel] = protocol::uc_playback_rms_linear(packet.output(channel));
         }
     }
 
@@ -605,8 +611,7 @@ fn apply_eq_to_settings(eq: &InputEq, s: &mut ChannelSettings) {
     for (i, band) in eq.bands.iter().enumerate() {
         s.eq.bands[i].freq = band.freq_hz.clamp(20, 20_000);
         s.eq.bands[i].q10 = (band.q * 10.0).round().clamp(7.0, 50.0) as u8;
-        s.eq.bands[i].gain_tenths =
-            (band.gain_db * 10.0).round().clamp(-200.0, 200.0) as i16;
+        s.eq.bands[i].gain_tenths = (band.gain_db * 10.0).round().clamp(-200.0, 200.0) as i16;
         // Band 2 is fixed to Bell.  Band 1 has Bell and Low Shelf; band 3
         // has Bell, High Shelf and Hi Cut.  Anything else is normalised to
         // Bell so a legacy scene or caller cannot write a type the unit
@@ -646,7 +651,6 @@ fn scene_order_by_name(current: &[String], saved: &[String]) -> Vec<usize> {
         .collect()
 }
 
-
 /// The device state that can be read back.
 ///
 /// The matrix, masters, loopback, mute, options word, references and the
@@ -674,9 +678,7 @@ impl ReadableState {
     pub fn differences(&self, scene: &Scene) -> Vec<String> {
         let mut out = Vec::new();
         if !self.ucx {
-            if !self.clock_source.is_empty()
-                && self.clock_source != scene.settings.clock_source
-            {
+            if !self.clock_source.is_empty() && self.clock_source != scene.settings.clock_source {
                 out.push(format!(
                     "Clock source: device {}, TotalControl {}",
                     self.clock_source, scene.settings.clock_source
@@ -685,15 +687,31 @@ impl ReadableState {
             if self.optical_out_spdif != scene.settings.optical_out_spdif {
                 out.push(format!(
                     "Optical output: device {}, TotalControl {}",
-                    if self.optical_out_spdif { "SPDIF" } else { "ADAT" },
-                    if scene.settings.optical_out_spdif { "SPDIF" } else { "ADAT" }
+                    if self.optical_out_spdif {
+                        "SPDIF"
+                    } else {
+                        "ADAT"
+                    },
+                    if scene.settings.optical_out_spdif {
+                        "SPDIF"
+                    } else {
+                        "ADAT"
+                    }
                 ));
             }
             if self.spdif_professional != scene.settings.spdif_professional {
                 out.push(format!(
                     "SPDIF format: device {}, TotalControl {}",
-                    if self.spdif_professional { "professional" } else { "consumer" },
-                    if scene.settings.spdif_professional { "professional" } else { "consumer" }
+                    if self.spdif_professional {
+                        "professional"
+                    } else {
+                        "consumer"
+                    },
+                    if scene.settings.spdif_professional {
+                        "professional"
+                    } else {
+                        "consumer"
+                    }
                 ));
             }
             for i in 0..2 {
@@ -734,7 +752,10 @@ impl ReadableState {
                 if let Some(input) = scene.inputs.get(idx) {
                     if input.gain != Some(gain) {
                         let (dev, ours) = if idx < 2 {
-                            (format!("{gain} dB"), format!("{} dB", input.gain.unwrap_or(0)))
+                            (
+                                format!("{gain} dB"),
+                                format!("{} dB", input.gain.unwrap_or(0)),
+                            )
                         } else {
                             (
                                 format!("{:.1} dB", gain as f32 / 2.0),
@@ -786,9 +807,26 @@ fn pan_split(volume: f32, pan: i8) -> (f32, f32) {
 /// 0 dB per side.
 fn pan_split_equal_power(volume: f32, pan: i8) -> (f32, f32) {
     let v = volume.clamp(0.0, 2.0);
-    let theta = (pan.clamp(-100, 100) as f32 / 100.0 + 1.0)
-        * std::f32::consts::FRAC_PI_4;
+    let theta = (pan.clamp(-100, 100) as f32 / 100.0 + 1.0) * std::f32::consts::FRAC_PI_4;
     (v * theta.cos(), v * theta.sin())
+}
+
+/// The 2x2 coefficients for one stereo pair: `[L→L, R→L, L→R, R→R]`.
+/// Width narrows the pair toward a mono sum; MS Proc applies the mid/side
+/// encoder on top of that matrix. Shared by the UC and UCX writers.
+fn width_ms_coefficients(gl: f32, gr: f32, width: f32, ms_proc: bool) -> [f32; 4] {
+    let theta = (1.0 - width.clamp(-1.0, 1.0)) * std::f32::consts::FRAC_PI_4;
+    let (sin, cos) = theta.sin_cos();
+    if ms_proc {
+        [
+            gl * (cos + sin) * 0.5,
+            gr * (sin + cos) * 0.5,
+            gl * (cos - sin) * 0.5,
+            gr * (sin - cos) * 0.5,
+        ]
+    } else {
+        [gl * cos, gr * sin, gl * sin, gr * cos]
+    }
 }
 
 /// A Fireface UC or UCX opened over the kernel hwdep transport.
@@ -1175,8 +1213,9 @@ impl Fireface {
 
     pub fn open_card(card: i32) -> Result<Self, Error> {
         let hw = Hwdep::open(card)?;
-        let info = DeviceInfo::from_abi(card, hw.info()?)
-            .ok_or_else(|| Error::DeviceNotFound { model: format!("card {card}") })?;
+        let info = DeviceInfo::from_abi(card, hw.info()?).ok_or_else(|| Error::DeviceNotFound {
+            model: format!("card {card}"),
+        })?;
         let transport = HwdepTransport::new(hw, info.clone());
         Self::from_transport_async(Box::new(transport), info)
     }
@@ -1461,13 +1500,7 @@ impl Fireface {
         Ok(())
     }
 
-    fn vendor_in(
-        &self,
-        req: u8,
-        value: u16,
-        index: u16,
-        len: usize,
-    ) -> Result<Vec<u8>, Error> {
+    fn vendor_in(&self, req: u8, value: u16, index: u16, len: usize) -> Result<Vec<u8>, Error> {
         self.flush_write_batch()?;
         self.transport()
             .vendor(req, Direction::In, value, index, &vec![0u8; len])
@@ -1679,22 +1712,82 @@ impl Fireface {
                         pan_split(volume, pan)
                     };
                     Some(if block % 2 == 0 { left } else { right })
-                } else if block % 2 == i % 2 {
-                    Some(volume)
                 } else {
-                    Some(0.0)
+                    let base = i & !1;
+                    let other = base ^ 1;
+                    let left = self.inputs.get(base)?.volumes.get(pair).copied()?;
+                    let right = self.inputs.get(other)?.volumes.get(pair).copied()?;
+                    let balance =
+                        self.inputs[base].pans.get(pair).copied().unwrap_or(0) as f32 / 100.0;
+                    let gl = left * (1.0 - balance.max(0.0));
+                    let gr = right * (1.0 + balance.min(0.0));
+                    let [ll, lr, rl, rr] = width_ms_coefficients(
+                        gl,
+                        gr,
+                        self.inputs[base].width,
+                        self.inputs[base].ms_proc,
+                    );
+                    Some(if block % 2 == 0 {
+                        if i % 2 == 0 {
+                            ll
+                        } else {
+                            lr
+                        }
+                    } else if i % 2 == 0 {
+                        rl
+                    } else {
+                        rr
+                    })
                 }
             }
             ChannelId::Playback(i) => {
-                let ch = self.playbacks.get(i)?;
-                let volume = *ch.volumes.get(pair)?;
-                let (left, right) =
-                    pan_split(volume, ch.pans.get(pair).copied().unwrap_or(0));
-                Some(if block % 2 == i % 2 {
-                    if i % 2 == 0 { left } else { right }
+                let base = i & !1;
+                let other = base ^ 1;
+                let linked = self.playback_linked(base / 2);
+                if linked {
+                    let left = self.playbacks.get(base)?.volumes.get(pair).copied()?;
+                    let right = self.playbacks.get(other)?.volumes.get(pair).copied()?;
+                    let left = pan_split(
+                        left,
+                        self.playbacks[base].pans.get(pair).copied().unwrap_or(0),
+                    )
+                    .0;
+                    let right = pan_split(
+                        right,
+                        self.playbacks[other].pans.get(pair).copied().unwrap_or(0),
+                    )
+                    .1;
+                    let [ll, lr, rl, rr] = width_ms_coefficients(
+                        left,
+                        right,
+                        self.playbacks[base].width,
+                        self.playbacks[base].ms_proc,
+                    );
+                    Some(if block % 2 == 0 {
+                        if i % 2 == 0 {
+                            ll
+                        } else {
+                            lr
+                        }
+                    } else if i % 2 == 0 {
+                        rl
+                    } else {
+                        rr
+                    })
                 } else {
-                    0.0
-                })
+                    let ch = self.playbacks.get(i)?;
+                    let volume = *ch.volumes.get(pair)?;
+                    let (left, right) = pan_split(volume, ch.pans.get(pair).copied().unwrap_or(0));
+                    Some(if block % 2 == i % 2 {
+                        if i % 2 == 0 {
+                            left
+                        } else {
+                            right
+                        }
+                    } else {
+                        0.0
+                    })
+                }
             }
             ChannelId::Output(_) => None,
         }
@@ -1714,8 +1807,7 @@ impl Fireface {
                 let ch = self.inputs.get(i)?;
                 let volume = *ch.volumes.get(pair)?;
                 if i < 4 {
-                    let (left, right) =
-                        pan_split(volume, ch.pans.get(pair).copied().unwrap_or(0));
+                    let (left, right) = pan_split(volume, ch.pans.get(pair).copied().unwrap_or(0));
                     Some(if side == 0 { left } else { right })
                 } else if side == i % 2 {
                     Some(volume)
@@ -1772,9 +1864,8 @@ impl Fireface {
             };
             [dsp, dsp + 1]
         };
-        self.matrix_overrides.retain(|&(src, block), _| {
-            !(src == source && blocks.contains(&block))
-        });
+        self.matrix_overrides
+            .retain(|&(src, block), _| !(src == source && blocks.contains(&block)));
     }
 
     fn uc_output_phase(&self, block: usize) -> bool {
@@ -1837,11 +1928,7 @@ impl Fireface {
         Ok(())
     }
 
-    fn uc_set_talkback_with(
-        &mut self,
-        on: bool,
-        config: &TalkbackConfig,
-    ) -> Result<(), Error> {
+    fn uc_set_talkback_with(&mut self, on: bool, config: &TalkbackConfig) -> Result<(), Error> {
         if on == self.talkback_active {
             return Ok(());
         }
@@ -1899,7 +1986,10 @@ impl Fireface {
                 self.uc_write_matrix(pair * 2 + 1, source_index, old_right * factor)?;
             }
             self.uc_write_matrix(pair * 2, source, 0.7)?;
-            if let Some(listen) = config.listenback.filter(|listen| *listen != source && Some(pair) == main) {
+            if let Some(listen) = config
+                .listenback
+                .filter(|listen| *listen != source && Some(pair) == main)
+            {
                 self.uc_write_matrix(pair * 2 + 1, listen, 0.7)?;
             }
         }
@@ -1910,7 +2000,11 @@ impl Fireface {
 
     fn uc_set_cue(&mut self, idx: usize, on: bool) -> Result<(), Error> {
         if !on {
-            if self.cue_state.as_ref().is_some_and(|(source, _, _)| *source == idx) {
+            if self
+                .cue_state
+                .as_ref()
+                .is_some_and(|(source, _, _)| *source == idx)
+            {
                 self.uc_release_cue()?;
             }
             return Ok(());
@@ -1929,18 +2023,20 @@ impl Fireface {
         }
         let saved = self.uc_monitor_save_pair(target);
         for source in 0..36 {
-            let left = self.cell_gain(
-                Self::matrix_source_channel(source)
-                    .ok_or_else(|| Error::InvalidChannel("cue source".into()))?,
-                idx * 2,
-            )
-            .unwrap_or(0.0);
-            let right = self.cell_gain(
-                Self::matrix_source_channel(source)
-                    .ok_or_else(|| Error::InvalidChannel("cue source".into()))?,
-                idx * 2 + 1,
-            )
-            .unwrap_or(0.0);
+            let left = self
+                .cell_gain(
+                    Self::matrix_source_channel(source)
+                        .ok_or_else(|| Error::InvalidChannel("cue source".into()))?,
+                    idx * 2,
+                )
+                .unwrap_or(0.0);
+            let right = self
+                .cell_gain(
+                    Self::matrix_source_channel(source)
+                        .ok_or_else(|| Error::InvalidChannel("cue source".into()))?,
+                    idx * 2 + 1,
+                )
+                .unwrap_or(0.0);
             self.uc_write_matrix(target * 2, source, left)?;
             self.uc_write_matrix(target * 2 + 1, source, right)?;
         }
@@ -2026,7 +2122,11 @@ impl Fireface {
                 "Mono needs an assigned monitor output".into(),
             ));
         };
-        if on == self.settings.mono {
+        // The saved matrix is the real “Mono is applied” marker.  A stale
+        // settings flag alone must not suppress the first rewrite: a scene
+        // restore or a caller that pre-set the flag can leave it true while
+        // the monitor matrix is still stereo.
+        if self.settings.mono == on && self.uc_monitor_saved.is_some() == on {
             return Ok(());
         }
         if !on {
@@ -2038,18 +2138,20 @@ impl Fireface {
         }
         let saved = self.uc_monitor_save_pair(monitor);
         for source in 0..36 {
-            let left = self.cell_gain(
-                Self::matrix_source_channel(source)
-                    .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
-                monitor * 2,
-            )
-            .unwrap_or(0.0);
-            let right = self.cell_gain(
-                Self::matrix_source_channel(source)
-                    .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
-                monitor * 2 + 1,
-            )
-            .unwrap_or(0.0);
+            let left = self
+                .cell_gain(
+                    Self::matrix_source_channel(source)
+                        .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
+                    monitor * 2,
+                )
+                .unwrap_or(0.0);
+            let right = self
+                .cell_gain(
+                    Self::matrix_source_channel(source)
+                        .ok_or_else(|| Error::InvalidChannel("mono source".into()))?,
+                    monitor * 2 + 1,
+                )
+                .unwrap_or(0.0);
             // Feed both monitor sides from both source sides.  Each side
             // is attenuated by 3 dB before the sum; the two contributions
             // then meet in the monitor pair.
@@ -2186,7 +2288,6 @@ impl Fireface {
         Ok(())
     }
 
-
     /// Rewrite every cell routed to one output after its phase changes.
     fn uc_rewrite_output_block(&self, internal_idx: usize) -> Result<(), Error> {
         let block = uc::matrix_block(internal_idx, self.output_order());
@@ -2308,13 +2409,105 @@ impl Fireface {
                     continue;
                 };
                 for block in [left_block, right_block] {
-                    let gain = self.cell_gain(channel, block).unwrap_or(0.0)
-                        * self.trim_gain(channel);
+                    let gain =
+                        self.cell_gain(channel, block).unwrap_or(0.0) * self.trim_gain(channel);
                     self.uc_write_matrix(block, source, gain)?;
                 }
             }
         }
         Ok(())
+    }
+
+    /// The effective left/right gains of a linked UC input pair into one
+    /// output pair, before the width/MS matrix.
+    fn uc_input_pair_gains(&self, base: usize, pair: usize) -> (f32, f32) {
+        let other = base ^ 1;
+        let left = self.inputs[base].volumes.get(pair).copied().unwrap_or(0.0)
+            * self.trim_gain(ChannelId::Input(base));
+        let right = self.inputs[other].volumes.get(pair).copied().unwrap_or(0.0)
+            * self.trim_gain(ChannelId::Input(other));
+        let balance = self.inputs[base].pans.get(pair).copied().unwrap_or(0) as f32 / 100.0;
+        (
+            left * (1.0 - balance.max(0.0)),
+            right * (1.0 + balance.min(0.0)),
+        )
+    }
+
+    /// The effective left/right gains of a linked UC playback pair into one
+    /// output pair, before the width/MS matrix.
+    fn uc_playback_pair_gains(&self, base: usize, pair: usize) -> (f32, f32) {
+        let other = base ^ 1;
+        let left = self.playbacks[base]
+            .volumes
+            .get(pair)
+            .copied()
+            .unwrap_or(0.0)
+            * self.trim_gain(ChannelId::Playback(base));
+        let right = self.playbacks[other]
+            .volumes
+            .get(pair)
+            .copied()
+            .unwrap_or(0.0)
+            * self.trim_gain(ChannelId::Playback(other));
+        let left = pan_split(
+            left,
+            self.playbacks[base].pans.get(pair).copied().unwrap_or(0),
+        )
+        .0;
+        let right = pan_split(
+            right,
+            self.playbacks[other].pans.get(pair).copied().unwrap_or(0),
+        )
+        .1;
+        (left, right)
+    }
+
+    /// Rewrite one UC input pair's 2x2 matrix with width and MS Proc.
+    fn uc_write_input_pair(&mut self, base: usize, pair: usize) -> Result<(), Error> {
+        let other = base ^ 1;
+        if other >= self.inputs.len() || pair >= PAIRS {
+            return Err(Error::InvalidChannel(format!("input pair {base}/{pair}")));
+        }
+        let (gl, gr) = self.uc_input_pair_gains(base, pair);
+        if gl <= 0.0 && gr <= 0.0 {
+            return Ok(());
+        }
+        let [ll, lr, rl, rr] =
+            width_ms_coefficients(gl, gr, self.inputs[base].width, self.inputs[base].ms_proc);
+        self.record_routing(base, pair, ll.max(rl));
+        self.record_routing(other, pair, lr.max(rr));
+        self.uc_write_matrix(pair * 2, base, ll)?;
+        self.uc_write_matrix(pair * 2, other, lr)?;
+        self.uc_write_matrix(pair * 2 + 1, base, rl)?;
+        self.uc_write_matrix(pair * 2 + 1, other, rr)
+    }
+
+    /// Rewrite one UC playback pair's 2x2 matrix with width and MS Proc.
+    fn uc_write_playback_pair(&mut self, base: usize, pair: usize) -> Result<(), Error> {
+        let other = base ^ 1;
+        if other >= self.playbacks.len() || pair >= PAIRS {
+            return Err(Error::InvalidChannel(format!(
+                "playback pair {base}/{pair}"
+            )));
+        }
+        let (gl, gr) = self.uc_playback_pair_gains(base, pair);
+        if gl <= 0.0 && gr <= 0.0 {
+            return Ok(());
+        }
+        let [ll, lr, rl, rr] = width_ms_coefficients(
+            gl,
+            gr,
+            self.playbacks[base].width,
+            self.playbacks[base].ms_proc,
+        );
+        let left = 18 + self.playbacks[base].id;
+        let right = 18 + self.playbacks[other].id;
+        self.record_routing(left, pair, ll.max(rl));
+        self.record_routing(right, pair, lr.max(rr));
+        self.uc_write_matrix(pair * 2, left, ll)?;
+        self.uc_write_matrix(pair * 2, right, lr)?;
+        self.uc_write_matrix(pair * 2 + 1, left, rl)?;
+        self.uc_write_matrix(pair * 2 + 1, right, rr)
     }
 
     fn uc_write_input(&mut self, idx: usize, pair: usize, _volume: f32) -> Result<(), Error> {
@@ -2342,6 +2535,9 @@ impl Fireface {
         // A stereo strip: one source per side, balance only.
         let base = idx & !1;
         let other = base ^ 1;
+        if self.inputs[base].width != 1.0 || self.inputs[base].ms_proc {
+            return self.uc_write_input_pair(base, pair);
+        }
         let left = self.inputs[base].volumes.get(pair).copied().unwrap_or(0.0)
             * self.trim_gain(ChannelId::Input(base));
         let right = self.inputs[other].volumes.get(pair).copied().unwrap_or(0.0)
@@ -2356,6 +2552,12 @@ impl Fireface {
     }
 
     fn uc_write_playback(&mut self, idx: usize, pair: usize, volume: f32) -> Result<(), Error> {
+        let base = idx & !1;
+        if self.playback_linked(base / 2)
+            && (self.playbacks[base].width != 1.0 || self.playbacks[base].ms_proc)
+        {
+            return self.uc_write_playback_pair(base, pair);
+        }
         let dev = self.playbacks[idx].id;
         let block = pair * 2 + (dev % 2);
         let pan = self.playbacks[idx].pans.get(pair).copied().unwrap_or(0);
@@ -2409,11 +2611,7 @@ impl Fireface {
             )));
         }
         let current = u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
-        let next = if on {
-            current | mask
-        } else {
-            current & !mask
-        };
+        let next = if on { current | mask } else { current & !mask };
         // TotalMix writes the complete switch/level register through
         // wIndex 0xf03f.  The narrower 0x0fc0 mask excludes the 48 V,
         // PAD and Inst bits and EP0 accepts it without moving them.
@@ -2421,12 +2619,7 @@ impl Fireface {
 
         // Keep the model tied to the register the unit actually accepted.
         let d = self.vendor_in(protocol::req::LEVELS, 0, 0, 4)?;
-        let readback = u32::from_le_bytes([
-            d[0],
-            d[1],
-            d[2],
-            d.get(3).copied().unwrap_or(0),
-        ]);
+        let readback = u32::from_le_bytes([d[0], d[1], d[2], d.get(3).copied().unwrap_or(0)]);
         if (readback & mask != 0) != on {
             return Err(Error::Io(std::io::Error::other(format!(
                 "0x17 switch mask 0x{mask:04x} did not read back as {on}"
@@ -2514,12 +2707,7 @@ impl Fireface {
 
     // ── UCX write paths ───────────────────────────────────────────────
 
-    fn ucx_write_matrix(
-        &self,
-        dsp_output: u8,
-        source: Source,
-        linear: f64,
-    ) -> Result<(), Error> {
+    fn ucx_write_matrix(&self, dsp_output: u8, source: Source, linear: f64) -> Result<(), Error> {
         let reg = ucx::matrix_reg(dsp_output, source);
         let value = ucx::matrix_gain(linear);
         self.write_word(reg, value)?;
@@ -2557,33 +2745,12 @@ impl Fireface {
         if gl <= 0.0 && gr <= 0.0 {
             return Ok(());
         }
-        let width = self.inputs[base].width.clamp(-1.0, 1.0);
-        let theta = (1.0 - width) * std::f32::consts::FRAC_PI_4;
-        let (sin, cos) = theta.sin_cos();
-        if self.inputs[base].ms_proc {
-            // M/S encoder on top of the width matrix:
-            //   L' = (L + R) / 2, R' = (L - R) / 2
-            let a = gl * (cos + sin) * 0.5;
-            let b = gr * (sin + cos) * 0.5;
-            let c = gl * (cos - sin) * 0.5;
-            let d = gr * (sin - cos) * 0.5;
-            self.ucx_write_matrix(dsp as u8, Source::Input(base), a as f64)?;
-            self.ucx_write_matrix(dsp as u8, Source::Input(other), b as f64)?;
-            self.ucx_write_matrix(dsp as u8 + 1, Source::Input(base), c as f64)?;
-            return self.ucx_write_matrix(dsp as u8 + 1, Source::Input(other), d as f64);
-        }
-        self.ucx_write_matrix(dsp as u8, Source::Input(base), (gl * cos) as f64)?;
-        self.ucx_write_matrix(dsp as u8, Source::Input(other), (gr * sin) as f64)?;
-        self.ucx_write_matrix(
-            dsp as u8 + 1,
-            Source::Input(base),
-            (gl * sin) as f64,
-        )?;
-        self.ucx_write_matrix(
-            dsp as u8 + 1,
-            Source::Input(other),
-            (gr * cos) as f64,
-        )
+        let [ll, lr, rl, rr] =
+            width_ms_coefficients(gl, gr, self.inputs[base].width, self.inputs[base].ms_proc);
+        self.ucx_write_matrix(dsp as u8, Source::Input(base), ll as f64)?;
+        self.ucx_write_matrix(dsp as u8, Source::Input(other), lr as f64)?;
+        self.ucx_write_matrix(dsp as u8 + 1, Source::Input(base), rl as f64)?;
+        self.ucx_write_matrix(dsp as u8 + 1, Source::Input(other), rr as f64)
     }
 
     fn ucx_write_input(&self, idx: usize, pair: usize, _volume: f32) -> Result<(), Error> {
@@ -2605,9 +2772,9 @@ impl Fireface {
                 self.ucx_write_matrix(dsp as u8, source, l as f64)?;
                 self.ucx_write_matrix(dsp as u8 + 1, source, r as f64)?;
             }
-            let level = ucx::linear_to_tenths(
-                volume * self.dest_trim(ChannelId::Input(idx), pair * 2),
-            ) as i16;
+            let level =
+                ucx::linear_to_tenths(volume * self.dest_trim(ChannelId::Input(idx), pair * 2))
+                    as i16;
             let pan_word = ucx::fader_pan(pan as i16);
             // The fader table is per output side.  Writing only the left
             // output leaves the right channel's table at its power-on
@@ -2645,44 +2812,33 @@ impl Fireface {
         let dsp = ucx::output_pair_dsp(pair)
             .ok_or_else(|| Error::InvalidChannel(format!("output pair {pair}")))?;
         let other = base ^ 1;
-        let gl = self.playbacks[base].volumes.get(pair).copied().unwrap_or(0.0)
+        let gl = self.playbacks[base]
+            .volumes
+            .get(pair)
+            .copied()
+            .unwrap_or(0.0)
             * self.dest_trim(ChannelId::Playback(base), pair * 2);
-        let gr = self.playbacks[other].volumes.get(pair).copied().unwrap_or(0.0)
+        let gr = self.playbacks[other]
+            .volumes
+            .get(pair)
+            .copied()
+            .unwrap_or(0.0)
             * self.dest_trim(ChannelId::Playback(other), pair * 2 + 1);
         if gl <= 0.0 && gr <= 0.0 {
             return Ok(());
         }
-        let width = self.playbacks[base].width.clamp(-1.0, 1.0);
-        let theta = (1.0 - width) * std::f32::consts::FRAC_PI_4;
-        let (sin, cos) = theta.sin_cos();
         let dev_l = self.playbacks[base].id;
         let dev_r = self.playbacks[other].id;
-        if self.playbacks[base].ms_proc {
-            let a = gl * (cos + sin) * 0.5;
-            let b = gr * (sin + cos) * 0.5;
-            let c = gl * (cos - sin) * 0.5;
-            let d = gr * (sin - cos) * 0.5;
-            self.ucx_write_matrix(dsp as u8, Source::Playback(dev_l), a as f64)?;
-            self.ucx_write_matrix(dsp as u8, Source::Playback(dev_r), b as f64)?;
-            self.ucx_write_matrix(dsp as u8 + 1, Source::Playback(dev_l), c as f64)?;
-            return self.ucx_write_matrix(
-                dsp as u8 + 1,
-                Source::Playback(dev_r),
-                d as f64,
-            );
-        }
-        self.ucx_write_matrix(dsp as u8, Source::Playback(dev_l), (gl * cos) as f64)?;
-        self.ucx_write_matrix(dsp as u8, Source::Playback(dev_r), (gr * sin) as f64)?;
-        self.ucx_write_matrix(
-            dsp as u8 + 1,
-            Source::Playback(dev_l),
-            (gl * sin) as f64,
-        )?;
-        self.ucx_write_matrix(
-            dsp as u8 + 1,
-            Source::Playback(dev_r),
-            (gr * cos) as f64,
-        )
+        let [ll, lr, rl, rr] = width_ms_coefficients(
+            gl,
+            gr,
+            self.playbacks[base].width,
+            self.playbacks[base].ms_proc,
+        );
+        self.ucx_write_matrix(dsp as u8, Source::Playback(dev_l), ll as f64)?;
+        self.ucx_write_matrix(dsp as u8, Source::Playback(dev_r), lr as f64)?;
+        self.ucx_write_matrix(dsp as u8 + 1, Source::Playback(dev_l), rl as f64)?;
+        self.ucx_write_matrix(dsp as u8 + 1, Source::Playback(dev_r), rr as f64)
     }
 
     fn ucx_write_playback(&self, idx: usize, pair: usize, volume: f32) -> Result<(), Error> {
@@ -2694,11 +2850,7 @@ impl Fireface {
         }
         let side = dev % 2;
         let volume = volume * self.dest_trim(ChannelId::Playback(idx), pair * 2 + side);
-        self.ucx_write_matrix(
-            (dsp + side) as u8,
-            Source::Playback(dev),
-            volume as f64,
-        )
+        self.ucx_write_matrix((dsp + side) as u8, Source::Playback(dev), volume as f64)
     }
 
     fn ucx_write_output_volume(&self, idx: usize, volume: f32) -> Result<(), Error> {
@@ -2708,10 +2860,7 @@ impl Fireface {
             .ok_or_else(|| Error::InvalidChannel(format!("output {idx}")))?;
         let channel = ucx::output_channel(dsp + side);
         let value = ucx::linear_to_tenths(volume);
-        self.write_word(
-            ucx::channel_reg(channel, ucx::offset::MUTE_OR_FADER),
-            value,
-        )
+        self.write_word(ucx::channel_reg(channel, ucx::offset::MUTE_OR_FADER), value)
     }
 
     fn ucx_input_word_matches_pre_connect(&self, idx: usize, offset: u8, value: u16) -> bool {
@@ -2721,10 +2870,7 @@ impl Fireface {
 
     fn ucx_output_reg(idx: usize, offset: u8) -> Option<u16> {
         let dsp = ucx::output_pair_dsp(idx / 2)?;
-        Some(ucx::channel_reg(
-            ucx::output_channel(dsp + idx % 2),
-            offset,
-        ))
+        Some(ucx::channel_reg(ucx::output_channel(dsp + idx % 2), offset))
     }
 
     fn ucx_output_word_matches_pre_connect(&self, idx: usize, offset: u8, value: u16) -> bool {
@@ -2749,29 +2895,21 @@ impl Fireface {
     /// stereo/mono mode.
     fn ucx_output_stereo_matches_pre_connect(&self, idx: usize, linked: bool) -> bool {
         let pair = idx / 2;
-        [pair * 2, pair * 2 + 1]
-            .into_iter()
-            .all(|i| {
-                self.ucx_output_word_matches_pre_connect(
-                    i,
-                    ucx::offset::OUTPUT_STEREO,
-                    linked as u16,
-                )
-            })
+        [pair * 2, pair * 2 + 1].into_iter().all(|i| {
+            self.ucx_output_word_matches_pre_connect(i, ucx::offset::OUTPUT_STEREO, linked as u16)
+        })
     }
 
     /// Whether both sides already hold this balance value.
     fn ucx_output_balance_matches_pre_connect(&self, idx: usize, balance: i8) -> bool {
         let pair = idx / 2;
-        [pair * 2, pair * 2 + 1]
-            .into_iter()
-            .all(|i| {
-                self.ucx_output_word_matches_pre_connect(
-                    i,
-                    ucx::offset::FX_SEND_OR_BALANCE,
-                    balance as i16 as u16,
-                )
-            })
+        [pair * 2, pair * 2 + 1].into_iter().all(|i| {
+            self.ucx_output_word_matches_pre_connect(
+                i,
+                ucx::offset::FX_SEND_OR_BALANCE,
+                balance as i16 as u16,
+            )
+        })
     }
 
     /// The output mode word: bit 0 = mute, bit 1 = monitor-muted.
@@ -2783,10 +2921,7 @@ impl Fireface {
     fn ucx_write_output_mode(&self, idx: usize, mute: bool) -> Result<(), Error> {
         let pair = idx / 2;
         let monitor_muted = self.settings.speaker_b && self.settings.main_out == Some(pair);
-        self.ucx_write_output_mode_value(
-            idx,
-            (mute as u16) | ((monitor_muted as u16) << 1),
-        )
+        self.ucx_write_output_mode_value(idx, (mute as u16) | ((monitor_muted as u16) << 1))
     }
 
     fn ucx_write_output_mode_value(&self, idx: usize, value: u16) -> Result<(), Error> {
@@ -2795,10 +2930,7 @@ impl Fireface {
         let dsp = ucx::output_pair_dsp(pair)
             .ok_or_else(|| Error::InvalidChannel(format!("output {idx}")))?;
         let channel = ucx::output_channel(dsp + side);
-        self.write_word(
-            ucx::channel_reg(channel, ucx::offset::OUTPUT_MUTE),
-            value,
-        )
+        self.write_word(ucx::channel_reg(channel, ucx::offset::OUTPUT_MUTE), value)
     }
 
     fn ucx_write_output_mute(&self, idx: usize, mute: bool) -> Result<(), Error> {
@@ -2893,11 +3025,9 @@ impl Fireface {
         settings.dynamics.gain_tenths = (d.gain_db * 10.0).round() as i16;
         settings.dynamics.attack_ms = d.attack_ms;
         settings.dynamics.release_ms = d.release_ms;
-        settings.dynamics.comp_threshold_tenths =
-            (d.comp_threshold_db * 10.0).round() as i16;
+        settings.dynamics.comp_threshold_tenths = (d.comp_threshold_db * 10.0).round() as i16;
         settings.dynamics.comp_ratio10 = (d.comp_ratio * 10.0).round() as u8;
-        settings.dynamics.exp_threshold_tenths =
-            (d.exp_threshold_db * 10.0).round() as i16;
+        settings.dynamics.exp_threshold_tenths = (d.exp_threshold_db * 10.0).round() as i16;
         settings.dynamics.exp_ratio10 = (d.exp_ratio * 10.0).round() as u8;
         settings.auto_level.on = d.auto_level;
         settings.auto_level.max_gain_tenths = (d.auto_max_gain_db * 10.0).round() as u16;
@@ -2913,11 +3043,7 @@ impl Fireface {
 
     /// Write the 12 dynamics / Auto Level registers of one hardware input
     /// or output.  The measured UCX block is `NN60..NN67` + `NN80..NN83`.
-    fn ucx_write_dynamics(
-        &mut self,
-        channel: ChannelId,
-        dynamics: &Dynamics,
-    ) -> Result<(), Error> {
+    fn ucx_write_dynamics(&mut self, channel: ChannelId, dynamics: &Dynamics) -> Result<(), Error> {
         self.ucx_update_dynamics_settings(channel, dynamics)?;
         let (idx, is_output) = match channel {
             ChannelId::Input(i) => (i, false),
@@ -2939,16 +3065,40 @@ impl Fireface {
         let dyn_offsets = [
             (ucx::offset::DYN_ON, settings.dynamics.on as u16),
             (ucx::offset::DYN_GAIN, settings.dynamics.gain_tenths as u16),
-            (ucx::offset::DYN_ATTACK, settings.dynamics.attack_ms.saturating_add(1)),
-            (ucx::offset::DYN_RELEASE, settings.dynamics.release_ms.saturating_add(1)),
-            (ucx::offset::COMP_THRESHOLD, settings.dynamics.comp_threshold_tenths as u16),
-            (ucx::offset::COMP_RATIO, settings.dynamics.comp_ratio10 as u16),
-            (ucx::offset::EXP_THRESHOLD, settings.dynamics.exp_threshold_tenths as u16),
+            (
+                ucx::offset::DYN_ATTACK,
+                settings.dynamics.attack_ms.saturating_add(1),
+            ),
+            (
+                ucx::offset::DYN_RELEASE,
+                settings.dynamics.release_ms.saturating_add(1),
+            ),
+            (
+                ucx::offset::COMP_THRESHOLD,
+                settings.dynamics.comp_threshold_tenths as u16,
+            ),
+            (
+                ucx::offset::COMP_RATIO,
+                settings.dynamics.comp_ratio10 as u16,
+            ),
+            (
+                ucx::offset::EXP_THRESHOLD,
+                settings.dynamics.exp_threshold_tenths as u16,
+            ),
             (ucx::offset::EXP_RATIO, settings.dynamics.exp_ratio10 as u16),
             (ucx::offset::AUTO_LEVEL_ON, settings.auto_level.on as u16),
-            (ucx::offset::AUTO_LEVEL_MAX_GAIN, settings.auto_level.max_gain_tenths),
-            (ucx::offset::AUTO_LEVEL_HEADROOM, settings.auto_level.headroom_tenths),
-            (ucx::offset::AUTO_LEVEL_RISE_TIME, settings.auto_level.rise_tenths),
+            (
+                ucx::offset::AUTO_LEVEL_MAX_GAIN,
+                settings.auto_level.max_gain_tenths,
+            ),
+            (
+                ucx::offset::AUTO_LEVEL_HEADROOM,
+                settings.auto_level.headroom_tenths,
+            ),
+            (
+                ucx::offset::AUTO_LEVEL_RISE_TIME,
+                settings.auto_level.rise_tenths,
+            ),
         ];
         let words: Vec<(u16, u16)> = dyn_offsets
             .into_iter()
@@ -2963,7 +3113,10 @@ impl Fireface {
             (0x3c01, reverb.kind as u16),
             (0x3c02, reverb.pre_delay_ms),
             (0x3c03, reverb.low_cut_hz),
-            (0x3c04, (reverb.room_scale * 100.0).round().clamp(0.0, 65535.0) as u16),
+            (
+                0x3c04,
+                (reverb.room_scale * 100.0).round().clamp(0.0, 65535.0) as u16,
+            ),
             // Type-specific block: Attack/Hold/Release for the envelope
             // algorithms, Reverb Time/High Damp for the Space ones.
             (0x3c05, reverb.attack_ms),
@@ -3209,8 +3362,11 @@ impl Fireface {
         if !self.is_uc() && self.model != Model::Ucx {
             return None;
         }
-        let mut input_gain: Vec<(usize, u32)> =
-            self.device_input_gain.iter().map(|(&i, &g)| (i, g)).collect();
+        let mut input_gain: Vec<(usize, u32)> = self
+            .device_input_gain
+            .iter()
+            .map(|(&i, &g)| (i, g))
+            .collect();
         input_gain.sort_unstable_by_key(|(i, _)| *i);
         let mut output_volume: Vec<(usize, f32)> = self
             .device_output_volume
@@ -3620,56 +3776,50 @@ impl Fireface {
         self.set_talkback_with(on, &TalkbackConfig::default())
     }
 
-    /// Toggle M/S processing on an input pair: `NN05` on both channels and
-    /// the M/S send rewrite.  Mono inputs reject it.
+    /// Toggle M/S processing on a linked input pair.  The UC writes the
+    /// matrix only; the UCX also writes `NN05` on both channels.
     pub fn set_input_ms_proc(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "MS Proc is not mapped on the UC".into(),
-            ));
-        }
         if idx >= self.inputs.len() {
             return Err(Error::InvalidChannel(format!("input {idx}")));
         }
-        if idx < 4 && !self.input_pair_linked(idx / 2) {
+        let base = idx & !1;
+        let other = base ^ 1;
+        if other >= self.inputs.len() || !self.input_pair_linked(base / 2) {
             return Err(Error::InvalidChannel(
                 "MS Proc needs a linked stereo pair".into(),
             ));
         }
-        let base = idx & !1;
-        let other = base ^ 1;
         for i in [base, other] {
             if let Some(input) = self.inputs.get_mut(i) {
                 input.ms_proc = on;
             }
-            self.write_word(
-                ucx::channel_reg(ucx::input_channel(i), ucx::offset::MS_PROC),
-                on as u16,
-            )?;
+            if !self.is_uc() {
+                self.write_word(
+                    ucx::channel_reg(ucx::input_channel(i), ucx::offset::MS_PROC),
+                    on as u16,
+                )?;
+            }
         }
         for pair in 0..PAIRS {
-            self.ucx_write_input_pair(base, pair)?;
+            self.write_input_pair(base, pair)?;
         }
         Ok(())
     }
 
-    /// Toggle M/S processing on a software-playback pair.  There is no
-    /// register: every routing with a live send is rewritten.
+    /// Toggle M/S processing on a linked software-playback pair.  There is
+    /// no device register: every routing with a live send is rewritten.
     pub fn set_playback_ms_proc(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "MS Proc is not mapped on the UC".into(),
-            ));
-        }
         let base = idx & !1;
         let other = base ^ 1;
-        if other >= self.playbacks.len() {
-            return Err(Error::InvalidChannel(format!("playback {idx}")));
+        if other >= self.playbacks.len() || !self.playback_linked(base / 2) {
+            return Err(Error::InvalidChannel(
+                "MS Proc needs a linked stereo pair".into(),
+            ));
         }
         self.playbacks[base].ms_proc = on;
         self.playbacks[other].ms_proc = on;
         for pair in 0..PAIRS {
-            self.ucx_write_playback_pair(base, pair)?;
+            self.write_playback_pair(base, pair)?;
         }
         Ok(())
     }
@@ -3877,7 +4027,11 @@ impl Fireface {
     /// The LED gate is the device's count against FSCntOVR (default 3);
     /// no host-side sample counting is done.
     pub fn over_runs(&self, playback: bool) -> Option<Vec<u8>> {
-        if playback { self.playback_over_runs() } else { self.output_over_runs() }
+        if playback {
+            self.playback_over_runs()
+        } else {
+            self.output_over_runs()
+        }
     }
 
     /// Red-band bar values (0..+6 dB) per playback row, per the device's
@@ -3888,16 +4042,18 @@ impl Fireface {
     pub fn playback_over_levels(&self) -> Option<Vec<Option<f32>>> {
         match self.model {
             Model::Uc => Some(
-                (0..self.playbacks.len()).map(|i| {
-                    let run = self.uc_meters.playback_over_run(i);
-                    if run < protocol::UC_OVR_RUN_GATE {
-                        return None;
-                    }
-                    protocol::uc_counter_over_db(run)
-                        .map(|db| 10f32.powf(db / 20.0))
-                        .or(Some(1.0))
-                    .filter(|level| *level > 0.0)
-                }).collect(),
+                (0..self.playbacks.len())
+                    .map(|i| {
+                        let run = self.uc_meters.playback_over_run(i);
+                        if run < protocol::UC_OVR_RUN_GATE {
+                            return None;
+                        }
+                        protocol::uc_counter_over_db(run)
+                            .map(|db| 10f32.powf(db / 20.0))
+                            .or(Some(1.0))
+                            .filter(|level| *level > 0.0)
+                    })
+                    .collect(),
             ),
             Model::Ucx => None,
         }
@@ -3912,18 +4068,20 @@ impl Fireface {
     pub fn output_over_levels(&self, post: bool) -> Option<Vec<Option<f32>>> {
         match self.model {
             Model::Uc => Some(
-                (0..self.outputs.len()).map(|i| {
-                    let run = self.uc_meters.output_over_run(i);
-                    if run < protocol::UC_OVR_RUN_GATE {
-                        return None;
-                    }
-                    if let Some(db) = protocol::uc_counter_over_db(run) {
-                        return Some(10f32.powf(db / 20.0));
-                    }
-                    // Carry state: the row's written fader and matrix value
-                    // the level beyond the device's resolvable range.
-                    Some(self.uc_output_estimated_rms(i, post).max(1.0))
-                }).collect(),
+                (0..self.outputs.len())
+                    .map(|i| {
+                        let run = self.uc_meters.output_over_run(i);
+                        if run < protocol::UC_OVR_RUN_GATE {
+                            return None;
+                        }
+                        if let Some(db) = protocol::uc_counter_over_db(run) {
+                            return Some(10f32.powf(db / 20.0));
+                        }
+                        // Carry state: the row's written fader and matrix value
+                        // the level beyond the device's resolvable range.
+                        Some(self.uc_output_estimated_rms(i, post).max(1.0))
+                    })
+                    .collect(),
             ),
             Model::Ucx => None,
         }
@@ -3955,10 +4113,7 @@ impl Fireface {
 
     pub fn output_peaks_internal(&self, post: bool) -> Option<Vec<f32>> {
         let raw = self.output_peaks(post)?;
-        Some(reorder_output_meters(
-            &raw,
-            self.profile.output_order(),
-        ))
+        Some(reorder_output_meters(&raw, self.profile.output_order()))
     }
 
     pub fn fx_peaks(&self) -> Option<[f32; 2]> {
@@ -4030,10 +4185,7 @@ impl Fireface {
 
     pub fn output_meters_internal(&self, post: bool) -> Option<Vec<f32>> {
         let raw = self.output_meters(post)?;
-        Some(reorder_output_meters(
-            &raw,
-            self.profile.output_order(),
-        ))
+        Some(reorder_output_meters(&raw, self.profile.output_order()))
     }
 
     fn uc_status_event(&mut self, data: &[u8]) {
@@ -4072,9 +4224,7 @@ impl Fireface {
         }
         if let Some(until) = self.ignore_output_until {
             if Instant::now() < until {
-                log::debug!(
-                    "UC startup: ignoring queued output status channel={chan} value={raw}"
-                );
+                log::debug!("UC startup: ignoring queued output status channel={chan} value={raw}");
                 return;
             }
         }
@@ -4140,9 +4290,7 @@ impl Fireface {
         }
         if let Some(idx) = ucx::output_index_from_state(addr) {
             let volume = ucx::tenths_to_linear(value);
-            log::debug!(
-                "UCX state {addr:#06x} = {value:#06x}: output {idx} volume {volume:.4}"
-            );
+            log::debug!("UCX state {addr:#06x} = {value:#06x}: output {idx} volume {volume:.4}");
             if let Some(output) = self.outputs.get_mut(idx) {
                 output.volume = volume;
             }
@@ -4211,8 +4359,7 @@ impl Fireface {
                                 // so the meters never stop; the flag records
                                 // that the roles are unverified.
                                 self.uc_meters.apply_heartbeat(&event.data);
-                                self.uc_meter_phase_lost =
-                                    event.flags & EV_FLAG_PHASE_LOST != 0;
+                                self.uc_meter_phase_lost = event.flags & EV_FLAG_PHASE_LOST != 0;
                             } else if let Some(packet) = UcMeterPacket::parse(&event.data) {
                                 // Variant without the heartbeat quirk: legacy
                                 // single-page classification.
@@ -4514,9 +4661,7 @@ impl Fireface {
         let Some(pair) = self.settings.main_out else {
             return false;
         };
-        self.outputs
-            .get(pair * 2)
-            .is_some_and(|output| output.mute)
+        self.outputs.get(pair * 2).is_some_and(|output| output.mute)
             || self
                 .outputs
                 .get(pair * 2 + 1)
@@ -4719,7 +4864,6 @@ impl Fireface {
         }
         Ok(())
     }
-
 }
 
 impl Fireface {
@@ -4730,6 +4874,27 @@ impl Fireface {
             self.routed_pairs.insert((source, pair));
         } else {
             self.routed_pairs.remove(&(source, pair));
+        }
+    }
+}
+
+impl Fireface {
+    /// Rewrite one input pair's routing through the device-specific writer.
+    fn write_input_pair(&mut self, base: usize, pair: usize) -> Result<(), Error> {
+        if self.is_uc() {
+            self.uc_write_input_pair(base, pair)
+        } else {
+            self.ucx_write_input_pair(base, pair)
+        }
+    }
+
+    /// Rewrite one playback pair's routing through the device-specific
+    /// writer.
+    fn write_playback_pair(&mut self, base: usize, pair: usize) -> Result<(), Error> {
+        if self.is_uc() {
+            self.uc_write_playback_pair(base, pair)
+        } else {
+            self.ucx_write_playback_pair(base, pair)
         }
     }
 }
@@ -4826,12 +4991,7 @@ impl RmeDevice for Fireface {
         &mut self.settings
     }
 
-    fn set_output_volume(
-        &mut self,
-        pair: usize,
-        which: usize,
-        volume: f32,
-    ) -> Result<(), Error> {
+    fn set_output_volume(&mut self, pair: usize, which: usize, volume: f32) -> Result<(), Error> {
         let (left, right) = (pair * 2, pair * 2 + 1);
         if left >= self.outputs.len() || right >= self.outputs.len() {
             return Err(Error::InvalidChannel(format!("output pair {pair}")));
@@ -4851,9 +5011,7 @@ impl RmeDevice for Fireface {
         // the two channel volumes.  Move both by the same dB offset so a
         // fader drag cannot flatten an existing balance.
         let target = volume.clamp(0.0, 2.0);
-        let current = self.outputs[left]
-            .volume
-            .max(self.outputs[right].volume);
+        let current = self.outputs[left].volume.max(self.outputs[right].volume);
         let (new_left, new_right) = if target <= 0.0 {
             (0.0, 0.0)
         } else if current <= 0.0 {
@@ -4869,12 +5027,7 @@ impl RmeDevice for Fireface {
         self.set_volume(ChannelId::Output(right), 0, new_right)
     }
 
-    fn set_volume(
-        &mut self,
-        channel: ChannelId,
-        output: usize,
-        volume: f32,
-    ) -> Result<(), Error> {
+    fn set_volume(&mut self, channel: ChannelId, output: usize, volume: f32) -> Result<(), Error> {
         let batch = self.begin_write_batch();
         // Every fader runs to +6 dB, like TotalMix.
         let v = volume.clamp(0.0, 2.0);
@@ -4941,9 +5094,10 @@ impl RmeDevice for Fireface {
         // A routing exists while it has a level (GUI spec 8.1.1).  Both
         // sides of the pair contribute, so a split pair is routed when
         // either channel carries a send.
-        self.matrix_blocks_for_pair(pair)
-            .iter()
-            .any(|block| self.cell_gain(channel, *block).is_some_and(|gain| gain > 0.0))
+        self.matrix_blocks_for_pair(pair).iter().any(|block| {
+            self.cell_gain(channel, *block)
+                .is_some_and(|gain| gain > 0.0)
+        })
     }
 
     fn routed_pairs_for(&self, channel: ChannelId) -> Vec<usize> {
@@ -5066,8 +5220,7 @@ impl RmeDevice for Fireface {
             let pair = block / 2;
             match channel {
                 ChannelId::Input(i) => {
-                    if let Some(slot) =
-                        self.inputs.get_mut(i).and_then(|c| c.volumes.get_mut(pair))
+                    if let Some(slot) = self.inputs.get_mut(i).and_then(|c| c.volumes.get_mut(pair))
                     {
                         *slot = gain;
                     }
@@ -5170,9 +5323,7 @@ impl RmeDevice for Fireface {
                     if !self.output_linked(pair) {
                         return Ok(());
                     }
-                    let current = self.outputs[left]
-                        .volume
-                        .max(self.outputs[right].volume);
+                    let current = self.outputs[left].volume.max(self.outputs[right].volume);
                     let (gl, gr) = output_balance_to_volumes(current, pan);
                     self.outputs[left].volume = gl;
                     self.outputs[right].volume = gr;
@@ -5468,7 +5619,8 @@ impl RmeDevice for Fireface {
                 }
                 if mute {
                     let saved = self.playbacks[idx].volumes.clone();
-                    self.mute_saved.insert(channel, (saved.clone(), vec![0; PAIRS]));
+                    self.mute_saved
+                        .insert(channel, (saved.clone(), vec![0; PAIRS]));
                     // See the input branch: mark the channel muted only after
                     // the zero writes, or `mute_saved` would hold zeroes and
                     // the second press would drop the fader to zero.
@@ -5681,10 +5833,23 @@ impl RmeDevice for Fireface {
         Ok(())
     }
 
-    fn set_pitch(&mut self, _pitch_percent: f32) -> Result<(), Error> {
-        Err(Error::InvalidChannel(
-            "varispeed pitch is not mapped for the UC/UCX".into(),
-        ))
+    fn set_pitch(&mut self, pitch_percent: f32) -> Result<(), Error> {
+        // UC and UCX share the four-word clock quad.  The UC pitch capture
+        // shows four `0x1b` writes per step, one per base family, with
+        // DDS = 0x5f5e10000000 / (base * (1 + pitch / 100)).
+        let pitch = pitch_percent.clamp(-5.0, 5.0);
+        let bases = [32_000u32, 44_100, 48_000, 50_000];
+        for (family, base) in bases.iter().enumerate() {
+            let dds = (0x5f5e10000000u64 as f64 / (*base as f64 * (1.0 + pitch as f64 / 100.0)))
+                .round() as u64;
+            self.vendor_out(
+                protocol::req::DDS,
+                (dds >> 16) as u16,
+                ((dds & 0xff00) as u16) | family as u16,
+            )?;
+        }
+        self.settings.pitch_percent = pitch;
+        Ok(())
     }
 
     fn set_sample_rate(&mut self, rate: u32) -> Result<(), Error> {
@@ -5720,11 +5885,7 @@ impl RmeDevice for Fireface {
             let dsp = ucx::output_pair_dsp(out)
                 .ok_or_else(|| Error::InvalidChannel(format!("output pair {out}")))?;
             for side in 0..2 {
-                self.vendor_out(
-                    protocol::req::LOOPBACK,
-                    on as u16,
-                    (dsp + side) as u16,
-                )?;
+                self.vendor_out(protocol::req::LOOPBACK, on as u16, (dsp + side) as u16)?;
             }
         }
         self.outputs[out * 2].loopback = on;
@@ -5798,16 +5959,8 @@ impl RmeDevice for Fireface {
                         }
                     };
                     for (pair, left_level, right_level) in saved {
-                        self.set_volume(
-                            ChannelId::Output(pair * 2),
-                            0,
-                            dim(left_level),
-                        )?;
-                        self.set_volume(
-                            ChannelId::Output(pair * 2 + 1),
-                            0,
-                            dim(right_level),
-                        )?;
+                        self.set_volume(ChannelId::Output(pair * 2), 0, dim(left_level))?;
+                        self.set_volume(ChannelId::Output(pair * 2 + 1), 0, dim(right_level))?;
                     }
                     self.settings.dim_saved = self.dim_saved.clone();
                 }
@@ -5840,11 +5993,7 @@ impl RmeDevice for Fireface {
             if right >= self.outputs.len() {
                 return Err(Error::InvalidChannel(format!("Speaker pair {pair}")));
             }
-            saved.push((
-                pair,
-                self.outputs[left].volume,
-                self.outputs[right].volume,
-            ));
+            saved.push((pair, self.outputs[left].volume, self.outputs[right].volume));
         }
         self.dim_saved = saved;
         self.settings.dim_saved = self.dim_saved.clone();
@@ -5890,9 +6039,7 @@ impl RmeDevice for Fireface {
                 self.set_volume(ChannelId::Output(right), 0, dimmed)?;
                 if self.speaker_b_linked {
                     if let Some(b) = self.settings.main_b_out.filter(|b| *b != pair) {
-                        if let Some(entry) =
-                            self.dim_saved.iter_mut().find(|(p, _, _)| *p == b)
-                        {
+                        if let Some(entry) = self.dim_saved.iter_mut().find(|(p, _, _)| *p == b) {
                             entry.1 = level;
                             entry.2 = level;
                             self.set_volume(ChannelId::Output(b * 2), 0, dimmed)?;
@@ -6295,8 +6442,11 @@ impl RmeDevice for Fireface {
                     // pair adopts the Main pair's saved pre-Dim levels as
                     // well as its current dimmed levels.
                     if self.settings.dim {
-                        if let Some((_, left, right)) =
-                            self.dim_saved.iter().find(|(pair, _, _)| *pair == main).copied()
+                        if let Some((_, left, right)) = self
+                            .dim_saved
+                            .iter()
+                            .find(|(pair, _, _)| *pair == main)
+                            .copied()
                         {
                             match self.dim_saved.iter_mut().find(|(pair, _, _)| *pair == b) {
                                 Some(entry) => {
@@ -6637,39 +6787,38 @@ impl RmeDevice for Fireface {
 
     fn set_channel_width(&mut self, channel: ChannelId, width: f32) -> Result<(), Error> {
         let batch = self.begin_write_batch();
-        if self.is_uc() {
-            return Err(Error::InvalidChannel(
-                "Channel width is not mapped on the UC".into(),
-            ));
-        }
         let width = width.clamp(-1.0, 1.0);
         match channel {
             ChannelId::Input(idx) => {
                 let base = idx & !1;
                 let other = base ^ 1;
-                if other >= self.inputs.len() {
-                    return Err(Error::InvalidChannel(format!("input {idx}")));
+                if other >= self.inputs.len() || !self.input_pair_linked(base / 2) {
+                    return Err(Error::InvalidChannel(
+                        "width needs a linked stereo pair".into(),
+                    ));
                 }
                 self.inputs[base].width = width;
                 self.inputs[other].width = width;
                 for pair in 0..PAIRS {
                     self.clear_pair_overrides(ChannelId::Input(base), pair);
                     self.clear_pair_overrides(ChannelId::Input(other), pair);
-                    self.ucx_write_input_pair(base, pair)?;
+                    self.write_input_pair(base, pair)?;
                 }
             }
             ChannelId::Playback(idx) => {
                 let base = idx & !1;
                 let other = base ^ 1;
-                if other >= self.playbacks.len() {
-                    return Err(Error::InvalidChannel(format!("playback {idx}")));
+                if other >= self.playbacks.len() || !self.playback_linked(base / 2) {
+                    return Err(Error::InvalidChannel(
+                        "width needs a linked stereo pair".into(),
+                    ));
                 }
                 self.playbacks[base].width = width;
                 self.playbacks[other].width = width;
                 for pair in 0..PAIRS {
                     self.clear_pair_overrides(ChannelId::Playback(base), pair);
                     self.clear_pair_overrides(ChannelId::Playback(other), pair);
-                    self.ucx_write_playback_pair(base, pair)?;
+                    self.write_playback_pair(base, pair)?;
                 }
             }
             ChannelId::Output(_) => {
@@ -6695,11 +6844,7 @@ impl RmeDevice for Fireface {
         Ok(())
     }
 
-    fn set_sensitivity(
-        &mut self,
-        idx: usize,
-        sensitivity: Sensitivity,
-    ) -> Result<(), Error> {
+    fn set_sensitivity(&mut self, idx: usize, sensitivity: Sensitivity) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
                 "the UC has no software reference-level switch".into(),
@@ -6787,7 +6932,9 @@ impl RmeDevice for Fireface {
 
     fn set_echo(&mut self, echo: &Echo) -> Result<(), Error> {
         if self.is_uc() {
-            return Err(Error::InvalidChannel("Echo does not exist on the UC".into()));
+            return Err(Error::InvalidChannel(
+                "Echo does not exist on the UC".into(),
+            ));
         }
         self.ucx_write_echo(echo)?;
         self.settings.echo = Some(*echo);
@@ -6873,12 +7020,7 @@ impl RmeDevice for Fireface {
         self.ucx_write_channel_settings(idx, false, &s)
     }
 
-    fn set_eq_band_freq(
-        &mut self,
-        idx: usize,
-        band: usize,
-        freq_hz: u16,
-    ) -> Result<(), Error> {
+    fn set_eq_band_freq(&mut self, idx: usize, band: usize, freq_hz: u16) -> Result<(), Error> {
         if self.is_uc() || idx >= self.inputs.len() || band >= 3 {
             return Err(Error::InvalidChannel(format!("EQ input {idx} band {band}")));
         }
@@ -6967,11 +7109,7 @@ impl RmeDevice for Fireface {
             "Optical" | "ADAT" => 2,
             "Word Clock" => 3,
             "LTC" => 4,
-            _ => {
-                return Err(Error::InvalidChannel(format!(
-                    "clock source {source}"
-                )))
-            }
+            _ => return Err(Error::InvalidChannel(format!("clock source {source}"))),
         };
         if self.is_uc() {
             self.settings.clock_source = source.to_string();
@@ -7083,21 +7221,18 @@ impl RmeDevice for Fireface {
         // carry a different row order (notably the UCX software-playback
         // row); map their values into the current channel order by name,
         // then restore the current names and IDs below.
-        let current_input_names: Vec<String> =
-            self.inputs.iter().map(|c| c.name.clone()).collect();
+        let current_input_names: Vec<String> = self.inputs.iter().map(|c| c.name.clone()).collect();
         let current_playback_names: Vec<String> =
             self.playbacks.iter().map(|c| c.name.clone()).collect();
         let current_output_names: Vec<String> =
             self.outputs.iter().map(|c| c.name.clone()).collect();
-        let scene_input_names: Vec<String> =
-            scene.inputs.iter().map(|c| c.name.clone()).collect();
+        let scene_input_names: Vec<String> = scene.inputs.iter().map(|c| c.name.clone()).collect();
         let scene_playback_names: Vec<String> =
             scene.playbacks.iter().map(|c| c.name.clone()).collect();
         let scene_output_names: Vec<String> =
             scene.outputs.iter().map(|c| c.name.clone()).collect();
         let input_order = scene_order_by_name(&current_input_names, &scene_input_names);
-        let playback_order =
-            scene_order_by_name(&current_playback_names, &scene_playback_names);
+        let playback_order = scene_order_by_name(&current_playback_names, &scene_playback_names);
         let output_order = scene_order_by_name(&current_output_names, &scene_output_names);
         let current_inputs = self.inputs.clone();
         let current_playbacks = self.playbacks.clone();
@@ -7292,13 +7427,10 @@ impl RmeDevice for Fireface {
                     self.set_phase(idx, phase)?;
                 }
                 let phase_r = self.inputs[idx].phase_r;
-                let phase_r_reg = ucx::channel_reg(
-                    ucx::input_channel(idx),
-                    ucx::offset::INPUT_PHASE,
-                ) + 0x100;
+                let phase_r_reg =
+                    ucx::channel_reg(ucx::input_channel(idx), ucx::offset::INPUT_PHASE) + 0x100;
                 if !self.skip_unchanged_output_state
-                    || self.pre_connect_words.get(&phase_r_reg).copied()
-                        != Some(phase_r as u16)
+                    || self.pre_connect_words.get(&phase_r_reg).copied() != Some(phase_r as u16)
                 {
                     self.set_input_phase_right(idx, phase_r)?;
                 }
@@ -7332,10 +7464,7 @@ impl RmeDevice for Fireface {
                 if self.inputs[idx].eq.is_some() {
                     self.sync_input_eq(idx);
                     if let Some(dynamics) = self.inputs[idx].dynamics {
-                        self.ucx_update_dynamics_settings(
-                            ChannelId::Input(idx),
-                            &dynamics,
-                        )?;
+                        self.ucx_update_dynamics_settings(ChannelId::Input(idx), &dynamics)?;
                     }
                     let s = self.input_settings[idx];
                     self.ucx_write_channel_settings(idx, false, &s)?;
@@ -7453,10 +7582,7 @@ impl RmeDevice for Fireface {
                     // Auto Level block; fold them in instead of writing
                     // those 12 registers a second time.
                     if let Some(dynamics) = self.outputs[idx].dynamics {
-                        self.ucx_update_dynamics_settings(
-                            ChannelId::Output(idx),
-                            &dynamics,
-                        )?;
+                        self.ucx_update_dynamics_settings(ChannelId::Output(idx), &dynamics)?;
                     }
                     let s = self.output_settings[idx];
                     self.ucx_write_channel_settings(idx, true, &s)?;
@@ -7527,9 +7653,7 @@ impl RmeDevice for Fireface {
                 self.playbacks
                     .iter()
                     .enumerate()
-                    .filter_map(|(idx, channel)| {
-                        channel.solo.then_some(ChannelId::Playback(idx))
-                    }),
+                    .filter_map(|(idx, channel)| channel.solo.then_some(ChannelId::Playback(idx))),
             )
             .chain(
                 self.outputs
@@ -7552,6 +7676,11 @@ impl RmeDevice for Fireface {
             Some(batch) => batch.finish_wait(),
             None => Ok(()),
         };
+        if result.is_ok() && self.profile.capabilities().pitch {
+            // Pitch is a host setting and is always written to the device.
+            let pitch = self.settings.pitch_percent;
+            self.set_pitch(pitch)?;
+        }
         if result.is_ok() {
             if self.dry_run {
                 log::info!(
@@ -7604,7 +7733,6 @@ impl RmeDevice for Fireface {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -7757,9 +7885,14 @@ mod tests {
         dev.set_volume(ChannelId::Output(2), 0, 0.5).unwrap();
         dev.set_mute(ChannelId::Output(2), true).unwrap();
         let w = writes.lock().unwrap();
-        assert!(w.contains(&Write::Words(vec![(0x1200, 0xfd76)])) ||
-                w.iter().any(|x| matches!(x, Write::Words(v) if v[0].0 == 0x1200)));
-        assert!(w.iter().any(|x| matches!(x, Write::Words(v) if v[0] == (0x1202, 1))));
+        assert!(
+            w.contains(&Write::Words(vec![(0x1200, 0xfd76)]))
+                || w.iter()
+                    .any(|x| matches!(x, Write::Words(v) if v[0].0 == 0x1200))
+        );
+        assert!(w
+            .iter()
+            .any(|x| matches!(x, Write::Words(v) if v[0] == (0x1202, 1))));
     }
 
     #[test]
@@ -7957,9 +8090,7 @@ mod tests {
             let scalar = [0, 1, 3, 4, 7, 8].contains(&offset);
             let settings = (0x20..=0x8f).contains(&offset);
             if (0x1200..=0x1bff).contains(&reg) && (scalar || settings) {
-                panic!(
-                    "connect restore rewrote unchanged output register {reg:#06x}={value:#06x}"
-                );
+                panic!("connect restore rewrote unchanged output register {reg:#06x}={value:#06x}");
             }
         }
         assert!(
@@ -7981,7 +8112,9 @@ mod tests {
 
         let words = written_words(&writes);
         assert!(
-            words.iter().any(|(reg, value)| *reg == 0x1200 && *value == 0xff59),
+            words
+                .iter()
+                .any(|(reg, value)| *reg == 0x1200 && *value == 0xff59),
             "a changed output level must still be written at connect"
         );
     }
@@ -8109,8 +8242,16 @@ mod tests {
     fn scene_channel_order_is_mapped_by_name_not_position() {
         // An older UCX scene had Phones first, then AN1/AN2.  The current
         // profile has AN1/AN2 first, so positional cloning would swap them.
-        let current = vec!["PCM AN1".to_string(), "PCM AN2".to_string(), "PCM Phones 7".to_string()];
-        let saved = vec!["PCM Phones 7".to_string(), "PCM AN1".to_string(), "PCM AN2".to_string()];
+        let current = vec![
+            "PCM AN1".to_string(),
+            "PCM AN2".to_string(),
+            "PCM Phones 7".to_string(),
+        ];
+        let saved = vec![
+            "PCM Phones 7".to_string(),
+            "PCM AN1".to_string(),
+            "PCM AN2".to_string(),
+        ];
         assert_eq!(scene_order_by_name(&current, &saved), vec![1, 2, 0]);
     }
 
@@ -8139,7 +8280,9 @@ mod tests {
         let (mut dev, writes) = open(Model::Ucx);
         dev.poll_events().unwrap();
         let w = writes.lock().unwrap();
-        assert!(w.iter().any(|x| matches!(x, Write::Words(v) if v == &vec![(0x3f00, 0)])));
+        assert!(w
+            .iter()
+            .any(|x| matches!(x, Write::Words(v) if v == &vec![(0x3f00, 0)])));
     }
 
     #[test]
@@ -8202,11 +8345,7 @@ mod tests {
         dev.set_output_eq(2, &eq).unwrap();
         assert_eq!(dev.outputs()[2].eq.unwrap().bands[0].gain_db, 6.0);
         assert_eq!(
-            dev.capture_scene().outputs[2]
-                .eq
-                .unwrap()
-                .bands[0]
-                .gain_db,
+            dev.capture_scene().outputs[2].eq.unwrap().bands[0].gain_db,
             6.0
         );
         let dsp = ucx::output_pair_dsp(1).unwrap();
@@ -8240,7 +8379,9 @@ mod tests {
         dev.set_gain(0, 48).unwrap();
         dev.set_loopback(0, true).unwrap();
         let w = writes.lock().unwrap();
-        assert!(w.iter().any(|x| matches!(x, Write::Words(v) if v == &vec![(0x0007, 480)])));
+        assert!(w
+            .iter()
+            .any(|x| matches!(x, Write::Words(v) if v == &vec![(0x0007, 480)])));
         assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 6)));
         assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 7)));
     }
@@ -8334,6 +8475,7 @@ mod tests {
     #[test]
     fn ucx_channel_width_rewrites_the_pair_matrix() {
         let (mut dev, writes) = open(Model::Ucx);
+        dev.set_input_pair_linked(0, true).unwrap();
         dev.set_volume(ChannelId::Input(0), 1, 1.0).unwrap();
         dev.set_volume(ChannelId::Input(1), 1, 1.0).unwrap();
         writes.lock().unwrap().clear();
@@ -8367,9 +8509,7 @@ mod tests {
         writes.lock().unwrap().clear();
         dev.set_channel_width(ChannelId::Input(0), 0.5).unwrap();
         let w = written_words(&writes);
-        assert!(!w
-            .iter()
-            .any(|(reg, _)| (0x4000..=0x4041).contains(reg)));
+        assert!(!w.iter().any(|(reg, _)| (0x4000..=0x4041).contains(reg)));
     }
 
     #[test]
@@ -8415,7 +8555,10 @@ mod tests {
             .iter()
             .position(|x| matches!(x, Write::Vendor(..)))
             .expect("rate vendor");
-        assert!(words < vendor, "queued words must precede the vendor request");
+        assert!(
+            words < vendor,
+            "queued words must precede the vendor request"
+        );
     }
 
     #[test]
@@ -8434,7 +8577,10 @@ mod tests {
 
         writes.lock().unwrap().clear();
         dev.set_output_phase(2, false).unwrap();
-        assert!(writes.lock().unwrap().contains(&Write::Words(vec![(0x1207, 0)])));
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Words(vec![(0x1207, 0)])));
         assert!(!dev.outputs()[2].phase_l);
     }
 
@@ -8945,13 +9091,19 @@ mod tests {
         let gain = ucx::matrix_gain(10f64.powf(-6.0 / 20.0));
         assert!(words.contains(&(ucx::matrix_reg(0, Source::Input(0)), gain)));
         assert!(words.contains(&(ucx::matrix_reg(1, Source::Input(1)), gain)));
-        assert!(!words.iter().any(|(reg, _)| *reg == ucx::matrix_reg(2, Source::Input(0))));
-        assert!(!words.iter().any(|(reg, _)| *reg == ucx::matrix_reg(3, Source::Input(1))));
+        assert!(!words
+            .iter()
+            .any(|(reg, _)| *reg == ucx::matrix_reg(2, Source::Input(0))));
+        assert!(!words
+            .iter()
+            .any(|(reg, _)| *reg == ucx::matrix_reg(3, Source::Input(1))));
         // Both Main FX returns are muted; Speaker B FX returns are untouched.
         for reg in [0x1203, 0x1303] {
             assert!(words.contains(&(reg, 0xfd76)), "missing FX mute {reg:04x}");
         }
-        assert!(!words.iter().any(|(reg, _)| *reg == 0x1403 || *reg == 0x1503));
+        assert!(!words
+            .iter()
+            .any(|(reg, _)| *reg == 0x1403 || *reg == 0x1503));
         assert!(words.contains(&(0x3f9e, 0x20)));
         assert!(dev.settings().external_input);
 
@@ -8980,14 +9132,8 @@ mod tests {
 
         dev.set_cue(1, true).unwrap();
         let words = written_words(&writes);
-        assert!(words.contains(&(
-            ucx::matrix_reg(6, Source::Input(0)),
-            ucx::matrix_gain(0.5)
-        )));
-        assert!(words.contains(&(
-            0x18e0,
-            ucx::fader_level(ucx::linear_to_tenths(0.5) as i16)
-        )));
+        assert!(words.contains(&(ucx::matrix_reg(6, Source::Input(0)), ucx::matrix_gain(0.5))));
+        assert!(words.contains(&(0x18e0, ucx::fader_level(ucx::linear_to_tenths(0.5) as i16))));
         assert!(words.contains(&(0x1803, 0xfd76)));
         assert!(words.contains(&(0x1903, 0xfd76)));
         assert!(words.contains(&(0x3f98, 0xfcc0)));
@@ -9015,7 +9161,8 @@ mod tests {
     }
 
     #[test]
-    fn ucx_pfl_routes_the_input_at_unity_and_restores_the_target() {        let (mut dev, writes) = open(Model::Ucx);
+    fn ucx_pfl_routes_the_input_at_unity_and_restores_the_target() {
+        let (mut dev, writes) = open(Model::Ucx);
         dev.set_cue_target(Some(0)).unwrap();
         dev.set_pfl_mode(true, true).unwrap();
         writes.lock().unwrap().clear();
@@ -9363,10 +9510,8 @@ mod tests {
     fn ucx_input_link_copies_fx_eq_and_dynamics() {
         let (mut dev, _writes) = open(Model::Ucx);
         dev.set_input_pair_linked(0, false).unwrap();
-        dev.set_channel_fx_send(ChannelId::Input(0), -30.0)
-            .unwrap();
-        dev.set_channel_fx_send(ChannelId::Input(1), -10.0)
-            .unwrap();
+        dev.set_channel_fx_send(ChannelId::Input(0), -30.0).unwrap();
+        dev.set_channel_fx_send(ChannelId::Input(1), -10.0).unwrap();
 
         let mut eq = InputEq::default();
         eq.enabled = true;
@@ -9633,7 +9778,112 @@ mod tests {
         let (left_value, left_index) = uc::matrix_word(0.5, 4);
         let (right_value, right_index) = uc::matrix_word(right, 41);
         assert!(w.contains(&Write::Vendor(protocol::req::MIXER, left_value, left_index)));
-        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, right_value, right_index)));
+        assert!(w.contains(&Write::Vendor(
+            protocol::req::MIXER,
+            right_value,
+            right_index
+        )));
+    }
+
+    #[test]
+    fn uc_input_width_rewrites_the_pair_matrix() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_input_pair_linked(0, true).unwrap();
+        dev.set_volume(ChannelId::Input(0), 1, 1.0).unwrap();
+        dev.set_volume(ChannelId::Input(1), 1, 1.0).unwrap();
+        writes.lock().unwrap().clear();
+
+        dev.set_channel_width(ChannelId::Input(0), 0.0).unwrap();
+
+        let mixed = uc::matrix_word(std::f32::consts::FRAC_1_SQRT_2, 2 * 36);
+        let mixed_r = uc::matrix_word(std::f32::consts::FRAC_1_SQRT_2, 2 * 36 + 1);
+        let mixed_lr = uc::matrix_word(std::f32::consts::FRAC_1_SQRT_2, 3 * 36);
+        let mixed_rr = uc::matrix_word(std::f32::consts::FRAC_1_SQRT_2, 3 * 36 + 1);
+        let w = writes.lock().unwrap();
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, mixed.0, mixed.1)));
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, mixed_r.0, mixed_r.1)));
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, mixed_lr.0, mixed_lr.1)));
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, mixed_rr.0, mixed_rr.1)));
+    }
+
+    #[test]
+    fn uc_playback_width_rewrites_the_pair_matrix() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_volume(ChannelId::Playback(0), 1, 1.0).unwrap();
+        dev.set_volume(ChannelId::Playback(1), 1, 1.0).unwrap();
+        writes.lock().unwrap().clear();
+
+        dev.set_channel_width(ChannelId::Playback(0), 0.0).unwrap();
+
+        let mixed = uc::matrix_word(std::f32::consts::FRAC_1_SQRT_2, 2 * 36 + 18);
+        let mixed_r = uc::matrix_word(std::f32::consts::FRAC_1_SQRT_2, 2 * 36 + 19);
+        let w = writes.lock().unwrap();
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, mixed.0, mixed.1)));
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, mixed_r.0, mixed_r.1)));
+    }
+
+    #[test]
+    fn uc_ms_proc_writes_only_the_matrix() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_input_pair_linked(0, true).unwrap();
+        dev.set_volume(ChannelId::Input(0), 1, 1.0).unwrap();
+        dev.set_volume(ChannelId::Input(1), 1, 1.0).unwrap();
+        writes.lock().unwrap().clear();
+
+        dev.set_input_ms_proc(0, true).unwrap();
+
+        let w = writes.lock().unwrap();
+        let (value, index) = uc::matrix_word(0.5, 2 * 36);
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+        assert!(w.contains(&Write::Vendor(
+            protocol::req::MIXER,
+            uc::matrix_word(0.5, 2 * 36 + 1).0,
+            uc::matrix_word(0.5, 2 * 36 + 1).1
+        )));
+        assert!(w.contains(&Write::Vendor(
+            protocol::req::MIXER,
+            uc::matrix_word(0.5, 3 * 36).0,
+            uc::matrix_word(0.5, 3 * 36).1
+        )));
+        assert!(!w.iter().any(|x| matches!(x, Write::Words(_))));
+    }
+
+    #[test]
+    fn uc_pitch_writes_the_four_dds_words() {
+        let (mut dev, writes) = open(Model::Uc);
+        writes.lock().unwrap().clear();
+
+        dev.set_pitch(0.0).unwrap();
+        {
+            let w = writes.lock().unwrap();
+            assert!(w.contains(&Write::Vendor(protocol::req::DDS, 0xc350, 0x0000)));
+            assert!(w.contains(&Write::Vendor(protocol::req::DDS, 0x8db9, 0x2d01)));
+            assert!(w.contains(&Write::Vendor(protocol::req::DDS, 0x8235, 0x5502)));
+            assert!(w.contains(&Write::Vendor(protocol::req::DDS, 0x7d00, 0x0003)));
+        }
+
+        writes.lock().unwrap().clear();
+        dev.set_pitch(5.0).unwrap();
+        let w = writes.lock().unwrap();
+        // The 44.1 kHz word from the verified pitch capture.
+        assert!(w.contains(&Write::Vendor(protocol::req::DDS, 0x86f9, 0x8101)));
+        assert_eq!(dev.settings().pitch_percent, 5.0);
+    }
+
+    #[test]
+    fn uc_pitch_is_written_on_scene_apply() {
+        let (mut dev, writes) = open(Model::Uc);
+        let mut scene = dev.capture_scene();
+        scene.settings.pitch_percent = 1.5;
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        let w = writes.lock().unwrap();
+        assert_eq!(
+            w.iter()
+                .filter(|x| matches!(x, Write::Vendor(protocol::req::DDS, ..)))
+                .count(),
+            4
+        );
     }
 
     #[test]
@@ -9670,7 +9920,10 @@ mod tests {
             inputs
         );
         let playback = dev.playback_meters().expect("UC playback meters");
-        assert!((playback[0] - 0.5012).abs() < 0.02, "playback 1 RMS at -6.0 dBFS");
+        assert!(
+            (playback[0] - 0.5012).abs() < 0.02,
+            "playback 1 RMS at -6.0 dBFS"
+        );
         let outputs = dev
             .output_peaks_internal(true)
             .expect("UC output peak line");
@@ -9729,11 +9982,7 @@ mod tests {
         let run = UcMeterPacket::parse(&bytes).expect("data page");
         dev.uc_meters.apply(&run);
         let over = dev.output_over_levels(true).expect("UC over levels");
-        assert_eq!(
-            over[0],
-            Some(10f32.powf(0.25 / 20.0)),
-            "run 8 = +0.25 dB"
-        );
+        assert_eq!(over[0], Some(10f32.powf(0.25 / 20.0)), "run 8 = +0.25 dB");
         // A row without over stays clear.
         assert_eq!(over[4], None);
         // The playback record reads the same counter law.
@@ -9823,10 +10072,8 @@ mod tests {
         let (mut dev, _writes) = open(Model::Uc);
         let mut flag = [0u8; UcMeterPacket::LEN];
         flag[4..8].copy_from_slice(&1u32.to_le_bytes());
-        flag[(3 + 4 * 4) * 2..(3 + 4 * 4) * 2 + 2]
-            .copy_from_slice(&1098u16.to_le_bytes());
-        flag[(3 + 4 * 8) * 2..(3 + 4 * 8) * 2 + 2]
-            .copy_from_slice(&159u16.to_le_bytes());
+        flag[(3 + 4 * 4) * 2..(3 + 4 * 4) * 2 + 2].copy_from_slice(&1098u16.to_le_bytes());
+        flag[(3 + 4 * 8) * 2..(3 + 4 * 8) * 2 + 2].copy_from_slice(&159u16.to_le_bytes());
         let rms = UcRmsPacket::parse(&flag).expect("flag page");
         dev.uc_meters.apply_rms(&rms);
         let inputs = dev.input_rms_meters().expect("UC input RMS");
@@ -9971,7 +10218,7 @@ mod tests {
         // record non-zero so the page still parses (a page whose whole
         // record region reads zero is a filler page).
         data[276..280].copy_from_slice(&0u32.to_le_bytes());
-        data[108+4*30..112+4*30].copy_from_slice(&1u32.to_le_bytes());
+        data[108 + 4 * 30..112 + 4 * 30].copy_from_slice(&1u32.to_le_bytes());
         dev.uc_meters
             .apply(&UcMeterPacket::parse(&data).expect("data page"));
         let silent = dev
@@ -9990,7 +10237,7 @@ mod tests {
         assert!(settled > 0.0, "a valid analog record gives a level");
         // A zero analog record is silence and releases.
         an[108..112].copy_from_slice(&0u32.to_le_bytes());
-        an[108+120..112+120].copy_from_slice(&1u32.to_le_bytes());
+        an[108 + 120..112 + 120].copy_from_slice(&1u32.to_le_bytes());
         dev.uc_meters
             .apply(&UcMeterPacket::parse(&an).expect("data page"));
         let silent = dev.meters().expect("UC input meters")[0];
@@ -10007,7 +10254,10 @@ mod tests {
         dev.uc_meters
             .apply(&UcMeterPacket::parse(&data).expect("data page"));
         let level = dev.meters().expect("UC input meters")[8];
-        assert!((level - 0.1).abs() < 1e-3, "S/PDIF at -20 dBFS, got {level}");
+        assert!(
+            (level - 0.1).abs() < 1e-3,
+            "S/PDIF at -20 dBFS, got {level}"
+        );
         // A record page always co-publishes other channels' records; keep
         // one outside the S/PDIF bank so page validity does not hinge on
         // this record going to a no-data filler.
@@ -10023,12 +10273,11 @@ mod tests {
         );
         // A zero record is silence and releases.
         data[140..144].copy_from_slice(&0u32.to_le_bytes());
-        data[108+120..112+120].copy_from_slice(&1u32.to_le_bytes());
+        data[108 + 120..112 + 120].copy_from_slice(&1u32.to_le_bytes());
         dev.uc_meters
             .apply(&UcMeterPacket::parse(&data).expect("data page"));
         assert_eq!(dev.meters().expect("UC input meters")[8], 0.0);
     }
-
 
     #[test]
     fn phones_routings_stay_in_their_own_column() {
@@ -10197,11 +10446,7 @@ mod tests {
         let (left_value, left_index) = uc::matrix_word(0.5, 4 * 36 + 18);
         let (right_value, right_index) = uc::matrix_word(1.0, 5 * 36 + 19);
         let w = writes.lock().unwrap();
-        assert!(w.contains(&Write::Vendor(
-            protocol::req::MIXER,
-            left_value,
-            left_index
-        )));
+        assert!(w.contains(&Write::Vendor(protocol::req::MIXER, left_value, left_index)));
         assert!(w.contains(&Write::Vendor(
             protocol::req::MIXER,
             right_value,
@@ -10294,18 +10539,20 @@ mod tests {
 
         dev.set_output_phase(6, true).unwrap();
         let (value, index) = uc::matrix_word(1.0, 6 * 36);
-        assert!(writes
-            .lock()
-            .unwrap()
-            .contains(&Write::Vendor(protocol::req::MIXER, !value, index)));
+        assert!(writes.lock().unwrap().contains(&Write::Vendor(
+            protocol::req::MIXER,
+            !value,
+            index
+        )));
         assert!(dev.outputs()[6].phase_l);
 
         writes.lock().unwrap().clear();
         dev.set_output_phase(6, false).unwrap();
-        assert!(writes
-            .lock()
-            .unwrap()
-            .contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+        assert!(writes.lock().unwrap().contains(&Write::Vendor(
+            protocol::req::MIXER,
+            value,
+            index
+        )));
         assert!(!dev.outputs()[6].phase_l);
     }
 
@@ -10317,10 +10564,11 @@ mod tests {
         writes.lock().unwrap().clear();
         dev.set_volume(ChannelId::Input(0), 0, 1.0).unwrap();
         let (value, index) = uc::matrix_word(1.0, 0);
-        assert!(writes
-            .lock()
-            .unwrap()
-            .contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+        assert!(writes.lock().unwrap().contains(&Write::Vendor(
+            protocol::req::MIXER,
+            value,
+            index
+        )));
     }
 
     #[test]
@@ -10329,13 +10577,13 @@ mod tests {
         // Playback 1 (source 18) into AN4 (block 3), the side its stereo
         // pair does not normally reach.
         dev.set_volume(ChannelId::Playback(0), 1, 1.0).unwrap();
-        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
-            .unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5).unwrap();
         let (value, index) = uc::matrix_word(0.5, 3 * 36 + 18);
-        assert!(writes
-            .lock()
-            .unwrap()
-            .contains(&Write::Vendor(protocol::req::MIXER, value, index)));
+        assert!(writes.lock().unwrap().contains(&Write::Vendor(
+            protocol::req::MIXER,
+            value,
+            index
+        )));
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(0.5));
         // The pair model is untouched for the off-side cell.
         assert_eq!(dev.volume(ChannelId::Playback(0), 1).unwrap(), 1.0);
@@ -10355,8 +10603,7 @@ mod tests {
         let (mut dev, writes) = open(Model::Ucx);
         // Playback 1 into AN4: the side its stereo pair does not normally
         // reach.  Block 3 is AN4 in the UCX DSP/output order.
-        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
-            .unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5).unwrap();
         let reg = ucx::matrix_reg(3, Source::Playback(0));
         let value = ucx::matrix_gain(0.5);
         assert!(writes
@@ -10394,16 +10641,14 @@ mod tests {
             .iter()
             .any(|w| matches!(w, Write::Words(words) if words.contains(&(reg, value)))));
 
-        dev.set_matrix_cell(ChannelId::Playback(0), 3, 2.0)
-            .unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 2.0).unwrap();
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(2.0));
     }
 
     #[test]
     fn ucx_scene_carries_and_applies_off_side_matrix_cells() {
         let (mut dev, _writes) = open(Model::Ucx);
-        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
-            .unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5).unwrap();
         let scene = dev.capture_scene();
         assert_eq!(scene.matrix_overrides.len(), 1);
         let cell = scene.matrix_overrides[0];
@@ -10418,8 +10663,7 @@ mod tests {
     #[test]
     fn ucx_pair_fader_clears_off_side_matrix_cells() {
         let (mut dev, _writes) = open(Model::Ucx);
-        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
-            .unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5).unwrap();
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(0.5));
         dev.set_volume(ChannelId::Playback(0), 2, 0.25).unwrap();
         // The off side of the pair carries no level: the cell is empty.
@@ -10515,7 +10759,10 @@ mod tests {
             })
         };
         assert!(touched(main_block), "External Input must replace Main Out");
-        assert!(!touched(b_block), "External Input must leave Speaker B alone");
+        assert!(
+            !touched(b_block),
+            "External Input must leave Speaker B alone"
+        );
     }
 
     #[test]
@@ -10618,6 +10865,25 @@ mod tests {
     }
 
     #[test]
+    fn uc_mono_rewrites_when_the_settings_flag_is_already_set() {
+        // The GUI used to set `settings.mono` before calling the setter.
+        // That must not suppress the first matrix rewrite.
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_main_out(Some(3)).unwrap(); // Phones 7/8
+        dev.settings.mono = true;
+        writes.lock().unwrap().clear();
+        dev.set_mono(true).unwrap();
+        let w = writes.lock().unwrap();
+        assert!(
+            w.iter().any(|write| {
+                matches!(write, Write::Vendor(protocol::req::MIXER, _, idx)
+                    if matches!((*idx & 0x3fff) as usize / 36, 6 | 7))
+            }),
+            "Mono must rewrite the active Phones pair even with a stale flag"
+        );
+    }
+
+    #[test]
     fn uc_mono_uses_the_active_speaker_b_pair() {
         let (mut dev, writes) = open(Model::Uc);
         dev.set_main_out(Some(1)).unwrap();
@@ -10641,8 +10907,7 @@ mod tests {
     #[test]
     fn uc_scene_carries_off_side_matrix_cells() {
         let (mut dev, _writes) = open(Model::Uc);
-        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
-            .unwrap();
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5).unwrap();
         let scene = dev.capture_scene();
         assert_eq!(scene.matrix_overrides.len(), 1);
         let cell = scene.matrix_overrides[0];
@@ -10679,13 +10944,11 @@ mod tests {
         dev.apply_scene(&scene).unwrap();
         let w = writes.lock().unwrap();
 
-        // Exact TotalMix connect count: 30 × 0x15, 18 × 0x1a, 666 × 0x12.
-        assert_eq!(w.len(), 714);
+        // TotalMix mixer push: 30 × 0x15, 18 × 0x1a, 666 × 0x12, plus the
+        // four DDS words written from the host pitch setting.
+        assert_eq!(w.len(), 718);
         for (i, write) in w[..30].iter().enumerate() {
-            assert_eq!(
-                *write,
-                Write::Vendor(protocol::req::LOOPBACK, 0, i as u16)
-            );
+            assert_eq!(*write, Write::Vendor(protocol::req::LOOPBACK, 0, i as u16));
         }
 
         // Outputs are numeric ascending, so the push walks them in reverse
@@ -10701,7 +10964,8 @@ mod tests {
 
         // Outputs are numeric ascending and written in reverse order, so
         // the final pair pushed is AN1/2 (encoder 4/5, masters 992/993).
-        let first_pair = w.len() - 76;
+        // The four DDS words follow the mixer push.
+        let first_pair = w.len() - 80;
         assert_eq!(w[first_pair], Write::Vendor(protocol::req::PGA, 6, 4));
         assert_eq!(w[first_pair + 1], Write::Vendor(protocol::req::PGA, 6, 5));
         assert_eq!(
@@ -10712,6 +10976,8 @@ mod tests {
             w[first_pair + 3],
             Write::Vendor(protocol::req::MIXER, 0x2000, 993)
         );
+        assert_eq!(w[718 - 4], Write::Vendor(protocol::req::DDS, 0xc350, 0));
+        assert_eq!(w[718 - 1], Write::Vendor(protocol::req::DDS, 0x7d00, 3));
     }
 
     #[test]
@@ -10850,20 +11116,19 @@ mod tests {
 
         let w = writes.lock().unwrap();
         // Device-owned writes must not be part of a scene apply.
-        assert!(!w.iter().any(|x| matches!(x, Write::Vendor(protocol::req::LEVELS, ..))));
-        assert!(!w.iter().any(|x| matches!(
-            x,
-            Write::Vendor(protocol::req::SETTINGS, _, 1487)
-        )));
-        assert!(!w.iter().any(|x| matches!(
-            x,
-            Write::Vendor(protocol::req::PGA, _, 0..=3)
-        )));
+        assert!(!w
+            .iter()
+            .any(|x| matches!(x, Write::Vendor(protocol::req::LEVELS, ..))));
+        assert!(!w
+            .iter()
+            .any(|x| matches!(x, Write::Vendor(protocol::req::SETTINGS, _, 1487))));
+        assert!(!w
+            .iter()
+            .any(|x| matches!(x, Write::Vendor(protocol::req::PGA, _, 0..=3))));
         // The mixer still goes through.
-        assert!(w.iter().any(|x| matches!(
-            x,
-            Write::Vendor(protocol::req::MIXER, ..)
-        )));
+        assert!(w
+            .iter()
+            .any(|x| matches!(x, Write::Vendor(protocol::req::MIXER, ..))));
         // Switches/clock are device-known, so the scene's values were not
         // displayed.  Input gain has no readback; the last known value is
         // left for display and still not written.
@@ -11131,7 +11396,9 @@ mod tests {
         dev.apply_scene(&scene).unwrap();
         assert_eq!(dev.inputs()[2].gain, Some(0));
         let words = written_words(&writes);
-        assert!(words.iter().any(|(addr, value)| *addr == 0x0207 && *value == 0));
+        assert!(words
+            .iter()
+            .any(|(addr, value)| *addr == 0x0207 && *value == 0));
     }
 
     #[test]
@@ -11195,17 +11462,19 @@ mod tests {
         dev.set_eq_for_record(true).unwrap();
         dev.set_optical_out_format(true).unwrap();
         // EQ+D on clears bit 8; SPDIF optical clears bit 10.
-        assert!(writes
-            .lock()
-            .unwrap()
-            .contains(&Write::Vendor(protocol::req::SETTINGS, 0x00C8, 1487)));
+        assert!(writes.lock().unwrap().contains(&Write::Vendor(
+            protocol::req::SETTINGS,
+            0x00C8,
+            1487
+        )));
         dev.set_eq_for_record(false).unwrap();
         dev.set_optical_out_format(false).unwrap();
         dev.set_word_clock_termination(false).unwrap();
-        assert!(writes
-            .lock()
-            .unwrap()
-            .contains(&Write::Vendor(protocol::req::SETTINGS, 0x05C0, 1487)));
+        assert!(writes.lock().unwrap().contains(&Write::Vendor(
+            protocol::req::SETTINGS,
+            0x05C0,
+            1487
+        )));
     }
 
     #[test]
@@ -11471,18 +11740,16 @@ mod tests {
         let words: usize = bursts.iter().map(|v| v.len()).sum();
         assert!(words > 1000, "scene shrank to {words} words");
         assert!(
-            bursts.iter().all(|v| !v.is_empty() && v.len() <= HWDEP_MAX_WORDS),
+            bursts
+                .iter()
+                .all(|v| !v.is_empty() && v.len() <= HWDEP_MAX_WORDS),
             "a burst exceeded the ABI limit"
         );
         assert!(
             bursts.iter().any(|v| v.len() > 1),
             "words were still sent one at a time"
         );
-        assert!(
-            w.len() < 100,
-            "scene still used {} USB transfers",
-            w.len()
-        );
+        assert!(w.len() < 100, "scene still used {} USB transfers", w.len());
         // Full bursts at the 16 ms drain gap, plus the loopback vendors.
         assert!(elapsed < Duration::from_secs(2), "scene took {elapsed:?}");
     }

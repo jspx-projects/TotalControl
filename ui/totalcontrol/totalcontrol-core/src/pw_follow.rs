@@ -122,6 +122,24 @@ pub struct Owner {
     pub rate: u32,
 }
 
+/// A readable application name for the Follow source line.  PipeWire often
+/// reports reverse-DNS names such as `io.github.celluloid_player.Celluloid`;
+/// users only need the application part.
+pub fn display_application_name(name: &str) -> String {
+    let name = name.trim();
+    let last = name.rsplit('.').next().unwrap_or(name);
+    let last = last
+        .strip_suffix("_player")
+        .or_else(|| last.strip_suffix("-player"))
+        .unwrap_or(last)
+        .replace('_', " ");
+    let mut chars = last.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => name.to_string(),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Handover {
     identity: ClientIdentity,
@@ -787,5 +805,18 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].application_name, "Film Player");
         assert_eq!(found[0].rate, Some(44_100));
+    }
+
+    #[test]
+    fn reverse_dns_application_names_show_only_the_app() {
+        assert_eq!(
+            display_application_name("io.github.celluloid_player.Celluloid"),
+            "Celluloid"
+        );
+        assert_eq!(
+            display_application_name("io.github.celluloid_player"),
+            "Celluloid"
+        );
+        assert_eq!(display_application_name("Firefox"), "Firefox");
     }
 }

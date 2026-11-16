@@ -119,6 +119,17 @@ Authoritative files:
 All UI layout and interaction rules live in `docs/spec/TOTALCONTROL-GUI-SPEC.md`.
 Do not duplicate them here; when a rule is missing, add it to the spec.
 
+Required before changing any channel or settings layout:
+
+- A control that is not visible keeps its grid row as a nonvisible filler.
+- A settings card always contains all nine rows, even when a row is empty.
+- A channel template keeps every reserved row when an element is omitted.
+- Read `docs/spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md` ("An omitted
+  element leaves its row empty, and the rows below keep their position") and
+  `docs/spec/TOTALCONTROL-GUI-SPEC.md` §4 before editing a card.
+- Test the affected card with every optional control hidden, not only with
+  the fully populated case.
+
 ## Git workflow
 
 `main` is the protected integration branch. Every change lands through a pull

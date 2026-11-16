@@ -93,7 +93,9 @@ solo amber.  A fader-linked group tints the caps of its members with its
 colour; the global fader group tints them yellow while it is ganged.
 
 The Control Room closes the Hardware Outputs row, flush with the mixer's right
-edge.
+edge. When the row cannot hold both, the Control Room stays on top and covers
+the right-hand output strips and the `HARDWARE OUTPUTS` title; the page does
+not widen to push the Control Room out of view.
 
 The device card reads:
 
@@ -991,13 +993,13 @@ Empty rows keep the height of the control the grid reserves for them.
 | Row | Software playback | Hardware output |
 |---|---|---|
 | 1 | `stereo` | `stereo` |
-| 2 | `width` | reference label |
-| 3 | `send FX` | reference dropdown |
-| 4 | `MS proc` | `return FX` |
-| 5 | `Ø L` `Ø R` | `Ø L` `Ø R` |
-| 6 | — | `no trim` |
-| 7 | — | space |
-| 8 | — | `talkback` |
+| 2 | space | reference label |
+| 3 | space | reference dropdown |
+| 4 | space | `return FX` |
+| 5 | space | `Ø L` `Ø R` |
+| 6 | `width` | `no trim` |
+| 7 | `send FX` | space |
+| 8 | `MS proc` | `talkback` |
 | 9 | — | `loopback` |
 
 The row heights are shared across channel types. A missing control keeps its
@@ -1010,7 +1012,7 @@ reference group; `talkback` is omitted on Control Room channels.
 | Input 3/4 | Stereo, `ref.`, Inst + reference dropdown, Gain, Width, Send FX, MS Proc, Ø L / R Ø |
 | Inputs 5–8 | Stereo, `ref.`, reference dropdown, two empty rows, Width, Send FX, MS Proc, Ø L / R Ø |
 | Inputs 9+ | Stereo, four empty rows, Width, Send FX, MS Proc, Ø L / R Ø |
-| Software playback | Stereo, Width, Send FX, MS Proc, phase slot |
+| Software playback | Stereo, four empty rows, Width, Send FX, MS Proc, phase slot |
 | Hardware output | Stereo, `ref.`, reference dropdown, Return FX, Ø L / R Ø, No Trim, space, Talkback, Loopback |
 
 - 48 V and AutoSet are available on inputs 1/2; Inst and a gain knob on 3/4;
@@ -1020,11 +1022,17 @@ reference group; `talkback` is omitted on Control Room channels.
 - Width is a pair control, -1.00 … 1.00: 1.00 full stereo, 0.00 mono and
   -1.00 swapped channels. It rewrites the pair's 2x2 send matrix in every
   routing that carries a live send; silent routings are untouched. Inputs and
-  software playback share it.
+  software playback share it. It is hidden on a mono input pair and on a
+  split software-playback pair.
 - MS Proc is a pair button on inputs and software playback. On the UCX it
   writes `NN05` on both input channels and rewrites the same 2x2 send matrix
-  with the M/S encoder (`L' = (L + R) / 2`, `R' = (L - R) / 2`); software
-  playback rewrites the matrix only. A mono input pair cannot enable it.
+  with the M/S encoder (`L' = (L + R) / 2`, `R' = (L - R) / 2`); the UC
+  writes the matrix only. Software playback rewrites the matrix only on both
+  devices. It is hidden on a mono input pair and on a split
+  software-playback pair.
+- The `ref.` label is shown only when the reference dropdown below it is
+  shown. The UC has no per-channel reference control, so the UC input and
+  output panels show neither.
 - One control spans the panel content width; two controls share it with one
   gap, so their combined width equals a single control. `stereo`, `48V`,
   `autoset`, `no trim`, `loopback` and a phase pair therefore all end at the
@@ -1161,12 +1169,13 @@ sheet shows that value. A value is written when it changes there.
 |---|---|---|
 | Clock source | yes | yes |
 | Sample rate | yes | yes, when the device owns the rate |
+| Pitch | yes | yes |
 | Line In reference | yes | — |
 | Line Out reference | yes | — |
 | Phones reference | yes | — |
 | Optical | yes | yes |
 | SPDIF | yes | yes |
-| Single speed word clock | yes | yes |
+| Single speed:<br>word clock | yes | yes |
 | Word clock in | — | yes |
 | EQ for Record | — | yes |
 | Firmware | yes | yes |
@@ -1178,8 +1187,15 @@ control shares one left edge, and every dropdown has the same width.
 
 The options rows belong to the unit's own group. The UC offers five clock
 sources, including LTC; the UCX offers four: Internal, SPDIF coax., Optical
-and Word. Host-side modes (`MS Proc`, `AN 1>2`, `Input Link`) appear in the
-GLOBAL grid, apart from the device-owned rows.
+and Word.
+
+Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
+wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
+Every change is written immediately to the device.
+
+The panel is 360 px wide at scale 1 and its caption column is 110 px. It is
+only as tall as its content, capped at the window height. Longer labels wrap
+rather than widening the column; `Single speed:` sits above `word clock`.
 
 On the UCX the options word, the reference levels and the 48 V/Inst/Level
 switches have no readback. The saved scene value is written at connect and the
@@ -1209,7 +1225,9 @@ connected device's fixed rates: 32, 44.1, 48, 64, 88.2, 96, 128, 176.4 and
 running at, in every mode. In Follow mode it also shows `Mode` and `Source`;
 `Source` reads `<application> · <rate>` for the stream setting the graph, and
 reads `Waiting for playback` with the last graph rate when no stream feeds SW
-playback 1/2. The source is always SW playback 1/2, never the focused strip.
+playback 1/2. A reverse-DNS PipeWire application name is reduced to its final
+component, so `io.github.celluloid_player.Celluloid` reads `Celluloid`. The
+source is always SW playback 1/2, never the focused strip.
 
 Follow uses the stream linked to `playback_AUX0`/`playback_AUX1`, including a
 player feeding a TotalControl 5.1/7.1 sink through the sink's input stream, not
@@ -1225,7 +1243,7 @@ connected device's nine rates, keeping the previous value. On disconnect or a
 clean exit it restores that value if the list is still the one it wrote. No
 persistent PipeWire configuration file is installed.
 
-Above the driver rows, `Xruns (PipeWire)` counts the PipeWire graph xruns
+Above the driver rows, `Xruns` counts the PipeWire graph xruns
 for the RME output node, sampled once a second while the drawer is open.
 It is reset with the same button as the driver rows.
 
@@ -1950,7 +1968,7 @@ The displayed line is not an acoustic measurement. The PC calibration is a
 full-duplex electrical loopback (output 5 to input 5); the evidence is in
 `docs/work/UC-RTL-LOOPBACK.md`.
 
-Below it, **Xruns (PipeWire)** shows the PipeWire graph xrun count for the
+Below it, **Xruns** shows the PipeWire graph xrun count for the
 RME output node, above the driver rows. It is sampled once a second while
 the drawer is open and reset with the driver baselines.
 
@@ -2027,5 +2045,6 @@ beyond the window.
   rises with the trim value. Output meters remain post-fader.
 - Width is host-side and has no width register: it rewrites the pair's
   matrix cells. Playback stereo/mono, No Trim and Talkback receive are
-  host-side and do not produce device writes. Mono writes the monitor flags
-  `0x3f9e` and `0x3f98`.
+  host-side and do not produce device writes. On the UCX Mono writes the
+  monitor flags `0x3f9e` and `0x3f98`; on the UC it rewrites the active
+  monitor pair's matrix cells.

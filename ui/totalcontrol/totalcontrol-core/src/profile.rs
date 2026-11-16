@@ -448,6 +448,8 @@ impl DeviceProfile {
             loopback: has_output(Operation::Loopback),
             no_trim: has_output(Operation::NoTrim),
             talkback: has_global(GlobalControl::Talkback),
+            dim: has_global(GlobalControl::Dim),
+            speaker_b: has_global(GlobalControl::SpeakerB),
             phase: has_input(Operation::Phase),
             phase_without_eq: self.phase_without_eq,
             output_phase: has_output(Operation::Phase),
@@ -471,7 +473,10 @@ impl DeviceProfile {
             channel_width: self.channel_width,
             ms_proc: has_input(Operation::Ms) || has_playback(Operation::Ms),
             an12: has_global(GlobalControl::An12Link),
-            input_link: has_input(Operation::Link),
+            // The global Input Link is a distinct AN1/2 preamp link, not the
+            // per-pair stereo link expressed by Operation::Link. No backend
+            // implements it yet.
+            input_link: false,
             eq_for_record: has_global(GlobalControl::EqForRecord),
             optical_out: has_global(GlobalControl::OpticalFormat),
         }

@@ -531,8 +531,10 @@ split as `wValue` = bits 31..16 and the `wIndex` high byte = bits 15..8; the
 | 44.1 kHz | `0x8db9` / `0x2d01` |
 | 48 kHz | `0x8235` / `0x5502` |
 
-Pitch scales the DDS value as `base / (1 + pitch / 100)`.  The fourth word
-has a fixed low byte `3`; its clock role is not part of the rate selection.
+Pitch scales the DDS value as `base / (1 + pitch / 100)`.  A pitch change
+writes all four words; it sends no rate-family word and no `0x10` commit.  The
+fourth word tracks the 48 kHz-family clock at 25/24 and has a fixed low byte
+`3`; its clock role is not part of the rate selection.
 
 A host rate change closes the current session with
 `0x13 / wValue 0x000F / wIndex 0xC000`, writes the new rate word when the

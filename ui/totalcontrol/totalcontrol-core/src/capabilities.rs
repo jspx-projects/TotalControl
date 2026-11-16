@@ -19,6 +19,10 @@ pub struct DeviceCapabilities {
     pub no_trim: bool,
     /// The backend can inject the Talkback source into receiving outputs.
     pub talkback: bool,
+    /// The backend can apply the Control Room Dim action.
+    pub dim: bool,
+    /// The backend can switch the Control Room Speaker B pair.
+    pub speaker_b: bool,
     pub phase: bool,
     /// Input phase works without an EQ section (the UC stores it in the
     /// matrix sign; the UCX has a channel register).

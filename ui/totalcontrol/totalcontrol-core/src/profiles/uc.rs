@@ -115,6 +115,7 @@ const OUTPUT_OPS: OperationSet = OperationSet::new(
         Operation::Link,
         Operation::NoTrim,
         Operation::Loopback,
+        Operation::TalkbackReceive,
     ],
     &[Operation::Volume, Operation::Balance],
 );
@@ -130,7 +131,7 @@ const GLOBALS: GlobalSet = GlobalSet::new(
         GlobalControl::Dim,
         GlobalControl::SpeakerB,
         GlobalControl::Mono,
-        GlobalControl::An12Link,
+        GlobalControl::Pitch,
     ],
     &[],
 );
@@ -216,7 +217,7 @@ pub const PC: DeviceProfile = DeviceProfile {
     layout: LAYOUT,
     requires: REQUIRES,
     phase_without_eq: true,
-    channel_width: false,
+    channel_width: true,
     dsp: false,
 };
 
@@ -228,6 +229,18 @@ pub const AP: DeviceProfile = DeviceProfile {
 #[cfg(test)]
 mod tests {
     use super::CHANNELS;
+
+    #[test]
+    fn uc_capabilities_match_the_implemented_channel_controls() {
+        let caps = super::PC.capabilities();
+        assert!(caps.channel_width);
+        assert!(caps.ms_proc);
+        assert!(caps.pitch);
+        assert!(caps.talkback);
+        assert!(caps.loopback);
+        assert!(!caps.an12);
+        assert!(!caps.input_link);
+    }
 
     #[test]
     fn hardware_output_row_is_numeric_ascending_with_phones_at_out_7_8() {
