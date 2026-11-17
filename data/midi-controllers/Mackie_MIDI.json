@@ -15,23 +15,6 @@
     "devices": 2,
     "direction": "duplex"
   },
-  "assignment": {
-    "enabled_by": "protocol",
-    "controls": [
-      "select",
-      "mute",
-      "solo",
-      "rec",
-      "vpot_push"
-    ],
-    "choices": [
-      "none",
-      "strip_mute",
-      "strip_solo",
-      "strip_select",
-      "submix_select"
-    ]
-  },
   "options": [
     {
       "key": "submix_linked",

@@ -3826,7 +3826,10 @@ fn preselect_protocol(state: &TotalControl, device: &crate::controllers::discove
 }
 
 /// Re-read the device list (after a device switch, reconnect or opening
-/// the dialog) and rebind the enabled instances.
+/// the dialog) and rebind the enabled instances. The best candidates come
+/// first: devices that match a definition, then the unit's own ports, then
+/// the remaining USB MIDI devices. Nothing is hidden; an unknown controller
+/// stays selectable.
 fn refresh_controller_devices(state: &mut TotalControl) {
     let selected_key = state
         .controller_devices
@@ -3834,12 +3837,14 @@ fn refresh_controller_devices(state: &mut TotalControl) {
         .map(|d| controller_device_key(state, d));
     state.controller_devices =
         crate::controllers::discover::controller_devices(&state.device.card_id());
-    // Simulation and a unit without visible rawmidi nodes still offer the
-    // model's own ports, so the dialog stays usable.
-    if !state
-        .controller_devices
-        .iter()
-        .any(|d| d.card_id == state.device.card_id())
+    // The simulation offers the model's own ports even without rawmidi
+    // nodes, so the dialog stays usable. Real hardware lists only the
+    // MIDI ports that exist.
+    if state.device.is_mock()
+        && !state
+            .controller_devices
+            .iter()
+            .any(|d| d.card_id == state.device.card_id())
     {
         let count = if state.device.canonical_model() == "Babyface-classic" {
             1
@@ -3856,6 +3861,17 @@ fn refresh_controller_devices(state: &mut TotalControl) {
             });
         }
     }
+    let unit_card = state.device.card_id();
+    let rank = |d: &crate::controllers::discover::MidiDevice| -> u8 {
+        if crate::controllers::discover::preselect(d, &state.controller_protocols).is_some() {
+            0
+        } else if d.card_id == unit_card {
+            1
+        } else {
+            2
+        }
+    };
+    state.controller_devices.sort_by_key(rank);
     state.controller_selected_device = selected_key
         .and_then(|key| {
             state
@@ -13702,9 +13718,10 @@ fn popover<'a>(
     )
 }
 
-/// A centered, modal dialog with a dimmed scrim.  The Settings sheet used
-/// to be a sidebar popover; dialogs are centered and cannot be dragged off
-/// the window.
+/// A modal dialog with a dimmed scrim, anchored below the top bar. The
+/// dialog keeps its top edge fixed while its content grows downward, so
+/// hovering or expanding a control never shifts the text under the pointer.
+/// When the content exceeds the available height, the dialog body scrolls.
 fn centered_dialog<'a>(
     state: &'a TotalControl,
     body: Element<'a, Message>,
@@ -13718,11 +13735,24 @@ fn centered_dialog<'a>(
             .padding(theme::SPACE_XL * scale)
             .width(Length::Fixed(width * scale)),
     );
+    let top = (theme::TOP_BAR_H + theme::SPACE_TIGHT) * scale;
+    let window_h = state.window_size.map(|(_, h)| h).unwrap_or(800.0);
+    let max_h = (window_h - top - theme::SPACE_XL * scale).max(200.0 * scale);
+    let scroller = scrollable(card)
+        .direction(scrollable::Direction::Vertical(theme::thin_scrollbar()))
+        .style(theme::scrollable);
+    let bounded = container(scroller).max_height(max_h);
     opaque(
         mouse_area(
-            container(card)
+            container(bounded)
                 .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .align_y(iced::Alignment::Start)
+                .padding(iced::Padding {
+                    top,
+                    left: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                })
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .style(|_theme: &iced::Theme| container::Style {
@@ -21536,14 +21566,24 @@ mod tests {
         let (tx, rx) = iced::futures::channel::mpsc::channel(4096);
         state.controller_settings.enabled = true;
         super::refresh_controller_devices(state);
-        let device = state.controller_devices[0].clone();
+        let pos = state
+            .controller_devices
+            .iter()
+            .position(|d| super::controller_device_key(state, d) == "device:0")
+            .expect("the unit's first port is listed");
+        let device = state.controller_devices[pos].clone();
         let key = super::controller_device_key(state, &device);
         let choice = state.controller_settings.devices.entry(key).or_default();
         choice.input = true;
         choice.protocol = "mackie_control".into();
         super::rebuild_controller_workers(state);
-        state.controller_instances[0].tx = Some(tx);
-        state.controller_instances[0].state.nav.online = true;
+        let inst = state
+            .controller_instances
+            .iter_mut()
+            .find(|i| i.device_key == "device:0")
+            .expect("instance");
+        inst.tx = Some(tx);
+        inst.state.nav.online = true;
         rx
     }
 
@@ -21708,30 +21748,40 @@ mod tests {
     #[test]
     fn two_instances_navigate_independently() {
         let mut state = new(true, None, None);
-        let (tx0, _rx0) = iced::futures::channel::mpsc::channel(4096);
-        let (tx1, _rx1) = iced::futures::channel::mpsc::channel(4096);
         state.controller_settings.enabled = true;
         super::refresh_controller_devices(&mut state);
-        for i in 0..2 {
-            let device = state.controller_devices[i].clone();
-            let key = super::controller_device_key(&state, &device);
-            let choice = state.controller_settings.devices.entry(key).or_default();
+        for key in ["device:0", "device:1"] {
+            assert!(state
+                .controller_devices
+                .iter()
+                .any(|d| super::controller_device_key(&state, d) == key));
+            let choice = state.controller_settings.devices.entry(key.into()).or_default();
             choice.input = true;
             choice.protocol = "mackie_control".into();
         }
         set_mackie_option(&mut state, "stereo_to_mono", true);
         super::rebuild_controller_workers(&mut state);
-        state.controller_instances[0].tx = Some(tx0);
-        state.controller_instances[1].tx = Some(tx1);
-        state.controller_instances[0].state.nav.online = true;
-        state.controller_instances[1].state.nav.online = true;
+        for inst in &mut state.controller_instances {
+            let (tx, _rx) = iced::futures::channel::mpsc::channel(4096);
+            inst.tx = Some(tx);
+            inst.state.nav.online = true;
+        }
+        let idx = |state: &TotalControl, key: &str| {
+            state
+                .controller_instances
+                .iter()
+                .position(|i| i.device_key == key)
+                .expect("instance")
+        };
+        let i0 = idx(&state, "device:0");
+        let i1 = idx(&state, "device:1");
         // Instance 2 banks right; instance 1 stays put.
-        let _ = update(&mut state, Message::ControllerIn(1, vec![0x90, 0x2f, 0x7f]));
-        assert_eq!(state.controller_instances[1].state.nav.bank, 8);
-        assert_eq!(state.controller_instances[0].state.nav.bank, 0);
+        let _ = update(&mut state, Message::ControllerIn(i1, vec![0x90, 0x2f, 0x7f]));
+        assert_eq!(state.controller_instances[i1].state.nav.bank, 8);
+        assert_eq!(state.controller_instances[i0].state.nav.bank, 0);
         // Each instance's fader 1 addresses its own window.
-        let _ = update(&mut state, Message::ControllerIn(1, vec![0xe0, 0x68, 0x68]));
-        let _ = update(&mut state, Message::ControllerIn(0, vec![0xe0, 0x00, 0x20]));
+        let _ = update(&mut state, Message::ControllerIn(i1, vec![0xe0, 0x68, 0x68]));
+        let _ = update(&mut state, Message::ControllerIn(i0, vec![0xe0, 0x00, 0x20]));
         let gain9 = super::channel_level(&state, ChannelId::Input(8), 0);
         let gain1 = super::channel_level(&state, ChannelId::Input(0), 0);
         assert!((gain9 - 1.0).abs() < 0.02);
@@ -21742,23 +21792,22 @@ mod tests {
     fn the_device_checkboxes_start_and_stop_the_workers() {
         let mut state = new(true, None, None);
         super::refresh_controller_devices(&mut state);
-        assert!(state.controller_devices.len() >= 2);
+        let index = state
+            .controller_devices
+            .iter()
+            .position(|d| super::controller_device_key(&state, d) == "device:1")
+            .expect("the unit's second port is listed");
+        let port = state.controller_devices[index].port();
         let _ = update(&mut state, Message::SetControllersEnabled(true));
-        let _ = update(&mut state, Message::SetControllerIn(1, true));
-        let _ = update(&mut state, Message::SetControllerOut(1, true));
+        let _ = update(&mut state, Message::SetControllerIn(index, true));
+        let _ = update(&mut state, Message::SetControllerOut(index, true));
         assert_eq!(state.controller_instances.len(), 1);
         let worker = state.controller_instances[0].worker.as_ref().unwrap();
         assert_eq!(worker.instance, 0);
-        assert_eq!(
-            worker.input,
-            Some(crate::mackie::MidiPort { card: 0, device: 1 })
-        );
-        assert_eq!(
-            worker.output,
-            Some(crate::mackie::MidiPort { card: 0, device: 1 })
-        );
+        assert_eq!(worker.input, Some(port));
+        assert_eq!(worker.output, Some(port));
         // Unchecking the input stops the instance.
-        let _ = update(&mut state, Message::SetControllerIn(1, false));
+        let _ = update(&mut state, Message::SetControllerIn(index, false));
         assert!(state.controller_instances.is_empty());
     }
 

@@ -126,8 +126,8 @@ that same height. The standard height is 350 px at scale 1.0.
 The top bar carries `OPTIONS` beside the view tabs. It opens a menu with
 `Audio Config`, `TotalControl`, `MIDI and OSC`, `Control Room` and `Reset Mix`.
 `Audio Config` opens the device Audio Configuration panel immediately left of the CONTROLS sidebar and is
-disabled without a connected device. `TotalControl` opens the centered
-application settings dialog. `MIDI and OSC` opens the centered remote-control
+disabled without a connected device. `TotalControl` opens the
+application settings dialog. `MIDI and OSC` opens the remote-control
 dialog (§1.4). `Control Room` opens the Control Room settings
 panel above the Control Room when the active backend has a mapped Control Room
 path; it is currently present for the UCX and omitted for the UC and
@@ -235,9 +235,14 @@ it immediately on the first press; submenu items open on the first click.
 ### 1.3 App settings
 
 `Options > TotalControl`, the tray Settings entry and the `,` shortcut open
-the app-level settings dialog. It is centered with a dimmed scrim, not a
+the app-level settings dialog. It is a modal over a dimmed scrim, not a
 sidebar popover, and it blocks mouse and keyboard access to the mixer until it
-closes. It holds BACKGROUND, STARTUP SYNC, SURROUND and VU FALLBACK
+closes. Every modal dialog is centered horizontally and anchored with its top
+edge just below the top bar. The top edge stays fixed while the content grows
+downward, so expanding a control never shifts the text under the pointer. A
+dialog taller than the space between the top bar and the window bottom scrolls
+its body inside the card. The app settings dialog holds BACKGROUND, STARTUP
+SYNC, SURROUND and VU FALLBACK
 sections — settings specific to TotalControl itself. Remote control has its
 own dialog (§1.4). Independent options are checkboxes, one-of-many options are
 radio buttons, and the only footer action is `Close`.
@@ -258,8 +263,8 @@ state (STATE-SPEC §6.1).
 
 ### 1.4 MIDI and OSC dialog
 
-`Options > MIDI and OSC` opens the centered remote-control dialog, with the
-same scrim and blocking behaviour as the app settings. Its title is
+`Options > MIDI and OSC` opens the remote-control dialog, with the
+same scrim, anchoring and blocking behaviour as the app settings (§1.3). Its title is
 `MIDI and OSC`; inside, `MIDI` and `OSC` are the two level-1 section titles.
 It follows the settings-dialog behaviour of §1.1: changes apply as they are
 made, the only footer action is `Close`, and a part that is not enabled is
@@ -283,7 +288,11 @@ The MIDI part:
 
 While the MIDI part is disabled, every control below `Enable` is grayed
 out. The controller listbox shows every USB MIDI port and the open unit's
-own ports, named `Card Name — MIDI 1`. Each checked MIDI In port runs one
+own ports, named `Card Name — MIDI 1`; cards without MIDI ports never
+appear. The best candidates come first: devices whose name matches a
+definition, then the unit's own ports, then the remaining USB MIDI
+devices. Nothing is hidden, so an unknown controller stays selectable.
+Each checked MIDI In port runs one
 controller instance with its own protocol; its feedback goes to the same
 port's MIDI Out when that is checked. Several instances run at once. The
 protocol listbox preselects by the rules of
@@ -338,7 +347,8 @@ current title.
 ### 1.6 About dialog
 
 The brand lockup in the top bar (mark and wordmark) opens the About dialog: a
-centered modal over a dimmed scrim, closed by `Close`, `Esc` or a click
+modal over a dimmed scrim, anchored below the top bar (§1.3), closed by
+`Close`, `Esc` or a click
 outside the card. It shows the product name, the package version, the build
 identifier, one line naming the device it is driving and that device's state
 (`disconnected`, `simulated`, `class-compliant` or `proprietary`), the
@@ -2036,7 +2046,7 @@ beyond the window.
 - Panel and row transitions use the constant-speed width tween.
 - The right sidebar remains visible while expanded, at every window width.
 - Menu items and dialog body text use `theme::TEXT_DIALOG` (16 px at scale 1.0).
-- The app settings sheet is centered over a dimmed scrim.
+- The app settings sheet is a modal over a dimmed scrim, anchored below the top bar.
 - The three channel rows scroll together under one horizontal slider.
 - Phase, pan, output balance, dynamics, FX and loopback survive scene recall.
 - Output balance survives output-fader movement.
