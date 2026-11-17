@@ -205,9 +205,13 @@ when this driver does not hold it; the claim policy and the coexistence are in
 In class-compliant mode the whole unit belongs to the class driver, and RME's
 iPad app controls the mixer over SysEx on MIDI port 2 (observed
 on the UCX II; assumed for the UCX).  The unit also implements stand-alone MIDI
-control with the UCX additions STOP = Dim and F1–F6 = Setup 1–6; see the MIDI
-spec §12.  The MIDI protocol and the Mackie Control host are generic and live
-in the MIDI spec.
+control: disconnected from the computer, it acts as a Mackie host itself,
+covering rows 1 and 3, input mute, Select ganging and submix selection, with
+the UCX additions STOP = Dim and F1–F6 = Setup 1–6 (plus the simple notes Dim
+and Setup 1–6).  This is a unit mode, not a host feature.  The MIDI transport
+is in [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md); the Mackie
+Control host is in
+[`midi-controllers/MACKIE_MIDI.md`](midi-controllers/MACKIE_MIDI.md).
 
 ## 3. IF1 register words
 

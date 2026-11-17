@@ -1,0 +1,331 @@
+{
+  "schema": 1,
+  "id": "rme_arc_usb",
+  "name": "RME ARC USB",
+  "version": "1.0",
+  "shape": "remote",
+  "match": ["ARC"],
+  "channels": 0,
+  "port": {
+    "source": "card",
+    "match": { "card_id": "ARC", "description": "ARC" },
+    "devices": 1,
+    "direction": "duplex"
+  },
+  "assignment": {
+    "controls": [
+      "key1", "key2", "key3", "key4", "key5", "key6", "key7", "key8",
+      "key9", "key10", "key11", "key12", "key13", "key14", "key15",
+      "footswitch"
+    ],
+    "choices": [
+      "none", "snapshot", "dim", "mono", "talkback", "speaker_b",
+      "external_input", "recall_volume", "mute_main", "global_mute",
+      "global_solo", "mute_group", "solo_group", "fader_group",
+      "cue_main", "cue_phones", "mute_phones", "encoder_target",
+      "layout_preset", "toggle_window"
+    ]
+  },
+  "options": [
+    {
+      "key": "heading_control_room",
+      "label": "Control Room",
+      "form": "text",
+      "group": "mapping",
+      "default": null
+    },
+    {
+      "key": "talkback_mode",
+      "label": "Talkback key",
+      "form": "radio",
+      "group": "mapping",
+      "break": true,
+      "choices": [
+        { "value": "toggle", "label": "Toggle" },
+        { "value": "momentary", "label": "Momentary" }
+      ],
+      "default": "toggle"
+    },
+    {
+      "key": "recall_double_press",
+      "label": "Recall on double press",
+      "form": "checkbox",
+      "group": "mapping",
+      "default": false,
+      "maps_to": "recall_double_press"
+    },
+    {
+      "key": "heading_encoder",
+      "label": "Encoder",
+      "form": "text",
+      "group": "encoder",
+      "default": null
+    },
+    {
+      "key": "encoder_target",
+      "label": "Target",
+      "form": "listbox",
+      "group": "encoder",
+      "break": true,
+      "choices": [
+        { "value": "main", "label": "Main Out" },
+        { "value": "phones1", "label": "Phones 1" },
+        { "value": "phones2", "label": "Phones 2" },
+        { "value": "phones3", "label": "Phones 3" },
+        { "value": "phones4", "label": "Phones 4" },
+        { "value": "none", "label": "No function" }
+      ],
+      "default": "main",
+      "maps_to": "encoder_target"
+    },
+    {
+      "key": "encoder_step",
+      "label": "Step",
+      "form": "radio",
+      "group": "encoder",
+      "break": true,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "fine", "label": "Fine 0.1 dB" }
+      ],
+      "default": "standard",
+      "maps_to": "encoder_step"
+    },
+    {
+      "key": "encoder_follows_selection",
+      "label": "Follows selected output",
+      "form": "checkbox",
+      "group": "encoder",
+      "default": false,
+      "maps_to": "encoder_follows_selection"
+    },
+    {
+      "key": "heading_keys",
+      "label": "Keys",
+      "form": "text",
+      "group": "keys",
+      "default": null
+    },
+    {
+      "key": "led_feedback",
+      "label": "Light key LEDs",
+      "form": "checkbox",
+      "group": "keys",
+      "break": true,
+      "default": true,
+      "maps_to": "led_feedback"
+    },
+    {
+      "key": "enable_diag_leds",
+      "label": "Startup indicator",
+      "form": "checkbox",
+      "group": "keys",
+      "default": false,
+      "requires": "led_feedback",
+      "maps_to": "enable_diag_leds"
+    },
+    {
+      "key": "snapshot_blink_store",
+      "label": "Blink storing key",
+      "form": "checkbox",
+      "group": "keys",
+      "break": true,
+      "default": false,
+      "requires": "led_feedback",
+      "maps_to": "snapshot_blink_store"
+    },
+    {
+      "key": "default_keys",
+      "label": "Restore printed keys",
+      "form": "button",
+      "group": "keys",
+      "default": null
+    },
+    {
+      "key": "heading_host",
+      "label": "Host",
+      "form": "text",
+      "group": "surface",
+      "default": null
+    },
+    {
+      "key": "background_disable",
+      "label": "Disable in background",
+      "form": "checkbox",
+      "group": "surface",
+      "break": true,
+      "default": false,
+      "maps_to": "background_disable"
+    }
+  ],
+  "boolean_encodings": {
+    "arc_led": {
+      "on": { "kind": "note", "velocity": 127 },
+      "off": { "kind": "note", "velocity": 0 },
+      "blink": { "kind": "note", "velocity": 1 }
+    }
+  },
+  "numeric": {
+    "encoder": {
+      "kind": "relative",
+      "encoding": "relative_signed_bit",
+      "max_step": 15
+    }
+  },
+  "controls": [
+    {
+      "id": "key1",
+      "label": "Key 1",
+      "kind": "note",
+      "note": 54,
+      "action": "snapshot",
+      "argument": 1
+    },
+    {
+      "id": "key2",
+      "label": "Key 2",
+      "kind": "note",
+      "note": 55,
+      "action": "snapshot",
+      "argument": 2
+    },
+    {
+      "id": "key3",
+      "label": "Key 3",
+      "kind": "note",
+      "note": 56,
+      "action": "snapshot",
+      "argument": 3
+    },
+    {
+      "id": "key4",
+      "label": "Key 4",
+      "kind": "note",
+      "note": 57,
+      "action": "snapshot",
+      "argument": 4
+    },
+    {
+      "id": "key5",
+      "label": "Key 5",
+      "kind": "note",
+      "note": 58,
+      "action": "snapshot",
+      "argument": 5
+    },
+    {
+      "id": "key6",
+      "label": "Key 6",
+      "kind": "note",
+      "note": 59,
+      "action": "snapshot",
+      "argument": 6
+    },
+    {
+      "id": "key7",
+      "label": "Key 7",
+      "kind": "note",
+      "note": 60,
+      "action": "snapshot",
+      "argument": 7
+    },
+    {
+      "id": "key8",
+      "label": "Key 8",
+      "kind": "note",
+      "note": 61,
+      "action": "snapshot",
+      "argument": 8
+    },
+    {
+      "id": "key9",
+      "label": "Key 9 (Mono)",
+      "kind": "note",
+      "note": 62,
+      "action": "mono"
+    },
+    {
+      "id": "key10",
+      "label": "Key 10 (Volume Phones 1)",
+      "kind": "note",
+      "note": 63,
+      "action": "encoder_target",
+      "argument": "phones1"
+    },
+    {
+      "id": "key11",
+      "label": "Key 11 (Volume Phones 2)",
+      "kind": "note",
+      "note": 64,
+      "action": "encoder_target",
+      "argument": "phones2"
+    },
+    {
+      "id": "key12",
+      "label": "Key 12 (External Input)",
+      "kind": "note",
+      "note": 65,
+      "action": "external_input"
+    },
+    {
+      "id": "key13",
+      "label": "Key 13 (Talkback)",
+      "kind": "note",
+      "note": 66,
+      "action": "talkback",
+      "mode_option": { "key": "talkback_mode", "value": "momentary" }
+    },
+    {
+      "id": "key14",
+      "label": "Key 14 (Speaker B)",
+      "kind": "note",
+      "note": 67,
+      "action": "speaker_b"
+    },
+    {
+      "id": "key15",
+      "label": "Key 15 (Dim)",
+      "kind": "note",
+      "note": 68,
+      "action": "dim"
+    },
+    {
+      "id": "footswitch",
+      "label": "Footswitch",
+      "kind": "note",
+      "note": 69,
+      "action": "toggle_window"
+    },
+    {
+      "id": "encoder",
+      "label": "Encoder",
+      "kind": "cc",
+      "message": 16,
+      "value": "encoder",
+      "action": "encoder_target_volume"
+    }
+  ],
+  "feedback": [
+    {
+      "id": "key_led",
+      "enabled_by": "led_feedback",
+      "kind": "note",
+      "address": { "note": "control" },
+      "state": "action_state",
+      "value": "arc_led",
+      "sync": true
+    }
+  ],
+  "extra": {
+    "handshake": null,
+    "tables": {
+      "actions": [
+        "none", "snapshot", "dim", "mono", "talkback", "speaker_b",
+        "external_input", "recall_volume", "mute_main", "global_mute",
+        "global_solo", "mute_group", "solo_group", "fader_group",
+        "cue_main", "cue_phones", "mute_phones", "encoder_target",
+        "layout_preset", "toggle_window"
+      ]
+    }
+  }
+}

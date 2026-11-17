@@ -480,18 +480,18 @@ subscription on its own port.
 ### MIDI SysEx, MCU or another transport
 
 The inbound side is generic: any transport that produces `Message` values can
-drive the mixer. The Mackie Control host is implemented this way: a rawmidi
-worker (`midi.rs`) forwards byte blocks, a pure codec (`mackie.rs`) parses
-them into ordinary messages and encodes feedback, and the application
-dispatches and refreshes the surface window. A further transport adds the
-same three pieces: a worker, a decoder and a feedback encoder.
+drive the mixer. The MIDI controller engine is implemented this way: a
+rawmidi worker (`midi.rs`) forwards byte blocks, the map-driven engine
+(`controllers/`) decodes them against a definition file into ordinary
+messages and encodes feedback, and the application dispatches and refreshes
+the instance's window. Mackie Control is the first shipped definition; a
+further controller adds a definition file, not code. A further transport
+adds a worker and reuses the engine.
 
 The feedback side still carries the names of its first user: `OscOutbound`
 contains internal address strings and the application stores one `osc_tx`.
-The Mackie host keeps its own feedback queue and last-sent surface state
-beside it. Several more control surfaces would be cleaner with a
-control-surface-neutral `ControlEvent`, typed variants and a list or
-broadcast of feedback sinks.
+Each controller instance keeps its own feedback queue and last-sent state
+beside it.
 
 ### Another device backend
 
@@ -509,6 +509,6 @@ A new device model or transport implements `RmeDevice` and adds a
 | Device service | `totalcontrol-gui/src/device_service.rs` |
 | Application state and update loop | `totalcontrol-gui/src/app.rs` |
 | OSC bridge | `totalcontrol-gui/src/osc.rs`, `osc_rme.rs` |
-| Mackie Control host | `totalcontrol-gui/src/mackie.rs`, `midi.rs` |
+| MIDI controller engine | `totalcontrol-gui/src/controllers/`, `midi.rs`; definitions in `data/midi-controllers/` |
 | GUI widgets | `totalcontrol-gui/src/widgets/` |
 | Developer tools | `docs/DEVELOPMENT-TOOLS.md` |

@@ -54,7 +54,7 @@ package.
 
 %build
 cd ui/totalcontrol
-cargo build --release --locked -p totalcontrol-gui -p totalcontrol-tui
+TOTALCONTROL_DATADIR=%{_datadir} cargo build --release --locked -p totalcontrol-gui -p totalcontrol-tui
 
 %install
 install -Dm755 ui/totalcontrol/target/release/totalcontrol-gui %{buildroot}%{_bindir}/totalcontrol
@@ -69,6 +69,9 @@ install -Dm644 ui/totalcontrol/totalcontrol-gui/assets/totalcontrol-256.png \
     %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/totalcontrol.png
 install -Dm644 LICENSE %{buildroot}%{_licensedir}/totalcontrol/LICENSE
 install -Dm644 README.md %{buildroot}%{_docdir}/totalcontrol/README.md
+for f in data/midi-controllers/*.json; do
+    install -Dm644 "$f" %{buildroot}%{_datadir}/totalcontrol/midi-controllers/"$(basename "$f")"
+done
 
 %check
 desktop-file-validate ui/totalcontrol/totalcontrol-gui/assets/totalcontrol.desktop
@@ -88,6 +91,7 @@ touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
 %{_datadir}/icons/hicolor/scalable/apps/totalcontrol.svg
 %{_datadir}/icons/hicolor/128x128/apps/totalcontrol.png
 %{_datadir}/icons/hicolor/256x256/apps/totalcontrol.png
+%{_datadir}/totalcontrol/midi-controllers/*.json
 %license %{_licensedir}/totalcontrol/LICENSE
 %doc %{_docdir}/totalcontrol/README.md
 

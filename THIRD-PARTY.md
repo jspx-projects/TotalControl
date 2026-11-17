@@ -54,6 +54,41 @@ GPL-2.0-or-later (SPDX headers).  We use it under GPL-2.0, which is why the
 kernel module in this repository is GPL-2.0-only.  The Fireface UCX transport,
 register model and meter decoding in `kernel/` build on this project.
 
+## Openface-Mixer — RME ARC USB protocol reference
+
+<https://github.com/thomas-nelson23/Openface-Mixer>
+
+MIT, Copyright (c) 2026 The Openface Mixer contributors. The ARC USB
+definition file (`data/midi-controllers/RME_ARC_USB_MIDI.json`) and the ARC
+protocol specification follow this project's capture-based notes alongside
+the vendor command list. No code is adapted from it; the controller engine
+is an independent implementation, and the protocol facts are restated as
+our own tables.
+
+```text
+MIT License
+
+Copyright (c) 2026 The Openface Mixer contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Reference material
 
 Protocol facts were checked against RME USB captures and against the public

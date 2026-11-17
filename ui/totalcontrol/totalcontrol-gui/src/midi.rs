@@ -1,13 +1,10 @@
-//! ALSA rawmidi transport for the Mackie Control remotes.
+//! ALSA rawmidi transport for the MIDI controllers.
 //!
-//! One worker owns one remote's port pair: it reads the controller's byte
-//! stream and forwards it as [`Message::MackieIn`], and drains the
-//! feedback channel handed back through [`Message::MackieReady`].  The
-//! codec in [`crate::mackie`] does the parsing and encoding; this module
-//! only moves bytes.
-//!
-//! The remotes are the unit's own MIDI ports, found by the ALSA card id;
-//! a controller connects through the breakout cable.
+//! One worker owns one controller instance's port pair: it reads the
+//! controller's byte stream and forwards it as [`Message::ControllerIn`],
+//! and drains the feedback channel handed back through
+//! [`Message::ControllerReady`].  The engine in [`crate::controllers`] does
+//! the parsing and encoding; this module only moves bytes.
 
 use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, Stream};
@@ -16,11 +13,13 @@ use iced::stream;
 use crate::app::Message;
 use crate::mackie::MidiPort;
 
-/// The worker recipe: which remote, which ports to open.  `Hash` because
-/// it identifies the `Subscription::run_with` recipe.
+/// The worker recipe: which instance, which ports to open.  `Hash` because
+/// it identifies the `Subscription::run_with` recipe. The protocol is part
+/// of the recipe so a protocol change restarts the worker and re-syncs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MackieWorkerConfig {
-    pub remote: usize,
+pub struct ControllerWorkerConfig {
+    pub instance: usize,
+    pub protocol: String,
     pub input: Option<MidiPort>,
     pub output: Option<MidiPort>,
 }
@@ -28,6 +27,7 @@ pub struct MackieWorkerConfig {
 /// The device's own rawmidi ports, found by the card id (for example
 /// `FirefaceUC`).  Port 1 is device 0, port 2 is device 1.  Returns fewer
 /// than `count` ports when the card exposes fewer.
+#[allow(dead_code)] // live port check, run with --ignored
 pub fn device_ports(card_id: &str, count: usize) -> Vec<MidiPort> {
     if card_id.is_empty() {
         return Vec::new();
@@ -75,12 +75,12 @@ mod imp {
     /// The transport worker.  The input runs on its own thread because
     /// rawmidi reads block; a 1 ms poll keeps the latency below one MIDI
     /// byte time while costing nothing when no surface is connected.
-    pub fn worker(config: &MackieWorkerConfig) -> impl Stream<Item = Message> {
+    pub fn worker(config: &ControllerWorkerConfig) -> impl Stream<Item = Message> {
         let config = config.clone();
-        let remote = config.remote;
+        let instance = config.instance;
         stream::channel(100, async move |mut output| {
             let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4096);
-            if output.send(Message::MackieReady(remote, tx)).await.is_err() {
+            if output.send(Message::ControllerReady(instance, tx)).await.is_err() {
                 return;
             }
             let input = open(config.input, Direction::Capture);
@@ -129,7 +129,8 @@ mod imp {
             let mut in_rx = Some(in_rx);
 
             log::info!(
-                "MIDI: remote up, in {:?}, out {:?}",
+                "MIDI: controller {} up, in {:?}, out {:?}",
+                instance + 1,
                 config.input,
                 config.output
             );
@@ -143,7 +144,7 @@ mod imp {
                     } => {
                         match bytes {
                             Some(bytes) => {
-                                if output.send(Message::MackieIn(remote, bytes)).await.is_err() {
+                                if output.send(Message::ControllerIn(instance, bytes)).await.is_err() {
                                     return;
                                 }
                             }
@@ -176,7 +177,7 @@ pub use imp::worker;
 
 /// Without the ALSA feature there is no rawmidi access.
 #[cfg(not(feature = "alsa"))]
-pub fn worker(_config: &MackieWorkerConfig) -> impl Stream<Item = Message> {
+pub fn worker(_config: &ControllerWorkerConfig) -> impl Stream<Item = Message> {
     stream::channel(1, async move |_output| {})
 }
 

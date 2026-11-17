@@ -1,14 +1,14 @@
 use iced::futures::channel::mpsc;
 use iced::keyboard::{self, Key};
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, opaque, pick_list, progress_bar, responsive,
-    row, scrollable, slider, stack, text, text_input,
+    button, checkbox, column, container, mouse_area, opaque, pick_list, progress_bar, radio,
+    responsive, row, scrollable, slider, stack, text, text_input,
 };
 use iced::{window, Background, Color, Element, Length, Subscription, Task};
 use rfd::FileDialog;
 use rosc::OscType;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -2242,27 +2242,39 @@ pub enum Message {
     OscSendPortChanged(String),
     /// Settings sheet: the remote controller address feedback is sent to.
     OscSendHostChanged(String),
-    /// The Mackie worker (see `midi.rs`) just started — carries the
-    /// remote index and the sender used to push feedback bytes out.
-    MackieReady(usize, mpsc::Sender<Vec<u8>>),
+    /// A controller worker (see `midi.rs`) just started — carries the
+    /// instance index and the sender used to push feedback bytes out.
+    ControllerReady(usize, mpsc::Sender<Vec<u8>>),
     /// One raw MIDI byte block from a controller.  Parsed on the UI
     /// thread so toggles resolve against the confirmed mixer model.
-    MackieIn(usize, Vec<u8>),
+    ControllerIn(usize, Vec<u8>),
     /// A model-dependent Mackie action (master mute/solo, cue selection).
     MackieAction(crate::mackie::MackieAction),
     /// A relative VPOT turn: nudge the pan by the delta, clamped.
     MackiePanNudge(ChannelId, usize, i16),
-    /// The controller sent a connection query; reply with the response.
+    /// A controller encoder nudge on its target output, in dB.
+    EncoderNudge { target: String, db: f32 },
+    /// The legacy Mackie codec's handshake reply request. The generic
+    /// engine replies directly; this variant serves the parity oracle.
+    #[allow(dead_code)]
     MackieHandshake(usize, [u8; 4]),
-    ToggleMackieLog,
-    ClearMackieLog,
+    ToggleControllerLog,
+    ClearControllerLog,
     /// Settings: master enable of the MIDI part.
-    SetMackieEnabled(bool),
-    /// Settings: MIDI In / MIDI Out checkbox per device port.
-    SetMackieIn(usize, bool),
-    SetMackieOut(usize, bool),
-    /// Settings: one Mackie option checkbox.
-    SetMackieOption(crate::mackie::MackieOption),
+    SetControllersEnabled(bool),
+    /// Settings: the device the dialog configures.
+    SelectControllerDevice(usize),
+    /// Settings: MIDI In / MIDI Out enable of one device.
+    SetControllerIn(usize, bool),
+    SetControllerOut(usize, bool),
+    /// Settings: the protocol of one device.
+    SetControllerProtocol(usize, String),
+    /// Settings: one option value of one protocol.
+    SetControllerOption { protocol: String, key: String, value: crate::host_settings::ControllerValue },
+    /// Settings: one key/button assignment of one protocol.
+    SetControllerAssignment { protocol: String, control: String, action: String },
+    /// Settings: restore the shipped key assignment of one protocol.
+    ResetControllerKeys(String),
     /// Options menu: open the MIDI and OSC dialog.
     OptionsMidiOsc,
     /// Close the MIDI and OSC dialog.
@@ -2818,24 +2830,18 @@ pub struct TotalControl {
     /// opening the panel after a burst of activity isn't a blank page.
     pub osc_log: VecDeque<String>,
     pub show_osc_log: bool,
-    /// The Mackie Control remotes: one per device MIDI port. Settings are
-    /// shared; navigation, feedback state and the worker queue are per
-    /// remote.
-    pub mackie_config: crate::mackie::MackieConfig,
-    pub mackie_nav: [crate::mackie::MackieNav; crate::mackie::PORTS],
-    pub mackie_surface: [crate::mackie::MackieSurface; crate::mackie::PORTS],
-    pub mackie_tx: [Option<mpsc::Sender<Vec<u8>>>; crate::mackie::PORTS],
-    /// Worker recipe per remote; `subscription()` starts the workers
-    /// while an entry is `Some`.
-    pub mackie_worker: [Option<crate::midi::MackieWorkerConfig>; crate::mackie::PORTS],
-    /// The connected unit's own rawmidi ports (port 1 = device 0).
-    pub mackie_ports: Vec<crate::mackie::MidiPort>,
-    pub mackie_log: VecDeque<String>,
-    pub show_mackie_log: bool,
-    /// Last loopback-detection note send per remote (500 ms period).
-    pub mackie_loopback_due: [Instant; crate::mackie::PORTS],
-    /// Last meter feedback send per remote, throttled to ~25 Hz.
-    pub mackie_meter_due: [Instant; crate::mackie::PORTS],
+    /// The generic MIDI controllers: one instance per enabled input port,
+    /// each with its own protocol. Option values are shared per protocol;
+    /// navigation, feedback state and the worker queue are per instance.
+    pub controller_settings: crate::host_settings::ControllerSettings,
+    pub controller_protocols: Vec<crate::controllers::load::LoadedProtocol>,
+    pub controller_devices: Vec<crate::controllers::discover::MidiDevice>,
+    /// The device the settings dialog configures, by index into
+    /// `controller_devices`.
+    pub controller_selected_device: usize,
+    pub controller_instances: Vec<ControllerInstance>,
+    pub controller_log: VecDeque<String>,
+    pub show_controller_log: bool,
     /// The MIDI and OSC dialog (Options menu) is open.
     pub show_midi_osc: bool,
     /// The window has focus; `background_disable` remotes suspend when
@@ -3426,7 +3432,8 @@ pub fn new_with_device(
     }
     let layout = layout_document.resolve_for(device.canonical_model());
     crate::theme::install_palette(layout.colors.clone());
-    let mackie_ports = crate::midi::device_ports(&device.card_id(), crate::mackie::PORTS);
+    let controller_protocols = crate::controllers::load::load_all();
+    let controller_devices = crate::controllers::discover::controller_devices(&device.card_id());
 
     let state = TotalControl {
         device,
@@ -3510,16 +3517,13 @@ pub fn new_with_device(
         osc_tx: None,
         osc_log: VecDeque::new(),
         show_osc_log: false,
-        mackie_config: crate::mackie::MackieConfig::default(),
-        mackie_nav: std::array::from_fn(|_| crate::mackie::MackieNav::default()),
-        mackie_surface: std::array::from_fn(|_| crate::mackie::MackieSurface::default()),
-        mackie_tx: [None, None],
-        mackie_worker: [None, None],
-        mackie_ports,
-        mackie_log: VecDeque::new(),
-        show_mackie_log: false,
-        mackie_loopback_due: [Instant::now(); crate::mackie::PORTS],
-        mackie_meter_due: [Instant::now(); crate::mackie::PORTS],
+        controller_settings: crate::host_settings::ControllerSettings::default(),
+        controller_protocols,
+        controller_devices,
+        controller_selected_device: 0,
+        controller_instances: Vec::new(),
+        controller_log: VecDeque::new(),
+        show_controller_log: false,
         show_midi_osc: false,
         window_focused: true,
         show_device_panel: false,
@@ -3674,38 +3678,208 @@ fn rebuild_osc_config(state: &mut TotalControl) {
     state.osc_send_host_text = state.osc_send_host.to_string();
 }
 
-/// Start or stop one worker per enabled device port.  The worker recipe
-/// carries the ports; option changes apply live.
-fn rebuild_mackie_workers(state: &mut TotalControl) {
-    for i in 0..crate::mackie::PORTS {
-        let port = state.mackie_ports.get(i).copied();
-        let run = state.mackie_config.remote_enabled(i) && port.is_some();
-        if run {
-            let port = port.expect("checked above");
-            state.mackie_worker[i] = Some(crate::midi::MackieWorkerConfig {
-                remote: i,
-                input: Some(port),
-                output: state.mackie_config.out_enabled[i].then_some(port),
-            });
-        } else {
-            if state.mackie_worker[i].is_some() {
-                // Tell the controller to go offline before the port closes.
-                if let Some(tx) = state.mackie_tx[i].as_mut() {
-                    let _ = tx.try_send(crate::mackie::go_offline());
-                }
-            }
-            state.mackie_worker[i] = None;
-            state.mackie_tx[i] = None;
-            state.mackie_nav[i].online = false;
-            state.mackie_surface[i] = crate::mackie::MackieSurface::default();
-        }
+/// One running controller: an enabled input port with its protocol.
+pub struct ControllerInstance {
+    /// The persistence key of the device (`device:<i>` or `<card_id>:<i>`).
+    pub device_key: String,
+    pub device: crate::controllers::discover::MidiDevice,
+    pub protocol: String,
+    pub state: crate::controllers::engine::InstanceState,
+    pub tx: Option<mpsc::Sender<Vec<u8>>>,
+    /// Worker recipe; `subscription()` starts the worker while `Some`.
+    pub worker: Option<crate::midi::ControllerWorkerConfig>,
+    /// Last loopback-detection note send (the entry's period).
+    pub loopback_due: Instant,
+    /// Last meter feedback send, throttled to ~25 Hz.
+    pub meter_due: Instant,
+}
+
+/// The definition of an instance, when it loaded.
+fn instance_map(state: &TotalControl, inst: usize) -> Option<&crate::controllers::map::ControllerMap> {
+    let protocol = &state.controller_instances.get(inst)?.protocol;
+    state
+        .controller_protocols
+        .iter()
+        .find(|p| p.id() == protocol)
+        .and_then(|p| p.map.as_ref())
+}
+
+/// The device key of a listbox device: the unit's ports keep the stable
+/// `device:<i>` key across unit switches; a USB card uses its card id.
+fn controller_device_key(state: &TotalControl, device: &crate::controllers::discover::MidiDevice) -> String {
+    if device.card_id == state.device.card_id() {
+        format!("device:{}", device.midi)
+    } else {
+        device.key()
     }
 }
 
-/// Re-read the connected unit's own rawmidi ports (after a device switch
-/// or reconnect).
-fn refresh_mackie_ports(state: &mut TotalControl) {
-    state.mackie_ports = crate::midi::device_ports(&state.device.card_id(), crate::mackie::PORTS);
+/// Start or stop one worker per enabled input port. Option changes apply
+/// live; an unchanged instance keeps its navigation and feedback state.
+fn rebuild_controller_workers(state: &mut TotalControl) {
+    use crate::controllers::discover::MidiDevice;
+    // The desired instances, in device-list order.
+    let mut wanted: Vec<(String, MidiDevice, String, bool)> = Vec::new();
+    if state.controller_settings.enabled {
+        for device in &state.controller_devices {
+            let key = controller_device_key(state, device);
+            let choice = state.controller_settings.device(&key);
+            if !choice.input {
+                continue;
+            }
+            let protocol = if choice.protocol.is_empty() {
+                preselect_protocol(state, device)
+            } else {
+                choice.protocol.clone()
+            };
+            if state.controller_protocols.iter().any(|p| p.id() == protocol && p.map.is_some()) {
+                wanted.push((key, device.clone(), protocol, choice.output));
+            }
+        }
+    }
+    // Drop instances that are no longer wanted; tell them to go offline.
+    let old = std::mem::take(&mut state.controller_instances);
+    let mut kept: Vec<ControllerInstance> = Vec::new();
+    for mut inst in old {
+        if wanted.iter().any(|(k, _, p, _)| *k == inst.device_key && *p == inst.protocol) {
+            kept.push(inst);
+        } else if let Some(tx) = inst.tx.as_mut() {
+            if let Some(map) = state
+                .controller_protocols
+                .iter()
+                .find(|p| p.id() == inst.protocol)
+                .and_then(|p| p.map.as_ref())
+            {
+                if let Some(bytes) = crate::controllers::engine::on_close(map) {
+                    let _ = tx.try_send(bytes);
+                }
+            }
+        }
+    }
+    // Build the new instance list, reusing kept state by key and protocol.
+    let mut instances: Vec<ControllerInstance> = Vec::new();
+    for (index, (key, device, protocol, output)) in wanted.into_iter().enumerate() {
+        let mut inst = kept
+            .iter()
+            .position(|k| k.device_key == key && k.protocol == protocol)
+            .map(|pos| kept.remove(pos))
+            .unwrap_or(ControllerInstance {
+                device_key: key.clone(),
+                device: device.clone(),
+                protocol: protocol.clone(),
+                state: Default::default(),
+                tx: None,
+                worker: None,
+                loopback_due: Instant::now(),
+                meter_due: Instant::now(),
+            });
+        inst.device = device.clone();
+        // The encoder target follows the option value.
+        if let Some(map) = state
+            .controller_protocols
+            .iter()
+            .find(|p| p.id() == protocol)
+            .and_then(|p| p.map.as_ref())
+        {
+            let values = state.controller_settings.values_for(&protocol);
+            let target = map.option_choice(&values, "encoder_target");
+            if crate::controllers::map::ENCODER_TARGETS.contains(&target.as_str()) {
+                inst.state.encoder_target = target;
+            }
+        }
+        let port = device.port();
+        let config = crate::midi::ControllerWorkerConfig {
+            instance: index,
+            protocol: protocol.clone(),
+            input: Some(port),
+            output: output.then_some(port),
+        };
+        // An unchanged recipe keeps its running worker and sender; a
+        // changed one restarts the worker, which re-syncs on Ready.
+        if inst.worker.as_ref() != Some(&config) || inst.tx.is_none() {
+            inst.worker = Some(config);
+            inst.tx = None;
+            inst.state.reset_connection();
+        }
+        instances.push(inst);
+    }
+    state.controller_instances = instances;
+}
+
+/// The preselection of CONTROLLER-SPEC §5.3 for one device.
+fn preselect_protocol(state: &TotalControl, device: &crate::controllers::discover::MidiDevice) -> String {
+    if let Some(id) = crate::controllers::discover::preselect(device, &state.controller_protocols) {
+        return id.to_string();
+    }
+    // Rule 4: a Fireface unit port defaults to Mackie Control.
+    if device.card_id == state.device.card_id() {
+        if state.controller_protocols.iter().any(|p| p.id() == "mackie_control") {
+            return "mackie_control".into();
+        }
+    }
+    state
+        .controller_protocols
+        .iter()
+        .find(|p| p.map.is_some())
+        .map(|p| p.id().to_string())
+        .unwrap_or_default()
+}
+
+/// Re-read the device list (after a device switch, reconnect or opening
+/// the dialog) and rebind the enabled instances. The best candidates come
+/// first: devices that match a definition, then the unit's own ports, then
+/// the remaining USB MIDI devices. Nothing is hidden; an unknown controller
+/// stays selectable.
+fn refresh_controller_devices(state: &mut TotalControl) {
+    let selected_key = state
+        .controller_devices
+        .get(state.controller_selected_device)
+        .map(|d| controller_device_key(state, d));
+    state.controller_devices =
+        crate::controllers::discover::controller_devices(&state.device.card_id());
+    // The simulation offers the model's own ports even without rawmidi
+    // nodes, so the dialog stays usable. Real hardware lists only the
+    // MIDI ports that exist.
+    if state.device.is_mock()
+        && !state
+            .controller_devices
+            .iter()
+            .any(|d| d.card_id == state.device.card_id())
+    {
+        let count = if state.device.canonical_model() == "Babyface-classic" {
+            1
+        } else {
+            crate::mackie::PORTS
+        };
+        for midi in 0..count as u32 {
+            state.controller_devices.push(crate::controllers::discover::MidiDevice {
+                card_id: state.device.card_id(),
+                card: 0,
+                midi,
+                description: format!("{} - {}", state.device.card_id(), state.device.canonical_model()),
+                is_usb: false,
+            });
+        }
+    }
+    let unit_card = state.device.card_id();
+    let rank = |d: &crate::controllers::discover::MidiDevice| -> u8 {
+        if crate::controllers::discover::preselect(d, &state.controller_protocols).is_some() {
+            0
+        } else if d.card_id == unit_card {
+            1
+        } else {
+            2
+        }
+    };
+    state.controller_devices.sort_by_key(rank);
+    state.controller_selected_device = selected_key
+        .and_then(|key| {
+            state
+                .controller_devices
+                .iter()
+                .position(|d| controller_device_key(state, d) == key)
+        })
+        .unwrap_or(0);
 }
 
 /// The host settings document for the live state.  Workspace fields,
@@ -3737,7 +3911,7 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
     settings.osc_recv_port = state.osc_recv_port;
     settings.osc_send_port = state.osc_send_port;
     settings.osc_send_host = state.osc_send_host;
-    settings.mackie = state.mackie_config.clone();
+    settings.controllers = state.controller_settings.clone();
     settings
 }
 
@@ -3772,9 +3946,10 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
         state.osc_dialect = settings.osc_mode;
         rebuild_osc_config(state);
     }
-    state.mackie_config = settings.mackie.clone();
-    refresh_mackie_ports(state);
-    rebuild_mackie_workers(state);
+    state.controller_settings = settings.controllers.clone();
+    state.show_controller_log = state.controller_settings.show_log;
+    refresh_controller_devices(state);
+    rebuild_controller_workers(state);
     if let Some((key, unit)) = settings.active() {
         state.current_unit_key = Some(key.to_string());
         state.always_init_device = unit.always_init_device;
@@ -8142,10 +8317,10 @@ fn notify_rme_channel(state: &mut TotalControl, cid: ChannelId) {
     }
 }
 
-// ---- Mackie Control surface --------------------------------------------
+// ---- MIDI controllers ------------------------------------------------------
 
 /// Channel counts per row, capped like the OSC surface.
-fn mackie_counts(state: &TotalControl) -> [usize; 3] {
+fn controller_counts(state: &TotalControl) -> [usize; 3] {
     [
         state.device.inputs().len().min(crate::osc_rme::CHANNELS),
         state.device.playbacks().len().min(crate::osc_rme::CHANNELS),
@@ -8155,7 +8330,11 @@ fn mackie_counts(state: &TotalControl) -> [usize; 3] {
 
 /// The row as a strip list: a linked pair is one strip (its left channel)
 /// unless "Map Stereo to 2 Mono Channels" is on.
-fn mackie_row_strips(state: &TotalControl, bus: crate::osc_rme::Bus) -> Vec<ChannelId> {
+fn controller_row_strips(
+    state: &TotalControl,
+    bus: crate::osc_rme::Bus,
+    stereo_to_mono: bool,
+) -> Vec<ChannelId> {
     use crate::osc_rme::Bus;
     let count = match bus {
         Bus::Input => state.device.inputs().len(),
@@ -8172,7 +8351,7 @@ fn mackie_row_strips(state: &TotalControl, bus: crate::osc_rme::Bus) -> Vec<Chan
             Bus::Output => ChannelId::Output(idx),
         };
         strips.push(cid);
-        if !state.mackie_config.stereo_to_mono && pair_linked(state, cid) && idx + 1 < count {
+        if !stereo_to_mono && pair_linked(state, cid) && idx + 1 < count {
             idx += 2;
         } else {
             idx += 1;
@@ -8181,57 +8360,75 @@ fn mackie_row_strips(state: &TotalControl, bus: crate::osc_rme::Bus) -> Vec<Chan
     strips
 }
 
-fn mackie_strip_counts(state: &TotalControl) -> [usize; 3] {
+fn controller_strip_counts(state: &TotalControl, stereo_to_mono: bool) -> [usize; 3] {
     use crate::osc_rme::Bus;
     [
-        mackie_row_strips(state, Bus::Input).len(),
-        mackie_row_strips(state, Bus::Playback).len(),
-        mackie_row_strips(state, Bus::Output).len(),
+        controller_row_strips(state, Bus::Input, stereo_to_mono).len(),
+        controller_row_strips(state, Bus::Playback, stereo_to_mono).len(),
+        controller_row_strips(state, Bus::Output, stereo_to_mono).len(),
     ]
 }
 
-fn mackie_window_for(state: &TotalControl, remote: usize) -> crate::mackie::Window {
-    let nav = &state.mackie_nav[remote];
-    let strips = mackie_row_strips(state, nav.bus);
+fn controller_window_for(state: &TotalControl, inst: usize) -> crate::mackie::Window {
+    let Some(instance) = state.controller_instances.get(inst) else {
+        return Default::default();
+    };
+    let stereo = instance_map(state, inst)
+        .map(|m| m.behaviour_on(&state.controller_settings.values_for(&instance.protocol), "stereo_to_mono"))
+        .unwrap_or(false);
+    let nav = &instance.state.nav;
+    let strips = controller_row_strips(state, nav.bus, stereo);
     std::array::from_fn(|i| strips.get(nav.bank + i).copied())
 }
 
-/// The remote processes input and sends feedback only while it is
+/// The instance processes input and sends feedback only while it is
 /// enabled, opened and (with background disable) in the foreground.
-fn mackie_active(state: &TotalControl, remote: usize) -> bool {
-    state.mackie_config.remote_enabled(remote)
-        && state.mackie_tx[remote].is_some()
-        && (!state.mackie_config.background_disable
-            || (state.window_focused && !state.window_hidden))
+fn controller_active(state: &TotalControl, inst: usize) -> bool {
+    let Some(instance) = state.controller_instances.get(inst) else {
+        return false;
+    };
+    let background = instance_map(state, inst)
+        .map(|m| m.behaviour_on(&state.controller_settings.values_for(&instance.protocol), "background_disable"))
+        .unwrap_or(false);
+    state.controller_settings.enabled
+        && instance.tx.is_some()
+        && (!background || (state.window_focused && !state.window_hidden))
 }
 
-/// Whether the channel sits in any active remote's window: its name shows
+/// Whether the channel sits in any active surface window: its name shows
 /// in the remote tint, like TotalMix's brown name field.
-fn mackie_marks(state: &TotalControl, cid: ChannelId) -> bool {
-    (0..crate::mackie::PORTS)
-        .any(|i| mackie_active(state, i) && mackie_window_for(state, i).contains(&Some(cid)))
+fn controller_marks(state: &TotalControl, cid: ChannelId) -> bool {
+    (0..state.controller_instances.len()).any(|i| {
+        controller_active(state, i)
+            && instance_map(state, i).map(|m| m.shape == crate::controllers::map::Shape::Surface).unwrap_or(false)
+            && controller_window_for(state, i).contains(&Some(cid))
+    })
 }
 
-fn mackie_log(state: &mut TotalControl, line: String) {
-    state.mackie_log.push_front(line);
-    state.mackie_log.truncate(OSC_LOG_MAX);
+fn controller_log_line(state: &mut TotalControl, line: String) {
+    state.controller_log.push_front(line);
+    state.controller_log.truncate(OSC_LOG_MAX);
 }
 
-fn mackie_send(state: &mut TotalControl, remote: usize, bytes: Vec<u8>) {
+fn controller_send(state: &mut TotalControl, inst: usize, bytes: Vec<u8>) {
     if bytes.is_empty() {
         return;
     }
-    if let Some(tx) = state.mackie_tx[remote].as_mut() {
+    if let Some(tx) = state
+        .controller_instances
+        .get_mut(inst)
+        .and_then(|i| i.tx.as_mut())
+    {
         if tx.try_send(bytes.clone()).is_err() {
             log::debug!(
-                "Mackie: feedback queue full, dropping {} bytes",
+                "controller: feedback queue full, dropping {} bytes",
                 bytes.len()
             );
         }
     }
-    if state.show_mackie_log {
+    if state.show_controller_log {
         let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        mackie_log(state, format!("OUT{} {}", remote + 1, hex.join(" ")));
+        controller_log_line(state, format!("OUT{} {}", inst + 1, hex.join(" ")));
     }
 }
 
@@ -8303,11 +8500,17 @@ fn mackie_cue_pair(state: &TotalControl, pair: usize) -> Vec<Message> {
 }
 
 /// Build the feedback content for the current window from the model.
-fn mackie_feedback_input(state: &TotalControl, remote: usize) -> crate::mackie::FeedbackInput {
-    use crate::mackie::{FeedbackInput, StripFeedback, STRIPS};
+fn controller_feedback_ctx<'a>(
+    state: &TotalControl,
+    inst: usize,
+    values: &'a BTreeMap<String, crate::host_settings::ControllerValue>,
+) -> crate::controllers::engine::FeedbackCtx<'a> {
+    use crate::controllers::engine::{FeedbackCtx, MainFlags};
+    use crate::mackie::{StripFeedback, STRIPS};
     use crate::osc_rme::Bus;
-    let nav = &state.mackie_nav[remote];
-    let window = mackie_window_for(state, remote);
+    let instance = &state.controller_instances[inst];
+    let nav = &instance.state.nav;
+    let window = controller_window_for(state, inst);
     let mut strips: [StripFeedback; STRIPS] = std::array::from_fn(|_| StripFeedback::default());
     for (i, cid) in window.iter().enumerate() {
         let Some(cid) = *cid else { continue };
@@ -8358,56 +8561,80 @@ fn mackie_feedback_input(state: &TotalControl, remote: usize) -> crate::mackie::
             ChannelId::Input(i) | ChannelId::Playback(i) | ChannelId::Output(i) => i + 1,
         })
         .unwrap_or(1);
-    FeedbackInput {
+    FeedbackCtx {
         strips,
         master_fader,
-        dim: state.device.settings().dim,
-        talkback: state.talkback_on,
-        mono: state.device.settings().mono,
-        speaker_b: state.device.settings().speaker_b,
-        master_mute,
-        master_solo,
+        main: MainFlags {
+            dim: state.device.settings().dim,
+            talkback: state.talkback_on,
+            mono: state.device.settings().mono,
+            speaker_b: state.device.settings().speaker_b,
+            mute: master_mute,
+            solo: master_solo,
+            rude_solo: any_channel_soloed(state),
+        },
         trim: nav.trim,
-        rude_solo: any_channel_soloed(state),
-        full_lcd: state.mackie_config.full_lcd,
-        send_names: state.mackie_config.send_names,
+        external_input: state.device.settings().external_input,
+        levels: [-100.0; STRIPS],
+        over: [false; STRIPS],
         row_name: match nav.bus {
             Bus::Input => "In",
             Bus::Playback => "Play",
             Bus::Output => "Out",
         },
         first_channel,
+        snapshot_current: None,
+        values,
     }
 }
 
-/// Refresh every active remote after any model or navigation change.
+/// Refresh every active instance after any model or navigation change.
 /// The encoder only emits deltas, so an unchanged window costs no MIDI
 /// traffic.
-fn notify_mackie(state: &mut TotalControl) {
-    for remote in 0..crate::mackie::PORTS {
-        if !mackie_active(state, remote) || !state.mackie_nav[remote].online {
+fn notify_controllers(state: &mut TotalControl) {
+    for inst in 0..state.controller_instances.len() {
+        if !controller_active(state, inst) || !state.controller_instances[inst].state.nav.online {
             continue;
         }
-        let input = mackie_feedback_input(state, remote);
+        let Some(map) = instance_map(state, inst).cloned() else {
+            continue;
+        };
+        let values = state
+            .controller_settings
+            .values_for(&state.controller_instances[inst].protocol);
+        let ctx = controller_feedback_ctx(state, inst, &values);
         let mut out = Vec::new();
-        crate::mackie::refresh(&input, &mut state.mackie_surface[remote], &mut out);
-        mackie_send(state, remote, out);
+        crate::controllers::engine::refresh(
+            &map,
+            &mut state.controller_instances[inst].state,
+            &ctx,
+            &mut out,
+        );
+        controller_send(state, inst, out);
     }
 }
 
 /// Meter feedback, throttled by the caller.  Reads the shared meter bus.
-fn mackie_meters(state: &mut TotalControl, remote: usize) {
-    if !mackie_active(state, remote)
-        || !state.mackie_nav[remote].online
-        || !state.mackie_config.send_levels
+fn controller_meters(state: &mut TotalControl, inst: usize) {
+    let Some(instance) = state.controller_instances.get(inst) else {
+        return;
+    };
+    let values = state.controller_settings.values_for(&instance.protocol);
+    let Some(map) = instance_map(state, inst).cloned() else {
+        return;
+    };
+    if !controller_active(state, inst)
+        || !instance.state.nav.online
+        || !map.behaviour_on(&values, "send_level_messages")
     {
         return;
     }
+    let peak_hold = map.behaviour_on(&values, "peak_hold");
     let Some(bus) = state.meter_bus.clone() else {
         return;
     };
     let Ok(meters) = bus.lock() else { return };
-    let window = mackie_window_for(state, remote);
+    let window = controller_window_for(state, inst);
     let mut levels = [-100.0f32; crate::mackie::STRIPS];
     let mut over = [false; crate::mackie::STRIPS];
     for (i, cid) in window.iter().enumerate() {
@@ -8435,18 +8662,22 @@ fn mackie_meters(state: &mut TotalControl, remote: usize) {
                     .map(|o| o.get(idx).copied().unwrap_or(false)),
             ),
         };
-        let v = if state.mackie_config.peak_hold {
-            peak
-        } else {
-            level
-        };
+        let v = if peak_hold { peak } else { level };
         levels[i] = if v <= 0.0 { -100.0 } else { 20.0 * v.log10() };
         over[i] = ovr.unwrap_or(levels[i] >= 0.0);
     }
     drop(meters);
+    let mut ctx = controller_feedback_ctx(state, inst, &values);
+    ctx.levels = levels;
+    ctx.over = over;
     let mut out = Vec::new();
-    crate::mackie::refresh_meters(&levels, &over, &mut state.mackie_surface[remote], &mut out);
-    mackie_send(state, remote, out);
+    crate::controllers::engine::refresh_meters(
+        &map,
+        &mut state.controller_instances[inst].state,
+        &ctx,
+        &mut out,
+    );
+    controller_send(state, inst, out);
 }
 
 /// Flips `cid`'s collapsed/expanded target and kicks off (or redirects, if
@@ -9243,91 +9474,132 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         state.assign_pinned = false;
     }
 
-    // Mackie Control: parse on this thread so toggles resolve against the
+    // MIDI controllers: parse on this thread so toggles resolve against the
     // confirmed model, dispatch the resulting ordinary messages, then
-    // refresh the remote's window when the navigation changed.
-    if let Message::MackieIn(remote, bytes) = &message {
-        let remote = *remote;
-        if remote >= crate::mackie::PORTS || !mackie_active(state, remote) {
+    // refresh the instance's window when the navigation changed.
+    if let Message::ControllerIn(inst, bytes) = &message {
+        let inst = *inst;
+        if inst >= state.controller_instances.len() || !controller_active(state, inst) {
             return Task::none();
         }
-        if state.show_mackie_log {
+        if state.show_controller_log {
             let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            mackie_log(state, format!("IN{}  {}", remote + 1, hex.join(" ")));
+            controller_log_line(state, format!("IN{}  {}", inst + 1, hex.join(" ")));
         }
-        let before = state.mackie_nav[remote].nav();
-        let counts = mackie_counts(state);
-        let strip_counts = mackie_strip_counts(state);
+        let Some(map) = instance_map(state, inst) else {
+            return Task::none();
+        };
+        let map = map.clone();
+        let protocol = state.controller_instances[inst].protocol.clone();
+        let values = state.controller_settings.values_for(&protocol);
+        let assignments = state.controller_settings.assignments_for(&protocol);
+        let before = state.controller_instances[inst].state.nav.nav();
+        let counts = controller_counts(state);
+        let stereo = map.behaviour_on(&values, "stereo_to_mono");
+        let strip_counts = controller_strip_counts(state, stereo);
         let submix_count = state.device.output_pair_count().max(1);
         let mut dispatch = Vec::new();
         let mut loopback = false;
         for &b in bytes.iter() {
-            let Some(ev) = state.mackie_nav[remote].parser.feed(b) else {
+            let Some(ev) = state.controller_instances[inst].state.nav.parser.feed(b) else {
                 continue;
             };
-            if matches!(
-                ev,
-                crate::mackie::MidiEvent::NoteOn {
-                    ch: crate::mackie::LOOPBACK_CHANNEL,
-                    note: crate::mackie::LOOPBACK_NOTE,
-                    vel: crate::mackie::LOOPBACK_VELOCITY,
-                }
-            ) {
+            if crate::controllers::engine::is_loopback(&map, &ev) {
                 loopback = true;
                 continue;
             }
             // Controllers that skip the handshake go online on their
-            // first control message.
-            if !state.mackie_nav[remote].online
+            // first control message; the full feedback sync follows.
+            if !state.controller_instances[inst].state.nav.online
                 && !matches!(
                     ev,
                     crate::mackie::MidiEvent::SysEx(_) | crate::mackie::MidiEvent::Realtime(_)
                 )
             {
-                state.mackie_nav[remote].online = true;
-                state.mackie_surface[remote] = crate::mackie::MackieSurface::default();
+                state.controller_instances[inst].state.nav.online = true;
+                state.controller_instances[inst].state.feedback = Default::default();
+                notify_controllers(state);
             }
-            let window = mackie_window_for(state, remote);
+            if let crate::mackie::MidiEvent::SysEx(data) = &ev {
+                match crate::controllers::engine::sysex(
+                    &map,
+                    &mut state.controller_instances[inst].state,
+                    data,
+                ) {
+                    crate::controllers::engine::SysexOutcome::Reply(bytes) => {
+                        controller_send(state, inst, bytes);
+                    }
+                    crate::controllers::engine::SysexOutcome::Online => {
+                        state.controller_instances[inst].state.feedback = Default::default();
+                        notify_controllers(state);
+                    }
+                    crate::controllers::engine::SysexOutcome::Ignored => {}
+                }
+                continue;
+            }
+            let window = controller_window_for(state, inst);
             let out_window = {
-                let strips = mackie_row_strips(state, crate::osc_rme::Bus::Output);
-                let bank = state.mackie_nav[remote].bank;
+                let strips = controller_row_strips(state, crate::osc_rme::Bus::Output, stereo);
+                let bank = state.controller_instances[inst].state.nav.bank;
                 std::array::from_fn(|i| strips.get(bank + i).copied())
             };
-            if let Some(msgs) = crate::mackie::parse(
-                remote,
-                &ev,
-                &mut state.mackie_nav[remote],
-                &state.mackie_config,
-                &window,
-                &out_window,
+            let ctx = crate::controllers::engine::DispatchCtx {
+                window,
+                out_window,
                 counts,
                 strip_counts,
                 submix_count,
-            ) {
-                dispatch.extend(msgs);
+                values: &values,
+                assignments: &assignments,
+                external_input: state.device.settings().external_input,
+                selected_pair: Some(state.sel_out),
+            };
+            let events = crate::controllers::engine::decode(
+                &map,
+                &mut state.controller_instances[inst].state,
+                &ev,
+            );
+            for cev in &events {
+                dispatch.extend(crate::controllers::engine::dispatch(
+                    &map,
+                    &mut state.controller_instances[inst].state,
+                    &ctx,
+                    cev,
+                ));
             }
         }
         if loopback {
-            // The output is wired back into the input.  Disable the
-            // remote until the user re-enables it, like TotalMix FX.
-            state.mackie_config.in_enabled[remote] = false;
-            rebuild_mackie_workers(state);
+            // The output is wired back into the input. Disable the
+            // instance until the user re-enables it, like TotalMix FX.
+            let key = state.controller_instances[inst].device_key.clone();
+            state
+                .controller_settings
+                .devices
+                .entry(key)
+                .or_default()
+                .input = false;
+            rebuild_controller_workers(state);
             state.host_dirty = true;
             log::warn!(
-                "Mackie: MIDI loopback detected on port {}, remote disabled",
-                remote + 1
+                "controller: MIDI loopback detected on instance {}, disabled",
+                inst + 1
             );
-            mackie_log(
+            controller_log_line(
                 state,
-                format!("Loopback on port {} — remote disabled", remote + 1),
+                format!("Loopback on instance {} — disabled", inst + 1),
             );
             return Task::none();
         }
         for message in dispatch {
             let _ = update(state, message);
         }
-        if state.mackie_nav[remote].nav() != before {
-            notify_mackie(state);
+        if state
+            .controller_instances
+            .get(inst)
+            .map(|i| i.state.nav.nav() != before)
+            .unwrap_or(false)
+        {
+            notify_controllers(state);
         }
         return Task::none();
     }
@@ -9517,20 +9789,41 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         // the canvases read the now-active snapshot and schedule a frame.
         Message::MeterWake => {}
         Message::Tick => {
-            // Mackie housekeeping: the loopback-detection note every
-            // 500 ms while online, and meter feedback at ~25 Hz.
-            for remote in 0..crate::mackie::PORTS {
-                if mackie_active(state, remote) && state.mackie_nav[remote].online {
+            // Controller housekeeping: the loopback-detection note at its
+            // period while online, and meter feedback at ~25 Hz.
+            for inst in 0..state.controller_instances.len() {
+                if controller_active(state, inst) && state.controller_instances[inst].state.nav.online
+                {
                     let now = Instant::now();
-                    if state.mackie_config.out_enabled[remote]
-                        && now >= state.mackie_loopback_due[remote]
-                    {
-                        state.mackie_loopback_due[remote] = now + Duration::from_millis(500);
-                        mackie_send(state, remote, crate::mackie::loopback_note().to_vec());
+                    let map = instance_map(state, inst).cloned();
+                    let mut meter_interval = Duration::from_millis(40);
+                    if let Some(map) = map {
+                        if let Some((bytes, period)) = crate::controllers::engine::loopback(&map) {
+                            let out_on = state.controller_instances[inst]
+                                .worker
+                                .as_ref()
+                                .map(|w| w.output.is_some())
+                                .unwrap_or(false);
+                            if out_on && now >= state.controller_instances[inst].loopback_due {
+                                state.controller_instances[inst].loopback_due =
+                                    now + Duration::from_millis(period);
+                                controller_send(state, inst, bytes);
+                            }
+                        }
+                        if let Some(hz) = map
+                            .feedback
+                            .iter()
+                            .find(|f| f.state == "meter")
+                            .and_then(|f| f.rate_hz)
+                        {
+                            if hz > 0.0 {
+                                meter_interval = Duration::from_millis((1000.0 / hz) as u64);
+                            }
+                        }
                     }
-                    if now >= state.mackie_meter_due[remote] {
-                        state.mackie_meter_due[remote] = now + Duration::from_millis(40);
-                        mackie_meters(state, remote);
+                    if now >= state.controller_instances[inst].meter_due {
+                        state.controller_instances[inst].meter_due = now + meter_interval;
+                        controller_meters(state, inst);
                     }
                 }
             }
@@ -10030,11 +10323,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             let sel_out = i.min(state.device.output_pair_count().saturating_sub(1));
             state.sel_out = sel_out;
             state.sel_out_side = 0;
-            // "Submix linked to MIDI / OSC control": the remotes follow
+            // "Submix linked to MIDI / OSC control": the instances follow
             // the submix selected in the GUI.
-            if state.mackie_config.submix_linked {
-                for nav in &mut state.mackie_nav {
-                    nav.submix = sel_out;
+            for inst in 0..state.controller_instances.len() {
+                let protocol = state.controller_instances[inst].protocol.clone();
+                let values = state.controller_settings.values_for(&protocol);
+                if instance_map(state, inst)
+                    .map(|m| m.behaviour_on(&values, "submix_linked"))
+                    .unwrap_or(false)
+                {
+                    state.controller_instances[inst].state.nav.submix = sel_out;
                 }
             }
             // Selecting a bus dismisses the Route flyout — it did its
@@ -10046,11 +10344,21 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::ModifiersChanged(m) => state.modifiers = m,
         Message::WindowFocus(focused) => {
             state.window_focused = focused;
-            // A background-disable remote resumes with a full refresh.
-            if focused && state.mackie_config.background_disable {
-                state.mackie_surface =
-                    std::array::from_fn(|_| crate::mackie::MackieSurface::default());
-                notify_mackie(state);
+            // A background-disable instance resumes with a full refresh.
+            if focused {
+                let any = (0..state.controller_instances.len()).any(|inst| {
+                    let protocol = state.controller_instances[inst].protocol.clone();
+                    let values = state.controller_settings.values_for(&protocol);
+                    instance_map(state, inst)
+                        .map(|m| m.behaviour_on(&values, "background_disable"))
+                        .unwrap_or(false)
+                });
+                if any {
+                    for inst in &mut state.controller_instances {
+                        inst.state.feedback = Default::default();
+                    }
+                    notify_controllers(state);
+                }
             }
         }
         Message::WindowSize(w, h) => {
@@ -11313,7 +11621,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.osc_log.truncate(OSC_LOG_MAX);
         }
         // Handled at the top of `update`, before this match.
-        Message::OscRmeIn(_, _) | Message::OscGlobalIn(_) | Message::MackieIn(_, _) => {}
+        Message::OscRmeIn(_, _) | Message::OscGlobalIn(_) | Message::ControllerIn(_, _) => {}
+        // The legacy codec's handshake request; the engine replies directly.
+        Message::MackieHandshake(_, _) => {}
         Message::ToggleOscLog => state.show_osc_log = !state.show_osc_log,
         Message::ClearOscLog => state.osc_log.clear(),
         Message::SetOscEnabled(on) => {
@@ -11357,47 +11667,113 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 rebuild_osc_config(state);
             }
         }
-        Message::SetMackieEnabled(on) => {
-            state.mackie_config.enabled = on;
+        Message::SetControllersEnabled(on) => {
+            state.controller_settings.enabled = on;
             if !on {
-                state.show_mackie_log = false;
+                state.show_controller_log = false;
+                state.controller_settings.show_log = false;
             }
             state.host_dirty = true;
-            rebuild_mackie_workers(state);
+            rebuild_controller_workers(state);
         }
-        Message::SetMackieIn(port, on) => {
-            if port < crate::mackie::PORTS {
-                state.mackie_config.in_enabled[port] = on;
-                state.host_dirty = true;
-                rebuild_mackie_workers(state);
+        Message::SelectControllerDevice(index) => {
+            if index < state.controller_devices.len() {
+                state.controller_selected_device = index;
             }
         }
-        Message::SetMackieOut(port, on) => {
-            if port < crate::mackie::PORTS {
-                state.mackie_config.out_enabled[port] = on;
+        Message::SetControllerIn(index, on) => {
+            if let Some(device) = state.controller_devices.get(index).cloned() {
+                let key = controller_device_key(state, &device);
+                let preselected = preselect_protocol(state, &device);
+                let choice = state.controller_settings.devices.entry(key).or_default();
+                choice.input = on;
+                if choice.protocol.is_empty() {
+                    choice.protocol = preselected;
+                }
                 state.host_dirty = true;
-                rebuild_mackie_workers(state);
+                rebuild_controller_workers(state);
             }
         }
-        Message::SetMackieOption(option) => {
-            let on = !state.mackie_config.option(option);
-            state.mackie_config.set_option(option, on);
+        Message::SetControllerOut(index, on) => {
+            if let Some(device) = state.controller_devices.get(index).cloned() {
+                let key = controller_device_key(state, &device);
+                state
+                    .controller_settings
+                    .devices
+                    .entry(key)
+                    .or_default()
+                    .output = on;
+                state.host_dirty = true;
+                rebuild_controller_workers(state);
+            }
+        }
+        Message::SetControllerProtocol(index, protocol) => {
+            if let Some(device) = state.controller_devices.get(index).cloned() {
+                let key = controller_device_key(state, &device);
+                state
+                    .controller_settings
+                    .devices
+                    .entry(key)
+                    .or_default()
+                    .protocol = protocol;
+                state.host_dirty = true;
+                rebuild_controller_workers(state);
+            }
+        }
+        Message::SetControllerOption { protocol, key, value } => {
+            state
+                .controller_settings
+                .values
+                .entry(protocol.clone())
+                .or_default()
+                .insert(key.clone(), value);
             state.host_dirty = true;
             // LCD options change the whole display: force a full rewrite.
-            if matches!(
-                option,
-                crate::mackie::MackieOption::FullLcd | crate::mackie::MackieOption::SendNames
-            ) {
-                state.mackie_surface =
-                    std::array::from_fn(|_| crate::mackie::MackieSurface::default());
+            if key == "full_lcd" || key == "send_names" {
+                for inst in &mut state.controller_instances {
+                    inst.state.feedback = Default::default();
+                }
             }
-            notify_mackie(state);
+            // The encoder target option sets the instance target.
+            if key == "encoder_target" {
+                let values = state.controller_settings.values_for(&protocol);
+                if let Some(crate::host_settings::ControllerValue::Choice(target)) =
+                    values.get("encoder_target")
+                {
+                    for inst in &mut state.controller_instances {
+                        if inst.protocol == protocol {
+                            inst.state.encoder_target = target.clone();
+                        }
+                    }
+                }
+            }
+            rebuild_controller_workers(state);
+            notify_controllers(state);
         }
-        Message::ToggleMackieLog => state.show_mackie_log = !state.show_mackie_log,
-        Message::ClearMackieLog => state.mackie_log.clear(),
+        Message::SetControllerAssignment { protocol, control, action } => {
+            state
+                .controller_settings
+                .assignments
+                .entry(protocol)
+                .or_default()
+                .insert(control, action);
+            state.host_dirty = true;
+            notify_controllers(state);
+        }
+        Message::ResetControllerKeys(protocol) => {
+            state.controller_settings.assignments.remove(&protocol);
+            state.host_dirty = true;
+            notify_controllers(state);
+        }
+        Message::ToggleControllerLog => {
+            state.show_controller_log = !state.show_controller_log;
+            state.controller_settings.show_log = state.show_controller_log;
+            state.host_dirty = true;
+        }
+        Message::ClearControllerLog => state.controller_log.clear(),
         Message::OptionsMidiOsc => {
             state.options_menu = OptionsMenu::Closed;
-            refresh_mackie_ports(state);
+            refresh_controller_devices(state);
             suspend_mixer_input(state);
             state.show_midi_osc = true;
             state.show_device_panel = false;
@@ -11408,29 +11784,53 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             state.show_midi_osc = !state.show_midi_osc;
         }
-        Message::MackieReady(remote, tx) => {
-            if remote >= crate::mackie::PORTS {
+        Message::ControllerReady(inst, tx) => {
+            let Some(instance) = state.controller_instances.get_mut(inst) else {
                 return Task::none();
-            }
-            state.mackie_tx[remote] = Some(tx);
-            state.mackie_nav[remote].online = false;
-            state.mackie_surface[remote] = crate::mackie::MackieSurface::default();
+            };
+            instance.tx = Some(tx);
+            instance.state.reset_connection();
             // Ask the controller to identify itself; controllers that skip
             // the handshake go online on their first control message.
-            mackie_send(state, remote, crate::mackie::device_query());
-            mackie_send(state, remote, crate::mackie::version_request());
-            mackie_log(state, format!("Mackie remote {} opened", remote + 1));
-        }
-        Message::MackieHandshake(remote, challenge) => {
-            if remote >= crate::mackie::PORTS {
-                return Task::none();
+            let protocol = instance.protocol.clone();
+            if let Some(map) = state
+                .controller_protocols
+                .iter()
+                .find(|p| p.id() == protocol)
+                .and_then(|p| p.map.as_ref())
+            {
+                for bytes in crate::controllers::engine::on_open(map) {
+                    controller_send(state, inst, bytes);
+                }
             }
-            let reply = if challenge == [0; 4] {
-                crate::mackie::device_query()
-            } else {
-                crate::mackie::host_connection_reply(&state.mackie_nav[remote].serial, &challenge)
+            controller_log_line(state, format!("Controller {} opened", inst + 1));
+        }
+        Message::EncoderNudge { target, db } => {
+            // Resolve the target to an output pair and nudge its volume.
+            let pair = match target.as_str() {
+                "main" => mackie_main_pair(state),
+                "selected" => Some(state.sel_out),
+                t => t
+                    .strip_prefix("phones")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .and_then(|slot| state.assign.get(1 + slot).copied().flatten()),
             };
-            mackie_send(state, remote, reply);
+            if let Some(pair) = pair {
+                let left = ChannelId::Output(pair * 2);
+                let gain = channel_level(state, left, pair * 2);
+                let db_now = if gain <= 0.0 { -65.0 } else { 20.0 * gain.log10() };
+                let next_db = (db_now + db).clamp(-65.0, 6.0);
+                let next = if next_db <= -65.0 {
+                    0.0
+                } else {
+                    10f32.powf(next_db / 20.0)
+                };
+                let _ = update(state, Message::VolumeChanged(left, pair * 2, next));
+                if pair * 2 + 1 < state.device.outputs().len() {
+                    let right = ChannelId::Output(pair * 2 + 1);
+                    let _ = update(state, Message::VolumeChanged(right, pair * 2 + 1, next));
+                }
+            }
         }
         Message::MackieAction(action) => {
             for message in mackie_action_messages(state, action) {
@@ -12276,9 +12676,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             merge_host_changes(state, before);
         }
     }
-    // Mackie feedback: refresh the surface window after any change.  The
-    // encoder only emits deltas, so an unchanged window is free.
-    notify_mackie(state);
+    // Controller feedback: refresh the surface window after any change.
+    // The encoder only emits deltas, so an unchanged window is free.
+    notify_controllers(state);
     Task::none()
 }
 
@@ -12334,9 +12734,9 @@ fn replace_device_handle_direct(state: &mut TotalControl, new: DeviceHandle) {
     state.device_updates = None;
     state.meter_bus = None;
     state.device = new;
-    // The new unit has its own MIDI ports; rebind the enabled remotes.
-    refresh_mackie_ports(state);
-    rebuild_mackie_workers(state);
+    // The new unit has its own MIDI ports; rebind the enabled instances.
+    refresh_controller_devices(state);
+    rebuild_controller_workers(state);
 }
 
 /// How long a failure stays on screen.
@@ -12653,9 +13053,11 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
     if let Some(config) = &state.osc_config {
         subs.push(Subscription::run_with(*config, osc::worker));
     }
-    // The Mackie Control remotes — see `midi.rs`.
-    for config in state.mackie_worker.iter().flatten() {
-        subs.push(Subscription::run_with(config.clone(), crate::midi::worker));
+    // The MIDI controllers — see `midi.rs`.
+    for instance in &state.controller_instances {
+        if let Some(config) = &instance.worker {
+            subs.push(Subscription::run_with(config.clone(), crate::midi::worker));
+        }
     }
     Subscription::batch(subs)
 }
@@ -12838,8 +13240,8 @@ fn view_inner(state: &TotalControl, _window: window::Id) -> Element<'_, Message>
     if state.show_osc_log {
         main = main.push(osc_log_panel(state));
     }
-    if state.show_mackie_log {
-        main = main.push(mackie_log_panel(state));
+    if state.show_controller_log {
+        main = main.push(controller_log_panel(state));
     }
     let main = main.width(Length::Fill).height(Length::Fill);
     // TotalMix's own order across the window: mixer, FX column, control
@@ -12974,13 +13376,13 @@ fn osc_log_panel(state: &TotalControl) -> Element<'_, Message> {
     )
 }
 
-fn mackie_log_panel(state: &TotalControl) -> Element<'_, Message> {
+fn controller_log_panel(state: &TotalControl) -> Element<'_, Message> {
     debug_log_panel(
         "MIDI DEBUG LOG",
         "No MIDI traffic yet.",
-        &state.mackie_log,
-        Message::ClearMackieLog,
-        Message::ToggleMackieLog,
+        &state.controller_log,
+        Message::ClearControllerLog,
+        Message::ToggleControllerLog,
         state.ui_scale,
     )
 }
@@ -13316,9 +13718,10 @@ fn popover<'a>(
     )
 }
 
-/// A centered, modal dialog with a dimmed scrim.  The Settings sheet used
-/// to be a sidebar popover; dialogs are centered and cannot be dragged off
-/// the window.
+/// A modal dialog with a dimmed scrim, anchored below the top bar. The
+/// dialog keeps its top edge fixed while its content grows downward, so
+/// hovering or expanding a control never shifts the text under the pointer.
+/// When the content exceeds the available height, the dialog body scrolls.
 fn centered_dialog<'a>(
     state: &'a TotalControl,
     body: Element<'a, Message>,
@@ -13332,11 +13735,24 @@ fn centered_dialog<'a>(
             .padding(theme::SPACE_XL * scale)
             .width(Length::Fixed(width * scale)),
     );
+    let top = (theme::TOP_BAR_H + theme::SPACE_TIGHT) * scale;
+    let window_h = state.window_size.map(|(_, h)| h).unwrap_or(800.0);
+    let max_h = (window_h - top - theme::SPACE_XL * scale).max(200.0 * scale);
+    let scroller = scrollable(card)
+        .direction(scrollable::Direction::Vertical(theme::thin_scrollbar()))
+        .style(theme::scrollable);
+    let bounded = container(scroller).max_height(max_h);
     opaque(
         mouse_area(
-            container(card)
+            container(bounded)
                 .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .align_y(iced::Alignment::Start)
+                .padding(iced::Padding {
+                    top,
+                    left: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                })
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .style(|_theme: &iced::Theme| container::Style {
@@ -13562,17 +13978,383 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     menu_below_top_bar(card.into(), 500.0, Message::CloseOptions, scale)
 }
 
-/// How many device MIDI ports the settings offer: the unit's actual
-/// ports, or the model's count when none are visible (simulation).
-fn mackie_port_count(state: &TotalControl) -> usize {
-    if !state.mackie_ports.is_empty() {
-        return state.mackie_ports.len().min(crate::mackie::PORTS);
+/// The MIDI part of the MIDI and OSC dialog: the controller listbox, the
+/// protocol listbox and the option presentation of the selected definition
+/// (CONTROLLER-SPEC §9).
+fn midi_controller_part(state: &TotalControl) -> Element<'_, Message> {
+    use crate::widgets::dialog;
+    let scale = state.ui_scale;
+    let text_size = theme::TEXT_DIALOG * scale;
+    let midi_on = state.controller_settings.enabled;
+    let label = |s: &str| {
+        text(s.to_string())
+            .color(theme::text_primary())
+            .size(text_size)
+    };
+
+    let mut part = column![
+        dialog::section("MIDI", scale),
+        dialog::check(
+            "Enable",
+            midi_on,
+            Message::SetControllersEnabled(!midi_on),
+            true,
+            scale,
+        ),
+        dialog::check(
+            "Show MIDI debug log",
+            state.show_controller_log,
+            Message::ToggleControllerLog,
+            midi_on,
+            scale,
+        ),
+        dialog::help("Use a MIDI controller to control the mixer.", scale),
+    ]
+    .spacing(theme::SPACE_MD * scale)
+    .width(Length::Fill);
+
+    // The controller listbox: one entry per USB MIDI port and unit port.
+    let devices = &state.controller_devices;
+    if devices.is_empty() {
+        part = part.push(dialog::help("No MIDI ports found.", scale));
+        return part.into();
     }
-    if state.device.canonical_model() == "Babyface-classic" {
-        1
+    let dev_idx = state.controller_selected_device.min(devices.len() - 1);
+    let device = &devices[dev_idx];
+    let device_options: Vec<String> = devices.iter().map(|d| d.display()).collect();
+    let device_pick = pick_list(
+        device_options,
+        Some(device.display()),
+        move |display: String| {
+            let index = devices
+                .iter()
+                .position(|d| d.display() == display)
+                .unwrap_or(0);
+            Message::SelectControllerDevice(index)
+        },
+    )
+    .style(theme::pick_list)
+    .text_size(text_size);
+    part = part.push(
+        row![label("Controller").width(Length::Fixed(90.0 * scale)), device_pick]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+    );
+
+    // The selected device's input and output enable.
+    let key = controller_device_key(state, device);
+    let choice = state.controller_settings.device(&key);
+    let in_check = checkbox(choice.input)
+        .label("MIDI In")
+        .text_size(text_size)
+        .style(theme::checkbox);
+    let in_check = if midi_on {
+        in_check.on_toggle(move |_| Message::SetControllerIn(dev_idx, !choice.input))
     } else {
-        crate::mackie::PORTS
+        in_check
+    };
+    let out_check = checkbox(choice.output)
+        .label("MIDI Out")
+        .text_size(text_size)
+        .style(theme::checkbox);
+    let out_check = if midi_on {
+        out_check.on_toggle(move |_| Message::SetControllerOut(dev_idx, !choice.output))
+    } else {
+        out_check
+    };
+    part = part.push(
+        row![in_check, out_check]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+    );
+
+    // The protocol listbox and the file line.
+    let protocol_id = if choice.protocol.is_empty() {
+        preselect_protocol(state, device)
+    } else {
+        choice.protocol.clone()
+    };
+    let protocols = &state.controller_protocols;
+    let protocol_options: Vec<String> = protocols
+        .iter()
+        .filter(|p| p.map.is_some())
+        .map(|p| p.name().to_string())
+        .collect();
+    let selected_name = protocols
+        .iter()
+        .find(|p| p.id() == protocol_id)
+        .map(|p| p.name().to_string());
+    let protocol_pick = pick_list(
+        protocol_options,
+        selected_name,
+        move |name: String| {
+            let id = protocols
+                .iter()
+                .find(|p| p.map.is_some() && p.name() == name)
+                .map(|p| p.id().to_string())
+                .unwrap_or_default();
+            Message::SetControllerProtocol(dev_idx, id)
+        },
+    )
+    .style(theme::pick_list)
+    .text_size(text_size);
+    part = part.push(
+        row![label("Protocol").width(Length::Fixed(90.0 * scale)), protocol_pick]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+    );
+    let loaded = protocols.iter().find(|p| p.id() == protocol_id);
+    match loaded.filter(|p| p.map.is_some()) {
+        Some(loaded) => {
+            let map = loaded.map.as_ref().expect("filtered above");
+            part = part.push(dialog::help(
+                // The help line is static; the file line carries the detail.
+                "Controller definition loaded.",
+                scale,
+            ));
+            part = part.push(
+                text(format!("{} · v{} · {}", loaded.file_name, map.version, loaded.path))
+                    .color(theme::text_sec())
+                    .size(theme::TEXT_DIALOG * scale),
+            );
+            part = part.push(controller_options_area(state, map, &protocol_id, midi_on));
+        }
+        None => {
+            let reason = loaded
+                .and_then(|p| p.error.as_deref())
+                .unwrap_or("The definition file is missing.");
+            part = part.push(
+                text(format!("Unavailable: {reason}"))
+                    .color(theme::text_sec())
+                    .size(text_size),
+            );
+        }
     }
+    part.into()
+}
+
+/// The option presentation and assignment table of one definition.
+fn controller_options_area<'a>(
+    state: &TotalControl,
+    map: &'a crate::controllers::map::ControllerMap,
+    protocol_id: &str,
+    midi_on: bool,
+) -> Element<'a, Message> {
+    use crate::controllers::map::Form;
+    let scale = state.ui_scale;
+    let text_size = theme::TEXT_DIALOG * scale;
+    let values = state.controller_settings.values_for(protocol_id);
+    let mut area = column![].spacing(theme::SPACE_SM * scale).width(Length::Fill);
+    let mut last_group: Option<String> = None;
+    for opt in &map.options {
+        // A group change starts a heading.
+        if let Some(group) = &opt.group {
+            if last_group.as_deref() != Some(group.as_str()) {
+                let title = match group.as_str() {
+                    "mapping" => "Mapping",
+                    "keys" => "Keys",
+                    "encoder" => "Encoder",
+                    "surface" => "Surface",
+                    "feedback" => "Feedback",
+                    other => other,
+                };
+                area = area.push(
+                    text(title.to_string())
+                        .color(theme::text_sec())
+                        .size(text_size),
+                );
+                last_group = Some(group.clone());
+            }
+        }
+        let required_on = opt
+            .requires
+            .as_deref()
+            .map(|req| map.option_bool(&values, req))
+            .unwrap_or(true);
+        let enabled = midi_on && required_on;
+        let protocol = protocol_id.to_string();
+        let key = opt.key.clone();
+        match opt.form {
+            Form::Text => {
+                area = area.push(
+                    text(opt.label.clone())
+                        .color(theme::text_primary())
+                        .size(text_size),
+                );
+            }
+            Form::Checkbox => {
+                let current = map.option_bool(&values, &opt.key);
+                let mut cb = checkbox(current)
+                    .label(opt.label.clone())
+                    .text_size(text_size)
+                    .style(theme::checkbox);
+                if enabled {
+                    let msg = Message::SetControllerOption {
+                        protocol,
+                        key,
+                        value: crate::host_settings::ControllerValue::Bool(!current),
+                    };
+                    cb = cb.on_toggle(move |_| msg.clone());
+                }
+                area = area.push(cb);
+            }
+            Form::Radio => {
+                let current = map.option_choice(&values, &opt.key);
+                let mut r = row![text(opt.label.clone())
+                    .color(theme::text_primary())
+                    .size(text_size)
+                    .width(Length::Fixed(140.0 * scale))]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center);
+                for choice in &opt.choices {
+                    let selected = current == choice.value;
+                    if enabled {
+                        let msg = Message::SetControllerOption {
+                            protocol: protocol.clone(),
+                            key: key.clone(),
+                            value: crate::host_settings::ControllerValue::Choice(
+                                choice.value.clone(),
+                            ),
+                        };
+                        r = r.push(
+                            radio(choice.label.clone(), true, Some(selected), move |_| msg.clone())
+                                .size(16.0 * scale)
+                                .text_size(text_size)
+                                .style(theme::radio),
+                        );
+                    } else {
+                        r = r.push(
+                            text(format!("{} {}", if selected { "●" } else { "○" }, choice.label))
+                                .color(theme::disabled_text())
+                                .size(text_size),
+                        );
+                    }
+                }
+                area = area.push(r);
+            }
+            Form::Listbox => {
+                let current = map.option_choice(&values, &opt.key);
+                let current_label = opt
+                    .choices
+                    .iter()
+                    .find(|c| c.value == current)
+                    .map(|c| c.label.clone());
+                let choices = opt.choices.clone();
+                let pick = pick_list(
+                    opt.choices.iter().map(|c| c.label.clone()).collect::<Vec<_>>(),
+                    current_label,
+                    move |label: String| {
+                        let value = choices
+                            .iter()
+                            .find(|c| c.label == label)
+                            .map(|c| c.value.clone())
+                            .unwrap_or_default();
+                        Message::SetControllerOption {
+                            protocol: protocol.clone(),
+                            key: key.clone(),
+                            value: crate::host_settings::ControllerValue::Choice(value),
+                        }
+                    },
+                )
+                .style(theme::pick_list)
+                .text_size(text_size);
+                area = area.push(
+                    row![
+                        text(opt.label.clone())
+                            .color(theme::text_primary())
+                            .size(text_size)
+                            .width(Length::Fixed(140.0 * scale)),
+                        pick,
+                    ]
+                    .spacing(theme::SPACE_MD * scale)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
+            Form::Button => {
+                let msg = Message::ResetControllerKeys(protocol.clone());
+                let b = button(strip::centered_label_auto(opt.label.clone(), text_size))
+                    .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+                    .style(theme::ghost_button);
+                let b = if enabled { b.on_press(msg) } else { b };
+                area = area.push(b);
+            }
+        }
+    }
+
+    // The assignment table: one action picker per assignable control.
+    if let Some(assignment) = &map.assignment {
+        let table_on = assignment
+            .enabled_by
+            .as_deref()
+            .map(|opt| map.option_bool(&values, opt))
+            .unwrap_or(true);
+        if table_on && midi_on {
+            let assignments = state.controller_settings.assignments_for(protocol_id);
+            area = area.push(
+                text("Key assignment".to_string())
+                    .color(theme::text_sec())
+                    .size(text_size),
+            );
+            for control_id in &assignment.controls {
+                let Some(control) = map.control_by_id(control_id) else {
+                    continue;
+                };
+                let current = assignments
+                    .get(control_id)
+                    .cloned()
+                    .unwrap_or_else(|| control.action.clone());
+                let current_action = if assignment.choices.contains(&current) {
+                    current.clone()
+                } else {
+                    "none".to_string()
+                };
+                // Unavailable actions stay listed, marked as such.
+                let display = |a: &str| -> String {
+                    if crate::controllers::map::UNAVAILABLE_ACTIONS.contains(&a) {
+                        format!("{a} (unavailable)")
+                    } else {
+                        a.to_string()
+                    }
+                };
+                let options: Vec<String> =
+                    assignment.choices.iter().map(|a| display(a)).collect();
+                let current_label = display(&current_action);
+                let choices = assignment.choices.clone();
+                let protocol = protocol_id.to_string();
+                let control_id = control_id.clone();
+                let pick = pick_list(
+                    options,
+                    Some(current_label),
+                    move |label: String| {
+                        let action = choices
+                            .iter()
+                            .find(|a| display(a) == label)
+                            .cloned()
+                            .unwrap_or_else(|| "none".to_string());
+                        Message::SetControllerAssignment {
+                            protocol: protocol.clone(),
+                            control: control_id.clone(),
+                            action,
+                        }
+                    },
+                )
+                .style(theme::pick_list)
+                .text_size(text_size);
+                area = area.push(
+                    row![
+                        text(control.label.clone())
+                            .color(theme::text_primary())
+                            .size(text_size)
+                            .width(Length::Fixed(180.0 * scale)),
+                        pick,
+                    ]
+                    .spacing(theme::SPACE_MD * scale)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
+        }
+    }
+    area.into()
 }
 
 /// The MIDI and OSC dialog (Options > MIDI and OSC): the remote-control
@@ -13586,87 +14368,7 @@ fn midi_osc_panel(state: &TotalControl) -> Element<'_, Message> {
         .size(text_size);
 
     // ---- MIDI (grayed out until enabled) ------------------------------
-    let midi_on = state.mackie_config.enabled;
-    let port_count = mackie_port_count(state);
-    let port_label = |i: usize| -> &'static str {
-        match i {
-            0 => "Port 1",
-            _ => "Port 2",
-        }
-    };
-    let port_row = |label: &'static str,
-                    enabled: &[bool; crate::mackie::PORTS],
-                    message: fn(usize, bool) -> Message|
-     -> iced::widget::Row<'_, Message> {
-        let mut r = row![text(label)
-            .color(theme::text_primary())
-            .size(text_size)
-            .width(Length::Fixed(90.0 * scale))];
-        for i in 0..port_count {
-            r = r.push(dialog::check(
-                port_label(i),
-                enabled[i],
-                message(i, !enabled[i]),
-                midi_on,
-                scale,
-            ));
-        }
-        r.spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center)
-    };
-    let mackie_check = |label: &'static str, option: crate::mackie::MackieOption| {
-        dialog::check(
-            label,
-            state.mackie_config.option(option),
-            Message::SetMackieOption(option),
-            midi_on,
-            scale,
-        )
-    };
-    let midi_part = column![
-        dialog::section("MIDI", scale),
-        dialog::check(
-            "Enable",
-            midi_on,
-            Message::SetMackieEnabled(!midi_on),
-            true,
-            scale,
-        ),
-        dialog::help("Use a Mackie controller to control the mixer.", scale),
-        port_row(
-            "MIDI In",
-            &state.mackie_config.in_enabled,
-            Message::SetMackieIn,
-        ),
-        port_row(
-            "MIDI Out",
-            &state.mackie_config.out_enabled,
-            Message::SetMackieOut,
-        ),
-        mackie_check(
-            "Enable Mackie protocol",
-            crate::mackie::MackieOption::Protocol
-        ),
-        mackie_check("Full LCD support", crate::mackie::MackieOption::FullLcd),
-        mackie_check(
-            "Send user defined names",
-            crate::mackie::MackieOption::SendNames
-        ),
-        mackie_check(
-            "Send level messages",
-            crate::mackie::MackieOption::SendLevels
-        ),
-        mackie_check("Peak hold", crate::mackie::MackieOption::PeakHold),
-        dialog::check(
-            "Show MIDI debug log",
-            state.show_mackie_log,
-            Message::ToggleMackieLog,
-            midi_on,
-            scale,
-        ),
-    ]
-    .spacing(theme::SPACE_MD * scale)
-    .width(Length::Fill);
+    let midi_part = midi_controller_part(state);
 
     // ---- OSC (grayed out until enabled) -------------------------------
     let osc_on = state.osc_enabled;
@@ -15561,7 +16263,7 @@ fn strip_params<'a>(
         name_custom: false,
         name_locked: false,
         renameable: true,
-        mackie_remote: mackie_marks(state, cid),
+        mackie_remote: controller_marks(state, cid),
     };
 
     // A device switch can leave one stale id in the frame while the next
@@ -20858,16 +21560,40 @@ mod tests {
         assert!(!state.device.inputs()[0].mute);
     }
 
-    /// Bring the Mackie remote up without a real port: enabled, an input
-    /// chosen, a feedback queue attached and the handshake done.
-    fn mackie_up(state: &mut TotalControl) -> iced::futures::channel::mpsc::Receiver<Vec<u8>> {
+    /// Bring a Mackie controller instance up without a real port: enabled,
+    /// an input chosen, a feedback queue attached and the handshake done.
+    fn controller_up(state: &mut TotalControl) -> iced::futures::channel::mpsc::Receiver<Vec<u8>> {
         let (tx, rx) = iced::futures::channel::mpsc::channel(4096);
-        state.mackie_config.enabled = true;
-        state.mackie_config.in_enabled[0] = true;
-        state.mackie_ports = vec![crate::mackie::MidiPort { card: 0, device: 0 }];
-        state.mackie_tx[0] = Some(tx);
-        state.mackie_nav[0].online = true;
+        state.controller_settings.enabled = true;
+        super::refresh_controller_devices(state);
+        let pos = state
+            .controller_devices
+            .iter()
+            .position(|d| super::controller_device_key(state, d) == "device:0")
+            .expect("the unit's first port is listed");
+        let device = state.controller_devices[pos].clone();
+        let key = super::controller_device_key(state, &device);
+        let choice = state.controller_settings.devices.entry(key).or_default();
+        choice.input = true;
+        choice.protocol = "mackie_control".into();
+        super::rebuild_controller_workers(state);
+        let inst = state
+            .controller_instances
+            .iter_mut()
+            .find(|i| i.device_key == "device:0")
+            .expect("instance");
+        inst.tx = Some(tx);
+        inst.state.nav.online = true;
         rx
+    }
+
+    fn set_mackie_option(state: &mut TotalControl, key: &str, value: bool) {
+        state
+            .controller_settings
+            .values
+            .entry("mackie_control".into())
+            .or_default()
+            .insert(key.into(), crate::host_settings::ControllerValue::Bool(value));
     }
 
     fn drain_bytes(rx: &mut iced::futures::channel::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
@@ -20881,9 +21607,9 @@ mod tests {
     #[test]
     fn mackie_fader_moves_the_window_channel() {
         let mut state = new(true, None, None);
-        let _rx = mackie_up(&mut state);
+        let _rx = controller_up(&mut state);
         // Pitch bend channel 1 at the documented 0 dB position (104/127).
-        let _ = update(&mut state, Message::MackieIn(0, vec![0xe0, 0x68, 0x68]));
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0xe0, 0x68, 0x68]));
         let gain = super::channel_level(&state, ChannelId::Input(0), 0);
         assert!((gain - 1.0).abs() < 0.02, "expected ~0 dB, got {gain}");
     }
@@ -20891,8 +21617,8 @@ mod tests {
     #[test]
     fn mackie_mute_note_toggles_the_channel() {
         let mut state = new(true, None, None);
-        let _rx = mackie_up(&mut state);
-        let note = |vel| Message::MackieIn(0, vec![0x90, 0x10, vel]);
+        let _rx = controller_up(&mut state);
+        let note = |vel| Message::ControllerIn(0, vec![0x90, 0x10, vel]);
         let _ = update(&mut state, note(127));
         assert!(state.device.inputs()[0].mute);
         let _ = update(&mut state, note(127));
@@ -20902,13 +21628,13 @@ mod tests {
     #[test]
     fn mackie_bank_navigation_shifts_the_window() {
         let mut state = new(true, None, None);
-        let _rx = mackie_up(&mut state);
+        let _rx = controller_up(&mut state);
         // One strip per channel, so the bank offset is a channel offset.
-        state.mackie_config.stereo_to_mono = true;
+        set_mackie_option(&mut state, "stereo_to_mono", true);
         // Bank right, then fader 1: addresses input 9, not input 1.
-        let _ = update(&mut state, Message::MackieIn(0, vec![0x90, 0x2f, 0x7f]));
-        assert_eq!(state.mackie_nav[0].bank, 8);
-        let _ = update(&mut state, Message::MackieIn(0, vec![0xe0, 0x68, 0x68]));
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0x90, 0x2f, 0x7f]));
+        assert_eq!(state.controller_instances[0].state.nav.bank, 8);
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0xe0, 0x68, 0x68]));
         let gain = super::channel_level(&state, ChannelId::Input(8), 0);
         assert!((gain - 1.0).abs() < 0.02);
     }
@@ -20916,10 +21642,10 @@ mod tests {
     #[test]
     fn mackie_stereo_pairs_share_one_strip_by_default() {
         let mut state = new(true, None, None);
-        let _rx = mackie_up(&mut state);
+        let _rx = controller_up(&mut state);
         // The mock's inputs are linked pairs: strip 2 is input 3, and a
         // fader move on it carries the linked peer.
-        let window = super::mackie_window_for(&state, 0);
+        let window = super::controller_window_for(&state, 0);
         assert_eq!(window[0], Some(ChannelId::Input(0)));
         assert_eq!(window[1], Some(ChannelId::Input(2)));
     }
@@ -20927,20 +21653,20 @@ mod tests {
     #[test]
     fn mackie_simple_cc_fader_works_without_the_handshake() {
         let mut state = new(true, None, None);
-        let _rx = mackie_up(&mut state);
-        state.mackie_nav[0].online = false;
+        let _rx = controller_up(&mut state);
+        state.controller_instances[0].state.nav.online = false;
         // B0 66 68: input 1 to 0 dB, a chapter-29.5 CC command.
-        let _ = update(&mut state, Message::MackieIn(0, vec![0xb0, 0x66, 0x68]));
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0xb0, 0x66, 0x68]));
         let gain = super::channel_level(&state, ChannelId::Input(0), 0);
         assert!((gain - 1.0).abs() < 0.02);
-        // The first control message brings the remote online.
-        assert!(state.mackie_nav[0].online);
+        // The first control message brings the instance online.
+        assert!(state.controller_instances[0].state.nav.online);
     }
 
     #[test]
     fn mackie_feedback_emits_pitch_bend_and_leds() {
         let mut state = new(true, None, None);
-        let mut rx = mackie_up(&mut state);
+        let mut rx = controller_up(&mut state);
         let _ = update(&mut state, Message::Mute(ChannelId::Input(0), true));
         let bytes = drain_bytes(&mut rx);
         // Fader 1 pitch bend and the mute 1 LED (note 0x10, velocity 127).
@@ -20952,26 +21678,27 @@ mod tests {
     }
 
     #[test]
-    fn mackie_loopback_note_disables_the_remote() {
+    fn mackie_loopback_note_disables_the_instance() {
         let mut state = new(true, None, None);
-        let _rx = mackie_up(&mut state);
-        let _ = update(&mut state, Message::MackieIn(0, vec![0x9f, 0x7f, 0x5a]));
-        assert!(!state.mackie_config.in_enabled[0]);
-        assert!(state.mackie_tx[0].is_none());
+        let _rx = controller_up(&mut state);
+        let key = state.controller_instances[0].device_key.clone();
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0x9f, 0x7f, 0x5a]));
+        assert!(!state.controller_settings.device(&key).input);
+        assert!(state.controller_instances.is_empty());
     }
 
     #[test]
     fn mackie_handshake_replies_with_the_response_code() {
         let mut state = new(true, None, None);
-        let mut rx = mackie_up(&mut state);
-        state.mackie_nav[0].online = false;
+        let mut rx = controller_up(&mut state);
+        state.controller_instances[0].state.nav.online = false;
         let serial = *b"ABC1234";
         let challenge = [0x10, 0x20, 0x30, 0x40];
         let mut query = vec![0xf0, 0x00, 0x00, 0x66, 0x14, 0x01];
         query.extend_from_slice(&serial);
         query.extend_from_slice(&challenge);
         query.push(0xf7);
-        let _ = update(&mut state, Message::MackieIn(0, query));
+        let _ = update(&mut state, Message::ControllerIn(0, query));
         let bytes = drain_bytes(&mut rx);
         let reply = bytes
             .windows(18)
@@ -20986,62 +21713,75 @@ mod tests {
         let mut confirm = vec![0xf0, 0x00, 0x00, 0x66, 0x14, 0x03];
         confirm.extend_from_slice(&serial);
         confirm.push(0xf7);
-        let _ = update(&mut state, Message::MackieIn(0, confirm));
-        assert!(state.mackie_nav[0].online);
+        let _ = update(&mut state, Message::ControllerIn(0, confirm));
+        assert!(state.controller_instances[0].state.nav.online);
     }
 
     #[test]
     fn mackie_rec_selects_the_submix_from_the_output_row() {
         let mut state = new(true, None, None);
-        let _rx = mackie_up(&mut state);
+        let _rx = controller_up(&mut state);
         // Row down twice: input -> playback -> output.
-        let _ = update(&mut state, Message::MackieIn(0, vec![0x90, 0x61, 0x7f]));
-        let _ = update(&mut state, Message::MackieIn(0, vec![0x90, 0x61, 0x7f]));
-        assert_eq!(state.mackie_nav[0].bus, crate::osc_rme::Bus::Output);
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0x90, 0x61, 0x7f]));
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0x90, 0x61, 0x7f]));
+        assert_eq!(state.controller_instances[0].state.nav.bus, crate::osc_rme::Bus::Output);
         // REC 2 selects the output pair under strip 2.
-        let _ = update(&mut state, Message::MackieIn(0, vec![0x90, 0x01, 0x7f]));
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0x90, 0x01, 0x7f]));
         assert_eq!(state.sel_out, 1);
-        assert_eq!(state.mackie_nav[0].submix, 1);
+        assert_eq!(state.controller_instances[0].state.nav.submix, 1);
     }
 
     #[test]
     fn mackie_trim_mode_writes_the_channel_trim() {
         let mut state = new(true, None, None);
-        let _rx = mackie_up(&mut state);
-        // DYN on, then fader 1 to about -6 dB (half throw is ~-20 dB;
-        // use a quarter: p=0.25 -> f=255.75 -> about -30 dB).  Just check
-        // the trim moved and the volume did not.
+        let _rx = controller_up(&mut state);
+        // DYN on, then fader 1 down: the trim moves and the volume does not.
         let before = super::channel_level(&state, ChannelId::Input(0), 0);
-        let _ = update(&mut state, Message::MackieIn(0, vec![0x90, 0x2d, 0x7f]));
-        assert!(state.mackie_nav[0].trim);
-        let _ = update(&mut state, Message::MackieIn(0, vec![0xe0, 0x00, 0x40]));
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0x90, 0x2d, 0x7f]));
+        assert!(state.controller_instances[0].state.nav.trim);
+        let _ = update(&mut state, Message::ControllerIn(0, vec![0xe0, 0x00, 0x40]));
         assert!(state.device.inputs()[0].trim < 0.0);
         let after = super::channel_level(&state, ChannelId::Input(0), 0);
         assert_eq!(before, after);
     }
 
     #[test]
-    fn two_remotes_navigate_independently() {
+    fn two_instances_navigate_independently() {
         let mut state = new(true, None, None);
-        let (tx0, _rx0) = iced::futures::channel::mpsc::channel(4096);
-        let (tx1, _rx1) = iced::futures::channel::mpsc::channel(4096);
-        state.mackie_config.enabled = true;
-        state.mackie_config.in_enabled = [true, true];
-        state.mackie_config.stereo_to_mono = true;
-        state.mackie_ports = vec![
-            crate::mackie::MidiPort { card: 0, device: 0 },
-            crate::mackie::MidiPort { card: 0, device: 1 },
-        ];
-        state.mackie_tx = [Some(tx0), Some(tx1)];
-        state.mackie_nav[0].online = true;
-        state.mackie_nav[1].online = true;
-        // Remote 2 banks right; remote 1 stays put.
-        let _ = update(&mut state, Message::MackieIn(1, vec![0x90, 0x2f, 0x7f]));
-        assert_eq!(state.mackie_nav[1].bank, 8);
-        assert_eq!(state.mackie_nav[0].bank, 0);
-        // Each remote's fader 1 addresses its own window.
-        let _ = update(&mut state, Message::MackieIn(1, vec![0xe0, 0x68, 0x68]));
-        let _ = update(&mut state, Message::MackieIn(0, vec![0xe0, 0x00, 0x20]));
+        state.controller_settings.enabled = true;
+        super::refresh_controller_devices(&mut state);
+        for key in ["device:0", "device:1"] {
+            assert!(state
+                .controller_devices
+                .iter()
+                .any(|d| super::controller_device_key(&state, d) == key));
+            let choice = state.controller_settings.devices.entry(key.into()).or_default();
+            choice.input = true;
+            choice.protocol = "mackie_control".into();
+        }
+        set_mackie_option(&mut state, "stereo_to_mono", true);
+        super::rebuild_controller_workers(&mut state);
+        for inst in &mut state.controller_instances {
+            let (tx, _rx) = iced::futures::channel::mpsc::channel(4096);
+            inst.tx = Some(tx);
+            inst.state.nav.online = true;
+        }
+        let idx = |state: &TotalControl, key: &str| {
+            state
+                .controller_instances
+                .iter()
+                .position(|i| i.device_key == key)
+                .expect("instance")
+        };
+        let i0 = idx(&state, "device:0");
+        let i1 = idx(&state, "device:1");
+        // Instance 2 banks right; instance 1 stays put.
+        let _ = update(&mut state, Message::ControllerIn(i1, vec![0x90, 0x2f, 0x7f]));
+        assert_eq!(state.controller_instances[i1].state.nav.bank, 8);
+        assert_eq!(state.controller_instances[i0].state.nav.bank, 0);
+        // Each instance's fader 1 addresses its own window.
+        let _ = update(&mut state, Message::ControllerIn(i1, vec![0xe0, 0x68, 0x68]));
+        let _ = update(&mut state, Message::ControllerIn(i0, vec![0xe0, 0x00, 0x20]));
         let gain9 = super::channel_level(&state, ChannelId::Input(8), 0);
         let gain1 = super::channel_level(&state, ChannelId::Input(0), 0);
         assert!((gain9 - 1.0).abs() < 0.02);
@@ -21049,29 +21789,26 @@ mod tests {
     }
 
     #[test]
-    fn the_port_checkboxes_start_and_stop_the_workers() {
+    fn the_device_checkboxes_start_and_stop_the_workers() {
         let mut state = new(true, None, None);
-        state.mackie_ports = vec![
-            crate::mackie::MidiPort { card: 0, device: 0 },
-            crate::mackie::MidiPort { card: 0, device: 1 },
-        ];
-        let _ = update(&mut state, Message::SetMackieEnabled(true));
-        let _ = update(&mut state, Message::SetMackieIn(1, true));
-        let _ = update(&mut state, Message::SetMackieOut(1, true));
-        assert!(state.mackie_worker[0].is_none());
-        let worker = state.mackie_worker[1].as_ref().unwrap();
-        assert_eq!(worker.remote, 1);
-        assert_eq!(
-            worker.input,
-            Some(crate::mackie::MidiPort { card: 0, device: 1 })
-        );
-        assert_eq!(
-            worker.output,
-            Some(crate::mackie::MidiPort { card: 0, device: 1 })
-        );
-        // Unchecking the input stops the remote.
-        let _ = update(&mut state, Message::SetMackieIn(1, false));
-        assert!(state.mackie_worker[1].is_none());
+        super::refresh_controller_devices(&mut state);
+        let index = state
+            .controller_devices
+            .iter()
+            .position(|d| super::controller_device_key(&state, d) == "device:1")
+            .expect("the unit's second port is listed");
+        let port = state.controller_devices[index].port();
+        let _ = update(&mut state, Message::SetControllersEnabled(true));
+        let _ = update(&mut state, Message::SetControllerIn(index, true));
+        let _ = update(&mut state, Message::SetControllerOut(index, true));
+        assert_eq!(state.controller_instances.len(), 1);
+        let worker = state.controller_instances[0].worker.as_ref().unwrap();
+        assert_eq!(worker.instance, 0);
+        assert_eq!(worker.input, Some(port));
+        assert_eq!(worker.output, Some(port));
+        // Unchecking the input stops the instance.
+        let _ = update(&mut state, Message::SetControllerIn(index, false));
+        assert!(state.controller_instances.is_empty());
     }
 
     #[test]

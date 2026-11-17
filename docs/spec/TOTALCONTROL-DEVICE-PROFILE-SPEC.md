@@ -30,13 +30,16 @@ protocol specifications.
 The profile table is compiled into the application binary and versioned with
 the code. It contains one entry per supported profile.
 
-| Profile id | Model | Transport | Unit | Support |
-|---|---|---|---|---|
-| `uc_pc` | `uc` | interrupt | Fireface UC, PC | production |
-| `uc_ap` | `uc` | isochronous | Fireface UC, AP | production |
-| `ucx_iso` | `ucx` | isochronous | Fireface UCX | production |
-| `ucx_if5` | `ucx` | interrupt | Fireface UCX, IF5 | production |
-| `babyface_classic` | `babyface_classic` | isochronous | Babyface-classic | experimental |
+| Profile id | Model | Transport | Unit | MIDI ports | Support |
+|---|---|---|---|---|---|
+| `uc_pc` | `uc` | interrupt | Fireface UC, PC | 2 | production |
+| `uc_ap` | `uc` | isochronous | Fireface UC, AP | 2 | production |
+| `ucx_iso` | `ucx` | isochronous | Fireface UCX | 2 | production |
+| `ucx_if5` | `ucx` | interrupt | Fireface UCX, IF5 | 2 | production |
+| `babyface_classic` | `babyface_classic` | isochronous | Babyface-classic | 1 | experimental |
+
+The MIDI ports column is the count of logical MIDI ports, one DIN in/out
+pair each; the device protocol specifications own the wire detail.
 
 Babyface-classic support is experimental. Its profile covers the implemented
 control surface; the application labels the device as experimental.
