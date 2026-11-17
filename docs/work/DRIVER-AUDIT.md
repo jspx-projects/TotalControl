@@ -45,7 +45,7 @@ Babyface-classic; status = personalities with a status endpoint.
 | `INFO.outputs` reports the playback channel count | Babyface-classic | P2 | The hardware output count differs; a host sizing output state by this field maps meters/levels wrongly. Verify the ABI field semantics before Babyface production use. | needs-verification |
 | hwdep read path allocates a buffer per event (`GFP_KERNEL`) | all | P2 | CPU overhead on every event in the drain path; direct-reclaim latency under memory pressure; a failed allocation fails the read. Per-reader preallocation removes it. | optional |
 | ISO continuity log counter is module-global | ISO | P3 | The 12-message log throttle is shared across devices and endpoints; continuity diagnostics go silent everywhere after the first 12. Diagnostics only. | open |
-| Verbose PCM trigger-stop diagnostics | all | P3 | Unratelimited `dev_info` on every stop: dmesg noise that buries real errors; on a serial console each line stretches the stop path by milliseconds. No effect while streaming. | optional |
+| Verbose PCM trigger-stop diagnostics | all | P3 | Unratelimited `dev_info` on every stop: dmesg noise that buries real errors; on a serial console each line stretches the stop path by milliseconds. No effect while streaming. | done — log hygiene PR: per-start/stop/rate/session narration is `dev_dbg`; anomalies are ratelimited warnings; probe identification stays |
 | Buffer poison memsets the PCM buffer on every prepare | all | P3 | One whole-buffer memset at stream start (tens of µs at large buffers) plus cache pollution. Already a module parameter (`ffuc_poison`, default on); the remaining decision is the production default. | optional |
 | `COUNTERS.status_urbs` reports zero | status | P3 | The host cannot observe status-URB health; the device sheet counter is incomplete. | open |
 
@@ -106,6 +106,20 @@ Reproduction evidence (UCX, ISO, firmware 46):
 | Single meter reader is host discipline only | P2 | A second hwdep reader breaks the UC pair phase model: each reader samples pages, pairs misalign, `PHASE_LOST` flags and wrong RMS/peak pairing follow. Driver enforcement or an explicit ABI contract. | open — later |
 | Connect policy writes host settings on connect | P2 | Front-panel changes made while the host was away are overwritten. Already flagged for a separate investigation. | open — later |
 | Snapshot cadence (50 ms) | P3 | Fast front-panel moves can alias between captures; the UI confirms at 20 Hz. Acceptable today; event-driven capture is the refinement. | optional |
+
+### Log hygiene result
+
+- Per-start/stop, rate, session, hw_params, suspend/resume and q48
+  instrumentation narration moved to `dev_dbg` (dynamic debug).
+  Ring-event and pointer-mismatch narration moved to
+  `dev_dbg_ratelimited`; the status-watch and cadence warnings are
+  ratelimited. Probe identification and error paths stay.
+- Bench check (UCX, reload + playback): two driver lines in the kernel
+  log, both ratelimited cadence warnings during the rate transition;
+  the previous build emitted a dozen informational lines for the same
+  sequence.
+- Optional refinement: a settling grace for the cadence guard after a
+  rate commit would suppress the transition warnings too.
 
 ### Kernel P1 fix result
 

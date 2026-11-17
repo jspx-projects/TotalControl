@@ -397,8 +397,8 @@ static int ffuc_uc_set_rate(struct ffuc *chip, unsigned int rate)
 	u32 dds;
 	int ret;
 
-	dev_info(&chip->dev->dev, "UC rate -> %u Hz (iso=%d)\n", rate,
-		 chip->iso);
+	dev_dbg(&chip->dev->dev, "UC rate -> %u Hz (iso=%d)\n", rate,
+		chip->iso);
 	/* Windows UC PC uses only 0x10/48 (family) + the 0x10/1487 commit.
 	 * The DDS word is needed by the ISO/Mac personality, not the
 	 * interrupt/Windows one; sending it there can override the committed
@@ -413,16 +413,16 @@ static int ffuc_uc_set_rate(struct ffuc *chip, unsigned int rate)
 		ret = ffuc_vendor_send(chip, FFUC_REQ_DDS, dds >> 16,
 				       (dds & 0xff00) | ffuc_rate_family(rate),
 				       NULL, 0);
-		dev_info(&chip->dev->dev,
-			 "UC DDS 0x%04x/0x%04x ret=%d\n", dds >> 16,
-			 (dds & 0xff00) | ffuc_rate_family(rate), ret);
+		dev_dbg(&chip->dev->dev,
+			"UC DDS 0x%04x/0x%04x ret=%d\n", dds >> 16,
+			(dds & 0xff00) | ffuc_rate_family(rate), ret);
 		if (ret < 0)
 			return ret;
 	}
 	ret = ffuc_set_rate_family(chip, rate);
-	dev_info(&chip->dev->dev,
-		 "UC rate family 0x%02x index 48 ret=%d\n",
-		 ffuc_rate_family(rate) << 4, ret);
+	dev_dbg(&chip->dev->dev,
+		"UC rate family 0x%02x index 48 ret=%d\n",
+		ffuc_rate_family(rate) << 4, ret);
 	if (ret < 0)
 		return ret;
 	/* Windows commits every rate change with 0x10 / wIndex 1487, the
@@ -439,8 +439,8 @@ static int ffuc_uc_set_rate(struct ffuc *chip, unsigned int rate)
 	opts = le32_to_cpu(cur) & FFUC_UC_OPTIONS_MASK;
 	ret = ffuc_vendor_send(chip, FFUC_REQ_SETTINGS, opts,
 			       FFUC_UC_OPTIONS_MASK, NULL, 0);
-	dev_info(&chip->dev->dev, "UC rate commit 0x%04x/1487 ret=%d\n",
-		 opts, ret);
+	dev_dbg(&chip->dev->dev, "UC rate commit 0x%04x/1487 ret=%d\n",
+		opts, ret);
 	return ret;
 }
 
@@ -525,9 +525,9 @@ static int ffuc_uc_stream_start(struct ffuc *chip, unsigned int channels)
 	(void)channels;
 	if (!chip->uc_session)
 		return 0;
-	dev_info(&chip->dev->dev,
-		 "UC session open (rate=%u channels=%u session_reopen=%d)\n",
-		 chip->rate, channels, chip->session_reopen);
+	dev_dbg(&chip->dev->dev,
+		"UC session open (rate=%u channels=%u session_reopen=%d)\n",
+		chip->rate, channels, chip->session_reopen);
 
 	/* Windows session-open sequence, measured in A2b on every stream
 	 * open:
@@ -560,9 +560,9 @@ static int ffuc_uc_stream_stop(struct ffuc *chip, unsigned int channels)
 	/* Windows closes the session before every rate write (A2 t=13.03,
 	 * rate at 13.25; FP9c t=4.88, rate at 10.48).  This is not gated on
 	 * a previous rate change: the first 48 -> 44.1 switch needs it. */
-	dev_info(&chip->dev->dev,
-		 "UC session close (rate=%u channels=%u)\n",
-		 chip->rate, channels);
+	dev_dbg(&chip->dev->dev,
+		"UC session close (rate=%u channels=%u)\n",
+		chip->rate, channels);
 	/* Windows session-close word: 0x13 wIndex 0xC000 wValue 0x000F. */
 	return ffuc_vendor_send(chip, FFUC_REQ_MUTE, 0x000f, 0xc000,
 				NULL, 0);
@@ -1053,11 +1053,11 @@ static void ffuc_ring_event(struct ffuc *chip, struct snd_pcm_substream *subs,
 			    unsigned long appl, unsigned long own)
 {
 	atomic_inc(counter);
-	dev_info_ratelimited(&chip->dev->dev,
-			     "%s: %s #%d appl %lu hw %lu (buffer %lu)\n",
-			     subs->stream ? "capture" : "playback", what,
-			     atomic_read(counter), appl, own,
-			     subs->runtime->buffer_size);
+	dev_dbg_ratelimited(&chip->dev->dev,
+			    "%s: %s #%d appl %lu hw %lu (buffer %lu)\n",
+			    subs->stream ? "capture" : "playback", what,
+			    atomic_read(counter), appl, own,
+			    subs->runtime->buffer_size);
 }
 
 /* The core's shared status pointer diverged from this stream's driver
@@ -1071,17 +1071,17 @@ static void ffuc_ptr_mismatch(struct ffuc *chip,
 	if (!(chip->hw_ptr_logged++)) {
 		struct snd_pcm_runtime *rt = subs->runtime;
 
-		dev_info(&chip->dev->dev,
-			 "%s status hw_ptr %lu driver hw_ptr %lu (buffer %lu period %lu): core pointer diverged\n",
-			 subs->stream ? "capture" : "playback",
-			 rt->status->hw_ptr, s->hw_ptr,
-			 rt->buffer_size, rt->period_size);
-	} else {
-		dev_info_ratelimited(&chip->dev->dev,
-				     "%s mismatch #%u status %lu driver %lu\n",
+		dev_warn_ratelimited(&chip->dev->dev,
+				     "%s status hw_ptr %lu driver hw_ptr %lu (buffer %lu period %lu): core pointer diverged\n",
 				     subs->stream ? "capture" : "playback",
-				     chip->hw_ptr_logged,
-				     subs->runtime->status->hw_ptr, s->hw_ptr);
+				     rt->status->hw_ptr, s->hw_ptr,
+				     rt->buffer_size, rt->period_size);
+	} else {
+		dev_dbg_ratelimited(&chip->dev->dev,
+				    "%s mismatch #%u status %lu driver %lu\n",
+				    subs->stream ? "capture" : "playback",
+				    chip->hw_ptr_logged,
+				    subs->runtime->status->hw_ptr, s->hw_ptr);
 	}
 }
 
@@ -1835,12 +1835,12 @@ static bool ffuc_iso_contiguous(struct ffuc_ep *ep, struct urb *urb)
 		static unsigned int start_logged;
 		if (start_logged < 12) {
 			start_logged++;
-			dev_info(&ep->chip->dev->dev,
-				 "iso %s ep%d: start_frame %u packets %u delta %d\n",
-				 ep->dir ? "cap" : "play", ep->index,
-				 urb->start_frame, urb->number_of_packets,
-				 ep->last_start < 0 ? -1 :
-				 (int)(urb->start_frame - ep->last_start));
+			dev_dbg(&ep->chip->dev->dev,
+				"iso %s ep%d: start_frame %u packets %u delta %d\n",
+				ep->dir ? "cap" : "play", ep->index,
+				urb->start_frame, urb->number_of_packets,
+				ep->last_start < 0 ? -1 :
+				(int)(urb->start_frame - ep->last_start));
 			ep->last_start = urb->start_frame;
 		}
 	}
@@ -2145,9 +2145,9 @@ static void ffuc_engine_stop(struct ffuc *chip)
 	for (i = 0; i < 2; i++)
 		for (j = 0; j < FFUC_MAX_EPS; j++)
 			chip->eps[i][j].last_start = -1;
-	dev_info(&chip->dev->dev,
-		 "engine stop: rate=%u session=%d\n",
-		 chip->rate, chip->session_reopen);
+	dev_dbg(&chip->dev->dev,
+		"engine stop: rate=%u session=%d\n",
+		chip->rate, chip->session_reopen);
 	/* Windows sends the session-close word while packets are still
 	 * flowing (A2 t=13.03, stream dies at 13.3), and does not send a
 	 * separate mute-all.  The UC close word is 0x13/0x000f; a later
@@ -2371,10 +2371,10 @@ static int ffuc_engine_start(struct ffuc *chip)
 				chip->uc_session &&
 				chip->cur_alt == m->alt;
 
-		dev_info(&chip->dev->dev,
-			 "engine start: rate=%u alt=%u cur_alt=%u session=%d skip_alt=%d\n",
-			 chip->rate, m->alt, chip->cur_alt,
-			 chip->session_reopen, skip_alt);
+		dev_dbg(&chip->dev->dev,
+			"engine start: rate=%u alt=%u cur_alt=%u session=%d skip_alt=%d\n",
+			chip->rate, m->alt, chip->cur_alt,
+			chip->session_reopen, skip_alt);
 		if (!skip_alt) {
 			ret = usb_set_interface(chip->dev, chip->audio_iface,
 						m->alt);
@@ -2394,9 +2394,9 @@ static int ffuc_engine_start(struct ffuc *chip)
 	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) && chip->uc_session)
 		msleep(200);
 	ret = chip->desc->ops->set_rate(chip, chip->rate);
-	dev_info(&chip->dev->dev,
-		 "engine start: rate commit %u Hz alt %u cur_alt %u ret=%d\n",
-		 chip->rate, m->alt, chip->cur_alt, ret);
+	dev_dbg(&chip->dev->dev,
+		"engine start: rate commit %u Hz alt %u cur_alt %u ret=%d\n",
+		chip->rate, m->alt, chip->cur_alt, ret);
 	if (ret < 0)
 		return ret;
 
@@ -2462,8 +2462,8 @@ static int ffuc_engine_start(struct ffuc *chip)
 		   jiffies + msecs_to_jiffies(FFUC_STATUS_GRACE_MS));
 	ret = ffuc_status_submit(chip);
 	if (ret < 0)
-		dev_warn(&chip->dev->dev,
-			 "cannot watch the status endpoint: %d\n", ret);
+		dev_warn_ratelimited(&chip->dev->dev,
+				     "cannot watch the status endpoint: %d\n", ret);
 
 	ret = chip->desc->ops->hw_mute(chip, false);
 	if (ret < 0)
@@ -2677,11 +2677,11 @@ static int ffuc_pcm_hw_params(struct snd_pcm_substream *subs,
 
 	mutex_lock(&chip->mutex);
 	if (rate != chip->rate || !chip->mode) {
-		dev_info(&chip->dev->dev,
-			 "hw_params: stream=%s rate=%u old=%u engine=%d\n",
-			 subs->stream == SNDRV_PCM_STREAM_PLAYBACK ?
-			 "playback" : "capture",
-			 rate, chip->rate, chip->engine_running);
+		dev_dbg(&chip->dev->dev,
+			"hw_params: stream=%s rate=%u old=%u engine=%d\n",
+			subs->stream == SNDRV_PCM_STREAM_PLAYBACK ?
+			"playback" : "capture",
+			rate, chip->rate, chip->engine_running);
 		if ((chip->hw_params_mask | chip->prepared_mask) & ~self) {
 			ret = -EBUSY;
 			goto unlock;
@@ -2790,15 +2790,15 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->running = true;
 		/* q48 diagnostics: log the negotiated geometry once per
 		 * start so a capture session can be matched to it. */
-		dev_info(&chip->dev->dev,
-			 "%s start: rate %u, urbs %u x %u frames, buffer %lu, period %lu, stop_threshold %lu, start_threshold %lu, avail_min %lu, delay %lu\n",
-			 subs->stream ? "capture" : "playback", chip->rate,
-			 chip->nurbs, chip->urb_frames,
-			 subs->runtime->buffer_size, subs->runtime->period_size,
-			 subs->runtime->stop_threshold,
-			 subs->runtime->start_threshold,
-			 subs->runtime->control->avail_min,
-			 (unsigned long)subs->runtime->delay);
+		dev_dbg(&chip->dev->dev,
+			"%s start: rate %u, urbs %u x %u frames, buffer %lu, period %lu, stop_threshold %lu, start_threshold %lu, avail_min %lu, delay %lu\n",
+			subs->stream ? "capture" : "playback", chip->rate,
+			chip->nurbs, chip->urb_frames,
+			subs->runtime->buffer_size, subs->runtime->period_size,
+			subs->runtime->stop_threshold,
+			subs->runtime->start_threshold,
+			subs->runtime->control->avail_min,
+			(unsigned long)subs->runtime->delay);
 		return 0;
 	case SNDRV_PCM_TRIGGER_RESUME:
 		/*
@@ -2837,9 +2837,9 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 				chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
 				if (mm) {
 					atomic_inc(&chip->rate_mismatch);
-					dev_warn(&chip->dev->dev,
-						 "ISO cadence %u Hz disagrees with rate %u Hz\n",
-						 chip->iso_cadence, chip->rate);
+					dev_warn_ratelimited(&chip->dev->dev,
+							     "ISO cadence %u Hz disagrees with rate %u Hz\n",
+							     chip->iso_cadence, chip->rate);
 				}
 			}
 		}
@@ -2848,49 +2848,49 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 
 			for (i = 9; i < ARRAY_SIZE(chip->iso_frames_hist); i++)
 				over += chip->iso_frames_hist[i];
-			dev_info(&chip->dev->dev,
-				 "iso frames histogram [0..8,9+]: %u %u %u %u %u %u %u %u %u %u\n",
-				 chip->iso_frames_hist[0], chip->iso_frames_hist[1],
-				 chip->iso_frames_hist[2], chip->iso_frames_hist[3],
-				 chip->iso_frames_hist[4], chip->iso_frames_hist[5],
-				 chip->iso_frames_hist[6], chip->iso_frames_hist[7],
-				 chip->iso_frames_hist[8], over);
+			dev_dbg(&chip->dev->dev,
+				"iso frames histogram [0..8,9+]: %u %u %u %u %u %u %u %u %u %u\n",
+				chip->iso_frames_hist[0], chip->iso_frames_hist[1],
+				chip->iso_frames_hist[2], chip->iso_frames_hist[3],
+				chip->iso_frames_hist[4], chip->iso_frames_hist[5],
+				chip->iso_frames_hist[6], chip->iso_frames_hist[7],
+				chip->iso_frames_hist[8], over);
 		}
-		dev_info(&chip->dev->dev,
-			 "%s stop: delta_zero(cum) %d mismatch(cum) %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d cadence %uHz err(cum) %d delay %u lead %u\n",
-			 subs->stream ? "capture" : "playback",
-			 atomic_read(&chip->delta_zero),
-			 atomic_read(&chip->hw_ptr_mismatch),
-			 atomic_read(&chip->in_overruns),
-			 atomic_read(&chip->out_underruns),
-			 atomic_read(&chip->in_bad_length),
-			 atomic_read(&chip->out_bad_length),
-			 atomic_read(&chip->fb_only_urbs),
-			 atomic_read(&chip->out_fb_priming),
-			 atomic_read(&chip->out_fb_ahead),
-			 atomic_read(&chip->out_fb_stale),
-			 atomic_read(&chip->out_capacity_err),
-			 atomic_read(&chip->out_pkt_len_err),
-			 atomic_read(&chip->out_pkt_status),
-			 atomic_read(&chip->in_hdr_only),
-			 chip->out_lag_min, chip->out_lag_max,
-			 chip->iso_cadence,
-			 atomic_read(&chip->rate_mismatch),
-			 chip->fb_delay, chip->out_lead);
-		dev_info(&chip->dev->dev,
-			 "gate: deferred %d overdue %d max_pending %u overflow %d prep_err %d trig_err %d\n",
-			 atomic_read(&chip->signal_deferred),
-			 atomic_read(&chip->signal_overdue),
-			 READ_ONCE(chip->max_pending),
-			 atomic_read(&chip->in_frames_overflow),
-			 atomic_read(&chip->pcm_prepare_err),
-			 atomic_read(&chip->pcm_trigger_err));
-		dev_info(&chip->dev->dev,
-			 "iso lag samples (one per OUT URB): n %llu sx %lld sy %lld sxx %lld sxy %lld syy %lld\n",
-			 (unsigned long long)chip->lag_n,
-			 (long long)chip->lag_sx, (long long)chip->lag_sy,
-			 (long long)chip->lag_sxx, (long long)chip->lag_sxy,
-			 (long long)chip->lag_syy);
+		dev_dbg(&chip->dev->dev,
+			"%s stop: delta_zero(cum) %d mismatch(cum) %d overruns %d/%d bad_length %d/%d fb_only %d fb %d/%d/%d cap %d pktlen %d/%d hdr0 %d lag %d..%d cadence %uHz err(cum) %d delay %u lead %u\n",
+			subs->stream ? "capture" : "playback",
+			atomic_read(&chip->delta_zero),
+			atomic_read(&chip->hw_ptr_mismatch),
+			atomic_read(&chip->in_overruns),
+			atomic_read(&chip->out_underruns),
+			atomic_read(&chip->in_bad_length),
+			atomic_read(&chip->out_bad_length),
+			atomic_read(&chip->fb_only_urbs),
+			atomic_read(&chip->out_fb_priming),
+			atomic_read(&chip->out_fb_ahead),
+			atomic_read(&chip->out_fb_stale),
+			atomic_read(&chip->out_capacity_err),
+			atomic_read(&chip->out_pkt_len_err),
+			atomic_read(&chip->out_pkt_status),
+			atomic_read(&chip->in_hdr_only),
+			chip->out_lag_min, chip->out_lag_max,
+			chip->iso_cadence,
+			atomic_read(&chip->rate_mismatch),
+			chip->fb_delay, chip->out_lead);
+		dev_dbg(&chip->dev->dev,
+			"gate: deferred %d overdue %d max_pending %u overflow %d prep_err %d trig_err %d\n",
+			atomic_read(&chip->signal_deferred),
+			atomic_read(&chip->signal_overdue),
+			READ_ONCE(chip->max_pending),
+			atomic_read(&chip->in_frames_overflow),
+			atomic_read(&chip->pcm_prepare_err),
+			atomic_read(&chip->pcm_trigger_err));
+		dev_dbg(&chip->dev->dev,
+			"iso lag samples (one per OUT URB): n %llu sx %lld sy %lld sxx %lld sxy %lld syy %lld\n",
+			(unsigned long long)chip->lag_n,
+			(long long)chip->lag_sx, (long long)chip->lag_sy,
+			(long long)chip->lag_sxx, (long long)chip->lag_sxy,
+			(long long)chip->lag_syy);
 		return 0;
 	default:
 		return -EINVAL;
@@ -3155,8 +3155,8 @@ static int ffuc_probe(struct usb_interface *intf,
 	if (chip->nurbs * chip->base_urb_frames < FFUC_MIN_QUEUE_FRAMES) {
 		chip->nurbs = DIV_ROUND_UP(FFUC_MIN_QUEUE_FRAMES,
 					   chip->base_urb_frames);
-		dev_info(&intf->dev, "using %u URBs to keep %u frames queued\n",
-			 chip->nurbs, FFUC_MIN_QUEUE_FRAMES);
+		dev_dbg(&intf->dev, "using %u URBs to keep %u frames queued\n",
+			chip->nurbs, FFUC_MIN_QUEUE_FRAMES);
 	}
 	chip->iso_packets = clamp(DIV_ROUND_UP(chip->base_urb_frames, 6), 1u,
 				  (unsigned int)FFUC_MAX_ISO_PACKETS);
@@ -3332,9 +3332,9 @@ static int ffuc_suspend(struct usb_interface *intf, pm_message_t message)
 		if (chip->streams[dir].running)
 			chip->resume_mask |= 1u << dir;
 	}
-	dev_info(&chip->dev->dev,
-		 "suspend: prepared=0x%x running=0x%x\n",
-		 chip->prepared_mask, chip->resume_mask);
+	dev_dbg(&chip->dev->dev,
+		"suspend: prepared=0x%x running=0x%x\n",
+		chip->prepared_mask, chip->resume_mask);
 
 	snd_power_change_state(chip->card, SNDRV_CTL_POWER_D3hot);
 	/*
@@ -3348,9 +3348,9 @@ static int ffuc_suspend(struct usb_interface *intf, pm_message_t message)
 	if (chip->resume_mask && chip->resume_mask == chip->prepared_mask)
 		snd_pcm_suspend_all(chip->pcm);
 	else
-		dev_info(&chip->dev->dev,
-			 "suspend: driver-managed (prepared=0x%x running=0x%x)\n",
-			 chip->prepared_mask, chip->resume_mask);
+		dev_dbg(&chip->dev->dev,
+			"suspend: driver-managed (prepared=0x%x running=0x%x)\n",
+			chip->prepared_mask, chip->resume_mask);
 	cancel_work_sync(&chip->recover_work);
 	mutex_lock(&chip->mutex);
 	ffuc_engine_stop(chip);
@@ -3402,10 +3402,10 @@ static int ffuc_resume_common(struct usb_interface *intf, bool reset)
 			 "resume: engine restart failed: %d\n", engine_ret);
 
 	ffuc_midi_resume(chip);
-	dev_info(&chip->dev->dev,
-		 "resume: reset=%d prepared=0x%x running=0x%x engine=%d ret=%d\n",
-		 reset, chip->prepared_mask, chip->resume_mask,
-		 READ_ONCE(chip->engine_running), ret);
+	dev_dbg(&chip->dev->dev,
+		"resume: reset=%d prepared=0x%x running=0x%x engine=%d ret=%d\n",
+		reset, chip->prepared_mask, chip->resume_mask,
+		READ_ONCE(chip->engine_running), ret);
 	snd_power_change_state(chip->card, SNDRV_CTL_POWER_D0);
 	return ret;
 }
