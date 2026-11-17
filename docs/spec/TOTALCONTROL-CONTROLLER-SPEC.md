@@ -16,7 +16,7 @@ in their options, not in their machinery.
 | Loader and search order | implemented |
 | Engine | implemented, parity-tested against the Mackie codec |
 | Settings dialog | implemented |
-| Shipped definition files | Mackie Control; the ARC USB joins with its tested-support pull request |
+| Shipped definition files | Mackie Control and RME ARC USB; the ARC live-unit verification is open in its protocol document |
 
 ## Contents
 
@@ -521,10 +521,11 @@ and option values; it is omitted when the file is rewritten.
 | File | `id` | `shape` | `match` |
 |---|---|---|---|
 | `Mackie_MIDI.json` | `mackie_control` | `surface` | `Fireface UC`, `Fireface UCX`, `Babyface` |
+| `RME_ARC_USB_MIDI.json` | `rme_arc_usb` | `remote` | `ARC` |
 
-The ARC USB definition joins the shipped set with its tested-support pull
-request. Both files carry a `version`. A shipped file is replaced only by a
-user file of the same name.
+Both files carry a `version`. A shipped file is replaced only by a user file
+of the same name. The ARC definition's live-unit verification is open in its
+protocol document.
 
 ## 12. Adding a controller
 

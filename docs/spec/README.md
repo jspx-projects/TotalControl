@@ -21,6 +21,7 @@ protocol specs for the wire detail. See the layering rule in
 | [TOTALCONTROL-MIDI-SPEC.md](TOTALCONTROL-MIDI-SPEC.md) | USB-MIDI transport, rawmidi surface and limits |
 | [TOTALCONTROL-CONTROLLER-SPEC.md](TOTALCONTROL-CONTROLLER-SPEC.md) | MIDI controller engine, definition-file format, discovery, settings and persistence |
 | [midi-controllers/MACKIE_MIDI.md](midi-controllers/MACKIE_MIDI.md) | Mackie Control wire protocol, mixer mapping, feedback and options |
+| [midi-controllers/RME_ARC_USB_MIDI.md](midi-controllers/RME_ARC_USB_MIDI.md) | RME ARC USB wire protocol, key assignment, encoder, LEDs and options |
 | [FIREFFACE-UCX-PROTOCOL-SPEC.md](FIREFFACE-UCX-PROTOCOL-SPEC.md) | Fireface UCX transport, registers, writes and readback |
 | [FIREFFACE-UC-PROTOCOL-SPEC.md](FIREFFACE-UC-PROTOCOL-SPEC.md) | Fireface UC transport and controls |
 | [BABYFACE-CLASSIC-PROTOCOL-SPEC.md](BABYFACE-CLASSIC-PROTOCOL-SPEC.md) | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI (experimental) |

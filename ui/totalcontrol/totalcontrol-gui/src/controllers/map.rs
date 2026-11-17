@@ -997,12 +997,10 @@ mod tests {
     }
 
     fn arc() -> ControllerMap {
-        let text = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../docs/work/ARC-USB/MAPS/RME_ARC_USB_MIDI.json"
-        ))
-        .unwrap();
-        ControllerMap::parse(&text).unwrap().validate().unwrap()
+        ControllerMap::parse(crate::controllers::load::EMBEDDED_ARC)
+            .unwrap()
+            .validate()
+            .unwrap()
     }
 
     #[test]

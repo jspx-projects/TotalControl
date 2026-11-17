@@ -10,6 +10,10 @@ use super::map::ControllerMap;
 pub const EMBEDDED_MACKIE: &str =
     include_str!("../../../../../data/midi-controllers/Mackie_MIDI.json");
 
+/// The shipped ARC USB definition, embedded like the Mackie one.
+pub const EMBEDDED_ARC: &str =
+    include_str!("../../../../../data/midi-controllers/RME_ARC_USB_MIDI.json");
+
 /// One loaded protocol, or the reason it is unavailable.
 #[derive(Debug, Clone)]
 pub struct LoadedProtocol {
@@ -108,6 +112,13 @@ pub fn load_all() -> Vec<LoadedProtocol> {
             "Mackie_MIDI.json".into(),
             "embedded".into(),
             EMBEDDED_MACKIE.into(),
+        ));
+    }
+    if !by_name.iter().any(|(n, _, _)| n == "RME_ARC_USB_MIDI.json") {
+        by_name.push((
+            "RME_ARC_USB_MIDI.json".into(),
+            "embedded".into(),
+            EMBEDDED_ARC.into(),
         ));
     }
 

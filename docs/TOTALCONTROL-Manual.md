@@ -1603,8 +1603,14 @@ commands below), `Submix linked`, `Full LCD support`, `Send user defined
 names`, `Map Stereo to 2 Mono Channels`, `Submix Selection in
 Input/Playback Row`, `Disable MIDI in background`, `Send level messages`
 and `Peak hold`. Leave `MIDI Out` unchecked when no feedback is needed.
-`Show MIDI debug log` opens the traffic panel. The `Key assignment` table
-reassigns the SELECT, MUTE, SOLO, REC and VPOT-push buttons.
+`Show MIDI debug log` opens the traffic panel.
+
+The RME ARC USB is supported as a remote. Plug it in; it appears in the
+`Controller` list as its own card and the protocol preselects. Its 15 keys
+and the footswitch trigger Control Room actions, the encoder adjusts the
+volume of its target (Main Out or a phones mix), and the key LEDs follow
+the mixer state. The `Key assignment` table reassigns every key; the
+encoder target, step and talkback mode are options of the ARC definition.
 
 Without a Mackie surface, any MIDI controller can use the simple commands
 on the unit's ports: CC 7 on channel 1 sets the Main Out volume; CC 9 sets

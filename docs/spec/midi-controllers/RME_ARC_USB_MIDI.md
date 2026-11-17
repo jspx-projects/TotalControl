@@ -13,7 +13,7 @@ mixer through whichever device backend is open.
 |---|---|
 | USB declaration | verified against the vendor manual |
 | Key, footswitch, encoder and LED wire values | verified against the vendor command list and a capture-based public implementation |
-| Host model | specified, not implemented |
+| Host model | implemented in the controller engine; live-unit verification open (§11) |
 | SysEx mode | documented by the vendor; message format open (§11) |
 | Live unit verification | open (§11) |
 
@@ -154,7 +154,7 @@ more than 40 commands; the table lists the functions printed on a new unit.
 Every key and the footswitch carry any action of §7.3. The map file holds the
 printed default assignment. A user assignment is stored in the host settings
 under the protocol id and the control id
-([`CONTROLLER_MODEL.md`](CONTROLLER_MODEL.md) §10).
+([`../TOTALCONTROL-CONTROLLER-SPEC.md`](../TOTALCONTROL-CONTROLLER-SPEC.md) §10).
 
 ## 7. Host model
 
@@ -253,9 +253,8 @@ indistinguishable messages. The host drives one ARC and logs a second unit.
 
 The options are part of the controller definition,
 [`../TOTALCONTROL-CONTROLLER-SPEC.md`](../TOTALCONTROL-CONTROLLER-SPEC.md)
-§4.5. The settings dialog shows them in file order inside the groups of
-§8.3 of that document. A user changes them often, so they are listed here and
-stored in the model and in the map file.
+§4.6. The settings dialog shows them in file order inside their groups. The
+map file carries their defaults; the host settings carry the user's values.
 
 ### 8.1 Keys
 

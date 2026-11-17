@@ -444,40 +444,25 @@ fn protocol_off_keeps_the_simple_cc_path() {
 
 #[test]
 fn an_assignment_overrides_the_shipped_action() {
-    let map = map();
-    let cfg = MackieConfig::default();
-    let vals = values(&cfg);
+    // The ARC map carries the assignment table; the Mackie mapping is fixed.
+    let map = arc_map();
+    let values = BTreeMap::new();
     let mut assignments = BTreeMap::new();
-    assignments.insert("mute".to_string(), "strip_solo".to_string());
-    let ctx = DispatchCtx {
-        window: window(),
-        out_window: out_window(),
-        counts: COUNTS,
-        strip_counts: STRIP_COUNTS,
-        submix_count: 9,
-        values: &vals,
-        assignments: &assignments,
-        external_input: false,
-        selected_pair: None,
-    };
+    assignments.insert("key1".to_string(), "dim".to_string());
+    let ctx = arc_ctx(&values, &assignments);
     let mut state = InstanceState::default();
-    let ev = MidiEvent::NoteOn { ch: 0, note: 16, vel: 127 };
+    let ev = MidiEvent::NoteOn { ch: 0, note: 54, vel: 127 };
     let events = engine::decode(&map, &mut state, &ev);
     let msgs = engine::dispatch(&map, &mut state, &ctx, &events[0]);
     assert_eq!(
         format!("{msgs:?}"),
-        format!("{:?}", vec![Message::RmeToggle(crate::osc_rme::RmeToggle::Solo(ChannelId::Input(0)))])
+        format!("{:?}", vec![Message::RmeToggle(crate::osc_rme::RmeToggle::MainDim)])
     );
 }
 
 #[test]
 fn the_arc_encoder_decodes_sign_and_magnitude() {
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../docs/work/ARC-USB/MAPS/RME_ARC_USB_MIDI.json"
-    ))
-    .unwrap();
-    let map = ControllerMap::parse(&text).unwrap().validate().unwrap();
+    let map = arc_map();
     let mut state = InstanceState::default();
     let cases = [
         (0x01u8, 1i32),
@@ -507,12 +492,10 @@ fn the_arc_encoder_decodes_sign_and_magnitude() {
 }
 
 fn arc_map() -> ControllerMap {
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../docs/work/ARC-USB/MAPS/RME_ARC_USB_MIDI.json"
-    ))
-    .unwrap();
-    ControllerMap::parse(&text).unwrap().validate().unwrap()
+    ControllerMap::parse(super::load::EMBEDDED_ARC)
+        .unwrap()
+        .validate()
+        .unwrap()
 }
 
 fn arc_ctx<'a>(

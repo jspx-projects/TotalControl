@@ -10,6 +10,7 @@ The control surfaces that run on this transport are specified separately:
 | Surface | Document | Map file |
 |---|---|---|
 | Mackie Control | [`midi-controllers/MACKIE_MIDI.md`](midi-controllers/MACKIE_MIDI.md) | `Mackie_MIDI.json` |
+| RME ARC USB | [`midi-controllers/RME_ARC_USB_MIDI.md`](midi-controllers/RME_ARC_USB_MIDI.md) | `RME_ARC_USB_MIDI.json` |
 
 Further controller documents join this directory with their tested-support
 pull requests.
