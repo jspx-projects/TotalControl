@@ -10,22 +10,21 @@ The Digiface USB has two modes:
 
 - normal mode, with a vendor-specific audio interface and a separate vendor
   interface that carries the TotalMix mixer;
-- CC mode, which is class compliant.
+- CC mode, which is class compliant and has no TotalMix routing.
 
-The internal mixer is hardware of the unit and runs in both modes. CC mode has
-no documented mixer-control interface for a third-party host, while normal mode
-has one that public reverse engineering describes.
-
-Mainline Linux supports audio in normal mode and exposes clock and format
-controls. The mixer protocol below comes from public reverse engineering. It is
-a starting point, not proof. Two captures decide the backend: the CC-mode
-interface map, and the normal-mode mixer traffic.
+Normal mode is the target. Mainline Linux streams its audio and exposes clock
+and format controls; the mixer protocol below comes from public reverse
+engineering and is a starting point, not proof. The primary capture is the
+normal-mode mixer traffic. A CC-mode descriptor capture is optional: it
+settles whether a mixer interface exists there, which the backend does not
+need.
 
 ## 2. Before capturing
 
 1. Save the current TotalMix workspace and the interface's current scene.
-2. Capture CC mode first, then normal mode. The firmware update tool shows the
-   mode; §3.1 is the CC-mode capture.
+2. Capture normal mode first (§3.2 and §4); it is the target. The CC-mode
+   descriptor capture (§3.1) is optional. The firmware update tool shows the
+   mode.
 3. Use a Linux host. TotalMix FX runs on Windows or macOS while its traffic is
    captured with `usbmon` where the unit is attached, or through a USB analysis
    tool on that host.
@@ -44,7 +43,10 @@ The protocol needs the traffic, not the identity of the unit.
 
 ## 3. Descriptors
 
-### 3.1 CC mode: the interface map
+### 3.1 CC mode: the interface map (optional)
+
+This capture is optional; the backend targets normal mode and does not need
+it. It settles, for the record, whether a mixer interface exists in CC mode.
 
 Flash CC mode, attach the unit to the Linux host, and capture the full
 descriptor tree:
@@ -53,31 +55,22 @@ descriptor tree:
 lsusb -v > digiface-cc-descriptors.txt
 ```
 
-The question this answers: which interfaces and endpoints exist in CC mode, and
-whether any of them can carry mixer control. Record every interface class,
-alternate setting and endpoint, and whether `snd-usb-audio` bound it. This
-separates a control interface that a host can drive from one that only RME's
-own application drives.
+Record every interface class, alternate setting and endpoint, and whether
+`snd-usb-audio` bound it. Note whether interface 1 (the vendor mixer
+interface of normal mode) is present, and whether any USB MIDI port appears.
+RME states CC mode has no TotalMix routing; EP0 vendor control requests still
+answer (RME's `usb_vendor` demo switches the output formats with request 18).
 
-Also record whether the unit exposes a USB MIDI port in CC mode. RME's iPad
-application is the only known control path there, and RME states that it reaches
-the mixer over USB. A MIDI port would be its transport.
+### 3.1.1 CC mode: control traffic (not applicable today)
 
-### 3.1.1 CC mode: control traffic
+The iPad application does not control the Digiface USB today, so there is no
+iPad mixer traffic to capture. If a future firmware and app add that path,
+capture it then: port count and names, ten seconds idle, one output fader, one
+input mute, one route, one setup recall, raw bytes per port. A SysEx-heavy
+stream on one port would identify a vendor application protocol. Until then,
+the control traffic that matters is the normal-mode TotalMix capture of §4.
 
-When the unit exposes a MIDI port in CC mode, attach an iPad with TotalMix FX for
-iPad and capture the traffic while the mixer changes:
-
-1. Record the port count and the port names.
-2. Idle for ten seconds.
-3. Move one output fader, mute one input, route one input, recall one setup.
-4. Save the raw bytes per port.
-
-A SysEx-heavy stream on one port identifies a vendor application protocol.
-Such a protocol is captured traffic, not an interface a host can claim. Its
-meaning stays unknown until the messages are decoded.
-
-### 3.2 Normal mode: the mixer interface
+### 3.2 Normal mode: the mixer interface (primary)
 
 Flash normal mode and capture the descriptor tree:
 

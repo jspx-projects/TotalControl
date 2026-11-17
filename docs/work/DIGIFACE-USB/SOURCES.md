@@ -26,15 +26,30 @@ The PDFs are not committed. `docs/rme/` is local only.
 
 | Source | Use |
 |---|---|
-| `sound/usb/quirks-table.h` | Product IDs, interface 0 match, audio format sets, channel counts |
-| `sound/usb/quirks.c` | `snd_usb_rme_digiface_boot_quirk`, fixed boot state |
+| `sound/usb/quirks-table.h` | `QUIRK_RME_DIGIFACE`: product IDs, interface-0-only match, plain-PCM format sets (`S32_LE`, 24-bit), isoc OUT `0x02` / IN `0x81`, implicit feedback (`.implicit_fb = 1`, `.sync_ep = 0x81`), channel counts per speed |
+| `sound/usb/quirks.c` | `snd_usb_rme_digiface_boot_quirk`, fixed boot state (mixer off, internal clock, ADAT, 48 kHz, loopback off, unity gain) |
+| `sound/usb/mixer_quirks.c` | Digiface ALSA controls: `Sync Source`, `Current Sync Source`, `System Rate`, `Current Rate`, `Input N Sync/Format/Rate`, `Output N Format`; vendor requests 16/18 writes and 17 status read, with bitmasks |
 | `sound/usb/card.c` | Class-driver binding and rawmidi rules |
 | `sound/usb/pcm.c` | Rate and stream behaviour, background only |
 
 Tree: <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/usb>
 
-The quirk table is the authority for the two product IDs. This note does not
-repeat them.
+Initial support commit: `c032044` ("ALSA: usb-audio: Add quirk for RME Digiface
+USB"), Linux 6.12. The quirk table is the authority for the two product IDs;
+this note does not repeat them. The audio facts above are verified from these
+sources, not from a capture.
+
+## 2.1 RME statements and demo
+
+| Source | Use |
+|---|---|
+| RME forum, "Digiface USB class compliant on Linux", <https://forum.rme-audio.de/viewtopic.php?id=42916> | MC: CC mode has no input-to-output routing (no TotalMix); the DAW routes. MC's `usb_vendor` libusb demo switches the optical output formats in CC mode with request 18 (EP0 vendor control answers in CC mode) |
+| RME forum, "Digiface am iPad im CC Modus", <https://forum.rme-audio.de/viewtopic.php?id=43423> | MC: TotalMix FX for iPad support for the CC-capable interfaces is planned, not shipped; no date |
+| TotalMix FX for iPad App Store listing | The supported device list excludes the Digiface USB |
+| RME `usb_vendor` demo, <https://www.rme-audio.de/downloads/usb_vendor_c.zip> | A ready-made libusb probe for the control requests |
+
+These settle the CC-mode and iPad questions: the iPad path is not a control
+path today, and CC mode is not the backend's target.
 
 ## 3. Public prior art
 

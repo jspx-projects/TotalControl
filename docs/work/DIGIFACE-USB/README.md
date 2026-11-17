@@ -5,75 +5,132 @@ the RME Digiface USB and how to add mixer control to TotalControl.
 
 | File | Purpose | Destination once reviewed |
 |---|---|---|
-| [`DIGIFACE_USB_PROTOCOL_SPEC.md`](DIGIFACE_USB_PROTOCOL_SPEC.md) | Wire protocol and host binding | `docs/spec/DIGIFACE_USB_PROTOCOL_SPEC.md` |
+| [`DIGIFACE_USB_PROTOCOL_SPEC.md`](DIGIFACE_USB_PROTOCOL_SPEC.md) | Wire protocol and host binding | `docs/spec/DIGIFACE-USB-PROTOCOL-SPEC.md` |
 | [`IMPLEMENTATION.md`](IMPLEMENTATION.md) | Kernel module, backend, profile, tests | Working note; the specification outcome lands in the protocol spec and the device profile spec |
 | [`CAPTURE-REQUEST.md`](CAPTURE-REQUEST.md) | The evidence the device owner must provide | Working note, shareable as-is |
 | [`SOURCES.md`](SOURCES.md) | Sources and the MIT licence position | `THIRD-PARTY.md` entries and code comments |
 
-This work belongs to the person who owns the hardware. With the captures of
-[`CAPTURE-REQUEST.md`](CAPTURE-REQUEST.md), the protocol spec and the
-implementation plan are enough to implement, test and open a pull request from
-their own tree.
+## Ownership
 
-## The distinction that matters
+This work belongs to the person who owns the hardware. The contributor
+implements the kernel transport, the userspace backend, the profile, the GUI
+entry and the tests, verifies them on the unit, and opens one pull request.
+The maintainers review and integrate, and help with the shared application
+architecture on request. The protocol draft, the implementation plan, the
+uapi sketch and the capture request below are the starting point; they are
+prior art and a plan, not a finished implementation.
 
-The internal mixer answers in both USB modes. What differs is the USB
-declaration and the control path a third-party host can use.
+## The target mode is normal mode
 
-| Mode | USB declaration | Control path for a third-party host |
+The Digiface USB has two firmware modes, selected with the Flash Update Tool:
+
+| Mode | USB declaration | Audio | Mixer control for a third-party host |
+|---|---|---|---|
+| Normal | vendor-specific interfaces | plain PCM, streamed by mainline `snd-usb-audio` | interface 1: vendor control requests plus bulk matrix words and meters |
+| CC | class-compliant, different product id | class driver, no quirk | no TotalMix routing; EP0 vendor control requests still answer |
+
+**Normal mode is the target.** Mainline already streams its audio, and the
+mixer interface is left free for a control driver. The backend does not wait
+for any CC-mode investigation.
+
+Two earlier claims in this note were wrong and are corrected here:
+
+- The iPad application does **not** control the Digiface USB today. RME states
+  support is planned, not shipped; the App Store device list excludes it. The
+  mixer therefore is not known to answer over the iPad path.
+- CC mode is not a mixer-control path. RME states there is no input-to-output
+  routing in CC mode; the DAW does the routing. EP0 vendor control requests do
+  answer in CC mode (RME published a libusb demo that switches the optical
+  output formats with request 18), but whether interface 1 and the mixer exist
+  there is unknown and is not needed for the backend.
+
+## Verified mainline facts
+
+Read from the mainline `sound/usb` sources (see [`SOURCES.md`](SOURCES.md)):
+
+- The quirk matches vendor-class interface 0 only, with the normal-mode
+  product ids, and leaves the other interfaces unclaimed.
+- The audio is plain PCM, 24-bit in 32-bit containers (`S32_LE`), not a
+  proprietary packet format. Playback is isochronous OUT endpoint `0x02`,
+  capture is isochronous IN `0x81`.
+- Playback is asynchronous with **implicit feedback** from the capture
+  endpoint (`.implicit_fb = 1`, `.sync_ep = 0x81`) — the same mechanism the
+  Fireface URB engine uses.
+- Three rate families: 32–48 kHz (34 out / 32 in), 64–96 kHz (18 / 16),
+  128–192 kHz (10 / 8). The last two outputs are the phones pair.
+- A boot quirk writes a fixed state on every probe: mixer off, internal
+  clock, all outputs ADAT, 48 kHz, loopback off, unity output gain. A control
+  app must re-enable the mixer and full-sync after connect.
+- ALSA mixer controls already exist for `Sync Source` (rw), `Current Sync
+  Source`, `System Rate` / `Current Rate` (r), `Input N Sync/Format/Rate` (r)
+  and `Output N Format` (rw). They use the same vendor requests 16 and 18 and
+  the status read 17 the protocol draft describes, with matching bitmasks.
+- The matrix, output faders, meters, loopback and snapshots are deliberately
+  left to userspace; that is the control module's scope.
+
+## Two-card model and pairing rule
+
+The control module cannot attach hwdep to the mainline audio card. It
+registers its own ALSA card with one hwdep node and no PCM:
+
+| Card | Owner | Contents |
 |---|---|---|
-| Normal | vendor-specific | a vendor interface with control requests and bulk mixer words |
-| CC | class compliant | none documented; RME's iPad application is a private protocol over USB |
+| Audio card | `snd-usb-audio` | PCM and the standard mixer controls |
+| Control card | the new module | one hwdep node, no PCM |
 
-Two control models differ. A native control interface is a USB interface
-described by the device, so a host can capture and drive it. A vendor protocol
-is an application-level protocol over a class transport, here USB MIDI, so a
-host has to learn the messages from captured application traffic.
-
-RME uses the vendor model for the iPad. The mixer answering there shows the
-hardware runs in CC mode. It leaves the CC-mode control interface unsettled for
-a host, and the CC-mode descriptor capture is what settles it.
+The application pairs them into one visible device. Pairing rule: match the
+control card by its fixed id (proposed `DigifaceControl`) and the audio card
+by the mainline Digiface card id. Store ids, never card numbers. Both present
+→ one device; audio card only → "Digiface USB (no mixer interface)", no
+backend; control card only → an error state.
 
 ## Status
 
 | Item | State |
 |---|---|
-| Normal-mode audio | Verified in mainline `sound/usb` |
-| CC-mode audio | Verified in the vendor manual and mainline quirk |
-| Mixer answers in CC mode | RME forum: the iPad application reaches it |
-| CC-mode control interface for a host | Unknown; needs a capture |
+| Normal-mode audio, endpoints, implicit feedback | Verified in mainline `sound/usb` |
+| Mainline ALSA clock/format/status controls | Verified in mainline `mixer_quirks.c` |
+| Boot quirk fixed state | Verified in mainline `quirks.c` |
+| CC mode has no TotalMix routing | Verified statement, RME forum |
+| CC mode EP0 vendor control answers | Verified, RME libusb demo (request 18) |
+| CC-mode interface 1 / mixer presence | Unknown; optional descriptor capture |
 | Mixer interface and endpoints | Public prior art, not verified here |
-| Control requests and register bits | Public prior art, not verified here |
+| Control requests and register bits | Public prior art, partly confirmed by mainline values |
 | Matrix word format | Public prior art, not verified here |
-| Gain law | Public prior art, confirmed by the mainline unity write |
-| Meter frame layout | Public prior art, not verified here |
+| Gain law | Public prior art, unity confirmed by the mainline write |
+| Meter frame layout | Public prior art, measured on a unit by Openface-Mixer (vendor mode) |
 | Loopback request | Conflict between prior art and mainline; needs a capture |
 | Snapshot storage | Unknown; needs a capture |
 | Device profile | Not written |
 
 ## Recommendation
 
-Use a thin control-only kernel module that binds the mixer interface and
-exposes one hwdep node. Keep audio on `snd-usb-audio`. Keep the mixer model,
-routing policy and scenes in userspace.
-
-This follows the repository's support policy. A direct-USB userspace backend
-is a useful capture and prototype tool, but it is not part of the supported
-set.
+Use a thin control-only kernel module that binds interface 1 and exposes one
+hwdep node. Keep audio on `snd-usb-audio`. Keep the mixer model, routing
+policy and scenes in userspace. This follows the repository's support policy;
+a direct-USB userspace backend is a useful capture and prototype tool, not
+part of the supported set.
 
 Do not start the kernel work before the captures in
-[`CAPTURE-REQUEST.md`](CAPTURE-REQUEST.md) confirm the prior-art protocol.
+[`CAPTURE-REQUEST.md`](CAPTURE-REQUEST.md) confirm the prior-art protocol. A
+quick first probe is enough to start: RME's published `usb_vendor` libusb demo
+and the Openface-Mixer / rmectl prior art exercise the control requests
+directly. Reaffirm the status read, mixer enable, one route, one output fader
+and one meter frame on the unit before writing the module against them.
 
 ## What the device is
 
-- 16 micro-optical ADAT inputs at 1x: four optical ports of eight channels,
-  each port also usable as stereo S/PDIF.
+- 32 ADAT inputs at 1x: four optical ports of eight channels, each port also
+  usable as stereo S/PDIF (the pair aliases the port's first two channels).
 - 34 outputs at 1x: the same four optical ports plus one stereo Phones output.
 - 34 software playback channels at 1x.
 - TotalMix FX with routing, faders, mutes, pans, groups, snapshots and
   loopback.
 - No microphone preamps, no instrument inputs, no EQ, no dynamics and no
   reverb or echo. The manual states that FX is not available on this model.
+- No MIDI ports. A DIN Mackie surface cannot connect; USB controllers (ARC
+  USB, a USB X-Touch) connect through the computer and use the generic
+  controller engine.
 - Channel counts fall with the sample-rate family because ADAT uses S/MUX.
 
 ## Open items
@@ -86,4 +143,6 @@ Do not start the kernel work before the captures in
 | needs-capture | Loopback request semantics |
 | open | Channel topology at 2x and 4x |
 | open | Snapshot and setup storage in the device |
-| open | Whether the mixer interface can be claimed while audio streams |
+| open | Whether the mixer can be enabled while audio streams |
+| open | Interrupt endpoint `0x83` purpose |
+| optional | CC-mode descriptor tree (settles the CC-mode question; not needed for the backend) |

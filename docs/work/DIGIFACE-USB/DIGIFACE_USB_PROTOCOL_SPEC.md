@@ -33,29 +33,20 @@ Verified from the vendor manual:
   pans, groups, snapshots and loopback.
 - The model has no FX. The manual marks reverb and echo as not available.
 
-RME's iPad application reaches the mixer over USB. That shows the mixer runs
-and answers in CC mode. It says nothing about the control interface being
-available to a third-party host.
+RME's iPad application does not control this model today; support is stated
+as planned, not shipped, and the App Store device list excludes it. The mixer
+is therefore not known to answer over an iPad path.
 
-Two control models differ:
+CC mode is not a mixer-control path. RME states there is no input-to-output
+routing in CC mode; the DAW does the routing. EP0 vendor control requests do
+answer in CC mode: RME published a libusb demo that switches the optical
+output formats with request 18. Whether interface 1 and the mixer exist in CC
+mode is unknown.
 
-| Model | Who owns the protocol | Third-party host |
-|---|---|---|
-| Native: a class-USB control interface | the USB interface, described by the device's own descriptors | can capture it and drive it, as this document does for normal mode |
-| Vendor: a private application protocol over a class transport, here USB MIDI | RME | captures the application traffic to learn it |
-
-The vendor model is the one RME uses for the iPad. An interface may therefore be
-present in CC mode and still carry no control interface a host can simply use.
-
-CC mode has no documented mixer-control interface. Before the backend is
-committed to normal mode, one capture decides whether a control interface
-exists there: the CC-mode descriptor tree of §12. Until that capture, normal
-mode is the mode with a known protocol.
-
-RME states for the Digiface USB that TotalMix FX for iPad support is planned.
-The same statement holds for the AES, whose manual describes the CC-mode routing
-as *very similar to normal operation with TotalMix FX*, with the mixer state
-loaded from the unit's setups.
+The target is normal mode. Its audio is streamed by mainline `snd-usb-audio`,
+and its mixer interface is left free for a control driver. The backend does
+not wait for the CC-mode question; an optional CC-mode descriptor capture
+settles it for the record.
 
 ## 3. Mainline host behaviour
 
@@ -70,6 +61,19 @@ Verified from `sound/usb/quirks-table.h` and `sound/usb/quirks.c`:
   internal clock, all outputs ADAT, 48 kHz, unity output gain, loopback off.
 - The quirk exposes audio only, and leaves the mixer interface to a vendor
   driver.
+
+The audio path is plain PCM, not a proprietary packet format: 24-bit samples
+in 32-bit containers (`S32_LE`), playback on isochronous OUT endpoint `0x02`,
+capture on isochronous IN `0x81`. Playback is asynchronous with implicit
+feedback from the capture endpoint (`.implicit_fb = 1`, `.sync_ep = 0x81`).
+The channel counts per speed family are in §8.
+
+Verified from `sound/usb/mixer_quirks.c`: ALSA controls already exist for
+`Sync Source` (rw, Internal / Input 1–4), `Current Sync Source` (r), `System
+Rate` and `Current Rate` (r), `Input N Sync/Format/Rate` (r) and `Output N
+Format` (rw, ADAT / S/PDIF). They write vendor requests 16 and 18 and read the
+status with request 17, with the bitmasks of §5. The matrix, output faders,
+meters, loopback and snapshots are left to userspace.
 
 The boot sequence, as request, value and index:
 
@@ -395,14 +399,17 @@ recalling one.
 | Claim | Evidence |
 |---|---|
 | Normal mode is vendor-specific | Vendor manual and mainline quirk |
-| The mixer answers in CC mode | RME forum: the iPad application reaches it over USB |
-| No CC-mode control interface is documented for a third-party host | Vendor documentation and RME forum |
+| Normal-mode audio is plain PCM with implicit feedback | Mainline quirk table |
+| Mainline ALSA clock/format/status controls use requests 16/18/17 | Mainline `mixer_quirks.c` |
+| CC mode has no TotalMix routing | RME forum statement |
+| CC mode EP0 vendor control answers (request 18) | RME published libusb demo |
+| CC-mode interface 1 / mixer presence | Unknown; optional capture |
 | Mainline claims only interface 0 | Mainline quirk table |
 | Boot state is fixed | Mainline boot quirk |
 | Mixer interface, endpoints, requests | Prior art |
 | Register bit layout | Prior art, partly confirmed by the mainline values |
 | Gain law | Prior art, unity confirmed by mainline |
-| Meter layout | Prior art |
+| Meter layout | Prior art, measured on a unit by Openface-Mixer in vendor mode |
 | Channel counts per speed | Mainline quirk table |
 | Loopback write | Conflict; needs a capture |
 | Snapshot storage | Unknown |
