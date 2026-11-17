@@ -1571,47 +1571,64 @@ There is no `OK` or `Apply` to remember and no `Cancel`: a single `Close`
 saved. A section that is switched off is grayed out; only its `Enable`
 switch stays active until you turn it on.
 
-### MIDI — a Mackie Control surface
+### MIDI — control surfaces and remotes
 
-TotalControl can be driven by a Mackie Control compatible surface (Mackie
-Control, Behringer BCF2000 in "MC C" mode, X-Touch, and many others).
+TotalControl runs MIDI controllers through one generic engine. A controller
+is described by a definition file; Mackie Control is the first shipped
+definition, so any Mackie Control compatible surface works (Mackie Control,
+Behringer BCF2000 in "MC C" mode, X-Touch, and many others).
 
-1. Connect the surface. A DIN surface goes into the unit's MIDI breakout
+1. Connect the controller. A DIN surface goes into the unit's MIDI breakout
    ports; a USB surface connects to the computer directly.
-2. In the MIDI part, turn on `Enable`, then check the ports under `MIDI In`
-   (and `MIDI Out` for feedback). `Port 1` and `Port 2` are the unit's own
-   MIDI ports (the Babyface has only `Port 1`); each checked input runs one
-   controller, and changes take effect immediately.
-3. Move a fader: the matching channel strip moves, and its name turns
+2. In the MIDI part, turn on `Enable`. Pick the controller in the
+   `Controller` list — every USB MIDI port and the unit's own ports are
+   listed — then check `MIDI In` (and `MIDI Out` for feedback). Each checked
+   input runs one controller, and changes take effect immediately. Several
+   controllers can run at once.
+3. The `Protocol` list preselects the matching definition; the line below
+   shows which file is in use. The options below belong to that definition.
+4. Move a fader: the matching channel strip moves, and its name turns
    brown while it is in the surface's 8-channel window.
 
-The surface controls the mix of the selected submix. Bank and channel
-buttons move the window, the arrow buttons change the row, REC selects
-the submix, and the control-room buttons map to Dim (STOP), Talkback
-(PLAY), Mono (PAN), Speaker B (FLIP), Master Mute (EQ), Master Solo
-(PLUGINS) and Recall (RECORD). F1–F8 load snapshots. The VPOTs set pan;
-pressing one centers it. The full mapping is in
-[`spec/TOTALCONTROL-MIDI-SPEC.md`](spec/TOTALCONTROL-MIDI-SPEC.md).
+With the Mackie definition, the surface controls the mix of the selected
+submix. Bank and channel buttons move the window, the arrow buttons change
+the row, REC selects the submix, and the control-room buttons map to Dim
+(STOP), Talkback (PLAY), Mono (PAN), Speaker B (FLIP), Master Mute (EQ),
+Master Solo (PLUGINS) and Recall (RECORD). F1–F8 load snapshots. The VPOTs
+set pan; pressing one centers it. The full mapping is in
+[`spec/midi-controllers/MACKIE_MIDI.md`](spec/midi-controllers/MACKIE_MIDI.md).
 
-Options: `Enable Mackie protocol` (off leaves only the simple CC/note
-commands below), `Full LCD support`, `Send user defined names`, `Send
-level messages` and `Peak hold`. Leave `MIDI Out` unchecked when no
-feedback is needed. `Show MIDI debug log` opens the traffic panel.
+Mackie options: `Enable Mackie protocol` (off leaves only the simple CC
+commands below), `Submix linked`, `Full LCD support`, `Send user defined
+names`, `Map Stereo to 2 Mono Channels`, `Submix Selection in
+Input/Playback Row`, `Disable MIDI in background`, `Send level messages`
+and `Peak hold`. Leave `MIDI Out` unchecked when no feedback is needed.
+`Show MIDI debug log` opens the traffic panel. The `Key assignment` table
+reassigns the SELECT, MUTE, SOLO, REC and VPOT-push buttons.
 
-Without a Mackie surface, any MIDI controller can use the simple
-commands: CC 7 on channel 1 sets the Main Out volume; CC 102–117 on
-channels 1–12 set the faders of the three rows; note 93 toggles Dim, note
-94 Talkback, note 95 Recall, note 50 Speaker B; notes 54–61 load
-snapshots 1–8. The complete table is in the MIDI spec §8.3.
+Without a Mackie surface, any MIDI controller can use the simple commands
+on the unit's ports: CC 7 on channel 1 sets the Main Out volume; CC 9 sets
+input gain; CC 102–117 on channels 1–12 set the faders of the three rows;
+CC 102/103 on channel 13 switch Trim Gains; CC 104+2n on channel 13 selects
+a submix. The complete table is in the Mackie controller spec §9.
 
-**Loopback warning.** Do not wire the remote's MIDI output back into its
+**Adding your own controller.** A definition file is JSON. Copy a shipped
+file from `/usr/share/totalcontrol/midi-controllers/` (or
+`/usr/local/share/totalcontrol/midi-controllers/`) into
+`~/.local/share/totalcontrol/midi-controllers/`, edit the controls, feedback
+and options, and restart TotalControl; a file of the same name overrides the
+shipped one, a new name adds a protocol. The format is specified in
+[`spec/TOTALCONTROL-CONTROLLER-SPEC.md`](spec/TOTALCONTROL-CONTROLLER-SPEC.md).
+A tested definition can be contributed back as a pull request.
+
+**Loopback warning.** Do not wire the controller's MIDI output back into its
 input. TotalControl sends a detection note every 500 ms; if it hears it
-back, it disables the remote until you re-enable it. A surface whose
+back, it disables that controller until you re-enable it. A surface whose
 faders snap back by themselves is usually in such a loop.
 
 The unit's own stand-alone MIDI control (the unit acts as the host when
 no computer is connected) is a device mode, not a TotalControl feature;
-see the MIDI spec §12.
+see the device protocol specifications.
 
 ### OSC
 

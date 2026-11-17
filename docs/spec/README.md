@@ -18,7 +18,9 @@ protocol specs for the wire detail. See the layering rule in
 | [TOTALCONTROL-DEVICE-PROFILE-SPEC.md](TOTALCONTROL-DEVICE-PROFILE-SPEC.md) | profile table, selection, host operations, capabilities and scene compatibility |
 | [TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md](TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) | channel-template schema, layout document, per-device overrides, invariants and preview |
 | [TOTALCONTROL-OSC-SPEC.md](TOTALCONTROL-OSC-SPEC.md) | OSC 1.96 and Global OSC transport, address spaces, scales, feedback and mapping |
-| [TOTALCONTROL-MIDI-SPEC.md](TOTALCONTROL-MIDI-SPEC.md) | USB-MIDI transport, rawmidi surface, limits and Mackie Control surface support |
+| [TOTALCONTROL-MIDI-SPEC.md](TOTALCONTROL-MIDI-SPEC.md) | USB-MIDI transport, rawmidi surface and limits |
+| [TOTALCONTROL-CONTROLLER-SPEC.md](TOTALCONTROL-CONTROLLER-SPEC.md) | MIDI controller engine, definition-file format, discovery, settings and persistence |
+| [midi-controllers/MACKIE_MIDI.md](midi-controllers/MACKIE_MIDI.md) | Mackie Control wire protocol, mixer mapping, feedback and options |
 | [FIREFFACE-UCX-PROTOCOL-SPEC.md](FIREFFACE-UCX-PROTOCOL-SPEC.md) | Fireface UCX transport, registers, writes and readback |
 | [FIREFFACE-UC-PROTOCOL-SPEC.md](FIREFFACE-UC-PROTOCOL-SPEC.md) | Fireface UC transport and controls |
 | [BABYFACE-CLASSIC-PROTOCOL-SPEC.md](BABYFACE-CLASSIC-PROTOCOL-SPEC.md) | Babyface-classic transport, channel model, mixer writes, preamps, metering and hwdep ABI (experimental) |

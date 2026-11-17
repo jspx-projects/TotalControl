@@ -272,24 +272,32 @@ The MIDI part:
 | Control | Form |
 |---|---|
 | Enable | checkbox, master switch of the MIDI part |
-| Help line | "Use a Mackie controller to control the mixer." |
-| MIDI In | one checkbox per device port: `Port 1`, `Port 2` |
-| MIDI Out | one checkbox per device port: `Port 1`, `Port 2` |
-| Enable Mackie protocol | checkbox |
-| Full LCD support | checkbox |
-| Send user defined names | checkbox |
-| Send level messages | checkbox |
-| Peak hold | checkbox |
 | Show MIDI debug log | checkbox |
+| Help line | "Use a MIDI controller to control the mixer." |
+| Controller | listbox: one entry per USB MIDI port and per port of the open unit |
+| MIDI In / MIDI Out | two checkboxes for the selected controller |
+| Protocol | listbox: one entry per loaded definition |
+| Protocol file | read-only line: file name, version and resolved path |
+| Options | the option presentation of the selected definition |
+| Key assignment | one action picker per assignable control, when the definition carries an assignment table |
 
 While the MIDI part is disabled, every control below `Enable` is grayed
-out. The port checkboxes are the unit's own MIDI ports: two on the UC and
-UCX, one on the Babyface-classic (then only `Port 1` is shown). Each checked
-MIDI In port runs one remote; its feedback goes to the same-numbered MIDI
-Out port when that is checked. Toggling a checkbox opens or closes the
-port immediately. The enable switch, port checkboxes and options are host
-settings (STATE-SPEC §7.1). The remote model, the mapping and the feedback
-are in [`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
+out. The controller listbox shows every USB MIDI port and the open unit's
+own ports, named `Card Name — MIDI 1`. Each checked MIDI In port runs one
+controller instance with its own protocol; its feedback goes to the same
+port's MIDI Out when that is checked. Several instances run at once. The
+protocol listbox preselects by the rules of
+[`TOTALCONTROL-CONTROLLER-SPEC.md`](TOTALCONTROL-CONTROLLER-SPEC.md) §5.3;
+the choice is stored per device. The option area renders the definition's
+`options` array in file order: checkboxes, radio pairs, listboxes, headings
+and buttons, with group headings and `requires` gray-out. An assignment
+picker offers the definition's action choices; actions the model does not
+carry are marked unavailable. Toggling a control applies immediately. The
+enable switch, device choices, option values and assignments are host
+settings (STATE-SPEC §7.1). The engine, the definition format and the
+Mackie mapping are in
+[`TOTALCONTROL-CONTROLLER-SPEC.md`](TOTALCONTROL-CONTROLLER-SPEC.md) and
+[`midi-controllers/MACKIE_MIDI.md`](midi-controllers/MACKIE_MIDI.md).
 
 The OSC part:
 
@@ -738,7 +746,8 @@ remote tint, a brown tone, in both the expanded and the collapsed layout.
 The tint marks the channels the surface currently controls, like the host application;
 it is not a selection and does not change on hover. The window and the
 remote are defined in
-[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md).
+[`TOTALCONTROL-CONTROLLER-SPEC.md`](TOTALCONTROL-CONTROLLER-SPEC.md) and
+[`midi-controllers/MACKIE_MIDI.md`](midi-controllers/MACKIE_MIDI.md).
 
 #### 2.8.4 Horizontal columns
 

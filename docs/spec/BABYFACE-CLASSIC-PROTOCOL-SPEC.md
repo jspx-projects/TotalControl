@@ -79,10 +79,11 @@ later, Select+Recall at power-on) the whole unit belongs to the class driver
 and the MIDI port is class compliant and SysEx-capable; RME's
 iPad app then controls the mixer over SysEx on the MIDI port.
 
-The MIDI protocol and the Mackie Control host are generic and live in
-[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md). The Babyface
-differences (one port, cue phones 1–2, input gain CC9 up to 60 in steps of at
-least 3 dB) are in its §12.
+The MIDI transport is in
+[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md); the Mackie Control
+host is in [`midi-controllers/MACKIE_MIDI.md`](midi-controllers/MACKIE_MIDI.md).
+The Babyface differences (one port, cue phones 1–2, input gain CC9 up to 60
+in steps of at least 3 dB) are in its §13.
 
 ## 3. PCM streams
 

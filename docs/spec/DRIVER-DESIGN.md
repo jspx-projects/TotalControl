@@ -552,7 +552,7 @@ the decoding. The items below are the protocol gaps that touch the
 driver's transports. The owning sections carry the full detail:
 [`FIREFFACE-UC-PROTOCOL-SPEC.md`](FIREFFACE-UC-PROTOCOL-SPEC.md) §11.10
 (transport) and §12 (metering),
-[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md) §13 (MIDI).
+[`TOTALCONTROL-MIDI-SPEC.md`](TOTALCONTROL-MIDI-SPEC.md) §8 (MIDI).
 
 ### Transport
 
