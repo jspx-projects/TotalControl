@@ -955,12 +955,13 @@ their own masks:
 | Bit | Mask | Meaning |
 |---|---|---|
 | 4–5 | `0x0030` | base-rate family: 0 = 32k, 1 = 44.1k, 2 = 48k (multiples share the code) |
-| 11 | `0x0800` | option written by TotalMix under mask `0x0800`; meaning undecoded |
-| 12–13 | `0x3000` | option field written by TotalMix under mask `0x3000`; meaning undecoded |
+| 11 | `0x0800` | device option written by the Windows host (TotalMix or the tray settings applet) under mask `0x0800`; meaning undecoded |
+| 12–13 | `0x3000` | device option field written under mask `0x3000`; meaning undecoded |
 | 9, 14, 15 | `0xc200` | writable; not written in the captured init; meaning undecoded |
 
-TotalMix writes the main options under mask `0x05ff` (which includes the
-rate-family bits 4–5) and bits 11 / 12–13 under their own masks. The host
+The Windows host writes the main options under mask `0x05ff` (which includes
+the rate-family bits 4–5) and bits 11 / 12–13 under their own masks; the
+writer may be TotalMix or the tray settings applet. The host (TotalControl)
 writes under `0x05cf`, preserving the bits above it; the raw readback is
 never written back. The host reads the options at open and keeps the live
 values over a stale scene, as on the UC. The reference levels have no
