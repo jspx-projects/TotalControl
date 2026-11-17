@@ -397,6 +397,11 @@ struct ffuc {
 	/* hwdep events */
 	struct kfifo event_fifo;
 	spinlock_t event_lock;
+	/* Serializes the duplex period-gate decision: URB completions of
+	 * the two directions can run concurrently on different CPUs and
+	 * share the deferral counters.
+	 */
+	spinlock_t gate_lock;
 	wait_queue_head_t event_wait;
 	atomic_t event_seq;
 	atomic_t events_dropped;
@@ -481,6 +486,7 @@ void ffuc_event_put(struct ffuc *chip, u32 type, const void *data, u32 size,
 		    u32 flags);
 int ffuc_hwdep_create(struct ffuc *chip);
 void ffuc_hwdep_cleanup(struct ffuc *chip);
+void ffuc_hwdep_quiesce(struct ffuc *chip);
 int ffuc_transport_setup(struct ffuc *chip);
 int ffuc_transport_start(struct ffuc *chip);
 void ffuc_transport_stop(struct ffuc *chip);

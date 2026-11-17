@@ -684,8 +684,25 @@ void ffuc_transport_suspend(struct ffuc *chip)
 	ffuc_transport_stop(chip);
 }
 
+/* Quiesce the control transport at disconnect: stop the pump, kill the
+ * state/meter URBs and release the interface. The event FIFO and the
+ * URB buffers stay allocated until ffuc_hwdep_cleanup runs from the
+ * card's private_free, after the last reader closes, so a reader inside
+ * ffuc_hwdep_read never races a free.
+ */
+void ffuc_hwdep_quiesce(struct ffuc *chip)
+{
+	ffuc_transport_suspend(chip);
+	if (chip->state_intf) {
+		ffuc_release_interface(chip->state_intf);
+		chip->state_intf = NULL;
+	}
+}
+
 void ffuc_hwdep_cleanup(struct ffuc *chip)
 {
+	unsigned long flags;
+
 	ffuc_transport_suspend(chip);
 	if (chip->state_urb) {
 		usb_free_urb(chip->state_urb);
@@ -705,13 +722,11 @@ void ffuc_hwdep_cleanup(struct ffuc *chip)
 				  chip->meter_buf, chip->meter_dma);
 		chip->meter_buf = NULL;
 	}
-	if (chip->state_intf) {
-		ffuc_release_interface(chip->state_intf);
-		chip->state_intf = NULL;
-	}
+	spin_lock_irqsave(&chip->event_lock, flags);
 	if (kfifo_initialized(&chip->event_fifo)) {
 		kfifo_free(&chip->event_fifo);
 		memset(&chip->event_fifo, 0, sizeof(chip->event_fifo));
 	}
+	spin_unlock_irqrestore(&chip->event_lock, flags);
 	chip->hwdep = NULL;
 }

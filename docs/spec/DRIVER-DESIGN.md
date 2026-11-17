@@ -204,6 +204,10 @@ a period, so the follower's pointer is current when the reader wakes. A
 direction whose wake has been withheld twice signals alone, releasing the
 other direction. Single-direction operation signals at its own boundary.
 
+The two directions' completions can run concurrently on different CPUs.
+`gate_lock` serializes the gate decision and its deferral counters; the
+stream lock inside the signal nests under it.
+
 Counters: `signal_deferred`, `signal_overdue`, `max_pending`, `delta_zero`,
 `hw_ptr_mismatch`.
 
@@ -434,8 +438,10 @@ See the TODO section for the readiness-poll work.
   direction was running.
 - Resume re-runs hardware init and restarts the engine if prepared. A USB
   reset forces alt reselection and a UC session replay.
-- Disconnect marks the card disconnected, kills URBs, cancels recovery,
-  cleans up hwdep/MIDI, and frees the card when closed.
+- Disconnect marks the card disconnected, kills URBs, cancels recovery
+  and quiesces the control transport. The hwdep event FIFO and URB
+  buffers are freed when the card is released after the last close, so
+  an active reader never races a free.
 
 ## 9. Latency inputs
 
@@ -465,16 +471,6 @@ Scope labels used in this section and in the TODO:
 
 Terms used here are defined in the sections referenced.
 
-- **[all]** The **duplex period gate** (§4.2) is the wake rule that signals
-  both running directions together. Its **deferral counters** (§4.2) count
-  withheld wakes per direction. The gate reads and increments these
-  counters without a lock shared across directions. Concurrent URB
-  completions on different CPUs could race the counters. The period signal
-  itself is under the stream lock; the gate decision is not.
-- **[all]** The **event FIFO** (§5) is freed by `ffuc_hwdep_cleanup`, which
-  runs in disconnect and again in `private_free`. A reader that passed the
-  disconnected check could race the FIFO free. Cleanup should be ordered
-  against hwdep unregistration.
 - **[ISO]** The **ISO continuity check** (K1.5, `ffuc_iso_contiguous`, §4.3)
   verifies URB start-frame continuity. Its log counter is module-global,
   shared across devices and endpoints. It should be per-endpoint.
@@ -529,8 +525,6 @@ Scope labels are defined in §10.
 |---|---|
 | Replace fixed session gaps with a bounded poll of a device-visible readiness condition where one exists; keep documented quirks where the device has no acknowledgement | `WIN_SESSION` |
 | Add a rate-readiness poll after the rate commit word (UC PC, UC AP, UCX IF5 send it; UCX IF0 commits the family alone) | UC, UCX IF5 |
-| Serialize the duplex gate decision or make the deferral counters atomic | all |
-| Order hwdep cleanup against card unregistration; remove the double cleanup path | all |
 | Move ISO continuity logging to per-endpoint state | ISO |
 | Preallocate the hwdep read buffer per reader | all |
 | Make buffer poison and verbose stop diagnostics optional module parameters | all |

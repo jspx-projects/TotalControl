@@ -1270,42 +1270,51 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 {
 	struct ffuc_stream *p = &chip->streams[SNDRV_PCM_STREAM_PLAYBACK];
 	struct ffuc_stream *c = &chip->streams[SNDRV_PCM_STREAM_CAPTURE];
+	unsigned long flags;
 
+	/* The two directions' completions can run concurrently on
+	 * different CPUs; the gate decision and its deferral counters
+	 * form one serialized section. Lock order: gate_lock, then the
+	 * stream lock inside ffuc_signal_period.
+	 */
+	spin_lock_irqsave(&chip->gate_lock, flags);
 	if (!p->running || !c->running) {
 		ffuc_signal_period(chip, p->running ? p : c);
+		spin_unlock_irqrestore(&chip->gate_lock, flags);
 		return;
 	}
 	{
 		u32 mp = max((u32)(p->period - p->signalled),
 			     (u32)(c->period - c->signalled));
 
-		if (mp > READ_ONCE(chip->max_pending))
-			WRITE_ONCE(chip->max_pending, mp);
+		if (mp > chip->max_pending)
+			chip->max_pending = mp;
 	}
 	if (ffuc_pending(p) && ffuc_pending(c)) {
 		ffuc_signal_period(chip, p);
 		ffuc_signal_period(chip, c);
-		WRITE_ONCE(p->deferrals, 0);
-		WRITE_ONCE(c->deferrals, 0);
+		p->deferrals = 0;
+		c->deferrals = 0;
+		spin_unlock_irqrestore(&chip->gate_lock, flags);
 		return;
 	}
 	atomic_inc(&chip->signal_deferred);
 	/* One direction is behind: withhold the wake until the later
 	 * boundary, but never longer than two completions.  Counting
 	 * deferrals instead of periods bounds the wait to about one URB at
-	 * every period size. */
-	if (ffuc_pending(p) &&
-	    ++p->deferrals >= 2) {
+	 * every period size.
+	 */
+	if (ffuc_pending(p) && ++p->deferrals >= 2) {
 		atomic_inc(&chip->signal_overdue);
 		ffuc_signal_period(chip, p);
-		WRITE_ONCE(p->deferrals, 0);
+		p->deferrals = 0;
 	}
-	if (ffuc_pending(c) &&
-	    ++c->deferrals >= 2) {
+	if (ffuc_pending(c) && ++c->deferrals >= 2) {
 		atomic_inc(&chip->signal_overdue);
 		ffuc_signal_period(chip, c);
-		WRITE_ONCE(c->deferrals, 0);
+		c->deferrals = 0;
 	}
+	spin_unlock_irqrestore(&chip->gate_lock, flags);
 }
 
 /* Interrupt transport: one URB of interleaved frames. */
@@ -3121,6 +3130,7 @@ static int ffuc_probe(struct usb_interface *intf,
 	mutex_init(&chip->mutex);
 	mutex_init(&chip->ctl_lock);
 	spin_lock_init(&chip->fb_lock);
+	spin_lock_init(&chip->gate_lock);
 	INIT_WORK(&chip->recover_work, ffuc_recover_work);
 	init_waitqueue_head(&chip->event_wait);
 	spin_lock_init(&chip->event_lock);
@@ -3300,7 +3310,7 @@ static void ffuc_disconnect(struct usb_interface *intf)
 	ffuc_kill_urbs(chip, true);
 	mutex_unlock(&chip->mutex);
 	cancel_work_sync(&chip->recover_work);
-	ffuc_hwdep_cleanup(chip);
+	ffuc_hwdep_quiesce(chip);
 	ffuc_midi_cleanup(chip);
 	if (chip->status_intf) {
 		usb_driver_release_interface(&ffuc_driver, chip->status_intf);
