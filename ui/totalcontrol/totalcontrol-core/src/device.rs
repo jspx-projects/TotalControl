@@ -355,6 +355,7 @@ pub trait RmeDevice {
             input_link: true,
             eq_for_record: true,
             optical_out: true,
+            word_clock_termination: false,
         }
     }
 

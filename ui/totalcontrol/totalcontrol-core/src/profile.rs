@@ -151,6 +151,9 @@ pub enum GlobalControl {
     Mono,
     Pitch,
     An12Link,
+    /// Software word-clock input termination. Added last so the GlobalSet
+    /// bit positions of the existing controls stay stable.
+    WordClockTermination,
 }
 
 impl GlobalControl {
@@ -479,6 +482,7 @@ impl DeviceProfile {
             input_link: false,
             eq_for_record: has_global(GlobalControl::EqForRecord),
             optical_out: has_global(GlobalControl::OpticalFormat),
+            word_clock_termination: has_global(GlobalControl::WordClockTermination),
         }
     }
 }

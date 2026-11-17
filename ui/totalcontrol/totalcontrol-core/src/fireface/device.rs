@@ -4795,7 +4795,18 @@ impl RmeDevice for Fireface {
     }
 
     fn capabilities(&self) -> crate::capabilities::DeviceCapabilities {
-        self.profile.capabilities()
+        let mut caps = self.profile.capabilities();
+        // The UC had two main-board revisions. The earlier (Hw Rev 3,
+        // firmware 127) sets word-clock termination with a rear mechanical
+        // switch; options bit 0 is inert there (verified on a unit). The
+        // later (Hw Rev 6, firmware 138, UCX board) implements it in
+        // software. Firmware 128-137 is unmeasured; treat it as the earlier
+        // revision so no inert control is shown. See
+        // docs/work/UC/FIREFACE-UC-WIN-RME.md and UC-OPEN-WORK.md.
+        if self.model == Model::Uc && self.firmware() < 138 {
+            caps.word_clock_termination = false;
+        }
+        caps
     }
 
     fn protocol_features(&self) -> bool {
@@ -11061,9 +11072,10 @@ mod tests {
 
     #[test]
     fn uc_word_clock_termination_is_options_bit_0() {
-        // Measured from RME's Windows driver on firmware 138: Word In
-        // Termination on commits 0x0081 with SPDIF professional set, off
-        // commits 0x0080; every option at its default commits 0x0000.
+        // Expected write sequence taken from RME's Windows driver capture
+        // (firmware 138): Word In Termination on commits 0x0081 with SPDIF
+        // professional set, off commits 0x0080; every option at its default
+        // commits 0x0000. Asserted here through the mock transport.
         let (mut dev, writes) = open(Model::Uc);
         writes.lock().unwrap().clear();
         dev.set_word_clock_termination(true).unwrap();
@@ -11105,6 +11117,24 @@ mod tests {
             .unwrap()
             .iter()
             .any(|x| matches!(x, Write::Vendor(protocol::req::SETTINGS, _, 1487))));
+    }
+
+    #[test]
+    fn uc_word_clock_termination_capability_follows_the_revision() {
+        // The earlier UC (Hw Rev 3, firmware 127) sets termination with a
+        // rear mechanical switch; bit 0 is inert, so no software control is
+        // reported. The later UC (Hw Rev 6, firmware 138, UCX board) and the
+        // UCX report software termination. Firmware 128-137 is unmeasured
+        // and treated as the earlier revision.
+        let (mut dev, _) = open(Model::Uc);
+        dev.info.firmware = 127;
+        assert!(!dev.capabilities().word_clock_termination);
+        dev.info.firmware = 137;
+        assert!(!dev.capabilities().word_clock_termination);
+        dev.info.firmware = 138;
+        assert!(dev.capabilities().word_clock_termination);
+        let (ucx, _) = open(Model::Ucx);
+        assert!(ucx.capabilities().word_clock_termination);
     }
 
     #[test]
