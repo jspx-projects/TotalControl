@@ -1293,6 +1293,11 @@ impl Fireface {
             // Pick up front-panel changes queued while TotalControl was closed.
             dev.drain_events();
         }
+        if model == Model::Ucx {
+            // Read the options word so a connect does not write termination
+            // (and the other options) off over the unit's live state.
+            dev.read_ucx_settings();
+        }
         Ok(dev)
     }
 
@@ -2556,6 +2561,32 @@ impl Fireface {
                 self.settings.optical_out_spdif = v & 0x0400 != 0;
                 self.settings.word_clock_single_speed = v & 0x0040 != 0;
                 self.settings.word_clock_termination = v & 0x0001 != 0;
+            }
+        }
+    }
+
+    /// The UCX options word read form (`0x10` in) returns the options under
+    /// mask `0x05cf`, little-endian; the bits above the mask are undocumented
+    /// and are never written back. Measured on UCX firmware 46. Without this
+    /// read the model keeps its defaults and a connect writes termination off
+    /// over a unit that has it on.
+    fn read_ucx_settings(&mut self) {
+        if let Ok(d) = self.vendor_in(protocol::req::SETTINGS, 0, 0, 4) {
+            if d.len() >= 2 {
+                let v = u16::from_le_bytes([d[0], d[1]]) & 0x05cf;
+                self.settings.clock_source = match (v >> 1) & 3 {
+                    1 => "SPDIF Coaxial",
+                    2 => "Optical",
+                    3 => "Word Clock",
+                    _ => "Internal",
+                }
+                .to_string();
+                self.settings.word_clock_termination = v & 0x0008 != 0;
+                self.settings.word_clock_single_speed = v & 0x0040 != 0;
+                self.settings.spdif_professional = v & 0x0080 != 0;
+                // EQ+D for Record is active low; optical bit set means ADAT.
+                self.settings.eq_for_record = v & 0x0100 == 0;
+                self.settings.optical_out_spdif = v & 0x0400 == 0;
             }
         }
     }
@@ -7112,6 +7143,7 @@ impl RmeDevice for Fireface {
         let device_phones = self.settings.phones_ref;
         let device_wc_single = self.settings.word_clock_single_speed;
         let device_wc_term = self.settings.word_clock_termination;
+        let device_eq_for_record = self.settings.eq_for_record;
         let device_reverb = self.settings.reverb;
         let device_echo = self.settings.echo;
 
@@ -7246,11 +7278,11 @@ impl RmeDevice for Fireface {
                 }
             }
         }
-        // The UC reads its options word at connect, so the live values win
-        // over a scene that may predate a change made elsewhere.  No UCX
-        // options-word readback is exposed (request 0x10 returns a status
-        // word, not the options).  There the scene is the only record: keep
-        // its values so a restart does not reset the visible settings.
+        // Both the UC and the UCX read their options word at connect, so the
+        // live values win over a scene that may predate a change made
+        // elsewhere. The UCX read form (request 0x10 in) returns the options
+        // under mask 0x05cf (measured on firmware 46); the bits above the
+        // mask are undocumented status and are never written back.
         self.settings.clock_sources = device_clock_sources;
         if !self
             .settings
@@ -7268,7 +7300,7 @@ impl RmeDevice for Fireface {
                 .unwrap_or_else(|| "Internal".into());
         }
         if self.is_uc() {
-            self.settings.clock_source = device_clock;
+            self.settings.clock_source = device_clock.clone();
             self.settings.optical_out_spdif = device_optical;
             self.settings.spdif_professional = device_spdif_pro;
             self.settings.line_in_ref = device_line_in;
@@ -7276,6 +7308,17 @@ impl RmeDevice for Fireface {
             self.settings.phones_ref = device_phones;
             self.settings.word_clock_single_speed = device_wc_single;
             self.settings.word_clock_termination = device_wc_term;
+        }
+        if self.model == Model::Ucx {
+            // The UCX options word belongs to the unit, like the UC. Keep the
+            // live options over a stale scene; the reference levels are
+            // per-channel on the UCX and are not part of this word.
+            self.settings.clock_source = device_clock.clone();
+            self.settings.optical_out_spdif = device_optical;
+            self.settings.spdif_professional = device_spdif_pro;
+            self.settings.word_clock_single_speed = device_wc_single;
+            self.settings.word_clock_termination = device_wc_term;
+            self.settings.eq_for_record = device_eq_for_record;
         }
         if self.settings.reverb.is_none() {
             self.settings.reverb = device_reverb;
@@ -11070,6 +11113,13 @@ mod tests {
         (Fireface::from_transport(Box::new(t), info).unwrap(), writes)
     }
 
+    fn open_ucx_with_settings(word: u32) -> (Fireface, Arc<Mutex<Vec<Write>>>) {
+        let (t, writes) = MockTransport::new(Model::Ucx);
+        *t.settings.lock().unwrap() = Some(word);
+        let info = t.info.clone();
+        (Fireface::from_transport(Box::new(t), info).unwrap(), writes)
+    }
+
     #[test]
     fn uc_word_clock_termination_is_options_bit_0() {
         // Expected write sequence taken from RME's Windows driver capture
@@ -11577,18 +11627,22 @@ mod tests {
     }
 
     #[test]
-    fn ucx_scene_keeps_its_device_group_at_connect() {
-        // The UCX options word has no readback, so the saved scene is the
-        // only record of the device-owned settings.  Applying it must not
-        // replace them with a fresh model's defaults.
-        let (mut dev, writes) = open(Model::Ucx);
+    fn ucx_device_group_wins_over_a_stale_scene() {
+        // The UCX options word read form returns the live options under mask
+        // 0x05cf (measured on firmware 46), so the device-owned options are
+        // read at open and win over a scene that may predate a change made
+        // elsewhere, as on the UC. The reference levels have no readback and
+        // still come from the scene. Device word 0x00CE: Word Clock clock,
+        // optical SPDIF, SPDIF professional, single speed, termination on,
+        // EQ+D for Record enabled.
+        let (mut dev, writes) = open_ucx_with_settings(0x00CE);
         let mut scene = dev.capture_scene();
-        scene.settings.clock_source = "Word Clock".into();
-        scene.settings.optical_out_spdif = true;
-        scene.settings.spdif_professional = true;
-        scene.settings.word_clock_single_speed = true;
-        scene.settings.word_clock_termination = true;
-        scene.settings.eq_for_record = true;
+        scene.settings.clock_source = "Internal".into();
+        scene.settings.optical_out_spdif = false;
+        scene.settings.spdif_professional = false;
+        scene.settings.word_clock_single_speed = false;
+        scene.settings.word_clock_termination = false;
+        scene.settings.eq_for_record = false;
         scene.settings.line_out_ref = 1;
         scene.settings.phones_ref = 2;
         scene.settings.line_in_ref_58 = 3;
@@ -11602,8 +11656,8 @@ mod tests {
         assert!(settings.word_clock_single_speed);
         assert!(settings.word_clock_termination);
         assert!(settings.eq_for_record);
-        // These are device-owned and unreadable, so the scene is written
-        // at connect to keep the GUI and hardware in step.
+        // The reference levels are device-owned and unreadable, so the scene
+        // is written at connect to keep the GUI and hardware in step.
         let words = written_words(&writes);
         let last = |addr: u16| {
             words
@@ -11615,11 +11669,22 @@ mod tests {
         assert_eq!(last(0x1208), Some(1));
         assert_eq!(last(0x1808), Some(2));
         assert_eq!(last(0x0407), Some(3));
+        // The options word written at connect carries the device values.
         assert!(writes
             .lock()
             .unwrap()
             .iter()
             .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x00CE, 1487))));
+    }
+
+    #[test]
+    fn ucx_reads_word_clock_termination_at_open() {
+        // Bit 3 of the options word is the UCX termination. Without the read
+        // a connect would write termination off over a unit that has it on.
+        let (dev, _) = open_ucx_with_settings(0x0008);
+        assert!(dev.settings.word_clock_termination);
+        let (dev, _) = open_ucx_with_settings(0x0000);
+        assert!(!dev.settings.word_clock_termination);
     }
 
     #[test]

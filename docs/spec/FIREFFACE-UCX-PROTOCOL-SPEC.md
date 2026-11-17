@@ -943,10 +943,16 @@ Request `0x10`, index 1487, carries the unit's options as one full word:
 | 8 | `0x0100` | EQ+D for Record disabled (active low) |
 | 10 | `0x0400` | optical output ADAT (0 = SPDIF) |
 
-Every option change writes the whole word, including the current clock source
-in bits 1–2. Bit 10 is not an index of its own. No options-word readback is
-exposed: request `0x10` in returns a status word. The saved scene value is
-written at connect and after a change.
+Every option change writes the word under mask `0x05cf` (index 1487),
+including the current clock source in bits 1–2; the mask preserves the bits
+above it. Bit 10 is not an index of its own.
+
+The read form (request `0x10` in) returns the options under `0x05cf`,
+little-endian, with undocumented status bits above the mask (measured on
+firmware 46). The host reads the options at open and keeps the live values
+over a stale scene, as on the UC; the raw readback is never written back.
+The reference levels have no readback and are written from the scene at
+connect.
 
 ## 12. Streaming
 
