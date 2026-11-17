@@ -4,16 +4,26 @@ Working note, not part of the specification. The protocol is in
 [`DIGIFACE_USB_PROTOCOL_SPEC.md`](DIGIFACE_USB_PROTOCOL_SPEC.md). The captures that must come first are in
 [`CAPTURE-REQUEST.md`](CAPTURE-REQUEST.md).
 
+The work is split: the contributor owns the protocol specification and the
+kernel control module (hardware-bound); the maintainers own the two-driver
+TotalControl adaptation — discovery and pairing, the backend, the profile,
+the GUI entry, the mock and the tests (application architecture,
+hardware-independent). The contributor tests the integrated tree on the unit
+and ensures every specified function is reachable in the GUI, raising an
+issue for help. This plan is the starting point, not a finished design; the
+uapi below is a sketch the contributor proposes and the maintainers review.
+
 ## 1. Architecture decision
 
 Use a thin kernel module that owns the mixer interface and exposes one hwdep
 node. Keep audio on `snd-usb-audio`. Keep the matrix, faders, routing model,
 scenes and profiles in userspace.
 
-The target is normal mode. RME's iPad application reaches the mixer in CC mode
-through a private protocol over USB, so the mixer answers there. That does not
-expose a control interface a host can claim. A CC-mode descriptor capture
-decides whether one exists; the normal mode backend does not wait for it.
+The target is normal mode. Mainline `snd-usb-audio` already streams its audio
+(plain PCM, implicit feedback), and the quirk leaves interface 1 free for a
+control driver. CC mode has no TotalMix routing; the iPad application does not
+control this model today. An optional CC-mode descriptor capture settles the
+CC-mode question for the record; the normal-mode backend does not wait for it.
 
 Why not a userspace USB backend:
 
@@ -30,7 +40,10 @@ Why not a full audio driver:
 - writing an isochronous audio engine would duplicate mainline work.
 
 A userspace libusb tool is still useful for captures and for a prototype
-before the kernel module exists. It is not the supported path.
+before the kernel module exists. It is not the supported path. RME's
+published `usb_vendor` demo and the Openface-Mixer / rmectl prior art already
+exercise the control requests; use them to reaffirm the status read, mixer
+enable, one route, one output fader and one meter frame on the unit first.
 
 ## 2. The two-card consequence
 

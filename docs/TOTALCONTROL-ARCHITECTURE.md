@@ -399,6 +399,13 @@ the ALSA PCM device and one hwdep control node per card. It covers the Fireface
 UC/UCX and the Babyface-classic native transport. TotalControl owns the device
 model and writes through hwdep; PipeWire and the DAW use the ALSA PCM.
 
+Some devices already have working audio in the mainline kernel driver, in
+their vendor mode. For those, TotalControl needs no audio driver of its own:
+the mainline driver keeps the audio, and a small second kernel driver adds
+only the control and meters through one hwdep node. TotalControl uses the two
+drivers together and shows them as one device. The Digiface USB is the first
+such device (in development).
+
 The audio path has four parts:
 
 ```text

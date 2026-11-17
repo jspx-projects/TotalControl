@@ -57,6 +57,11 @@ The supported devices are the Fireface UC and Fireface UCX. Babyface-classic
 support is experimental: it uses the same kernel driver and covers the controls
 described in its protocol specification.
 
+For a device whose audio already works in the standard kernel driver,
+TotalControl uses that driver for the audio and adds a small second driver for
+the control and meters. The two work together and appear as one device. The
+Digiface USB will work this way (in development).
+
 The source and RPM paths below are alternatives.  Use the source path to work
 from a checkout; use the RPM path when you want packages that can be installed
 and removed with `dnf`.
