@@ -196,33 +196,32 @@ design specification. Do not duplicate them here.
 
 ### GUI: gated controls
 
-`needs_protocol_features` drops these messages on the UC. For each: keep
-gated (no device write), un-gate (device or host-side operation exists), or
-hide.
+Resolved by #190: the gate is capability-based (`protocol_feature_allowed`
+in `app.rs`), and the UC profile declares what the backend implements.
 
 | Item | Status | Notes |
 |---|---|---|
-| Pitch | done | UC pitch implemented through the `0x1b` DDS mapping and un-gated (#190). |
-| Output phase | open | Decide whether it is a matrix sign bit or an output word; input phase is already excepted. |
-| Width / MS Proc / per-channel width | open | Host-computed matrix operations (spec §9); need a UC matrix rewrite to be audible. |
-| Dim, Speaker B, Talkback receive | open | Confirm host-side monitor operation versus unsupported. |
-| Input link, AN 1>2 | open | Confirm host-side pairing versus a device word. |
-| EQ / dynamics / FX / AutoSet / reference-level switch | open | The UC has no DSP (spec §9); keep gated or hide. |
-| Reverse checks | open | `Dim`, `SpeakerBLinked` and `TalkbackReceiveChanged` reach UC-rejecting setters; make the same un-gate/hide decision. |
+| Pitch | done | Implemented through the `0x1b` DDS mapping; works on UC and UCX (bench-confirmed). |
+| Output phase | done | Per-side output phase words, measured; un-gated via `caps.output_phase`. |
+| Width / MS Proc / per-channel width | done | UC matrix rewrites implemented and unit-tested; un-gated via `caps.width`/`caps.channel_width`/`caps.ms_proc`. |
+| Dim, Speaker B, Talkback (send and receive) | done | Host-side monitor operations implemented, including `SpeakerBLinked`. |
+| Input link (global), AN 1>2 | done | Resolved as unsupported on the UC (`caps` false); the per-pair stereo link remains. |
+| EQ / dynamics / FX / AutoSet / reference-level switch | done | Decision: keep gated — the UC has no DSP and no decoded write. |
+| Reverse checks (`Dim`, `SpeakerBLinked`, `TalkbackReceiveChanged`) | done | They reach implemented setters. |
 
 ### GUI: channel controls
 
 | Item | Status | Notes |
 |---|---|---|
-| Input Link | open | Evidence does not establish a UC input-link flag. Mark unsupported and remove from the UC profile, as `AN 1>2` is? The stereo button already links input pairs. |
-| Pitch steps | open | Confirm normal 0.1 %, Shift fine 0.01 %, wheel 0.1 %, double-click 0.0 %. |
+| Input Link | done | Unsupported on the UC (`caps.input_link` false); the stereo button links input pairs. |
+| Pitch steps | done | Implemented with pitch (#190); normal 0.1 %, Shift fine 0.01 %, wheel 0.1 %, double-click 0.0 %. |
 | `0x17` index `0x1000` evidence | open | The live read returned zero at the documented indices; decide whether the existing capture evidence is enough or a focused capture is wanted. |
 
 ### GUI: settings card
 
 | Item | Status | Notes |
 |---|---|---|
-| Graph xruns row | open | Add `Graph xruns (PipeWire)`, separate from the transport-error rows, sourced from `pw-top`'s ERR column for the RME output node, with the same reset action and the copyable error report. |
+| Graph xruns row | done | `graph_xruns` with baseline and reset in the device sheet, separate from the transport-error rows. |
 
 ### Validation and captures
 
@@ -230,8 +229,8 @@ hide.
 |---|---|---|
 | Physical-loopback bit-exact check | needs-capture | The audio-content gate for both transports; needs a cable. Scheduling claims are sound on the dither substrate; pitch/level/mapping under load are unverified until this runs. |
 | Mode-2 early capture-content zeros | open | Likely a channel-mapping artifact (ADAT 5/6 are ALSA indices 12/13; the old trace checksummed a silent channel). Verify against the PC scene routing. |
-| q48 escalation experiment | open | A skipped follower cycle is necessary but not sufficient for an audible zero-run; the aggravator is client-side buffering. Shrink the recorder buffer to force escalation; also the q128 failure rate and whether the zeros reach the device output. |
-| AP meter profile verification | needs-capture | Verify RMS-then-peak order and header fields under AP; otherwise mark the AP meter profile experimental. |
+| q48 escalation experiment | done | Driver-side attribution is complete: the gate is serialized (#197), the event drain is protected (#193), and the stress runs show zero gate violations. The residual zero-runs are host-side (PipeWire follower and client buffering); characterising them further is outside the driver backlog. |
+| AP meter profile verification | done | AP meters behave the same as PC meters: same DSP firmware, alternation verified in AP, RMS-then-peak order carried from the PC verification; bench-confirmed. |
 
 ### Tooling and consolidation
 
@@ -242,6 +241,9 @@ hide.
 
 ## Recently closed
 
+- UC channel controls completed: pitch (UC and UCX), output phase, width,
+  MS Proc, per-channel width, Dim, Speaker B, talkback; capability-based
+  gate; graph-xruns row (#190).
 - Transport-keyed wire format: interrupt S32, ISO float32; the host-OS rule
   and the `INT32_SAMPLES` quirk replaced; `0x16` derived from the resolved
   format for every model. UCX IF5 authentic Windows mode setup and alt 1
