@@ -122,6 +122,11 @@
 #define FFUC_REQ_REVISION	0x1c
 #define FFUC_REQ_ENABLE		0x20
 
+/* wIndex of the 0x10 options commit (1487): the mask of the option bits
+ * (word clock termination, clock source, word clock single speed, SPDIF
+ * and optical output format). */
+#define FFUC_UC_OPTIONS_MASK	0x05cf
+
 /* UCX/Windows path: request 16/19/20/21/22/23/27/29 and the status reads
  * 28/30/31.  The numbers are documented with the protocol, not repeated
  * here. */
