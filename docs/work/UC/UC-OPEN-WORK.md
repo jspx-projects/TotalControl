@@ -179,7 +179,9 @@ design specification. Do not duplicate them here.
 
 | Item | Status | Notes |
 |---|---|---|
-| Read form of `0x10` | needs-capture | The options bits under `0x05cf` read back and the rate commit preserves them (#195); the other bits are undecoded. |
+| Read form of `0x10` | needs-capture | The options bits under `0x05cf` read back and the rate commit preserves them (#195). Bit 0 is word-clock input termination (#205). The readback carries undocumented bits above the mask, so a raw readback is never written back; the host writes the model value under the mask. The other bits are undecoded. |
+| Word-clock termination revision scope | needs-probe | The UC had two main-board revisions: the earlier (FireFace 400 board) terminates via a rear push switch with a yellow LED, where bit 0 mirrors the switch; the later (UCX board) implements the switch in software. Probe an earlier UC — flip bit 0 and watch the yellow LED — before the settings row is claimed as software control for every UC. |
+| UCX termination lost at connect | open | The UCX has the same class of defect: the settings read uses a length the control endpoint does not answer, so the model keeps its defaults and a connect overwrites the device's termination. Read `0x10` with the length the endpoint answers, keep the options under `0x05cf`, and stop overwriting from a stale scene. The read form returns the options under the mask (measured on UCX firmware 46), contradicting the UCX spec §11.5 "status word" claim, which needs correcting. Fast-follow to #205. |
 | Status bytes 0 and 1 | needs-capture | Front-panel events use bytes 2 and 3. |
 | Bulk role of `0x03`/`0x84` | needs-capture | Bulk at 1x/2x, interrupt at 4x; the bulk role is undecoded. |
 | PC interrupt URB size | open | Documentation only: 48/96/192 frames is the host's choice, not a device contract. |
