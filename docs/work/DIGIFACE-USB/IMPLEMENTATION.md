@@ -4,11 +4,14 @@ Working note, not part of the specification. The protocol is in
 [`DIGIFACE_USB_PROTOCOL_SPEC.md`](DIGIFACE_USB_PROTOCOL_SPEC.md). The captures that must come first are in
 [`CAPTURE-REQUEST.md`](CAPTURE-REQUEST.md).
 
-The contributor owns this implementation end to end: the kernel transport,
-the backend, the profile, the GUI entry and the tests, verified on the unit,
-in one pull request. The maintainers review and integrate. This plan is the
-starting point, not a finished design; the uapi below is a sketch the
-contributor finalizes and the maintainers review in the pull request.
+The work is split: the contributor owns the protocol specification and the
+kernel control module (hardware-bound); the maintainers own the two-driver
+TotalControl adaptation — discovery and pairing, the backend, the profile,
+the GUI entry, the mock and the tests (application architecture,
+hardware-independent). The contributor tests the integrated tree on the unit
+and ensures every specified function is reachable in the GUI, raising an
+issue for help. This plan is the starting point, not a finished design; the
+uapi below is a sketch the contributor proposes and the maintainers review.
 
 ## 1. Architecture decision
 

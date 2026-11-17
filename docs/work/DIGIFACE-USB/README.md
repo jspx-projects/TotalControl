@@ -12,13 +12,21 @@ the RME Digiface USB and how to add mixer control to TotalControl.
 
 ## Ownership
 
-This work belongs to the person who owns the hardware. The contributor
-implements the kernel transport, the userspace backend, the profile, the GUI
-entry and the tests, verifies them on the unit, and opens one pull request.
-The maintainers review and integrate, and help with the shared application
-architecture on request. The protocol draft, the implementation plan, the
-uapi sketch and the capture request below are the starting point; they are
-prior art and a plan, not a finished implementation.
+The work is split by who can do it best:
+
+| Step | Owner | What |
+|---|---|---|
+| Protocol specification | contributor | Reaffirm and complete the spec on the unit (probe + captures); land it verified. Required. |
+| Kernel control module | contributor | The thin interface-1 driver, one hwdep node, beside the mainline audio driver. No audio driver. |
+| Two-driver TotalControl adaptation | maintainers | Discovery and pairing of the mainline audio card with the control card, the backend, the profile, the GUI entry, the mock and the tests. Application architecture, hardware-independent. |
+| Integration and GUI completeness | contributor, with maintainer help | Test on the unit; every function the spec defines must be reachable in the GUI. Raise an issue for help. |
+
+The contract between the two sides is the hwdep ABI header (the ioctl
+commands and struct layouts; a sketch is in [`IMPLEMENTATION.md`](IMPLEMENTATION.md)).
+The contributor proposes it, the maintainers review it; the maintainers build
+the backend against it, the contributor implements the kernel side. The
+protocol draft, the implementation plan and the capture request below are the
+starting point; they are prior art and a plan, not a finished implementation.
 
 ## Specification completion (required)
 
