@@ -40,8 +40,8 @@ Babyface-classic; status = personalities with a status endpoint.
 
 | Item | Scope | Priority | Impact | Status |
 |---|---|---|---|---|
-| Duplex period gate deferral counters read/incremented without a shared lock | all | P1 | Hypothesis: concurrent URB completions on different CPUs race the counters, so the gate can wake the follower with a stale pointer — the dropout class the gate exists to prevent. The period signal is under the stream lock; the gate decision is not. KCSAN/lockdep runs decide it. | open |
-| hwdep cleanup runs in disconnect and again in `private_free` | all | P1 | A reader past the disconnected check can race the FIFO free on hot-unplug: potential use-after-free. Order cleanup against hwdep unregistration. | open |
+| Duplex period gate deferral counters read/incremented without a shared lock | all | P1 | Established by code analysis: both completion paths increment both directions' counters with non-atomic read-modify-write and no common lock; concurrent completions on different CPUs can release a direction early while its partner is behind (stale-follower wake). | done — `gate_lock` serializes the decision |
+| hwdep cleanup runs in disconnect and again in `private_free` | all | P1 | Established by code analysis: disconnect freed the event FIFO without `event_lock` while a reader could be between the disconnected check and the lock (use-after-free window). | done — disconnect quiesces; frees run at card release after the last close |
 | `INFO.outputs` reports the playback channel count | Babyface-classic | P2 | The hardware output count differs; a host sizing output state by this field maps meters/levels wrongly. Verify the ABI field semantics before Babyface production use. | needs-verification |
 | hwdep read path allocates a buffer per event (`GFP_KERNEL`) | all | P2 | CPU overhead on every event in the drain path; direct-reclaim latency under memory pressure; a failed allocation fails the read. Per-reader preallocation removes it. | optional |
 | ISO continuity log counter is module-global | ISO | P3 | The 12-message log throttle is shared across devices and endpoints; continuity diagnostics go silent everywhere after the first 12. Diagnostics only. | open |
@@ -61,7 +61,7 @@ Babyface-classic; status = personalities with a status endpoint.
 
 | Item | Priority | Impact | Status |
 |---|---|---|---|
-| `sparse` (`make C=1`), lockdep and KCSAN/UBSAN runs | P1 | The evidence base for the two race items above; sparse is not installed yet. | open |
+| `sparse` (`make C=1`), lockdep and KCSAN/UBSAN runs | P1 | The evidence base for the two race items above. sparse is installed and reports no warnings on the module; UBSAN is active in the bench kernel and reported nothing during the stress runs. KCSAN, KASAN and lockdep are not built into the Fedora kernel; the races were established by code analysis instead. | done (sparse/UBSAN); KCSAN/lockdep need a debug kernel |
 | checkpatch block-comment warnings | P3 | Kernel style compliance for upstream review. | optional |
 
 ## Host (TotalControl) communication
@@ -107,7 +107,19 @@ Reproduction evidence (UCX, ISO, firmware 46):
 | Connect policy writes host settings on connect | P2 | Front-panel changes made while the host was away are overwritten. Already flagged for a separate investigation. | open — later |
 | Snapshot cadence (50 ms) | P3 | Fast front-panel moves can alias between captures; the UI confirms at 20 Hz. Acceptable today; event-driven capture is the refinement. | optional |
 
-### Fix result (this PR)
+### Kernel P1 fix result
+
+- Gate stress (UCX ISO, duplex q48 through PipeWire, plus five USB
+  reset cycles): 5516 deferrals, `signal_overdue` 0, `delta_zero` 0,
+  `hw_ptr_mismatch` 0, `max_pending` 1.
+- Hotplug stress: an active hwdep reader survived five reset cycles
+  (3.6 MB of events, clean `-ENODEV` at each disconnect, six opens);
+  no oops, UBSAN report or warning in the kernel log; the card
+  recovered every cycle.
+- `make C=1` (sparse): no warnings. checkpatch: 0 errors, 0 warnings.
+  `make -C kernel test`: ok.
+
+### Host fix result (PR #193, merged)
 
 - H3 applies commands as model updates plus queued I/O; H4 (the shared
   control-I/O worker) executes all F2 operations in order and owns the
@@ -131,9 +143,8 @@ Reproduction evidence (UCX, ISO, firmware 46):
 
 ### Recommended order
 
-1. Host PR: the P1 cluster (event-drain independence, bounded command
-   queue, non-blocking flush, UC writes through the writer).
-2. Kernel follow-up PR: the two P1 races, with KCSAN/lockdep evidence.
+1. Host P1 cluster: done (PR #193).
+2. Kernel P1 races: done (this PR).
 3. P2 items as scheduled; P3 as cleanup.
 
 ## Wire-format decision (verified)
