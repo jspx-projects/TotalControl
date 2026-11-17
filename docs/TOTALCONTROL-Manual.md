@@ -775,6 +775,11 @@ keeps the relative offset between them. Dim and Recall move both by the same
 amount. With the link off, Speaker B keeps its own level and Dim and Recall
 act on Main Out only.
 
+Speaker B needs an assigned Main and an assigned Speaker B output. Until both
+are assigned, the `speaker B` button stays visible but does nothing, and the
+Speaker B entry in the Assign menu stays visible but grayed out. Assign a Main
+first, then Speaker B. Clearing the Main assignment also clears Speaker B.
+
 Phones 1–4 are not monitor outputs. Dim, Recall, Mono, External Input and
 Mute FX do not affect them. Talkback uses its own Phones Dim amount.
 
@@ -816,7 +821,7 @@ The buttons are one channel wide, in the host application's order:
 | `talkback` | Toggle | Every Talkback receiver, plus Phones and Main for Listenback | No, momentary; receive flags are in the current mix |
 | `ext. input` | Latching | Main Out | Yes, workspace |
 | `mute FX` | Latching | Reverb and Echo returns on Main Out | Yes |
-| `settings` | Opens the dialog | — | No |
+| `settings` | Toggles the dialog | — | No |
 | `assign` | Opens the menu | The monitoring assignments | No, preferences |
 
 ### Dim
@@ -1006,9 +1011,9 @@ are saved per device in TotalControl's own preferences, not in the current mix.
 
 Changes apply as you make them — the panel stays open so you can hear the
 effect while you adjust, and the External Input source/gain and the Solo/PFL
-modes reach the running device immediately. `Close` or `Escape` dismisses the
-panel; there is nothing to confirm and nothing to cancel. `default` restores
-the default values.
+modes reach the running device immediately. Pressing `settings` again, `Close`
+or `Escape` dismisses the panel; there is nothing to confirm and nothing to
+cancel. `default` restores the default values.
 
 ### Assigning outputs
 
@@ -1024,6 +1029,10 @@ Room channel.
 A hardware output can sit in only one monitoring destination. Assigning it to
 a second destination moves it there instead of showing it twice. Clearing a
 destination returns the output to the Hardware Outputs row.
+
+Speaker B needs an assigned Main. Without one, the Speaker B entry stays in
+the first-level list but is grayed out and opens no second level. Assign Main
+first. Clearing Main also clears Speaker B.
 
 Control Room channels are always stereo: an assigned pair is linked and
 cannot be unlinked, so the `STEREO` switch in its Settings panel stays

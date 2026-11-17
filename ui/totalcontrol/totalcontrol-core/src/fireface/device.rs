@@ -9453,6 +9453,66 @@ mod tests {
     }
 
     #[test]
+    fn ucx_assigning_main_keeps_the_pair_level() {
+        // Assigning a pair to Main must not reset its level to unity.
+        let (mut dev, _writes) = open(Model::Ucx);
+        let level = db_to_linear(-15.0);
+        dev.outputs[2].volume = level;
+        dev.outputs[3].volume = level;
+        dev.set_output_linked(1, true).unwrap();
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
+        assert!((dev.outputs()[2].volume - level).abs() < 1e-4);
+        assert!((dev.outputs()[3].volume - level).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ucx_assigning_main_links_a_split_pair_without_resetting_it() {
+        // A split pair is linked on assignment; the pair level is the louder
+        // side, not unity.
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_output_linked(1, false).unwrap();
+        let level = db_to_linear(-15.0);
+        dev.outputs[2].volume = level;
+        dev.outputs[3].volume = level;
+        dev.set_output_linked(1, true).unwrap();
+        dev.set_main_out(Some(1)).unwrap();
+        assert!((dev.outputs()[2].volume - level).abs() < 1e-4);
+        assert!((dev.outputs()[3].volume - level).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ucx_speaker_b_link_keeps_the_b_offset() {
+        // Engaging the link keeps the B pair's offset below Main; it does
+        // not copy Main's absolute level (which would jump B to unity).
+        let (mut dev, _writes) = open(Model::Ucx);
+        let main_level = db_to_linear(-15.0);
+        let b_level = db_to_linear(-20.0);
+        dev.outputs[2].volume = main_level;
+        dev.outputs[3].volume = main_level;
+        dev.outputs[0].volume = b_level;
+        dev.outputs[1].volume = b_level;
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(0)).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
+        dev.set_speaker_b(true).unwrap();
+        assert!((dev.outputs()[0].volume - b_level).abs() < 1e-4);
+        assert!((dev.outputs()[1].volume - b_level).abs() < 1e-4);
+    }
+
+    #[test]
+    fn uc_assigning_main_keeps_the_pair_level() {
+        let (mut dev, _writes) = open(Model::Uc);
+        let level = db_to_linear(-15.0);
+        dev.outputs[2].volume = level;
+        dev.outputs[3].volume = level;
+        dev.set_output_linked(1, true).unwrap();
+        dev.set_main_out(Some(1)).unwrap();
+        assert!((dev.outputs()[2].volume - level).abs() < 1e-4);
+        assert!((dev.outputs()[3].volume - level).abs() < 1e-4);
+    }
+
+    #[test]
     fn ucx_dim_without_a_main_out_does_not_fall_back_to_phones() {
         let (mut dev, _writes) = open(Model::Ucx);
         let before = (dev.outputs()[0].volume, dev.outputs()[1].volume);
