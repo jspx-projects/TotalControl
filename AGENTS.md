@@ -187,6 +187,17 @@ mechanism, FX returns and unsupported controls.
 - Apply the same split to other shared mixer features: share orchestration and
   state, delegate protocol differences.
 
+## Windows VM and TotalMix
+
+- Before any Windows VM, TotalMix FX, or OSC/USB-capture work, read the
+  desk-local way-of-working note `~/Documents/totalmixremote/WOW.md` first.
+  It carries the VM SSH access, TotalMix OSC ports, shared-folder paths and
+  discovery scripts so they are not rediscovered every session.
+- The note and its concrete desk values (host, account, key) are desk-local
+  and are never committed; this pointer is the durable entry point. If the
+  note is absent, ask the user instead of guessing access details.
+- The VM blocks ICMP: judge reachability by SSH, not by ping.
+
 ## Working rules
 
 - Use the NAS coordination mailbox for Windows/oracle questions and
