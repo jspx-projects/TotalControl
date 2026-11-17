@@ -2459,7 +2459,6 @@ pub enum Message {
     ControlRoomListenbackDim(f32),
     ControlRoomRecallDb(f32),
     ControlRoomMainDim(f32),
-    ControlRoomSpeakerBLinked(bool),
     ControlRoomExternalInput(Option<usize>),
     ControlRoomExternalGain(f32),
     ControlRoomPflReplacesSolo(bool),
@@ -3601,7 +3600,10 @@ pub fn new_with_device(
         fx_anim: None,
         assign: {
             let mut assign = [None; 7];
-            // The seventh slot is the Cue/PFL target; Main is the default.
+            // Main Out always holds a pair, as in TotalMix; it defaults to
+            // AN 1/2 (internal pair 1) and cannot be cleared. The seventh
+            // slot is the Cue/PFL target.
+            assign[0] = Some(1);
             assign[CUE_DEST] = Some(0);
             assign
         },
@@ -9073,7 +9075,6 @@ fn is_undoable(message: &Message) -> bool {
             | Message::ControlRoomListenbackDim(_)
             | Message::ControlRoomRecallDb(_)
             | Message::ControlRoomMainDim(_)
-            | Message::ControlRoomSpeakerBLinked(_)
             | Message::ControlRoomExternalInput(_)
             | Message::ControlRoomExternalGain(_)
             | Message::ControlRoomPflReplacesSolo(_)
@@ -11980,6 +11981,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if dest >= OUTPUT_DESTS {
                 return Task::none();
             }
+            // Main Out always keeps a pair, as in TotalMix; it cannot be
+            // cleared, so Speaker B can never be the only Control Room channel.
+            if dest == 0 && pair.is_none() {
+                return Task::none();
+            }
             let old_assign = state.assign;
             // A hardware output can only sit in one monitoring destination.
             // Move it rather than showing the same channel in two Control
@@ -12609,10 +12615,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::ControlRoomMainDim(db) => {
             state.control_room.main_dim_db = round_half_db(db);
-            apply_control_room_settings(state);
-        }
-        Message::ControlRoomSpeakerBLinked(on) => {
-            state.control_room.speaker_b_linked = on;
             apply_control_room_settings(state);
         }
         Message::ControlRoomExternalInput(pair) => {
@@ -16319,6 +16321,7 @@ fn strip_params<'a>(
         solo_armed: false,
 
         cue: false,
+        speaker_b_link: None,
         default_vol: 1.0,
         editing: state.editing == Some(cid),
         edit_buf: &state.edit_buf,
@@ -16632,6 +16635,10 @@ fn strip_params<'a>(
                 solo: ch.solo,
 
                 cue: ch.cue,
+                // The assigned Speaker B monitor (Assign slot 1) shows LINK
+                // ganged to Main instead of CUE.
+                speaker_b_link: (state.assign.get(1).copied().flatten() == Some(i / 2))
+                    .then_some(state.control_room.speaker_b_linked),
                 default_vol: 1.0,
                 active_surface: i == selected_output_channel(state),
                 ..base
@@ -19553,11 +19560,14 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             let order = state.device.output_display_order();
             let current = state.assign.get(dest).copied().flatten();
             let mut col = column![].spacing(0.0).width(Length::Fill);
-            col = col.push(entry(
-                "None".to_string(),
-                current.is_none(),
-                Message::AssignOutput(dest, None),
-            ));
+            // Main Out cannot be unassigned (TotalMix), so it has no `None`.
+            if dest != 0 {
+                col = col.push(entry(
+                    "None".to_string(),
+                    current.is_none(),
+                    Message::AssignOutput(dest, None),
+                ));
+            }
             for (display, label) in labels.iter().enumerate() {
                 let internal = order.get(display).copied().unwrap_or(display);
                 col = col.push(entry(
@@ -20432,14 +20442,6 @@ fn control_room_settings_panel(state: &TotalControl) -> Element<'_, Message> {
                 scale,
             ),
         ),
-        row_with(
-            "Speaker B",
-            checkbox(draft.speaker_b_linked)
-                .label("Link to Main")
-                .text_size(text_size)
-                .on_toggle(Message::ControlRoomSpeakerBLinked)
-                .into(),
-        ),
         section("SOLO / PFL MODE"),
         checkbox(draft.pfl_replaces_solo)
             .label("Live Mode, PFL replaces Solo")
@@ -20903,6 +20905,10 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     };
     let available = main_space - reserve;
     let fx_overlay = fx_open && reserve < fx_extent;
+    // The Hardware Outputs indicator marks only the channel strips themselves.
+    // The row below is widened to `available.max(cr_w)` so the Control Room can
+    // overlap it, but the indicator must not stretch into that overlap.
+    let hw_out_width = out_width;
     let out_row: Element<'_, Message> = if control_room_available(state) {
         // The Control Room keeps the right edge.  When the row cannot hold
         // both, it covers the right-hand output strips instead of widening
@@ -20991,8 +20997,12 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
         // when the row is too narrow, matching the strip overlay below.
         iced::widget::Stack::new()
             .push(
-                container(section_header("HARDWARE OUTPUTS", scale))
-                    .width(Length::Fixed(out_width)),
+                container(
+                    container(section_header("HARDWARE OUTPUTS", scale))
+                        .width(Length::Fixed(hw_out_width.min(out_width))),
+                )
+                .width(Length::Fill)
+                .align_x(iced::Alignment::Start),
             )
             .push(
                 container(
@@ -22402,6 +22412,23 @@ mod tests {
             !state.assigned_pairs().any(|p| p == 3),
             "the pair must return to the Hardware Outputs row"
         );
+    }
+
+    #[test]
+    fn speaker_b_strip_shows_link_instead_of_cue() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::AssignOutput(0, Some(0)));
+        let _ = update(&mut state, Message::AssignOutput(1, Some(1)));
+        // The Speaker B strip (pair 1, output 2) carries LINK; Main keeps CUE.
+        let sb = strip_params(&state, ChannelId::Output(2), 0);
+        assert_eq!(sb.speaker_b_link, Some(false));
+        let main = strip_params(&state, ChannelId::Output(0), 0);
+        assert_eq!(main.speaker_b_link, None);
+        // Pressing LINK gangs Speaker B to Main and lights the button.
+        let _ = update(&mut state, Message::SpeakerBLinked(true));
+        assert!(state.control_room.speaker_b_linked);
+        let sb = strip_params(&state, ChannelId::Output(2), 0);
+        assert_eq!(sb.speaker_b_link, Some(true));
     }
 
     #[test]
@@ -26273,6 +26300,9 @@ mod tests {
     #[test]
     fn split_output_channels_are_selected_individually() {
         let mut state = new(true, None, None);
+        // Main defaults to pair 1; move it aside so pair 1 is a plain
+        // hardware output for this split-selection test.
+        state.assign[0] = Some(0);
         state.device.set_output_linked(1, false).unwrap();
         let left = ChannelId::Output(2);
         let right = ChannelId::Output(3);

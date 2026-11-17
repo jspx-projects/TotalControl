@@ -1770,9 +1770,15 @@ Dim amount; applying it restores those levels and engages Dim once. Speaker B
 keeps its saved monitor path and is applied after the saved assignments.
 Speaker B requires assigned Main and Speaker B outputs; its button switches
 the monitor routing between those pairs, and clearing the Speaker B
-assignment also clears Speaker B. The `Link to Main` setting makes Speaker B
-follow Main fader, Dim and Recall changes. Without the link, Speaker B keeps
-its own level and the Phones outputs remain unaffected.
+assignment also clears Speaker B.
+
+LINK replaces CUE on the Speaker B strip and gangs the Speaker B channel to
+Main as a fader group. Moving either fader moves the other by the same dB
+amount, preserving the relative offset between them. The FX-return fader is
+ganged by the same rule. Dim and Recall apply the same dB change to Main and
+a linked Speaker B. LINK uses the stereo button style and lights orange while
+engaged. With the link off, Speaker B keeps its own level. The link leaves
+the Phones outputs unchanged.
 
 Mono is a latching monitor check: it attenuates the active monitor output's
 left and right sides by 6 dB, sums them and feeds the result to both sides of
@@ -1820,8 +1826,14 @@ target restores the previous target submix and FX returns.
 The second level for an output destination lists the predetermined hardware
 channel names—`None` first, then every hardware output in display order, the
 current output in bold. It never shows user names. Choosing `None` clears the
-destination. Both levels use the same button width, and every label is
-centred.
+destination. Main Out is the exception: it always holds a pair, defaults to
+AN 1/2 and offers no `None`, so Speaker B can never be the only Control Room
+channel. Both levels use the same button width, and every label is centred.
+
+The HARDWARE OUTPUTS indicator spans only the hardware output strips; the
+CONTROL ROOM indicator spans only the Control Room channels and its rule
+starts after the title text. Neither stretches into the other's section when
+the Control Room overlaps the output row.
 
 Clicking a first-level destination opens and pins its second level. Hovering
 an unpinned first-level row opens or switches the second level without
@@ -1948,8 +1960,11 @@ they are made, and `Close` or `Escape` dismisses it. There is no draft and no
 |---|---|
 | Talkback | Input, Dim |
 | Listenback | Input, Dim |
-| Main Out | Recall, Dim, External Input, Gain, Speaker B link |
+| Main Out | Recall, Dim, External Input, Gain |
 | Solo / PFL Mode | Live Mode, PFL replaces Solo; Exclusive Solo/PFL Mode |
+
+The Speaker B link is the LINK button on the Speaker B strip (§12), not a
+setting in this panel.
 
 The input lists start with `None`, then the mono hardware inputs by their
 device names. External Input lists stereo hardware-input pairs. The five

@@ -769,9 +769,11 @@ The monitor actions apply as follows:
 | Cue/PFL | Target only | Target only | Target only |
 
 Speaker B is a second playback path. When Speaker B is active, Main Out is
-muted and Speaker B is audible. The Speaker B `Link to Main` setting makes
-the Speaker B fader follow Main volume, Dim and Recall. Without the link,
-Speaker B keeps its own level and Dim and Recall act on Main Out only.
+muted and Speaker B is audible. The Speaker B strip's LINK button gangs its
+fader to Main: moving either fader moves the other by the same amount and
+keeps the relative offset between them. Dim and Recall move both by the same
+amount. With the link off, Speaker B keeps its own level and Dim and Recall
+act on Main Out only.
 
 Phones 1–4 are not monitor outputs. Dim, Recall, Mono, External Input and
 Mute FX do not affect them. Talkback uses its own Phones Dim amount.
@@ -779,8 +781,8 @@ Mute FX do not affect them. Talkback uses its own Phones Dim amount.
 Every Control Room output is a stereo pair. An assigned pair is linked and
 cannot be unlinked; assigning a split pair links it. The Settings panel's
 `STEREO` control stays engaged for Control Room pairs, and `Set all channels
-mono` does not split them. This stereo pair link is separate from
-`Speaker B → Link to Main`, which links the Speaker B volume to Main.
+mono` does not split them. This stereo pair link is separate from the Speaker
+B LINK button, which gangs the Speaker B fader to Main.
 
 ### What the destinations mean
 
@@ -830,10 +832,10 @@ turning Dim off returns to the level saved when Dim was engaged. Changing the
 Main Dim amount while Dim is engaged updates the current attenuation
 immediately. Reassigning or clearing the Main Out turns Dim off first.
 
-Dim affects Main Out. With `Speaker B → Link to Main` enabled, Speaker B
-follows the Main fader, Dim and Recall. Without the link, Speaker B keeps its
-own level. Dim does not attenuate the Phones outputs; Talkback has its own
-Phones Dim amount.
+Dim affects Main Out. With the Speaker B LINK engaged, Speaker B follows the
+Main fader, Dim and Recall by the same amount, keeping its offset. With the
+link off, Speaker B keeps its own level. Dim does not attenuate the Phones
+outputs; Talkback has its own Phones Dim amount.
 
 Dim is part of the current mix and is stored in a snapshot or workspace. The
 saved scene stores the active state, the pre-Dim speaker levels and the Dim
@@ -846,9 +848,9 @@ momentary: it does not latch and has no lit state after release. When Dim is
 engaged, Recall changes the saved pre-Dim level and the current dimmed level
 together.
 
-Recall needs an assigned Main Out and never acts on a Phones output. With
-`Speaker B → Link to Main` enabled, the Speaker B pair follows the Recall
-level; unlinked, it keeps its own level.
+Recall needs an assigned Main Out and never acts on a Phones output. With the
+Speaker B LINK engaged, the Speaker B pair moves by the same amount as Main,
+keeping its offset; unlinked, it keeps its own level.
 
 ### Speaker B
 
@@ -862,9 +864,13 @@ workspace. Loading a workspace restores the saved monitor path after the
 saved assignments are installed. Clearing the Speaker B assignment also
 clears Speaker B and turns the button off.
 
-`Speaker B → Link to Main` in Control Room Settings ties the Speaker B level
-to Main. Linked, the Speaker B pair follows Main fader, Dim and Recall
-changes. Unlinked, it keeps its own fader level.
+The Speaker B strip shows a LINK button in place of CUE. Pressing LINK gangs
+the Speaker B fader to Main as a fader group: moving either fader moves the
+other by the same amount and keeps the relative offset. The FX-return fader
+is ganged too, and Dim and Recall move both by the same amount. LINK lights
+orange while engaged, like the stereo button. The Speaker B button already
+monitors that pair, so the strip has no CUE. Unlinked, Speaker B keeps its own
+fader level.
 
 ### Mono
 
@@ -990,7 +996,7 @@ The panel has four sections:
 
 - **Talkback**: source and Dim.
 - **Listenback**: source and Dim.
-- **Main Out**: Recall, Dim, External Input, Gain and `Speaker B → Link to Main`.
+- **Main Out**: Recall, Dim, External Input and Gain.
 - **Solo / PFL Mode**: `Live Mode, PFL replaces Solo` and
   `Exclusive Solo/PFL Mode`.
 
@@ -1011,7 +1017,9 @@ the default values.
 chooses which output carries your cue/PFL signal and never reassigns
 hardware. The second level lists the hardware channels as their predetermined
 names (`None`, then every hardware output, current choice in bold). Choosing
-`None` clears a destination.
+`None` clears a destination. Main Out always holds a pair — it defaults to
+AN 1/2 and has no `None` — so Speaker B can never be left as the only Control
+Room channel.
 
 A hardware output can sit in only one monitoring destination. Assigning it to
 a second destination moves it there instead of showing it twice. Clearing a
