@@ -602,10 +602,10 @@ int ffuc_transport_setup(struct ffuc *chip)
 		}
 	}
 
-	dev_info(&chip->dev->dev,
-		 "raw control: IF%d ep out 0x%02x in 0x%02x meter 0x%02x\n",
-		 d->state_iface, d->state_out_ep, d->state_in_ep,
-		 d->meter_in_ep);
+	dev_dbg(&chip->dev->dev,
+		"raw control: IF%d ep out 0x%02x in 0x%02x meter 0x%02x\n",
+		d->state_iface, d->state_out_ep, d->state_in_ep,
+		d->meter_in_ep);
 	if (atomic_read(&chip->hwdep_users))
 		return ffuc_transport_start(chip);
 	return 0;
