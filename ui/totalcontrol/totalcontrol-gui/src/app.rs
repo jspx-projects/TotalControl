@@ -1955,6 +1955,8 @@ pub enum AssignMenu {
 /// output-pair assignments; the seventh is the Cue/PFL target selector.
 pub const OUTPUT_DESTS: usize = 6;
 pub const CUE_DEST: usize = 6;
+pub const MAIN_DEST: usize = 0;
+pub const SPEAKER_B_DEST: usize = 1;
 pub const ASSIGN_DESTS: [&str; 7] = [
     "Main",
     "Speaker B",
@@ -11949,6 +11951,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.assign_pinned = false;
         }
         Message::AssignDestinations(dest) => {
+            // Speaker B needs an assigned Main; without one its row is grayed
+            // and inert, so clicking it does nothing (GUI spec §12).
+            if dest == SPEAKER_B_DEST
+                && state.assign.get(MAIN_DEST).copied().flatten().is_none()
+            {
+                return Task::none();
+            }
             if dest == CUE_DEST {
                 state.assign_menu = AssignMenu::CueTargets;
                 state.assign_pinned = true;
@@ -11958,6 +11967,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::AssignHover(dest) => {
+            if dest == SPEAKER_B_DEST
+                && state.assign.get(MAIN_DEST).copied().flatten().is_none()
+            {
+                return Task::none();
+            }
             if !state.assign_pinned && !matches!(state.assign_menu, AssignMenu::Closed) {
                 if dest == CUE_DEST {
                     state.assign_menu = AssignMenu::CueTargets;
@@ -12000,6 +12014,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
             }
             state.assign[dest] = pair;
+            // Speaker B requires an assigned Main. If this change left Main
+            // unassigned (cleared it, or moved its pair to another slot),
+            // Speaker B cannot remain assigned either.
+            if state.assign.get(MAIN_DEST).copied().flatten().is_none() {
+                state.assign[SPEAKER_B_DEST] = None;
+            }
             // A Control Room channel is always stereo: linking here, before
             // the slot animation measures the pair, makes a split pair join
             // as the single stereo strip it will be in the Control Room.
@@ -19608,23 +19628,37 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
     // belongs to it. The row is a plain button, not a hover area: rebuilding
     // a hovered row under the pointer used to lose the click.
     let mut col = column![].spacing(0.0).width(Length::Fill);
+    let has_main = state.assign.get(MAIN_DEST).copied().flatten().is_some();
     for (dest, name) in ASSIGN_DESTS.iter().enumerate() {
         let active = matches!(state.assign_menu, AssignMenu::Outputs(d) if d == dest)
             || (dest == CUE_DEST && matches!(state.assign_menu, AssignMenu::CueTargets));
-        col = col.push(
-            iced::widget::mouse_area(
-                iced::widget::button(
-                    container(text(*name).size(theme::TEXT_MD * scale))
-                        .width(Length::Fill)
-                        .align_x(iced::Alignment::Start),
-                )
-                .width(Length::Fixed(entry_w))
-                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                .style(theme::toggle_button(active, theme::ACCENT))
-                .on_press(Message::AssignDestinations(dest)),
-            )
-            .on_enter(Message::AssignHover(dest)),
-        );
+        // Speaker B needs an assigned Main, as in TotalMix. Without one the
+        // row stays visible but grayed and inert.
+        let gated = dest == SPEAKER_B_DEST && !has_main;
+        let mut label = text(*name).size(theme::TEXT_MD * scale);
+        if gated {
+            label = label.color(theme::disabled_text());
+        }
+        let btn = iced::widget::button(
+            container(label)
+                .width(Length::Fill)
+                .align_x(iced::Alignment::Start),
+        )
+        .width(Length::Fixed(entry_w))
+        .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+        .style(theme::toggle_button(active && !gated, theme::ACCENT));
+        let btn = if gated {
+            btn
+        } else {
+            btn.on_press(Message::AssignDestinations(dest))
+        };
+        let area = iced::widget::mouse_area(btn);
+        let area = if gated {
+            area
+        } else {
+            area.on_enter(Message::AssignHover(dest))
+        };
+        col = col.push(area);
     }
     cards = cards.push(opaque(
         container(col)
@@ -20166,10 +20200,13 @@ fn control_room_panel(
                 "speaker B",
                 theme::TEXT_SM,
                 settings.speaker_b,
-                state
-                    .device
-                    .is_uc_family()
-                    .then_some(Message::SpeakerB(!settings.speaker_b)),
+                // Speaker B switches between the assigned Main and Speaker B
+                // pairs, so it needs both, as in TotalMix. Without them the
+                // button stays visible but inert.
+                (state.device.is_uc_family()
+                    && state.assign.get(MAIN_DEST).copied().flatten().is_some()
+                    && state.assign.get(SPEAKER_B_DEST).copied().flatten().is_some())
+                .then_some(Message::SpeakerB(!settings.speaker_b)),
             ),
         ]),
         group(vec![
@@ -20221,7 +20258,12 @@ fn control_room_panel(
                 "settings",
                 theme::TEXT_MD,
                 state.control_room_settings_open,
-                Some(Message::OpenControlRoomSettings),
+                // The button toggles the dialog: pressing it again closes it.
+                Some(if state.control_room_settings_open {
+                    Message::CloseControlRoomSettings
+                } else {
+                    Message::OpenControlRoomSettings
+                }),
             ),
             assign.into(),
         ]),
@@ -21555,7 +21597,7 @@ mod tests {
         PwClock, RateChoice, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
         TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,
         FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H,
-        FX_W, METER_RELEASE_DB_S, UC_AP_MEASUREMENTS, UC_PC_MEASUREMENTS, ZOOM_STEP,
+        FX_W, MAIN_DEST, METER_RELEASE_DB_S, SPEAKER_B_DEST, UC_AP_MEASUREMENTS, UC_PC_MEASUREMENTS, ZOOM_STEP,
     };
     use crate::osc::OscOutbound;
     use crate::sidebar;
@@ -22363,6 +22405,8 @@ mod tests {
     #[test]
     fn assign_menu_survives_the_global_pointer_press_and_applies_a_choice() {
         let mut state = new(true, None, None);
+        // Speaker B requires an assigned Main, so give it one first.
+        state.assign[MAIN_DEST] = Some(0);
         let _ = update(&mut state, Message::ToggleAssign);
         assert_eq!(state.assign_menu, AssignMenu::Destinations);
         // The app-wide subscription publishes this for every press, including
@@ -22387,6 +22431,8 @@ mod tests {
     #[test]
     fn assign_output_moves_between_destinations_and_none_returns_it() {
         let mut state = new(true, None, None);
+        // Speaker B requires an assigned Main, so give it one first.
+        state.assign[MAIN_DEST] = Some(0);
         let _ = update(&mut state, Message::AssignOutput(2, Some(3)));
         assert_eq!(state.assign[2], Some(3));
         // Moving the same output to Main Out B clears the Phones 1 slot.
@@ -22565,6 +22611,8 @@ mod tests {
     #[test]
     fn add_and_clear_start_an_assignment_animation_but_a_move_does_not() {
         let mut state = new(true, None, None);
+        // Speaker B requires an assigned Main, so give it one first.
+        state.assign[MAIN_DEST] = Some(0);
         let _ = update(&mut state, Message::AssignOutput(2, Some(3)));
         let anim = state.assign_anim.as_ref().expect("an add animates");
         assert_eq!(anim.moving(), Some((2, 3)));

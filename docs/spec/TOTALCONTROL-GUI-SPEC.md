@@ -1744,7 +1744,8 @@ slot after `ext. input`; hiding it leaves that slot blank.
 
 Engaged monitoring buttons use the dark face, orange text and 1 px orange
 outline. Recall has no latched state and uses the normal press feedback;
-Settings stays lit while its dialog is open. `assign` is a selector, not a
+Settings stays lit while its dialog is open, and pressing it again closes the
+dialog. `assign` is a selector, not a
 monitoring button: it uses the same compact row and white drop decoration as a
 strip's output-bus trigger, and its row stays lit while the menu is open.
 
@@ -1770,7 +1771,9 @@ Dim amount; applying it restores those levels and engages Dim once. Speaker B
 keeps its saved monitor path and is applied after the saved assignments.
 Speaker B requires assigned Main and Speaker B outputs; its button switches
 the monitor routing between those pairs, and clearing the Speaker B
-assignment also clears Speaker B.
+assignment also clears Speaker B. Without both assignments the Speaker B
+button stays visible but disabled, and in the Assign menu the Speaker B row
+stays visible but grayed and inert; assigning Speaker B needs a Main first.
 
 LINK replaces CUE on the Speaker B strip and gangs the Speaker B channel to
 Main as a fader group. Moving either fader moves the other by the same dB
@@ -1817,6 +1820,9 @@ destinations in this order, using the same names as the Control Room channels:
 | Speaker B | the same bit, plus control-room state word `0x3d00 = 1` while active |
 | Phones 1..4 | host-side; the unit receives nothing |
 | Cue/PFL to | host-side; selects the Cue/PFL monitoring target |
+
+The Speaker B row needs an assigned Main. Without one it stays in the list
+but is grayed and inert: clicking or hovering it opens no second level.
 
 The Cue button on a hardware output copies that output's submix into the
 selected Cue/PFL target, replacing the target's sources. It is exclusive
