@@ -27,6 +27,13 @@ A new device must share that path:
 - TotalControl controls the mixer through hwdep vendor requests;
 - the device model, scene and workspace live in userspace.
 
+When the mainline kernel already streams a device's vendor-mode audio, the
+contributed module may expose only the hwdep control node (control and
+meters) and leave the ALSA PCM to the mainline driver. The control path is
+still the in-tree hwdep module; the two drivers cooperate as one device. The
+mainline audio driver is the standard kernel driver, not an external
+dependency.
+
 Contributions that depend on a driver outside this repository, a direct-USB
 crate, or a vendor userspace daemon are not part of the supported set. A
 class-compliant path can be described as a development or fallback path, but it

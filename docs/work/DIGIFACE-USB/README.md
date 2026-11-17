@@ -20,6 +20,26 @@ architecture on request. The protocol draft, the implementation plan, the
 uapi sketch and the capture request below are the starting point; they are
 prior art and a plan, not a finished implementation.
 
+## Specification completion (required)
+
+Completing the protocol specification is a required part of the pull request,
+not an optional extra. The draft in
+[`DIGIFACE_USB_PROTOCOL_SPEC.md`](DIGIFACE_USB_PROTOCOL_SPEC.md) is prior art;
+the contributor turns it into a verified specification:
+
+1. Read it end to end and mark each section verified or open.
+2. Reaffirm the known parts on the unit (status read, mixer enable, one route,
+   one output fader, one meter frame) and capture the open parts (loopback
+   request, meter rate, interrupt endpoint `0x83`, snapshot storage, 2x/4x
+   channel maps).
+3. Update the specification with the verified facts and retire the open items
+   it settles; keep the rest as named open items.
+4. Land it as `docs/spec/DIGIFACE-USB-PROTOCOL-SPEC.md` in the same pull
+   request, with the evidence (firmware, transport, rate, steps and results).
+
+The specification is the maintenance anchor for the code; the code and the
+specification land together.
+
 ## The target mode is normal mode
 
 The Digiface USB has two firmware modes, selected with the Flash Update Tool:
