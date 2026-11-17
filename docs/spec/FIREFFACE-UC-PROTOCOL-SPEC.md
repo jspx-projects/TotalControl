@@ -67,17 +67,17 @@ The PC personalities differ in the interrupt transport:
 
 | PC product | Sample words | Engine start |
 |---|---|---|
-| `UC_PC`, `UC_PC_RME` | float32 | alt N; alt reselect only on a rate-band change |
-| `UC_WIN_RME` | float32 | alt 0, then alt N, on every start |
+| `UC_PC`, `UC_PC_RME` | S32 | alt N; alt reselect only on a rate-band change |
+| `UC_WIN_RME` | S32 | alt 0, then alt N, on every start |
 
-The wire sample format follows the host OS's native audio format: Linux
-and macOS are float-native (float32), Windows is integer-PCM-native (S32).
-This driver runs on Linux, so every UC personality carries float32.  The
-host imposes the format on the device through the channel-init value
-(§2.2); the device powers up in a default that the init overrides.  The
-Windows host writes S32 on the PC personality with a 60-slot init block
-(§2.3); that is the Windows-host reference, not a device requirement.  A
-device that strictly requires S32 is an evidence-backed exception.
+The driver keys the wire sample format to the transport: the interrupt
+transport (every PC personality) carries S32, the Windows reference
+pairing, and the isochronous transport (AP) carries float32, the macOS
+reference pairing.  The host imposes the format on the device through the
+channel-init value (§2.2); the device powers up in a default that the init
+overrides.  The device accepts either format when the init value matches;
+a mismatch distorts.  The Windows host writes S32 on the PC personality
+with a 60-slot init block (§2.3).
 
 On `UC_WIN_RME` the output latch clears only on the alt 0 → alt N reselect.
 Every UC engine start follows the previous engine stop by at least
@@ -225,7 +225,9 @@ The slot ranges depend on the host:
 
 | Host | Slots | `wValue` |
 |---|---|---|
-| Linux / macOS (this driver) | `0..17` and `32..49` (36) | `0x0001` (float32) |
+| Linux (this driver), PC personality | `0..17` and `32..49` (36) | `0x0000` (S32) |
+| Linux (this driver), AP personality | `0..17` and `32..49` (36) | `0x0001` (float32) |
+| macOS, AP personality | `0..17` and `32..49` (36) | `0x0001` (float32) |
 | Windows | `0..29` and `32..61` (60) | `0x0000` (S32) |
 
 The slot count does not affect the format pairing; both ranges play clean
@@ -237,7 +239,7 @@ The shipped probe sequence, used by both UC personalities on Linux, is:
 
 | Order | Request | Value |
 |---|---|---|
-| 1 | `0x16` | `0x0001`, slots `0..17` and `32..49` |
+| 1 | `0x16` | `0x0000` (PC) or `0x0001` (AP), slots `0..17` and `32..49` |
 | 2 | `0x10` | `0x0800 / 0xb800` |
 | 3 | `0x20` | `0x0001 / 0x0000` |
 
