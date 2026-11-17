@@ -763,9 +763,9 @@ words `0..13` carry channels `1..14`.  At 4x, playback endpoint 0 and capture
 endpoint 0 carry words `0..5` for channels `1..6`.  Playback endpoint 1 and
 capture endpoint 1 carry words `0..5` for channels `7..12`.
 
-The sample word is float32 on Linux, the host-native format (§1.1); the
-Windows host uses S32 on the PC personality.  Sample words are
-little-endian.
+The sample word is S32 on the PC personality, following the transport
+rule (§1.1); the AP personality carries float32 (§11.6).  Sample words
+are little-endian.
 
 One URB carries 48 sample frames at 1x, 96 at 2x and 192 at 4x.  That is six
 maximum-size packets.  Two URBs are in flight per endpoint.  The IN URBs are
