@@ -60,4 +60,8 @@ pub struct DeviceCapabilities {
     pub input_link: bool,
     pub eq_for_record: bool,
     pub optical_out: bool,
+    /// The backend can switch the word-clock input termination in software.
+    /// False hides the control: the earlier UC (Hw Rev 3) sets termination
+    /// with a rear mechanical switch, and the unit has no software control.
+    pub word_clock_termination: bool,
 }

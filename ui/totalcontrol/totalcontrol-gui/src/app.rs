@@ -15016,11 +15016,6 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 ["Consumer", "Professional"],
                 settings.spdif_professional,
                 Message::SpdifProfessionalChanged,
-            ))
-            .push(check_row(
-                "Word clock in",
-                settings.word_clock_termination,
-                Message::WordClockTerminationChanged(!settings.word_clock_termination),
             ));
         if ucx {
             body = body.push(check_row(
@@ -15029,6 +15024,16 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 Message::EqForRecordChanged(!settings.eq_for_record),
             ));
         }
+    }
+    // Software word-clock termination is capability-gated: the earlier UC
+    // sets termination with a rear mechanical switch and reports no software
+    // control, so the row is hidden there.
+    if state.device.capabilities().word_clock_termination {
+        body = body.push(check_row(
+            "Word clock in",
+            settings.word_clock_termination,
+            Message::WordClockTerminationChanged(!settings.word_clock_termination),
+        ));
     }
     if state.device.firmware().is_some() {
         body = body.push(

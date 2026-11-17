@@ -127,6 +127,7 @@ const GLOBALS: GlobalSet = GlobalSet::new(
         GlobalControl::OpticalFormat,
         GlobalControl::SpdifProfessional,
         GlobalControl::WordClock,
+        GlobalControl::WordClockTermination,
         GlobalControl::Talkback,
         GlobalControl::Dim,
         GlobalControl::SpeakerB,
