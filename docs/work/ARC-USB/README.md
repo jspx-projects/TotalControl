@@ -1,79 +1,54 @@
-# ARC USB support
+# ARC USB — remaining work for the device owner
 
-Working note. This directory holds the draft specification and the
-implementation plan for the RME ARC USB and for the generic MIDI controller
-model it belongs to. The generic engine is implemented and parity-tested
-against the Mackie codec; the ARC definition awaits its live-unit test.
+Working note. The generic controller engine, the ARC definition file and
+the ARC protocol specification are in the repository. This note lists only
+what the person with the ARC hardware still has to do.
 
-## Documents
+## Already in place
 
-| File | Purpose | Destination once reviewed |
-|---|---|---|
-| [`RME_ARC_USB_MIDI.md`](RME_ARC_USB_MIDI.md) | Wire protocol and host model of the ARC | `docs/spec/midi-controllers/RME_ARC_USB_MIDI.md` |
-| [`MACKIE_MIDI.md`](MACKIE_MIDI.md) | Wire protocol and host model of Mackie Control, split out of the MIDI spec | `docs/spec/midi-controllers/MACKIE_MIDI.md` |
-| [`CONTROLLER_MODEL.md`](CONTROLLER_MODEL.md) | Anatomy of a controller definition file, the generalised host model, and the settings UI | New `docs/spec/TOTALCONTROL-CONTROLLER-SPEC.md` |
-| [`MIDI_TRANSPORT.md`](MIDI_TRANSPORT.md) | Trimmed `TOTALCONTROL-MIDI-SPEC.md`: the transport only | `docs/spec/TOTALCONTROL-MIDI-SPEC.md` |
-| [`MAP-FILES.md`](MAP-FILES.md) | The two map files, where they live, how they are found and loaded | Part of `TOTALCONTROL-CONTROLLER-SPEC.md` §5–6 |
-| [`MAPS/Mackie_MIDI.json`](MAPS/Mackie_MIDI.json) | Mackie Control map, extracted from `totalcontrol-gui/src/mackie.rs` | `data/midi-controllers/Mackie_MIDI.json` |
-| [`MAPS/RME_ARC_USB_MIDI.json`](MAPS/RME_ARC_USB_MIDI.json) | ARC USB map, from the vendor command list | `data/midi-controllers/RME_ARC_USB_MIDI.json` |
-| [`SOURCES.md`](SOURCES.md) | Sources and the MIT licence position | `THIRD-PARTY.md` entries and code comments |
-| [`TESTING.md`](TESTING.md) | What the reviewer must run and verify | PR checklist |
-
-## The idea
-
-Two things change together.
-
-1. The MIDI controller support becomes generic. A controller is described by a
-   definition file; the host runs the same engine for every file.
-2. The Mackie Control part moves out of `TOTALCONTROL-MIDI-SPEC.md` into its
-   own document beside the ARC, and the MIDI spec keeps only the transport.
-
-The ARC then needs no special code path and no dedicated settings menu. It is
-one entry in the controller list, and its map file is the same kind of file as
-the Mackie map.
-
-## Is the listbox a good idea
-
-Yes, with three constraints.
-
-- Each controller type carries its own options list in its map file. Mackie
-  options cover the LCD, meters and the mixer surface; ARC options cover the
-  key map and the encoder. The listbox selects a controller, and the dialog
-  shows that controller's option groups.
-- The ENGINE is shared. Parsing, ports, worker, LED diff, reconnect and the
-  action dispatch run the same code for every controller. A map file carries
-  data only.
-- The MAP FILES are data. The shipped files are the defaults; a user copy in
-  the user data directory overrides them.
-
-## Status
-
-| Item | State |
+| Item | Location |
 |---|---|
-| ARC wire protocol | Verified against the vendor command list and a public implementation |
-| ARC host model | Designed in `RME_ARC_USB_MIDI.md` |
-| Mackie split | Landed: transport, Mackie and controller documents in `docs/spec/` |
-| Map file format | Landed as `docs/spec/TOTALCONTROL-CONTROLLER-SPEC.md`, schema 1 |
-| Map files | Written; Mackie shipped in `data/midi-controllers/`, ARC here |
-| Engine implementation | Implemented, parity-tested against the Mackie codec |
-| GUI listbox and options | Implemented |
-| Live unit test | Not done |
+| Controller engine and definition format | `ui/totalcontrol/totalcontrol-gui/src/controllers/`, `docs/spec/TOTALCONTROL-CONTROLLER-SPEC.md` |
+| ARC definition file, shipped and embedded | `data/midi-controllers/RME_ARC_USB_MIDI.json` |
+| ARC protocol specification | `docs/spec/midi-controllers/RME_ARC_USB_MIDI.md` |
+| Engine tests incl. the ARC remote shape | `ui/totalcontrol/totalcontrol-gui/src/controllers/parity.rs` |
+| Licence attribution | `THIRD-PARTY.md`, Openface-Mixer entry |
 
-## Decided design points
+## Your steps
 
-| Decision | Choice |
-|---|---|
-| Instances | One per enabled input port, each with its own protocol; several run at once |
-| Assignments | Host settings, keyed by protocol id and control id; map files stay pristine |
-| Schema 1 scope | note, cc, cc_pair, pitch_bend, channel_pressure, program_change, sysex patterns |
-| Port selection | Engine level, per instance; the map's `port` block declares source and defaults |
-| Embedded fallback | Yes, the shipped definitions are embedded in the binary |
-| Layout text syntax | Deferred; schema 1 is JSON only |
-| TUI | Deferred; GUI first |
+1. Rebase onto `main` once the generic-controller pull request is merged,
+   then build: `cargo build -p totalcontrol-gui`.
+2. Run the live-unit checklist in [`TESTING.md`](TESTING.md). Record the
+   firmware version and whether the unit is in note mode or SysEx mode.
+3. Where the unit differs from the specification, correct
+   `data/midi-controllers/RME_ARC_USB_MIDI.json` and
+   `docs/spec/midi-controllers/RME_ARC_USB_MIDI.md` in the same change,
+   and adjust the tests.
+4. Provide the captures of the open items below, or state that the unit
+   cannot produce them.
+5. Update the status table of the ARC protocol specification: live-unit
+   verification verified, with the evidence. Update the manual only if
+   the visible behaviour differs.
+6. Open the pull request with the project template: device, transport and
+   firmware; the checklist steps run and their results; every value that
+   differed; confirmation that the user scene and
+   `~/.config/totalcontrol/gui.json` were preserved.
 
-## Open questions
+## Open items to capture
 
-| Status | Question |
+| Status | Item |
 |---|---|
 | needs-capture | Encoder push message, if the knob is pushed |
-| needs-capture | SysEx mode format, only if note mode is insufficient |
+| needs-capture | SysEx mode message format (firmware 7 option) |
+| needs-capture | LED blink confirmed on a unit |
+| open | Standard-step curve, calibrated against a unit |
+| open | Momentary talkback behaviour on a unit |
+| open | Second ARC on one host |
+
+## Testing without a pull request
+
+The shipped definition loads as-is. To try a corrected map before
+committing it, copy it to
+`~/.local/share/totalcontrol/midi-controllers/RME_ARC_USB_MIDI.json`; the
+user file overrides the shipped one. `TOTALCONTROL_CONTROLLERS` points the
+loader at any directory for development.
