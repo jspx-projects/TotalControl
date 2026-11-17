@@ -43,6 +43,41 @@ We may integrate a **minimal, device-specific implementation** before every
 control is mapped. We do not expose guessed writes or host-only placeholders
 for controls the unit actually provides.
 
+### 1.1 Control-only devices (two drivers)
+
+When a device's vendor-mode audio already works in the mainline
+`snd-usb-audio` driver, TotalControl needs no audio driver of its own. The
+mainline driver keeps the **audio card** (PCM); a small in-tree module of ours
+owns a separate **control card** (one hwdep node, no PCM) for the mixer and
+meters. TotalControl pairs the two cards and shows them as one device. The
+Digiface USB is the first such device.
+
+The shared framework is `totalcontrol-gui/src/control_only.rs`. It owns the
+pairing and the audio/control identity separation: the **audio** card id, not
+the control card id, feeds the clock, controller discovery and meters. A
+backend cannot point those at the control card by mistake, because it never
+handles that separation.
+
+A control-only contribution adds:
+
+1. A kernel control module that claims the mixer interface and exposes one
+   hwdep node, with a capability bitmask in its INFO so a partially
+   implemented driver shows honest unavailable controls.
+2. A verified protocol specification (see §5).
+3. A profile (§3 below): channel table, capabilities, meter layout.
+4. A backend implementing the ordinary `RmeDevice` contract over the hwdep
+   ABI. The framework forwards every `RmeDevice` method to it.
+5. One `ControlOnlyDescriptor` entry: the device kind, the control card id,
+   the audio-card match (by id or description fragment, never by card
+   number), and an open factory.
+6. Tests on the unit; every specified function reachable in the GUI.
+
+Pairing requires the control card (matching id, hwdep present) and a distinct
+audio card (matching the descriptor's rule). Either card missing means the
+device is not opened; an audio card without a control card is shown as "no
+mixer interface". The framework is exercised without hardware by a mock
+control-only device in the tests.
+
 ## 2. What we expect from a contributor
 
 A device contribution needs a person with access to the hardware, not only a

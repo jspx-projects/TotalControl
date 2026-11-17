@@ -126,6 +126,9 @@ pub enum DeviceKind {
     Uc,
     /// The Babyface-classic through the kernel hwdep transport.
     BabyfaceClassic,
+    /// A control-only device: our hwdep control card paired with a mainline
+    /// audio card. The first such device is the Digiface USB.
+    Digiface,
     /// The in-memory device, as a Fireface UCX: EQ, dynamics, FX and the
     /// Control Room, all without hardware.
     MockUcx,
@@ -266,11 +269,12 @@ fn choose_startup_target(
 }
 
 impl DeviceKind {
-    pub const ALL: [DeviceKind; 7] = [
+    pub const ALL: [DeviceKind; 8] = [
         DeviceKind::Fireface,
         DeviceKind::Ucx,
         DeviceKind::Uc,
         DeviceKind::BabyfaceClassic,
+        DeviceKind::Digiface,
         DeviceKind::MockUcx,
         DeviceKind::MockUc,
         DeviceKind::MockBabyfaceClassic,
@@ -282,6 +286,7 @@ impl DeviceKind {
             DeviceKind::Ucx => "Fireface UCX",
             DeviceKind::Uc => "Fireface UC",
             DeviceKind::BabyfaceClassic => "Babyface-classic (experimental)",
+            DeviceKind::Digiface => "Digiface USB",
             DeviceKind::MockUcx => "Fireface UCX (simulated)",
             DeviceKind::MockUc => "Fireface UC (simulated)",
             DeviceKind::MockBabyfaceClassic => "Babyface-classic (simulated)",
@@ -299,6 +304,7 @@ impl DeviceKind {
             "Fireface UCX" => Some(Self::Ucx),
             "Fireface UC" => Some(Self::Uc),
             "Babyface-classic" => Some(Self::BabyfaceClassic),
+            "Digiface USB" => Some(Self::Digiface),
             _ => None,
         }
     }
@@ -312,6 +318,9 @@ pub enum DeviceHandle {
     /// First-generation Babyface through the kernel hwdep transport.
     #[cfg(feature = "alsa")]
     BabyfaceClassic(BabyfaceClassic),
+    /// A control-only device: a backend on our hwdep control card, paired
+    /// with a mainline audio card. The wrapper owns the identity separation.
+    ControlOnly(crate::control_only::ControlOnly),
     Mock(MockDevice),
     /// A UI-side copy of a device owned by the device service.
     Mirror(crate::device_service::Mirror),
@@ -373,6 +382,7 @@ macro_rules! delegate {
     ($self:expr, $method:ident($($arg:expr),*)) => { match $self {
         DeviceHandle::Mock(d) => d.$method($($arg),*),
         DeviceHandle::Mirror(d) => d.$method($($arg),*),
+        DeviceHandle::ControlOnly(d) => d.backend.$method($($arg),*),
         #[cfg(feature = "alsa")]
         DeviceHandle::Fireface(d) => d.$method($($arg),*),
         #[cfg(feature = "alsa")]
@@ -381,6 +391,7 @@ macro_rules! delegate {
     ($self:expr, $method:ident) => { match $self {
         DeviceHandle::Mock(d) => d.$method(),
         DeviceHandle::Mirror(d) => d.$method(),
+        DeviceHandle::ControlOnly(d) => d.backend.$method(),
         #[cfg(feature = "alsa")]
         DeviceHandle::Fireface(d) => d.$method(),
         #[cfg(feature = "alsa")]
@@ -868,6 +879,15 @@ impl DeviceHandle {
                 }
                 Err(e) => log::debug!("Babyface-classic hwdep open not available: {e:?}"),
             }
+            // Control-only devices: pair our control card with the mainline
+            // audio card and open the backend on the control card.
+            let cards = crate::control_only::read_sound_cards();
+            for desc in crate::control_only::descriptors() {
+                if let Some(handle) = Self::open_control_only_with_cards(desc.kind, &cards) {
+                    log::info!("Device backend: control-only ({})", desc.model_name);
+                    return Some(handle);
+                }
+            }
         }
         None
     }
@@ -909,6 +929,7 @@ impl DeviceHandle {
                 }
             }
             DeviceHandle::Mirror(d) => d.info().kind,
+            DeviceHandle::ControlOnly(d) => d.kind,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => match d.model() {
                 FirefaceModel::Ucx => DeviceKind::Ucx,
@@ -933,6 +954,7 @@ impl DeviceHandle {
                 }
             }
             DeviceHandle::Mirror(d) => d.info().card_id.clone(),
+            DeviceHandle::ControlOnly(d) => d.audio_card_id(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.card_id(),
             #[cfg(feature = "alsa")]
@@ -945,6 +967,7 @@ impl DeviceHandle {
             DeviceKind::MockUcx => Some(Self::open_mock_ucx()),
             DeviceKind::MockUc => Some(Self::open_mock_uc()),
             DeviceKind::MockBabyfaceClassic => Some(Self::open_mock_classic()),
+            DeviceKind::Digiface => Self::open_control_only(DeviceKind::Digiface),
             #[cfg(feature = "alsa")]
             DeviceKind::Fireface => Fireface::open().ok().map(DeviceHandle::Fireface),
             #[cfg(feature = "alsa")]
@@ -963,6 +986,34 @@ impl DeviceHandle {
             _ => None,
         }
     }
+
+    /// Open a control-only device by kind: pair its control card with its
+    /// audio card, then open the backend on the control card.
+    fn open_control_only(kind: DeviceKind) -> Option<Self> {
+        Self::open_control_only_with_cards(kind, &crate::control_only::read_sound_cards())
+    }
+
+    /// The pairing-aware open, with the card list supplied so it is testable
+    /// without hardware.
+    fn open_control_only_with_cards(
+        kind: DeviceKind,
+        cards: &[crate::control_only::SoundCard],
+    ) -> Option<Self> {
+        for desc in crate::control_only::descriptors() {
+            if desc.kind != kind {
+                continue;
+            }
+            let binding = crate::control_only::pair(desc, cards)?;
+            let backend = (desc.open)(&binding).ok()?;
+            return Some(DeviceHandle::ControlOnly(crate::control_only::ControlOnly {
+                backend,
+                binding,
+                kind: desc.kind,
+            }));
+        }
+        None
+    }
+
     /// All physical hwdep devices, one entry per unit, with stable serial.
     pub fn available_targets() -> Vec<DeviceTarget> {
         #[cfg(feature = "alsa")]
@@ -976,6 +1027,16 @@ impl DeviceHandle {
             }
             if BabyfaceClassic::present() {
                 out.push(DeviceTarget::kind_only(DeviceKind::BabyfaceClassic));
+            }
+            // Control-only devices: a paired control card and audio card.
+            let cards = crate::control_only::read_sound_cards();
+            for desc in crate::control_only::descriptors() {
+                if crate::control_only::pair(desc, &cards).is_some() {
+                    let target = DeviceTarget::kind_only(desc.kind);
+                    if !out.contains(&target) {
+                        out.push(target);
+                    }
+                }
             }
             // Both supported simulations are always offered, so the
             // interface can be explored (or a GUI change checked) without
@@ -1002,6 +1063,7 @@ impl DeviceHandle {
                 DeviceKind::MockUcx
             }),
             DeviceHandle::Mirror(d) => d.info().target.clone(),
+            DeviceHandle::ControlOnly(d) => d.target(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => DeviceTarget::from_identity(d.identity()),
             #[cfg(feature = "alsa")]
@@ -1039,6 +1101,7 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(d) => (0..n).map(|i| d.input_meter(i)).collect(),
             DeviceHandle::Mirror(d) => d.meters().inputs.to_vec(),
+            DeviceHandle::ControlOnly(_) => vec![0.0; n],
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
@@ -1050,6 +1113,7 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(d) => (0..n).map(|i| d.playback_meter(i)).collect(),
             DeviceHandle::Mirror(d) => d.meters().playbacks.to_vec(),
+            DeviceHandle::ControlOnly(_) => vec![0.0; n],
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.playback_meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
@@ -1260,6 +1324,7 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(_) => true,
             DeviceHandle::Mirror(d) => d.info().input_meters.get(idx).copied().unwrap_or(false),
+            DeviceHandle::ControlOnly(_) => false,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => idx < d.inputs().len(),
             #[cfg(feature = "alsa")]
@@ -1658,6 +1723,7 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(_) => true,
             DeviceHandle::Mirror(d) => d.info().has_sensitivity,
+            DeviceHandle::ControlOnly(_) => false,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => false,
             #[cfg(feature = "alsa")]
@@ -1678,6 +1744,7 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(_) => None,
             DeviceHandle::Mirror(d) => d.panel_selection(),
+            DeviceHandle::ControlOnly(_) => None,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => None,
             #[cfg(feature = "alsa")]
@@ -26921,6 +26988,25 @@ mod tests {
             ),
             crate::widgets::layout::TemplateId::InputMono
         );
+    }
+
+    #[test]
+    fn a_control_only_handle_reports_the_audio_card_and_forwards() {
+        use crate::control_only::test_support::{mock_cards, MOCK_AUDIO_ID, MOCK_CONTROL_ID};
+        let handle = DeviceHandle::open_control_only_with_cards(DeviceKind::Digiface, &mock_cards())
+            .expect("the mock control-only device opens");
+        assert!(matches!(handle, DeviceHandle::ControlOnly(_)));
+        // The handle reports the audio card, not the control card.
+        assert_eq!(handle.card_id(), MOCK_AUDIO_ID);
+        assert_ne!(handle.card_id(), MOCK_CONTROL_ID);
+        assert_eq!(handle.kind(), DeviceKind::Digiface);
+        assert_eq!(handle.target().kind, DeviceKind::Digiface);
+        // RmeDevice forwards to the backend (the mock is a UCX).
+        assert!(!handle.inputs().is_empty());
+        assert_eq!(handle.model_name(), "Fireface UCX (mock)");
+        // Meters are gated off until a control-only backend implements them.
+        assert!(!handle.has_input_meter(0));
+        assert!(handle.input_meters().iter().all(|&v| v == 0.0));
     }
 
     #[test]

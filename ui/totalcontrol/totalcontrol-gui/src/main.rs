@@ -15,6 +15,7 @@
 
 mod about;
 mod app;
+mod control_only;
 mod controllers;
 mod device_service;
 mod host_settings;
