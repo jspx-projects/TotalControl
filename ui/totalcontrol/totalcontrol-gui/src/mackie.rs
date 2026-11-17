@@ -1,11 +1,13 @@
-//! Mackie Control Universal host codec.
+//! Mackie Control Universal codec: primitives and parity oracle.
 //!
-//! TotalControl is the host: a Mackie Control compatible surface connects
-//! to one rawmidi port pair and drives the mixer, the same model TotalMix
-//! FX implements.  This module is pure — it parses surface messages into
-//! ordinary GUI messages, encodes feedback, and runs the connection
-//! handshake.  The rawmidi transport lives in [`crate::midi`]; the mixer
-//! mapping and the model-dependent actions live in `app.rs`.
+//! The production controller path is the map-driven engine in
+//! [`crate::controllers`], with the Mackie definition in
+//! `data/midi-controllers/Mackie_MIDI.json`. This module supplies the
+//! generic byte parser, the fader curve, the handshake and the feedback
+//! encoders the engine reuses, and keeps the original hand-written codec
+//! as the parity oracle: `controllers/parity.rs` asserts the engine
+//! reproduces it message for message on the Mackie map. The oracle path is
+//! exercised by tests only, hence the module-wide dead-code allowance.
 //!
 //! The note and CC map follows the Mackie Control Universal protocol
 //! (N. Jarnoux's reverse-engineered reference and the TouchMCU
@@ -17,6 +19,8 @@
 //! Navigation counts strips, not channels: a linked stereo pair is one
 //! strip unless "Map Stereo to 2 Mono Channels" is on.  The app builds
 //! the strip windows from the confirmed model.
+
+#![allow(dead_code)]
 
 use totalcontrol_core::ChannelId;
 
@@ -238,7 +242,7 @@ pub enum MidiEvent {
 
 /// Running-status parser with SysEx framing.  SysEx is capped: the kernel
 /// transport carries at most 128 bytes per message anyway.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MidiParser {
     status: u8,
     data: [u8; 2],
@@ -365,7 +369,7 @@ impl MidiParser {
 
 /// Per-remote navigation.  Not part of the mixer scene, like `RmeState`.
 /// `bank` counts strips, not channels.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MackieNav {
     pub bus: Bus,
     /// First strip of the window, relative to the row.

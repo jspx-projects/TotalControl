@@ -61,6 +61,86 @@ pub struct UnitSettings {
     pub always_init_device: bool,
 }
 
+/// One controller option value: a checkbox boolean or a choice string.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ControllerValue {
+    Bool(bool),
+    Choice(String),
+}
+
+/// One device's controller choice: input and output enable plus the
+/// protocol id. The key is `device:<i>` for the open unit's ports and
+/// `<card_id>:<i>` for a separate USB card.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeviceChoice {
+    pub input: bool,
+    pub output: bool,
+    pub protocol: String,
+}
+
+/// The generic MIDI controller settings (Settings > MIDI and OSC, MIDI
+/// part). Option values are keyed by protocol id and option key;
+/// assignments by protocol id and control id.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ControllerSettings {
+    /// Master enable of the MIDI part.
+    pub enabled: bool,
+    pub show_log: bool,
+    pub devices: BTreeMap<String, DeviceChoice>,
+    pub values: BTreeMap<String, BTreeMap<String, ControllerValue>>,
+    pub assignments: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl ControllerSettings {
+    pub fn device(&self, key: &str) -> DeviceChoice {
+        self.devices.get(key).cloned().unwrap_or_default()
+    }
+
+    pub fn values_for(&self, protocol: &str) -> BTreeMap<String, ControllerValue> {
+        self.values.get(protocol).cloned().unwrap_or_default()
+    }
+
+    pub fn assignments_for(&self, protocol: &str) -> BTreeMap<String, String> {
+        self.assignments.get(protocol).cloned().unwrap_or_default()
+    }
+
+    /// Fold the legacy `mackie` block into the generic settings once.
+    pub fn migrate_mackie(&mut self, legacy: &crate::mackie::MackieConfig) {
+        if !self.devices.is_empty() {
+            return;
+        }
+        self.enabled = legacy.enabled;
+        for i in 0..crate::mackie::PORTS {
+            self.devices.insert(
+                format!("device:{i}"),
+                DeviceChoice {
+                    input: legacy.in_enabled[i],
+                    output: legacy.out_enabled[i],
+                    protocol: "mackie_control".into(),
+                },
+            );
+        }
+        let bools = [
+            ("protocol", legacy.protocol),
+            ("full_lcd", legacy.full_lcd),
+            ("send_names", legacy.send_names),
+            ("stereo_to_mono", legacy.stereo_to_mono),
+            ("submix_any_row", legacy.submix_any_row),
+            ("background_disable", legacy.background_disable),
+            ("send_levels", legacy.send_levels),
+            ("peak_hold", legacy.peak_hold),
+            ("submix_linked", legacy.submix_linked),
+        ];
+        let entry = self.values.entry("mackie_control".into()).or_default();
+        for (key, value) in bools {
+            entry.insert(key.into(), ControllerValue::Bool(value));
+        }
+    }
+}
+
 /// The complete host settings document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -81,8 +161,12 @@ pub struct HostSettings {
     /// interfaces.
     #[serde(default = "send_host")]
     pub osc_send_host: std::net::IpAddr,
-    /// The Mackie Control remote (Settings > MIDI and OSC, MIDI part).
-    pub mackie: crate::mackie::MackieConfig,
+    /// The generic MIDI controller settings (Settings > MIDI and OSC, MIDI
+    /// part).
+    pub controllers: ControllerSettings,
+    /// The legacy Mackie block: read once and folded into `controllers`.
+    #[serde(default, skip_serializing)]
+    pub mackie: Option<crate::mackie::MackieConfig>,
     pub engine_force_rate: Option<u32>,
     pub engine_rate_mode: Option<EngineRateMode>,
     pub engine_force_quantum: Option<u32>,
@@ -105,7 +189,8 @@ impl Default for HostSettings {
             osc_recv_port: recv_port(),
             osc_send_port: send_port(),
             osc_send_host: send_host(),
-            mackie: crate::mackie::MackieConfig::default(),
+            controllers: ControllerSettings::default(),
+            mackie: None,
             engine_force_rate: None,
             engine_rate_mode: None,
             engine_force_quantum: None,
@@ -122,10 +207,14 @@ impl HostSettings {
     }
 
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut settings: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Some(legacy) = settings.mackie.take() {
+            settings.controllers.migrate_mackie(&legacy);
+        }
+        settings
     }
 
     /// The global OVR trigger count, clamped to the TotalMix FX range.
@@ -218,20 +307,59 @@ mod tests {
     }
 
     #[test]
-    fn the_mackie_remote_round_trips() {
+    fn the_controller_settings_round_trip() {
         let mut settings = HostSettings::default();
-        settings.mackie.enabled = true;
-        settings.mackie.in_enabled = [true, false];
-        settings.mackie.out_enabled = [true, true];
-        settings.mackie.full_lcd = false;
-        settings.mackie.send_levels = true;
+        settings.controllers.enabled = true;
+        settings.controllers.devices.insert(
+            "device:0".into(),
+            DeviceChoice { input: true, output: true, protocol: "mackie_control".into() },
+        );
+        settings.controllers.values.entry("mackie_control".into()).or_default().insert(
+            "full_lcd".into(),
+            ControllerValue::Bool(false),
+        );
+        settings.controllers.assignments.entry("rme_arc_usb".into()).or_default().insert(
+            "key1".into(),
+            "dim".into(),
+        );
         let json = serde_json::to_string(&settings).unwrap();
         let loaded: HostSettings = serde_json::from_str(&json).unwrap();
-        assert_eq!(loaded.mackie, settings.mackie);
-        // An older file without the mackie block keeps the defaults.
+        assert_eq!(loaded.controllers, settings.controllers);
+        // An older file without the controllers block keeps the defaults.
         let legacy: HostSettings = serde_json::from_str("{}").unwrap();
-        assert_eq!(legacy.mackie, crate::mackie::MackieConfig::default());
+        assert_eq!(legacy.controllers, ControllerSettings::default());
         assert_eq!(legacy.osc_recv_port, 7001);
+    }
+
+    #[test]
+    fn the_legacy_mackie_block_migrates_once() {
+        let legacy = crate::mackie::MackieConfig {
+            enabled: true,
+            in_enabled: [true, false],
+            out_enabled: [true, true],
+            full_lcd: false,
+            send_levels: true,
+            ..crate::mackie::MackieConfig::default()
+        };
+        let json = format!("{{\"mackie\": {}}}", serde_json::to_string(&legacy).unwrap());
+        let mut settings: HostSettings = serde_json::from_str(&json).unwrap();
+        if let Some(old) = settings.mackie.take() {
+            settings.controllers.migrate_mackie(&old);
+        }
+        assert!(settings.controllers.enabled);
+        assert_eq!(settings.controllers.device("device:0").input, true);
+        assert_eq!(settings.controllers.device("device:1").input, false);
+        assert_eq!(settings.controllers.device("device:0").protocol, "mackie_control");
+        let values = settings.controllers.values_for("mackie_control");
+        assert_eq!(values.get("full_lcd"), Some(&ControllerValue::Bool(false)));
+        assert_eq!(values.get("send_levels"), Some(&ControllerValue::Bool(true)));
+        assert_eq!(values.get("protocol"), Some(&ControllerValue::Bool(true)));
+        // The migrated file no longer carries the legacy block.
+        let rewritten = serde_json::to_string(&settings).unwrap();
+        assert!(!rewritten.contains("\"mackie\""));
+        // A second migration does not overwrite existing choices.
+        settings.controllers.migrate_mackie(&crate::mackie::MackieConfig::default());
+        assert!(settings.controllers.enabled);
     }
 
     #[test]
