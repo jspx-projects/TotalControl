@@ -947,12 +947,18 @@ Every option change writes the word under mask `0x05cf` (index 1487),
 including the current clock source in bits 1–2; the mask preserves the bits
 above it. Bit 10 is not an index of its own.
 
-The read form (request `0x10` in) returns the options under `0x05cf`,
-little-endian, with undocumented status bits above the mask (measured on
-firmware 46). The host reads the options at open and keeps the live values
-over a stale scene, as on the UC; the raw readback is never written back.
-The reference levels have no readback and are written from the scene at
-connect.
+The read form (request `0x10` in) returns the options under `0x05cf` plus
+read-only status bits above the mask (measured on firmware 46):
+
+| Bit | Mask | Meaning |
+|---|---|---|
+| 4–5 | `0x0030` | base-rate family: 0 = 32k, 1 = 44.1k, 2 = 48k (multiples share the code) |
+| 9, 11, 14, 15 | `0xca00` | constant status, always set on the measured unit; not options |
+
+The host reads the options at open and keeps the live values over a stale
+scene, as on the UC; the raw readback is never written back, and the masked
+write preserves the status bits. The reference levels have no readback and
+are written from the scene at connect.
 
 ## 12. Streaming
 
