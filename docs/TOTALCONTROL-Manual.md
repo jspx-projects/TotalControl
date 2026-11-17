@@ -1017,7 +1017,9 @@ the default values.
 chooses which output carries your cue/PFL signal and never reassigns
 hardware. The second level lists the hardware channels as their predetermined
 names (`None`, then every hardware output, current choice in bold). Choosing
-`None` clears a destination.
+`None` clears a destination. Main Out always holds a pair — it defaults to
+AN 1/2 and has no `None` — so Speaker B can never be left as the only Control
+Room channel.
 
 A hardware output can sit in only one monitoring destination. Assigning it to
 a second destination moves it there instead of showing it twice. Clearing a

@@ -1826,8 +1826,14 @@ target restores the previous target submix and FX returns.
 The second level for an output destination lists the predetermined hardware
 channel names—`None` first, then every hardware output in display order, the
 current output in bold. It never shows user names. Choosing `None` clears the
-destination. Both levels use the same button width, and every label is
-centred.
+destination. Main Out is the exception: it always holds a pair, defaults to
+AN 1/2 and offers no `None`, so Speaker B can never be the only Control Room
+channel. Both levels use the same button width, and every label is centred.
+
+The HARDWARE OUTPUTS indicator spans only the hardware output strips; the
+CONTROL ROOM indicator spans only the Control Room channels and its rule
+starts after the title text. Neither stretches into the other's section when
+the Control Room overlaps the output row.
 
 Clicking a first-level destination opens and pins its second level. Hovering
 an unpinned first-level row opens or switches the second level without

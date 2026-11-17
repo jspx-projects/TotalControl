@@ -3600,7 +3600,10 @@ pub fn new_with_device(
         fx_anim: None,
         assign: {
             let mut assign = [None; 7];
-            // The seventh slot is the Cue/PFL target; Main is the default.
+            // Main Out always holds a pair, as in TotalMix; it defaults to
+            // AN 1/2 (internal pair 1) and cannot be cleared. The seventh
+            // slot is the Cue/PFL target.
+            assign[0] = Some(1);
             assign[CUE_DEST] = Some(0);
             assign
         },
@@ -11978,6 +11981,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if dest >= OUTPUT_DESTS {
                 return Task::none();
             }
+            // Main Out always keeps a pair, as in TotalMix; it cannot be
+            // cleared, so Speaker B can never be the only Control Room channel.
+            if dest == 0 && pair.is_none() {
+                return Task::none();
+            }
             let old_assign = state.assign;
             // A hardware output can only sit in one monitoring destination.
             // Move it rather than showing the same channel in two Control
@@ -19552,11 +19560,14 @@ fn assign_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             let order = state.device.output_display_order();
             let current = state.assign.get(dest).copied().flatten();
             let mut col = column![].spacing(0.0).width(Length::Fill);
-            col = col.push(entry(
-                "None".to_string(),
-                current.is_none(),
-                Message::AssignOutput(dest, None),
-            ));
+            // Main Out cannot be unassigned (TotalMix), so it has no `None`.
+            if dest != 0 {
+                col = col.push(entry(
+                    "None".to_string(),
+                    current.is_none(),
+                    Message::AssignOutput(dest, None),
+                ));
+            }
             for (display, label) in labels.iter().enumerate() {
                 let internal = order.get(display).copied().unwrap_or(display);
                 col = col.push(entry(
@@ -20894,6 +20905,10 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     };
     let available = main_space - reserve;
     let fx_overlay = fx_open && reserve < fx_extent;
+    // The Hardware Outputs indicator marks only the channel strips themselves.
+    // The row below is widened to `available.max(cr_w)` so the Control Room can
+    // overlap it, but the indicator must not stretch into that overlap.
+    let hw_out_width = out_width;
     let out_row: Element<'_, Message> = if control_room_available(state) {
         // The Control Room keeps the right edge.  When the row cannot hold
         // both, it covers the right-hand output strips instead of widening
@@ -20982,8 +20997,12 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
         // when the row is too narrow, matching the strip overlay below.
         iced::widget::Stack::new()
             .push(
-                container(section_header("HARDWARE OUTPUTS", scale))
-                    .width(Length::Fixed(out_width)),
+                container(
+                    container(section_header("HARDWARE OUTPUTS", scale))
+                        .width(Length::Fixed(hw_out_width.min(out_width))),
+                )
+                .width(Length::Fill)
+                .align_x(iced::Alignment::Start),
             )
             .push(
                 container(
@@ -26281,6 +26300,9 @@ mod tests {
     #[test]
     fn split_output_channels_are_selected_individually() {
         let mut state = new(true, None, None);
+        // Main defaults to pair 1; move it aside so pair 1 is a plain
+        // hardware output for this split-selection test.
+        state.assign[0] = Some(0);
         state.device.set_output_linked(1, false).unwrap();
         let left = ChannelId::Output(2);
         let right = ChannelId::Output(3);
