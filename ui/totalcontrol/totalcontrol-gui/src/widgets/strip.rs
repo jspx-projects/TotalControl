@@ -321,6 +321,10 @@ pub struct StripParams<'a> {
     pub mute_armed: bool,
     pub solo_armed: bool,
     pub cue: bool,
+    /// `Some(linked)` when this output is the assigned Speaker B monitor:
+    /// the strip shows a LINK button (ganged to Main) instead of CUE. `None`
+    /// for every other channel, which keeps CUE.
+    pub speaker_b_link: Option<bool>,
     pub default_vol: f32,
     pub editing: bool,
     pub edit_buf: &'a str,
@@ -903,7 +907,19 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         scale,
     );
     let second_slot: Element<'a, Message> = if matches!(cid, ChannelId::Output(_)) {
-        cue_btn.into()
+        match p.speaker_b_link {
+            Some(linked) => hint(
+                button(centered_label_fixed("LINK", theme::TEXT_XS * scale))
+                    .width(Length::Fill)
+                    .height(btn_h)
+                    .style(theme::stereo_button(linked))
+                    .on_press(Message::SpeakerBLinked(!linked)),
+                "LINK — gang this Speaker B fader to Main, keeping the relative offset",
+                scale,
+            )
+            .into(),
+            None => cue_btn.into(),
+        }
     } else {
         solo_btn.into()
     };
@@ -1113,8 +1129,20 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     );
     // Inputs and software playbacks pair M with S. Outputs, including the
     // Control Room channels, pair M with CUE; an output never shows M alone.
+    // The assigned Speaker B monitor shows LINK instead of CUE.
     let second_button = if matches!(cid, ChannelId::Output(_)) {
-        cue_btn
+        match p.speaker_b_link {
+            Some(linked) => hint(
+                button(centered_label_fixed("LINK", theme::TEXT_SM * scale))
+                    .width(Length::Fill)
+                    .height(btn_h)
+                    .style(theme::stereo_button(linked))
+                    .on_press(Message::SpeakerBLinked(!linked)),
+                "LINK — gang this Speaker B fader to Main, keeping the relative offset",
+                scale,
+            ),
+            None => cue_btn,
+        }
     } else {
         solo_btn
     };

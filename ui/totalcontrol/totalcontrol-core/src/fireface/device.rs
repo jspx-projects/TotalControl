@@ -875,6 +875,10 @@ pub struct Fireface {
     dim_amount_db: f32,
     /// Speaker B follows Main Out level changes.
     speaker_b_linked: bool,
+    /// While true, `set_volume` does not gang Main and Speaker B. Bulk writes
+    /// (scene restore, Dim, Recall) set the pair levels themselves and must
+    /// not be re-coupled.
+    speaker_b_coupling_suppressed: bool,
     /// UC matrix cells saved by a Control Room runtime action.  The UC uses
     /// direct `0x12` cells instead of the UCX register/FX-return shape.
     uc_monitor_saved: Option<Vec<(usize, usize, f32)>>,
@@ -1251,6 +1255,7 @@ impl Fireface {
             dim_saved: Vec::new(),
             dim_amount_db: -20.0,
             speaker_b_linked: false,
+            speaker_b_coupling_suppressed: false,
             uc_monitor_saved: None,
             uc_meter_phase_lost: false,
             talkback_saved: None,
@@ -4491,34 +4496,87 @@ impl Fireface {
         self.write_playback_send(idx, output)
     }
 
-    /// When Speaker B is linked to Main, mirror a Main Out level change onto
-    /// the corresponding Speaker B channel.
-    fn mirror_speaker_b_from_main(&mut self, idx: usize, volume: f32) -> Result<(), Error> {
-        if !self.speaker_b_linked || self.settings.main_out != Some(idx / 2) {
+    /// Speaker B link is a fader-group coupling: moving Main or Speaker B
+    /// moves the other by the same dB delta, preserving their relative
+    /// offset (RME manual 25.4: the faders "can be ganged via Link"). The
+    /// coupling is host-side and identical on every model; only the volume
+    /// write is device-specific. It is bidirectional and never copies an
+    /// absolute level, so a Speaker B pair set below Main stays below Main.
+    fn couple_speaker_b(&mut self, idx: usize, old: f32, new: f32) -> Result<(), Error> {
+        if !self.speaker_b_linked || self.speaker_b_coupling_suppressed {
             return Ok(());
         }
-        let Some(b) = self.settings.main_b_out else {
+        let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) else {
             return Ok(());
         };
-        if b == idx / 2 {
+        if main == b {
             return Ok(());
         }
-        let b_idx = b * 2 + idx % 2;
-        if b_idx >= self.outputs.len() {
+        let peer_pair = if main == idx / 2 {
+            b
+        } else if b == idx / 2 {
+            main
+        } else {
+            return Ok(());
+        };
+        let peer = peer_pair * 2 + idx % 2;
+        if peer >= self.outputs.len() {
             return Ok(());
         }
-        if self.outputs[b_idx].mute {
-            self.outputs[b_idx].volume = volume;
-            self.output_mute_saved.insert(b_idx, volume);
+        let peer_old = self.outputs[peer].volume;
+        // A side at -inf has no dB delta; fall back to the moved level so a
+        // fader coming off -inf still drives the peer.
+        let peer_new = if old <= 0.0 || peer_old <= 0.0 {
+            new
+        } else {
+            let delta = linear_db(new) - linear_db(old);
+            db_to_linear(linear_db(peer_old) + delta).clamp(0.0, 2.0)
+        };
+        if self.outputs[peer].mute {
+            self.outputs[peer].volume = peer_new;
+            self.output_mute_saved.insert(peer, peer_new);
             return Ok(());
         }
         if self.is_uc() {
-            self.uc_write_output_volume(b_idx, volume)?;
-            self.uc_write_output_master(b_idx, volume)?;
+            self.uc_write_output_volume(peer, peer_new)?;
+            self.uc_write_output_master(peer, peer_new)?;
         } else {
-            self.ucx_write_output_volume(b_idx, volume)?;
+            self.ucx_write_output_volume(peer, peer_new)?;
         }
-        self.outputs[b_idx].volume = volume;
+        self.outputs[peer].volume = peer_new;
+        Ok(())
+    }
+
+    /// The Speaker B link also gangs the FX-return fader: moving Main's or
+    /// Speaker B's FX return moves the other by the same dB delta, keeping
+    /// the relative offset. UCX-only (the UC has no FX return); the write is
+    /// direct, so it does not re-enter `set_fx_return`.
+    fn couple_speaker_b_fx(&mut self, output: usize, old_db: f32, new_db: f32) -> Result<(), Error> {
+        if !self.speaker_b_linked || self.speaker_b_coupling_suppressed || self.is_uc() {
+            return Ok(());
+        }
+        let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) else {
+            return Ok(());
+        };
+        if main == b {
+            return Ok(());
+        }
+        let peer_pair = if main == output / 2 {
+            b
+        } else if b == output / 2 {
+            main
+        } else {
+            return Ok(());
+        };
+        let delta = new_db - old_db;
+        for side in [peer_pair * 2, peer_pair * 2 + 1] {
+            if side >= self.outputs.len() {
+                continue;
+            }
+            let peer_db = (self.outputs[side].fx_return_db + delta).clamp(-65.0, 0.0);
+            self.ucx_write_fx_return(side, peer_db)?;
+            self.outputs[side].fx_return_db = peer_db;
+        }
         Ok(())
     }
 
@@ -4964,9 +5022,11 @@ impl RmeDevice for Fireface {
                 if idx >= BLOCKS {
                     return Err(Error::InvalidChannel(format!("output {idx}")));
                 }
+                let old = self.outputs[idx].volume;
                 if self.outputs[idx].mute {
                     self.outputs[idx].volume = v;
                     self.output_mute_saved.insert(idx, v);
+                    self.couple_speaker_b(idx, old, v)?;
                     return Ok(());
                 }
                 if self.is_uc() {
@@ -4976,7 +5036,7 @@ impl RmeDevice for Fireface {
                     self.ucx_write_output_volume(idx, v)?;
                 }
                 self.outputs[idx].volume = v;
-                self.mirror_speaker_b_from_main(idx, v)?;
+                self.couple_speaker_b(idx, old, v)?;
             }
             ChannelId::Input(idx) => self.apply_input_volume(idx, output, v)?,
             ChannelId::Playback(idx) => self.apply_playback_volume(idx, output, v)?,
@@ -5435,7 +5495,11 @@ impl RmeDevice for Fireface {
                 if let Some(dynamics) = saved.dynamics {
                     self.set_dynamics(ChannelId::Output(right), &dynamics)?;
                 }
+                // Copying the left side's FX return onto the right is a
+                // within-pair stereo link, not a Main/Speaker B move.
+                self.speaker_b_coupling_suppressed = true;
                 let _ = self.set_fx_return(right, saved.fx_return_db);
+                self.speaker_b_coupling_suppressed = false;
             }
             if self.is_uc() {
                 // No balance register: splitting comes back from the two
@@ -5957,36 +6021,68 @@ impl RmeDevice for Fireface {
         if right >= self.outputs.len() {
             return Err(Error::InvalidChannel(format!("Main Out pair {pair}")));
         }
-        let level = db_to_linear(db.clamp(-65.0, 6.0));
-        if self.settings.dim {
-            if let Some(entry) = self.dim_saved.iter_mut().find(|(p, _, _)| *p == pair) {
-                entry.1 = level;
-                entry.2 = level;
-                let dimmed = db_to_linear(linear_db(level) + self.dim_amount_db);
-                self.set_volume(ChannelId::Output(left), 0, dimmed)?;
-                self.set_volume(ChannelId::Output(right), 0, dimmed)?;
-                if self.speaker_b_linked {
-                    if let Some(b) = self.settings.main_b_out.filter(|b| *b != pair) {
-                        if let Some(entry) = self.dim_saved.iter_mut().find(|(p, _, _)| *p == b) {
-                            entry.1 = level;
-                            entry.2 = level;
-                            self.set_volume(ChannelId::Output(b * 2), 0, dimmed)?;
-                            self.set_volume(ChannelId::Output(b * 2 + 1), 0, dimmed)?;
+        let db = db.clamp(-65.0, 6.0);
+        let level = db_to_linear(db);
+        let linked_b = if self.speaker_b_linked {
+            self.settings.main_b_out.filter(|b| *b != pair)
+        } else {
+            None
+        };
+        // Recall moves Main to the recall level; a linked Speaker B follows
+        // by the same dB delta so its relative offset is preserved. The pair
+        // levels are written explicitly, so the fader coupling is suppressed.
+        self.speaker_b_coupling_suppressed = true;
+        let result = (|| -> Result<(), Error> {
+            if self.settings.dim {
+                if let Some(entry) = self.dim_saved.iter_mut().find(|(p, _, _)| *p == pair) {
+                    let main_pre = entry.1.max(entry.2);
+                    let delta_db = db - linear_db(main_pre);
+                    let from_zero = main_pre <= 0.0;
+                    entry.1 = level;
+                    entry.2 = level;
+                    let dimmed = db_to_linear(linear_db(level) + self.dim_amount_db);
+                    self.set_volume(ChannelId::Output(left), 0, dimmed)?;
+                    self.set_volume(ChannelId::Output(right), 0, dimmed)?;
+                    if let Some(b) = linked_b {
+                        if let Some(bentry) = self.dim_saved.iter_mut().find(|(p, _, _)| *p == b) {
+                            let shift = |src: f32| -> f32 {
+                                if from_zero || src <= 0.0 {
+                                    level
+                                } else {
+                                    db_to_linear(linear_db(src) + delta_db).clamp(0.0, 2.0)
+                                }
+                            };
+                            bentry.1 = shift(bentry.1);
+                            bentry.2 = shift(bentry.2);
+                            let bl = db_to_linear(linear_db(bentry.1) + self.dim_amount_db);
+                            let br = db_to_linear(linear_db(bentry.2) + self.dim_amount_db);
+                            self.set_volume(ChannelId::Output(b * 2), 0, bl)?;
+                            self.set_volume(ChannelId::Output(b * 2 + 1), 0, br)?;
                         }
                     }
+                    return Ok(());
                 }
-                return Ok(());
             }
-        }
-        self.set_volume(ChannelId::Output(left), 0, level)?;
-        self.set_volume(ChannelId::Output(right), 0, level)?;
-        if self.speaker_b_linked {
-            if let Some(b) = self.settings.main_b_out.filter(|b| *b != pair) {
-                self.set_volume(ChannelId::Output(b * 2), 0, level)?;
-                self.set_volume(ChannelId::Output(b * 2 + 1), 0, level)?;
+            let main_cur = self.outputs[left].volume.max(self.outputs[right].volume);
+            let delta_db = db - linear_db(main_cur);
+            let from_zero = main_cur <= 0.0;
+            self.set_volume(ChannelId::Output(left), 0, level)?;
+            self.set_volume(ChannelId::Output(right), 0, level)?;
+            if let Some(b) = linked_b {
+                for side in [b * 2, b * 2 + 1] {
+                    let src = self.outputs[side].volume;
+                    let target = if from_zero || src <= 0.0 {
+                        level
+                    } else {
+                        db_to_linear(linear_db(src) + delta_db).clamp(0.0, 2.0)
+                    };
+                    self.set_volume(ChannelId::Output(side), 0, target)?;
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })();
+        self.speaker_b_coupling_suppressed = false;
+        result
     }
 
     /// Control Room Assign: Main Out is a host-side monitor assignment on
@@ -6343,51 +6439,11 @@ impl RmeDevice for Fireface {
     }
 
     fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), Error> {
+        // The link is a fader-group coupling, not a level copy: engaging it
+        // keeps the pair's existing relative offset. `couple_speaker_b`
+        // preserves that offset on every later Main or Speaker B move, so no
+        // level is written here.
         self.speaker_b_linked = on;
-        if on {
-            if let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) {
-                if main != b {
-                    for side in 0..2 {
-                        let idx = main * 2 + side;
-                        if idx < self.outputs.len() {
-                            let volume = self.outputs[idx].volume;
-                            let target = b * 2 + side;
-                            // Do not rewrite a Speaker B level that already
-                            // matches Main.  A same-value output-volume
-                            // write can leave the UCX right post-fader
-                            // meter stale; only a changed value refreshes
-                            // it.
-                            let unchanged = target < self.outputs.len()
-                                && ucx::linear_to_tenths(
-                                    self.outputs[target].volume.clamp(0.0, 2.0),
-                                ) == ucx::linear_to_tenths(volume.clamp(0.0, 2.0));
-                            if !unchanged {
-                                self.set_volume(ChannelId::Output(target), 0, volume)?;
-                            }
-                        }
-                    }
-                    // If the link is engaged while Dim is active, the B
-                    // pair adopts the Main pair's saved pre-Dim levels as
-                    // well as its current dimmed levels.
-                    if self.settings.dim {
-                        if let Some((_, left, right)) = self
-                            .dim_saved
-                            .iter()
-                            .find(|(pair, _, _)| *pair == main)
-                            .copied()
-                        {
-                            match self.dim_saved.iter_mut().find(|(pair, _, _)| *pair == b) {
-                                Some(entry) => {
-                                    entry.1 = left;
-                                    entry.2 = right;
-                                }
-                                None => self.dim_saved.push((b, left, right)),
-                            }
-                        }
-                    }
-                }
-            }
-        }
         Ok(())
     }
 
@@ -6882,6 +6938,7 @@ impl RmeDevice for Fireface {
         // values are ignored by the device, so keep the model and the
         // write inside the readable range.
         let db = db.clamp(-65.0, 0.0);
+        let old = self.outputs[output].fx_return_db;
         let pair = output / 2;
         if self.output_linked(pair) {
             let left = pair * 2;
@@ -6894,6 +6951,7 @@ impl RmeDevice for Fireface {
             self.ucx_write_fx_return(output, db)?;
             self.outputs[output].fx_return_db = db;
         }
+        self.couple_speaker_b_fx(output, old, db)?;
         Ok(())
     }
 
@@ -7444,21 +7502,30 @@ impl RmeDevice for Fireface {
                 };
                 self.set_matrix_cell(channel, cell.block, cell.gain)?;
             }
-            for idx in 0..self.outputs.len() {
-                let volume = self.outputs[idx].volume;
-                let mute = self.outputs[idx].mute;
-                // TotalMix's connect restore leaves an output level alone
-                // when the unit already holds it.  Rewriting that same
-                // value is what left the UCX right post-fader meter stale
-                // after a power cycle.  Mode words are still written.
-                if !self.skip_unchanged_output_state
-                    || !self.ucx_output_volume_matches_pre_connect(idx, volume)
-                {
-                    self.set_volume(ChannelId::Output(idx), 0, volume)?;
+            // Restore the scene's output levels as-is: the Speaker B fader
+            // coupling must not re-gang Main and Speaker B while the saved
+            // pair levels are written.
+            self.speaker_b_coupling_suppressed = true;
+            let restore_outputs = (|| -> Result<(), Error> {
+                for idx in 0..self.outputs.len() {
+                    let volume = self.outputs[idx].volume;
+                    let mute = self.outputs[idx].mute;
+                    // TotalMix's connect restore leaves an output level alone
+                    // when the unit already holds it.  Rewriting that same
+                    // value is what left the UCX right post-fader meter stale
+                    // after a power cycle.  Mode words are still written.
+                    if !self.skip_unchanged_output_state
+                        || !self.ucx_output_volume_matches_pre_connect(idx, volume)
+                    {
+                        self.set_volume(ChannelId::Output(idx), 0, volume)?;
+                    }
+                    // Scene recall must also clear a mute left on the unit.
+                    self.set_mute(ChannelId::Output(idx), mute)?;
                 }
-                // Scene recall must also clear a mute left on the unit.
-                self.set_mute(ChannelId::Output(idx), mute)?;
-            }
+                Ok(())
+            })();
+            self.speaker_b_coupling_suppressed = false;
+            restore_outputs?;
             // TotalMix enables the output mute bits in its connect write.
             // Without this the NN02 mute bits are stored but ignored.
             self.write_word(ucx::global::MUTE_ENABLE, 1)?;
@@ -8877,18 +8944,26 @@ mod tests {
         dev.set_output_volume(1, 0, 0.4).unwrap();
         dev.set_output_volume(2, 0, 0.8).unwrap();
 
+        // Engaging the link keeps B's offset; it does not copy Main's level.
         dev.set_speaker_b_linked(true).unwrap();
-        assert!((dev.outputs()[4].volume - 0.4).abs() < 1e-6);
-        assert!((dev.outputs()[5].volume - 0.4).abs() < 1e-6);
+        assert!((dev.outputs()[4].volume - 0.8).abs() < 1e-5);
+        assert!((dev.outputs()[5].volume - 0.8).abs() < 1e-5);
 
+        // Moving Main moves B by the same dB delta (0.4 -> 0.25 is x0.625).
         dev.set_output_volume(1, 0, 0.25).unwrap();
-        assert!((dev.outputs()[4].volume - 0.25).abs() < 1e-6);
-        assert!((dev.outputs()[5].volume - 0.25).abs() < 1e-6);
+        assert!((dev.outputs()[4].volume - 0.5).abs() < 1e-5);
+        assert!((dev.outputs()[5].volume - 0.5).abs() < 1e-5);
+
+        // Bidirectional: moving B moves Main by the same delta (0.5 -> 0.4
+        // is x0.8, so Main 0.25 -> 0.2).
+        dev.set_output_volume(2, 0, 0.4).unwrap();
+        assert!((dev.outputs()[2].volume - 0.2).abs() < 1e-5);
+        assert!((dev.outputs()[3].volume - 0.2).abs() < 1e-5);
 
         dev.set_speaker_b_linked(false).unwrap();
         dev.set_output_volume(1, 0, 0.1).unwrap();
-        assert!((dev.outputs()[4].volume - 0.25).abs() < 1e-6);
-        assert!((dev.outputs()[5].volume - 0.25).abs() < 1e-6);
+        assert!((dev.outputs()[4].volume - 0.4).abs() < 1e-5);
+        assert!((dev.outputs()[5].volume - 0.4).abs() < 1e-5);
     }
 
     #[test]
@@ -8897,38 +8972,116 @@ mod tests {
         dev.set_main_out(Some(1)).unwrap();
         dev.set_main_out_b(Some(2)).unwrap();
         dev.set_output_volume(1, 0, db_to_linear(-10.0)).unwrap();
+        dev.set_output_volume(2, 0, db_to_linear(-5.0)).unwrap();
         dev.set_speaker_b_linked(true).unwrap();
 
         dev.set_dim_with(true, -20.0).unwrap();
-        let dimmed = db_to_linear(-30.0);
-        assert!((dev.outputs()[4].volume - dimmed).abs() < 1e-6);
-        assert!((dev.outputs()[5].volume - dimmed).abs() < 1e-6);
+        // Both drop by 20 dB; the +5 dB offset is preserved.
+        assert!((dev.outputs()[4].volume - db_to_linear(-25.0)).abs() < 1e-5);
+        assert!((dev.outputs()[5].volume - db_to_linear(-25.0)).abs() < 1e-5);
 
         dev.set_dim(false).unwrap();
-        let level = db_to_linear(-10.0);
-        assert!((dev.outputs()[4].volume - level).abs() < 1e-6);
-        assert!((dev.outputs()[5].volume - level).abs() < 1e-6);
+        assert!((dev.outputs()[4].volume - db_to_linear(-5.0)).abs() < 1e-5);
+        assert!((dev.outputs()[5].volume - db_to_linear(-5.0)).abs() < 1e-5);
     }
 
     #[test]
-    fn ucx_speaker_b_link_during_dim_adopts_the_main_saved_level() {
+    fn ucx_speaker_b_link_during_dim_preserves_the_offset() {
         let (mut dev, _writes) = open(Model::Ucx);
         dev.set_main_out(Some(1)).unwrap();
         dev.set_main_out_b(Some(2)).unwrap();
         dev.set_output_volume(1, 0, 0.4).unwrap();
         dev.set_output_volume(2, 0, 0.8).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
 
         dev.set_dim_with(true, -20.0).unwrap();
-        dev.set_speaker_b_linked(true).unwrap();
-        // B follows Main's current (dimmed) level while linked.
-        let dimmed = 0.4 * 0.1;
-        assert!((dev.outputs()[4].volume - dimmed).abs() < 1e-6);
-        assert!((dev.outputs()[5].volume - dimmed).abs() < 1e-6);
+        // Both dimmed by 20 dB; the x2 offset is preserved.
+        assert!((dev.outputs()[4].volume - 0.08).abs() < 1e-5);
+        assert!((dev.outputs()[5].volume - 0.08).abs() < 1e-5);
 
-        // The saved pre-Dim level is Main's, not B's old independent level.
+        // A Main move while Dim is engaged still couples B (x0.5).
+        dev.set_output_volume(1, 0, 0.02).unwrap();
+        assert!((dev.outputs()[4].volume - 0.04).abs() < 1e-5);
+
+        // Dim release returns to the saved pre-Dim levels, offset intact.
         dev.set_dim(false).unwrap();
-        assert!((dev.outputs()[4].volume - 0.4).abs() < 1e-6);
-        assert!((dev.outputs()[5].volume - 0.4).abs() < 1e-6);
+        assert!((dev.outputs()[2].volume - 0.4).abs() < 1e-5);
+        assert!((dev.outputs()[4].volume - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn uc_speaker_b_link_is_relative_and_bidirectional() {
+        // The link is host-side on the UC too (UC spec: the link setting
+        // produces no device write); the coupling must match the UCX.
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, 0.4).unwrap();
+        dev.set_output_volume(2, 0, 0.8).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
+        assert!((dev.outputs()[4].volume - 0.8).abs() < 1e-5);
+
+        dev.set_output_volume(1, 0, 0.25).unwrap();
+        assert!((dev.outputs()[4].volume - 0.5).abs() < 1e-5);
+        assert!((dev.outputs()[5].volume - 0.5).abs() < 1e-5);
+
+        dev.set_output_volume(2, 0, 0.4).unwrap();
+        assert!((dev.outputs()[2].volume - 0.2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn ucx_speaker_b_link_recall_preserves_offset() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, db_to_linear(-10.0)).unwrap();
+        dev.set_output_volume(2, 0, db_to_linear(-20.0)).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
+
+        // Recall moves Main -10 -> -5 (+5 dB); B follows by +5, not to -5.
+        dev.set_main_recall(-5.0).unwrap();
+        assert!((dev.outputs()[2].volume - db_to_linear(-5.0)).abs() < 1e-5);
+        assert!((dev.outputs()[4].volume - db_to_linear(-15.0)).abs() < 1e-5);
+        assert!((dev.outputs()[5].volume - db_to_linear(-15.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn ucx_speaker_b_link_gangs_fx_return() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_fx_return(2, -10.0).unwrap();
+        dev.set_fx_return(4, -20.0).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
+        // The link keeps B's FX offset; it does not copy Main's level.
+        assert!((dev.outputs()[4].fx_return_db - (-20.0)).abs() < 1e-4);
+
+        // Main FX -10 -> -5 (+5 dB); B follows -20 -> -15.
+        dev.set_fx_return(2, -5.0).unwrap();
+        assert!((dev.outputs()[4].fx_return_db - (-15.0)).abs() < 1e-4);
+        assert!((dev.outputs()[5].fx_return_db - (-15.0)).abs() < 1e-4);
+
+        // Bidirectional: B FX -15 -> -18 (-3 dB); Main follows -5 -> -8.
+        dev.set_fx_return(4, -18.0).unwrap();
+        assert!((dev.outputs()[2].fx_return_db - (-8.0)).abs() < 1e-4);
+        assert!((dev.outputs()[3].fx_return_db - (-8.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ucx_scene_restore_keeps_linked_pair_levels() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, 0.4).unwrap();
+        dev.set_output_volume(2, 0, 0.8).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
+        let scene = dev.capture_scene();
+
+        // Restoring the scene writes the pair levels as-is; the coupling
+        // must not re-gang them during the bulk write.
+        dev.apply_scene(&scene).unwrap();
+        assert!((dev.outputs()[2].volume - 0.4).abs() < 1e-5);
+        assert!((dev.outputs()[4].volume - 0.8).abs() < 1e-5);
     }
 
     #[test]
