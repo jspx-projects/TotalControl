@@ -881,8 +881,7 @@ init sequence does not set it.
 7. The AP header phase field on the UCX.  The 12-bit position, 11-bit phase
    and the 3072 wrap are the implemented mapping; they are not verified
    against a UCX capture.  On the UC the accumulator semantics are verified
-   at 48 kHz; isolated add/drop events away from the wrap are unattributed
-   (`docs/work/FIREFACE-UC-WIN-RME.md`).
+   at 48 kHz; isolated add/drop events away from the wrap are unattributed.
 8. Status bytes 0 and 1.  "Front-panel events" uses bytes 2 and 3; the roles
    of bytes 0 and 1 are not decoded.
 9. The bulk endpoints on interface 0 at 1x and 2x.  `0x03` and `0x84` are
