@@ -36,9 +36,10 @@ law behind each; these lines say what was measured.
   at 44.1 kHz through the internal loopback.
 - Slot count is independent of the pairing: 36 slots and 60 slots both play
   clean when the value matches the wire format.
-- The wire format follows the host OS's native format: Linux and macOS carry
-  float32, Windows carries S32. The format is not readable from the device
-  status registers (`0x11`, `0x10`); the host imposes it via `0x16`.
+- The wire format is keyed to the transport: interrupt (PC) carries S32,
+  the Windows reference pairing; isochronous (AP) carries float32, the
+  macOS reference pairing (#191). The format is not readable from the
+  device status registers (`0x11`, `0x10`); the host imposes it via `0x16`.
 - The AP init is 36 `0x16` writes (slots `0..17`, `32..49`) with `0x0001`,
   then `0x10 0x0800/0xb800`, then `0x20 0x0001/0x0000`. The Windows PC init is
   60 `0x16` writes (slots `0..29`, `32..61`) with `0x0000`, four DDS words and
@@ -47,10 +48,12 @@ law behind each; these lines say what was measured.
   (channel init, DDS, settings, loopback, reference, levels, 666 matrix
   words). There is no hidden restore state; the earlier distortion was the
   sample-format pairing.
-- The final UC PC configuration (float32, host-OS rule) was verified clean:
+- The UC PC float pairing (the earlier host-OS rule) was verified clean:
   internal loopback returned a pure sine (fundamental = RMS + 3 dB, zero
   discontinuities), rate transitions 44.1↔48 kHz tracked the device rate
-  index, and the transport counters stayed zero.
+  index, and the transport counters stayed zero. The S32 pairing was
+  verified clean on the same unit; the transport rule (#191) ships S32 on
+  PC.
 
 ### Rate and clock
 
@@ -118,7 +121,9 @@ law behind each; these lines say what was measured.
   `FLOAT_LE` with a vectorizable copy (~0.02 ns/sample) whereas S32 forces a
   per-sample integer conversion (~1 ns/sample, 50–70×). The format does not
   change audio latency; latency is set by the USB queue, ALSA period/buffer
-  and device round trip.
+  and device round trip. The transport rule accepts the S32 conversion cost
+  on PC for the authentic reference pairing; the conversion runs in the
+  URB completion, off the control path.
 
 ## Open work
 
@@ -131,8 +136,8 @@ design specification. Do not duplicate them here.
 
 | Item | Status | Notes |
 |---|---|---|
-| UC_WIN_RME float confirmation | needs-device | The firmware-keyed S32 was removed; UC_WIN_RME now follows the host (float32 on Linux). Confirm float plays clean on firmware 133 and 138; check the prediction that the same unit runs float in AP mode and S32 in PC mode under RME's drivers. If a unit needs an exception, it is an evidence-backed descriptor quirk. |
-| UCX interrupt (IF5) format | needs-device | S32 is kept as the documented protocol. Verify whether the host-OS rule (float32 on Linux) applies or S32 is a strict transport requirement. |
+| UC PC S32 regression | needs-device | The transport rule carries S32 on every PC personality (#191); the S32 pairing was verified clean on firmware 127. Confirm on the firmware 133/138 units when they are on the bench. |
+| UCX interrupt (IF5) format and mode | done | S32 is a strict requirement: float wire distorts. The authentic Windows connect block (60-slot init, DDS quad, settings group with settle) and alt 1 streaming are implemented; bench-verified with sine, capture and music (#191). |
 | AP-mode bench pass | open | Bench-pass the UC float path in AP mode (the last session ran in PC mode). |
 | Power-on default format and rate | needs-capture | Retained state survives a USB reset; a cold power cycle is untested. |
 | Undecoded field semantics | open | The masked settings-group bits (`0x3000`/`0x0800` masks, bits 11..13), the fourth DDS word's clock purpose, the periodic status reads (`0x19` Mac, `0x1e`/`0x1f` Windows), and the `0x10 0x0800/0xb800` settings word. The init sequence itself is complete. |
@@ -174,7 +179,7 @@ design specification. Do not duplicate them here.
 
 | Item | Status | Notes |
 |---|---|---|
-| Read form of `0x10` | needs-capture | Only the write is implemented; the options bits and rate family read back, the other bits are undecoded. |
+| Read form of `0x10` | needs-capture | The options bits under `0x05cf` read back and the rate commit preserves them (#195); the other bits are undecoded. |
 | Status bytes 0 and 1 | needs-capture | Front-panel events use bytes 2 and 3. |
 | Bulk role of `0x03`/`0x84` | needs-capture | Bulk at 1x/2x, interrupt at 4x; the bulk role is undecoded. |
 | PC interrupt URB size | open | Documentation only: 48/96/192 frames is the host's choice, not a device contract. |
@@ -191,33 +196,32 @@ design specification. Do not duplicate them here.
 
 ### GUI: gated controls
 
-`needs_protocol_features` drops these messages on the UC. For each: keep
-gated (no device write), un-gate (device or host-side operation exists), or
-hide.
+Resolved by #190: the gate is capability-based (`protocol_feature_allowed`
+in `app.rs`), and the UC profile declares what the backend implements.
 
 | Item | Status | Notes |
 |---|---|---|
-| Pitch | open | Spec §7 documents the `0x1b` DDS mapping; `caps.pitch` is false and the gate drops it. Implement the write and un-gate. |
-| Output phase | open | Decide whether it is a matrix sign bit or an output word; input phase is already excepted. |
-| Width / MS Proc / per-channel width | open | Host-computed matrix operations (spec §9); need a UC matrix rewrite to be audible. |
-| Dim, Speaker B, Talkback receive | open | Confirm host-side monitor operation versus unsupported. |
-| Input link, AN 1>2 | open | Confirm host-side pairing versus a device word. |
-| EQ / dynamics / FX / AutoSet / reference-level switch | open | The UC has no DSP (spec §9); keep gated or hide. |
-| Reverse checks | open | `Dim`, `SpeakerBLinked` and `TalkbackReceiveChanged` reach UC-rejecting setters; make the same un-gate/hide decision. |
+| Pitch | done | Implemented through the `0x1b` DDS mapping; works on UC and UCX (bench-confirmed). |
+| Output phase | done | Per-side output phase words, measured; un-gated via `caps.output_phase`. |
+| Width / MS Proc / per-channel width | done | UC matrix rewrites implemented and unit-tested; un-gated via `caps.width`/`caps.channel_width`/`caps.ms_proc`. |
+| Dim, Speaker B, Talkback (send and receive) | done | Host-side monitor operations implemented, including `SpeakerBLinked`. |
+| Input link (global), AN 1>2 | done | Resolved as unsupported on the UC (`caps` false); the per-pair stereo link remains. |
+| EQ / dynamics / FX / AutoSet / reference-level switch | done | Decision: keep gated — the UC has no DSP and no decoded write. |
+| Reverse checks (`Dim`, `SpeakerBLinked`, `TalkbackReceiveChanged`) | done | They reach implemented setters. |
 
 ### GUI: channel controls
 
 | Item | Status | Notes |
 |---|---|---|
-| Input Link | open | Evidence does not establish a UC input-link flag. Mark unsupported and remove from the UC profile, as `AN 1>2` is? The stereo button already links input pairs. |
-| Pitch steps | open | Confirm normal 0.1 %, Shift fine 0.01 %, wheel 0.1 %, double-click 0.0 %. |
+| Input Link | done | Unsupported on the UC (`caps.input_link` false); the stereo button links input pairs. |
+| Pitch steps | done | Implemented with pitch (#190); normal 0.1 %, Shift fine 0.01 %, wheel 0.1 %, double-click 0.0 %. |
 | `0x17` index `0x1000` evidence | open | The live read returned zero at the documented indices; decide whether the existing capture evidence is enough or a focused capture is wanted. |
 
 ### GUI: settings card
 
 | Item | Status | Notes |
 |---|---|---|
-| Graph xruns row | open | Add `Graph xruns (PipeWire)`, separate from the transport-error rows, sourced from `pw-top`'s ERR column for the RME output node, with the same reset action and the copyable error report. |
+| Graph xruns row | done | `graph_xruns` with baseline and reset in the device sheet, separate from the transport-error rows. |
 
 ### Validation and captures
 
@@ -225,8 +229,8 @@ hide.
 |---|---|---|
 | Physical-loopback bit-exact check | needs-capture | The audio-content gate for both transports; needs a cable. Scheduling claims are sound on the dither substrate; pitch/level/mapping under load are unverified until this runs. |
 | Mode-2 early capture-content zeros | open | Likely a channel-mapping artifact (ADAT 5/6 are ALSA indices 12/13; the old trace checksummed a silent channel). Verify against the PC scene routing. |
-| q48 escalation experiment | open | A skipped follower cycle is necessary but not sufficient for an audible zero-run; the aggravator is client-side buffering. Shrink the recorder buffer to force escalation; also the q128 failure rate and whether the zeros reach the device output. |
-| AP meter profile verification | needs-capture | Verify RMS-then-peak order and header fields under AP; otherwise mark the AP meter profile experimental. |
+| q48 escalation experiment | done | Driver-side attribution is complete: the gate is serialized (#197), the event drain is protected (#193), and the stress runs show zero gate violations. The residual zero-runs are host-side (PipeWire follower and client buffering); characterising them further is outside the driver backlog. |
+| AP meter profile verification | done | AP meters behave the same as PC meters: same DSP firmware, alternation verified in AP, RMS-then-peak order carried from the PC verification; bench-confirmed. |
 
 ### Tooling and consolidation
 
@@ -237,11 +241,27 @@ hide.
 
 ## Recently closed
 
-- Channel-init sample format derived from the wire format; host-OS rule
-  (float on Linux) adopted for the UC family; UC_WIN_RME firmware key removed
-  (#183).
-- PC init proven on Linux with the authentic Windows block and clean audio
-  (loopback), then settled on the host-OS float rule.
+- UC channel controls completed: pitch (UC and UCX), output phase, width,
+  MS Proc, per-channel width, Dim, Speaker B, talkback; capability-based
+  gate; graph-xruns row (#190).
+- Transport-keyed wire format: interrupt S32, ISO float32; the host-OS rule
+  and the `INT32_SAMPLES` quirk replaced; `0x16` derived from the resolved
+  format for every model. UCX IF5 authentic Windows mode setup and alt 1
+  streaming, bench-verified (#191).
+- Host event drain separated from control I/O: shared control-I/O worker,
+  ordered scene batches, bounded coalescing command queue; bench freeze
+  629 ms → 0 ns (#193).
+- UC options preserved across the rate commit (read-back under `0x05cf`),
+  with the read form verified on hardware (#195).
+- Duplex period gate serialized (`gate_lock`); hwdep teardown ordered
+  (quiesce at disconnect, frees at card release); hotplug stress with an
+  active reader clean (#197).
+- UC protocol spec wire-format sections aligned with the transport rule
+  (#196, #198).
+- Kernel log hygiene: per-start/stop narration to dynamic debug, anomalies
+  ratelimited (#199).
+- Channel-init sample format derived from the wire format (#183, superseded
+  by the transport rule in #191).
 - Mode detection (UC PC / UC AP) verified.
 - Interface 3/4 role established (firmware programming channel / page stream)
   and moved into the specification.
