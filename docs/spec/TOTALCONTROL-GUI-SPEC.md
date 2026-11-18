@@ -1262,20 +1262,18 @@ connected device's nine rates, keeping the previous value. On disconnect or a
 clean exit it restores that value if the list is still the one it wrote. No
 persistent PipeWire configuration file is installed.
 
-Above the driver rows, `Xruns` counts the PipeWire graph xruns
-for the RME output node, sampled once a second while the drawer is open.
-It is reset with the same button as the driver rows.
-
-`Driver errors` lists the kernel USB transport counters since the sheet
-opened or the last `reset`: `usb` (USB status errors), `urb` (URB
-submission/completion errors), `gaps` (missing packets), `short` (short
-packets), `short — rate switch` (expected during a sample-rate change),
-`recover` (driver recoveries). `usb`, `gaps`, `short` and the rate-switch
-row show `in / out`; `urb` and `recover` are single values. `in` is
-device-to-host (capture), `out` is host-to-device (playback); the host is
-the computer. A rate-switch burst is amber, a real error red. `Host event
-drops` is below the driver rows: the kernel hwdep event queue was full and
-the application reader fell behind. It is not a USB fault. The section is
+`Diagnostics` lists the kernel transport error counters, cumulative since
+the driver attached or the last `reset`. Counting runs on every tick,
+independent of whether the drawer is open. The rows are `underrun /
+overrun` (host ring), `recover` (engine restarts), `usb` (status and URB
+errors), `gaps` (missing packets), `bad packets` (short, malformed,
+misaligned or dropped packets, excluding the expected rate-switch burst),
+`feedback` (implicit-feedback clock errors), `pointer` (driver/core pointer
+divergence) and `events dropped` (hwdep event overflow). `underrun /
+overrun`, `gaps` and `bad packets` show `in / out`; the rest are totals.
+`in` is device-to-host (capture), `out` is host-to-device (playback); the
+host is the computer. A non-zero row is red. Each row carries a short
+tooltip; the manual carries the meaning and mitigation. The section is
 absent when the backend does not expose counters.
 
 ## 5. Equalizer panel
@@ -2008,19 +2006,14 @@ The displayed line is not an acoustic measurement. The PC calibration is a
 full-duplex electrical loopback (output 5 to input 5); the evidence is in
 `docs/work/UC-RTL-LOOPBACK.md`.
 
-Below it, **Xruns** shows the PipeWire graph xrun count for the
-RME output node, above the driver rows. It is sampled once a second while
-the drawer is open and reset with the driver baselines.
-
-**Driver errors** lists the USB transport counters: `usb` (status errors),
-`urb` (URB errors), `gaps` (missing packets), `short` (short packets) and
-`recover` (driver recovery). `in` is device→host and `out` is host→device;
-`usb`, `gaps` and `short` show both. A rate-change short burst is shown as
-`short — rate switch`, expected and shown in amber; the rate-switch row
-accumulates expected bursts since reset, while the `short` row restarts after
-each switch. **Host event drops** is outside the driver group: it is
-the application's hwdep reader falling behind. Tooltips are short; the
-manual carries the full explanation.
+Below it, **Diagnostics** lists the kernel transport error counters:
+`underrun / overrun`, `recover`, `usb`, `gaps`, `bad packets`, `feedback`,
+`pointer` and `events dropped`. They are cumulative since the driver
+attached or the last reset, and counted continuously regardless of the
+drawer. `in` is device→host and `out` is host→device; `underrun / overrun`,
+`gaps` and `bad packets` show both. The expected rate-change short burst is
+excluded from `bad packets`. Tooltips are short; the manual carries the
+meaning and mitigation.
 
 ## 14. State references
 

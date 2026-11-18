@@ -1321,31 +1321,30 @@ adjusted by the queue difference without another cable measurement. Rates
 outside the calibrated set use the model estimate. A different firmware or
 device path needs a new calibration.
 
-Below the latency line, **Xruns** counts the PipeWire graph
-xruns for the RME output node. This is an audio-graph counter, not a USB
-transport counter. It is sampled once a second and reset with the same
-button as the driver counters.
+Below the latency line, **Diagnostics** lists the kernel transport error
+counters. They are cumulative since the driver attached or the last
+**reset**, and they are counted continuously whether or not this panel is
+open. `in` is device-to-host (capture) and `out` is host-to-device
+(playback); the host is the computer running TotalControl. Each row is one
+fault domain. The tooltips are deliberately short; this section is the full
+reference. **reset** clears the display baseline without changing the device
+or the audio graph.
 
-**Driver errors** lists the kernel USB transport counters. `in` is
-device-to-host (capture) and `out` is host-to-device (playback); the host
-is the computer running TotalControl. The **Driver errors** tooltip spells
-this out as `device → computer` and `computer → device`. `usb`, `gaps` and
-`short` show `in / out`; `urb` and `recover` are totals. `usb`
-counts USB status-stage errors, `urb` submission/completion errors, `gaps`
-missing packets, and `recover` recovery or reset events. A non-zero real
-error row means the transport is dropping or mis-timing packets.
+| Row | Meaning | What to do |
+|---|---|---|
+| underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
+| recover | The driver restarted the streaming engine after a serious fault. | Check the other rows for the cause; if it repeats, reseat the USB cable or try another port. |
+| usb | USB link errors: status-stage errors and URB submission/completion errors. | Try another USB port or cable; avoid hubs; check for bandwidth contention. |
+| gaps | Missing packets: a completion arrived late or a packet was absent. | Reduce USB bus load; try a dedicated controller or port. |
+| bad packets | Short, malformed, misaligned or dropped packets. The expected rate-switch burst is excluded. | Usually accompanies a USB link problem; see `usb` and `gaps`. |
+| feedback | Implicit-feedback clock errors: a position discontinuity, a header frame-count mismatch, a sustained rate mismatch, or feedback unavailable. | Check the clock source and sample rate; a growing value indicates a device clock or USB timing fault. |
+| pointer | The driver's buffer pointer diverged from the ALSA core pointer. | Rare; if it repeats, restart the stream or reload the driver. |
+| events dropped | The kernel hwdep event queue was full and the application reader fell behind, so an event was discarded. Not a USB fault. | Reduce UI or system load; harmless if occasional. |
 
-A sample-rate change normally produces a burst of short packets. Those are
-shown separately as **short — rate switch** and are expected; the row
-accumulates the expected bursts since reset, while the normal **short**
-row restarts after each switch, so only later short packets count as a real
-problem. **Host event drops** is separate from the USB rows: the
-kernel's hwdep event queue was full and the application reader fell behind,
-so an event was discarded. It is not a USB fault.
-
-The tooltips in the Audio Configuration panel are deliberately short. This section is the
-longer reference; **reset** clears the display baselines without changing
-the device or the audio graph.
+A sample-rate change normally produces a burst of short packets; these are
+expected and are excluded from **bad packets**. A non-zero error row that
+keeps growing while audio plays means the transport is dropping or
+mis-timing packets; a row that stays at a fixed value records a past event.
 
 
 ## 15. Where TotalControl keeps its data

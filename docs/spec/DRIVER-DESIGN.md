@@ -360,7 +360,7 @@ a bounded reply wait (§5.2).
 | `INFO` | identity, capabilities, endpoint numbers, rate, firmware |
 | `VENDOR` | one EP0 vendor request (read or write, up to 64 bytes) |
 | `WRITE_WORDS` | up to 63 IF1 register words; the kernel adds odd parity |
-| `COUNTERS` | transport health counters |
+| `COUNTERS` | cumulative transport error counters (host ring, USB, feedback, pointer, events); zeroed on reattach |
 
 `read()`/`poll()` deliver events:
 
