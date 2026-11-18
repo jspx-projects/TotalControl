@@ -256,10 +256,10 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 
 | Term | Definition | Used by |
 |---|---|---|
-| position | the stream position modulo 8192 (UC) / 3072 (UCX); anchors the feedback timeline | K1.3 lead anchor |
+| position | the stream position modulo 8192 at 1x rates (UC, UCX, Babyface-classic share the header); anchors the feedback timeline | K1.3 lead anchor |
 | frame count | frames in this packet; carries the clock's add/drop | K1.3 mirrors it (rate lock) |
-| phase | 14-bit fractional-sample accumulator in units of 1/10000 sample, modulus 10000 (UC; UCX: 11-bit) | K1.1 records it; diagnostics |
-| lead word | the stream position an OUT frame plays at; keeps the device's output latch fed | K1.3 |
+| phase | 14-bit fractional-sample accumulator (bits 18–31) counting 480 MHz ticks, modulus 480000000/rate | K1.1 records it; diagnostics |
+| lead word | the stream position an OUT frame plays at; keeps the device output buffer supplied | K1.3 |
 | `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
 
@@ -585,7 +585,7 @@ driver's transports. The owning sections carry the full detail:
 | Status bytes 0 and 1; front-panel events use bytes 2 and 3 | UC PC | a capture correlating bytes 0/1 with a device action |
 | Bulk role of `0x03`/`0x84` at 1x/2x; they are interrupt at 4x | UC PC | a capture of the bulk traffic at 1x/2x |
 | Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
-| AP header phase on the UCX: the 12-bit position, 11-bit phase and 3072 wrap are the implemented mapping | UCX IF0 | a UCX capture; on the UC the accumulator is verified at 48 kHz, isolated add/drop events away from the wrap are unattributed |
+| AP header rate-band scaling: the position width and modulus at 2x/4x (16384/32768); the 1x layout (13-bit position / 8192, 14-bit phase) is capture-verified | UCX IF0, UC IF0, Babyface | a 2x/4x ISO capture; isolated add/drop events away from the wrap are unattributed |
 | IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
 | DDS quad rate dependence: the quad is written once at connect; rate changes write the family word alone across the captured 44.1↔48 transitions | UCX IF5 | a connect capture at a 32 kHz-family rate |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
