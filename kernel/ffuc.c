@@ -1447,6 +1447,21 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_PLAYBACK);
 }
 
+/* Record a feedback position gap for diagnostics; caller holds fb_lock. */
+static void ffuc_gap_record(struct ffuc *chip, u32 pos, u32 expected,
+			    u32 frames, u32 phase, u32 wrap)
+{
+	struct ffuc_gap_rec *r = &chip->gap_ring[chip->gap_head % FFUC_GAP_RING];
+
+	r->ktime_ns = ktime_get_ns();
+	r->pos = pos;
+	r->expected = expected;
+	r->frames = frames;
+	r->phase = phase;
+	r->wrap = wrap;
+	chip->gap_head++;
+}
+
 /* ISO implicit feedback: remember every IN packet's position and frame
  * count by packet number. */
 static void ffuc_fb_put(struct ffuc *chip, unsigned int pos, unsigned int frames,
@@ -1598,16 +1613,19 @@ cadence_skip:
 						      ((hdr >> 5) & 0x1fff);
 			unsigned int hframes = hdr & 0x1f;
 			unsigned int wrap = ffuc_iso_wrap(chip);
+			unsigned int phase = chip->ucx ? ((hdr >> 21) & 0x7ff) :
+							 ((hdr >> 18) & 0x3fff);
 
 			pos %= wrap;
 			if (hframes != frames[i])
 				atomic_inc(&chip->in_frames_mismatch);
 			if (chip->in_pkts &&
-			    pos != chip->in_end % wrap)
+			    pos != chip->in_end % wrap) {
 				atomic_inc(&chip->in_pos_gap);
-			ffuc_fb_put(chip, pos, frames[i],
-				    chip->ucx ? ((hdr >> 21) & 0x7ff) :
-						((hdr >> 18) & 0x3fff));
+				ffuc_gap_record(chip, pos, chip->in_end % wrap,
+						frames[i], phase, wrap);
+			}
+			ffuc_fb_put(chip, pos, frames[i], phase);
 		}
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
@@ -1951,6 +1969,40 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 }
 DEFINE_SHOW_ATTRIBUTE(ffuc_stats);
 
+static int ffuc_gaps_show(struct seq_file *m, void *v)
+{
+	struct ffuc *chip = m->private;
+	struct ffuc_gap_rec *snap;
+	unsigned long flags;
+	unsigned int head, n, i;
+
+	snap = kmalloc_array(FFUC_GAP_RING, sizeof(*snap), GFP_KERNEL);
+	if (!snap)
+		return -ENOMEM;
+
+	spin_lock_irqsave(&chip->fb_lock, flags);
+	head = chip->gap_head;
+	n = min(head, (unsigned int)FFUC_GAP_RING);
+	for (i = 0; i < n; i++)
+		snap[i] = chip->gap_ring[(head - n + i) % FFUC_GAP_RING];
+	spin_unlock_irqrestore(&chip->fb_lock, flags);
+
+	seq_printf(m, "# %u gaps total, last %u shown; delta = pos - expected (frames)\n",
+		   head, n);
+	seq_puts(m, "# ktime_ns pos expected delta frames phase wrap\n");
+	for (i = 0; i < n; i++) {
+		const struct ffuc_gap_rec *r = &snap[i];
+
+		seq_printf(m, "%llu %u %u %d %u %u %u\n",
+			   r->ktime_ns, r->pos, r->expected,
+			   (int)r->pos - (int)r->expected,
+			   r->frames, r->phase, r->wrap);
+	}
+	kfree(snap);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(ffuc_gaps);
+
 static void ffuc_urb_complete(struct urb *urb)
 {
 	struct ffuc_urb *u = urb->context;
@@ -2225,6 +2277,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	atomic_set(&chip->in_status_err, 0);
 	atomic_set(&chip->in_frames_mismatch, 0);
 	atomic_set(&chip->in_pos_gap, 0);
+	chip->gap_head = 0;
 	atomic_set(&chip->out_fb_priming, 0);
 	atomic_set(&chip->out_fb_ahead, 0);
 	atomic_set(&chip->out_fb_stale, 0);
@@ -3124,9 +3177,12 @@ static int ffuc_probe(struct usb_interface *intf,
 	chip->in_ep = desc->in_ep;
 	chip->modes = desc->modes;
 	chip->debugfs = debugfs_create_dir(dev_name(&intf->dev), NULL);
-	if (!IS_ERR_OR_NULL(chip->debugfs))
+	if (!IS_ERR_OR_NULL(chip->debugfs)) {
 		debugfs_create_file("stats", 0444, chip->debugfs, chip,
 				    &ffuc_stats_fops);
+		debugfs_create_file("gaps", 0444, chip->debugfs, chip,
+				    &ffuc_gaps_fops);
+	}
 	mutex_init(&chip->mutex);
 	mutex_init(&chip->ctl_lock);
 	spin_lock_init(&chip->fb_lock);

@@ -289,6 +289,17 @@ struct ffuc_midi_port {
 	bool out_running;
 };
 
+/* Diagnostic ring of recent feedback position gaps (protected by fb_lock). */
+#define FFUC_GAP_RING 64
+struct ffuc_gap_rec {
+	u64 ktime_ns;
+	u32 pos;
+	u32 expected;
+	u32 frames;
+	u32 phase;
+	u32 wrap;
+};
+
 struct ffuc {
 	struct usb_device *dev;
 	struct usb_interface *intf;
@@ -422,6 +433,8 @@ struct ffuc {
 	atomic_t in_misaligned;
 	atomic_t in_frames_mismatch;
 	atomic_t in_pos_gap;
+	struct ffuc_gap_rec gap_ring[FFUC_GAP_RING];
+	unsigned int gap_head;
 	atomic_t out_capacity_err;
 	atomic_t out_pkt_len_err;
 	atomic_t out_fb_priming;
