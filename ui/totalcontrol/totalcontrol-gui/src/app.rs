@@ -13679,26 +13679,8 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                     .into()
             };
         let mut output_row = row![].spacing(theme::SPACE_MD * scale);
-        if caps.pitch {
-            output_row = output_row.push(knob_cell(
-                "Pitch",
-                knob(Knob {
-                    value: settings.pitch_percent,
-                    range: (-5.0, 5.0),
-                    label: format!("{:+.1}%", settings.pitch_percent),
-                    secondary_value: None,
-                    on_readout_change: None,
-                    arc_from_center: true,
-                    level_arc_color: Some(theme::text_primary()),
-                    interactive: true,
-                    log_scale: false,
-                    modifiers,
-                    scale,
-                    on_change: Box::new(|v| Message::PitchChanged(v.clamp(-5.0, 5.0))),
-                    on_reset: Box::new(|| Message::PitchChanged(0.0)),
-                }),
-            ));
-        }
+        // Pitch is owned by the slider in the device group above; there is
+        // no pitch knob here.
         if caps.width {
             output_row = output_row.push(knob_cell(
                 "Width",
@@ -13719,9 +13701,8 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                 }),
             ));
         }
-        if caps.pitch || caps.width {
-            body =
-                body.push(column![section("OUTPUT"), output_row].spacing(theme::SPACE_MD * scale));
+        if caps.width {
+            body = body.push(output_row);
         }
 
         // The global flags as a two-column grid of equal toggles, the same
