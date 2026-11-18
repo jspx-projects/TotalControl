@@ -66,6 +66,15 @@ At 2× and 4× the USB packet carries fewer words than the ALSA stream. The
 kernel maps the words that are present and leaves the remaining ALSA channels
 silent, so the logical channel count stays constant across rates.
 
+The ISO header is the UCX layout
+([`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md) §12.1):
+bits 0..4 frame count, bits 5..17 position, bits 18..31 phase. At 1x the
+position is a 13-bit counter wrapping at 8192. The phase is a 14-bit
+480 MHz-tick accumulator with modulus 480000000/rate. The position mask and
+ring modulus are the UCX values; only the word counts differ. The
+position-counter width at 2x/4x is an open item as on the UCX. OUT frames
+use the UCX per-frame lead-word format.
+
 ### 2.1 MIDI
 
 Interface 2 carries one logical MIDI port on bulk OUT `0x07` and bulk IN

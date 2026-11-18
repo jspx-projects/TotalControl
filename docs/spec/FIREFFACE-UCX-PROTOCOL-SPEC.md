@@ -1018,14 +1018,20 @@ Input packet:
 
 - 4-byte header: bits 0..4 frame count, bits 5..17 position, bits 18..31 phase;
 - block/planar 32-bit samples;
-- position wraps at 3072;
 - up to 8 ISO packets per URB.
+
+At 1x rates the position is a 13-bit free-running counter wrapping at 8192.
+The phase is a 14-bit fractional-sample accumulator counting 480 MHz ticks
+(2.0833 ns); its modulus is ticks-per-sample, 480000000/rate (10000 at
+48 kHz, 10884 at 44.1 kHz). It predicts frame add/drop, not an absolute
+rate. The position-counter width at 2x and 4x rates is an open item (§12.4).
 
 Output packet:
 
 - interleaved `lead_word + nch float32` frames;
-- every lead word is written;
-- the ring wraps at 3072.
+- every lead word is written; it is the stream position the frame plays at,
+  modulo the ring;
+- the ring wraps at 8192 at 1x rates.
 
 ### 12.2 Interrupt interface 5
 
@@ -1111,6 +1117,11 @@ The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
    behaves during the transition, needs a capture with a tone playing:
    the status word (rate code, sync, out-latched bit), any mute
    requests, and the audio output recorded across the switch.
+6. ISO position-counter rate-band scaling: the position field width and
+   modulus at 2x (14-bit / 16384) and 4x (15-bit / 32768), the phase field
+   taking the remaining upper bits. The 1x layout (13-bit / 8192) is
+   capture-verified; a 2x/4x ISO capture confirms the wider bands. The
+   driver uses the 1x wrap (8192) at all rates.
 
 ## 13. Metering
 
