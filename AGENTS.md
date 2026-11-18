@@ -166,6 +166,20 @@ request; do not commit or push directly to `main`.
   quantum, test evidence, and confirmation that the user scene and
   `~/.config/totalcontrol/gui.json` were preserved.
 
+### Pull request descriptions
+
+- List every item the PR addresses as a complete checklist. Use plain
+  language; do not use internal phase labels such as "Phase A".
+- State the actual problems solved and why they matter. For driver and audio
+  changes, state the audio impact: which audible or behavioural problem the
+  change fixes.
+- Be honest about impact. If no audible or user-visible problem is solved
+  (for example a correctness or diagnostics fix), say so explicitly. Do not
+  imply an audible fix that was not verified.
+- Follow the publication rules: no disassembly references and no development
+  history. "Capture-verified" is acceptable; naming the disassembly as a
+  source is not.
+
 ## Shared behaviour and device delegation
 
 The Control Room is one device-independent feature. Shared code owns the
