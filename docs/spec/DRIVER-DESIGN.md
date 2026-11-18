@@ -443,6 +443,26 @@ See the TODO section for the readiness-poll work.
   buffers are freed when the card is released after the last close, so
   an active reader never races a free.
 
+### 8.1 Host recognition, incompatibility and fallback
+
+The host (TotalControl) owns recognition; the driver only reports presence
+and identity. The host enumerates hwdep nodes by stable identity (serial +
+model, never the card index) on a periodic probe, independent of boot order.
+
+- A unit whose driver ABI is below the host's (`HwdepInfo.abi < ABI_VERSION`)
+  is **incompatible**: present but unusable. Enumeration still lists it
+  (unchecked INFO) so the selector can show it prefixed with a red "!" and a
+  hover tooltip "incompatible driver"; opening it for use is refused.
+- On loss of the active unit (unplug, VM claim) or on incompatibility, the
+  host saves the workspace and switches to the next usable unit in the list;
+  if none is usable it selects the default simulation. A compatible real unit
+  that (re)appears takes over from a simulation. An explicit user-chosen
+  simulation is never auto-overridden.
+- Reconnect re-applies the unit's scene per the sync direction; the UCX
+  startup state dump is requested before the connect write.
+- A newer driver ABI is accepted (forward compatible); kernel rebuilds that
+  do not change the interface do not change the ABI (§5).
+
 ## 9. Latency inputs
 
 The driver exposes the queue geometry (`urb_frames`, `nurbs`,

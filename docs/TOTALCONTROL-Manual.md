@@ -251,6 +251,17 @@ If no device appears, check that the unit is in normal vendor mode, that the
 kernel module is loaded, and that another application is not holding the
 device.
 
+The **Device** selector at the top lists every detected unit (by model and
+serial); with several units connected, choose the one to control. Each unit
+keeps its own workspace and settings. If the active unit is unplugged or
+claimed by another system, TotalControl saves its workspace and switches to
+the next available unit, or to a simulation if none is usable; the unit
+returns automatically when it reappears. A unit whose driver is too old for
+this TotalControl build is shown with a red "!" — hover for "incompatible
+driver". TotalControl then falls back to the next unit or a simulation;
+updating the driver (or TotalControl) restores the unit. This is why the
+mixer may occasionally show a simulation instead of your hardware.
+
 ## 1. The mixer window
 
 The mixer shows three rows of channel strips:
