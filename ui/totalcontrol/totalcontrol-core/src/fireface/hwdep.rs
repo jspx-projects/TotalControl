@@ -40,16 +40,30 @@ impl Hwdep {
         let file = OpenOptions::new().read(true).write(true).open(&path)?;
         let hwdep = Self { file, path, card };
         let info = hwdep.info()?;
-        if info.abi != ABI_VERSION {
+        // The kernel module is rebuilt per kernel release and its ABI number
+        // moves even when the ioctl interface is unchanged. TotalControl is
+        // the stable side: accept any ABI in the compatible window (newer is
+        // forward compatible), refuse only below the floor. The INFO ioctl
+        // encodes the struct size, so a successful read already implies a
+        // matching layout.
+        if info.abi < ABI_MIN_COMPAT {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "{}: hwdep ABI {} (expected {})",
+                    "{}: hwdep ABI {} too old (minimum {})",
                     hwdep.path.display(),
                     info.abi,
-                    ABI_VERSION
+                    ABI_MIN_COMPAT
                 ),
             ));
+        }
+        if info.abi != ABI_VERSION {
+            log::warn!(
+                "{}: hwdep ABI {} differs from built {} but is compatible; continuing",
+                hwdep.path.display(),
+                info.abi,
+                ABI_VERSION
+            );
         }
         Ok(hwdep)
     }

@@ -8,6 +8,12 @@
 use std::mem::size_of;
 
 pub const ABI_VERSION: u32 = 4;
+/// Oldest driver ABI that still speaks the interface this crate uses. The
+/// kernel module is rebuilt for every kernel release and its version number
+/// moves even when the ioctl interface is unchanged, so TotalControl (the
+/// stable side) must accept a compatible range, not exact equality. Newer
+/// ABIs are accepted (forward compatible); only below this floor is refused.
+pub const ABI_MIN_COMPAT: u32 = 3;
 pub const HWDEP_MAX_DATA: usize = 64;
 pub const HWDEP_MAX_WORDS: usize = 63;
 pub const EVENT_MAX: usize = 704;

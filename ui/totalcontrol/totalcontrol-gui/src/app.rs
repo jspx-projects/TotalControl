@@ -10000,6 +10000,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             .as_ref()
                             .and_then(DeviceHandle::open_target)
                             .or_else(|| DeviceHandle::open_real())
+                            // Active unit lost and no other real unit present:
+                            // fall to a simulation so TC stays usable. A real
+                            // unit that (re)appears takes over again via the
+                            // fallback-mock path above.
+                            .or_else(|| Some(DeviceHandle::open_mock_ucx()))
                     };
                     if let Some(fresh) = fresh {
                         log::info!("Device connected: {}", fresh.target().label());
