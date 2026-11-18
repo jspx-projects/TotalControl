@@ -293,11 +293,16 @@ struct ffuc_midi_port {
 #define FFUC_GAP_RING 64
 struct ffuc_gap_rec {
 	u64 ktime_ns;
+	u32 hdr;
 	u32 pos;
 	u32 expected;
 	u32 frames;
 	u32 phase;
 	u32 wrap;
+	u32 prev_hdr;
+	u32 prev_pos;
+	u32 next_hdr;
+	u32 next_pos;
 };
 
 struct ffuc {
@@ -435,6 +440,9 @@ struct ffuc {
 	atomic_t in_pos_gap;
 	struct ffuc_gap_rec gap_ring[FFUC_GAP_RING];
 	unsigned int gap_head;
+	u32 prev_hdr;
+	u32 prev_pos;
+	int gap_pending;
 	atomic_t out_capacity_err;
 	atomic_t out_pkt_len_err;
 	atomic_t out_fb_priming;

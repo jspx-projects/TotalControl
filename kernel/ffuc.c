@@ -1448,17 +1448,22 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 }
 
 /* Record a feedback position gap for diagnostics; caller holds fb_lock. */
-static void ffuc_gap_record(struct ffuc *chip, u32 pos, u32 expected,
+static void ffuc_gap_record(struct ffuc *chip, u32 hdr, u32 pos, u32 expected,
 			    u32 frames, u32 phase, u32 wrap)
 {
 	struct ffuc_gap_rec *r = &chip->gap_ring[chip->gap_head % FFUC_GAP_RING];
 
 	r->ktime_ns = ktime_get_ns();
+	r->hdr = hdr;
 	r->pos = pos;
 	r->expected = expected;
 	r->frames = frames;
 	r->phase = phase;
 	r->wrap = wrap;
+	r->prev_hdr = chip->prev_hdr;
+	r->prev_pos = chip->prev_pos;
+	r->next_hdr = 0;
+	r->next_pos = 0;
 	chip->gap_head++;
 }
 
@@ -1617,15 +1622,26 @@ cadence_skip:
 							 ((hdr >> 18) & 0x3fff);
 
 			pos %= wrap;
+			if (chip->gap_pending >= 0) {
+				struct ffuc_gap_rec *r =
+					&chip->gap_ring[chip->gap_pending];
+				r->next_hdr = hdr;
+				r->next_pos = pos;
+				chip->gap_pending = -1;
+			}
 			if (hframes != frames[i])
 				atomic_inc(&chip->in_frames_mismatch);
 			if (chip->in_pkts &&
 			    pos != chip->in_end % wrap) {
 				atomic_inc(&chip->in_pos_gap);
-				ffuc_gap_record(chip, pos, chip->in_end % wrap,
+				ffuc_gap_record(chip, hdr, pos, chip->in_end % wrap,
 						frames[i], phase, wrap);
+				chip->gap_pending =
+					(chip->gap_head - 1) % FFUC_GAP_RING;
 			}
 			ffuc_fb_put(chip, pos, frames[i], phase);
+			chip->prev_hdr = hdr;
+			chip->prev_pos = pos;
 		}
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
@@ -1989,13 +2005,14 @@ static int ffuc_gaps_show(struct seq_file *m, void *v)
 
 	seq_printf(m, "# %u gaps total, last %u shown; delta = pos - expected (frames)\n",
 		   head, n);
-	seq_puts(m, "# ktime_ns pos expected delta frames phase wrap\n");
+	seq_puts(m, "# ktime prev_pos prev_hdr | pos hdr delta | next_pos next_hdr | frames phase wrap\n");
 	for (i = 0; i < n; i++) {
 		const struct ffuc_gap_rec *r = &snap[i];
 
-		seq_printf(m, "%llu %u %u %d %u %u %u\n",
-			   r->ktime_ns, r->pos, r->expected,
-			   (int)r->pos - (int)r->expected,
+		seq_printf(m, "%llu %u 0x%08x | %u 0x%08x %d | %u 0x%08x | %u %u %u\n",
+			   r->ktime_ns, r->prev_pos, r->prev_hdr,
+			   r->pos, r->hdr, (int)r->pos - (int)r->expected,
+			   r->next_pos, r->next_hdr,
 			   r->frames, r->phase, r->wrap);
 	}
 	kfree(snap);
@@ -2278,6 +2295,9 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	atomic_set(&chip->in_frames_mismatch, 0);
 	atomic_set(&chip->in_pos_gap, 0);
 	chip->gap_head = 0;
+	chip->gap_pending = -1;
+	chip->prev_hdr = 0;
+	chip->prev_pos = 0;
 	atomic_set(&chip->out_fb_priming, 0);
 	atomic_set(&chip->out_fb_ahead, 0);
 	atomic_set(&chip->out_fb_stale, 0);
