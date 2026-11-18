@@ -16,11 +16,19 @@ secs=${1:-30}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${TMPDIR:-/tmp}/totalcontrol-ffuc-counters
 gcc -O2 -I"$root/kernel" -o "$bin" "$root/tools/ffuc-counters.c" || exit 1
-node=/dev/snd/hwC2D0
+# Find the Fireface card dynamically (survives renumbering and replug).
+card=""
+for c in /sys/class/sound/card*; do
+    case "$(cat "$c/id" 2>/dev/null)" in
+        *Fireface*|*Babyface*) card=$(basename "$c"); break ;;
+    esac
+done
+[ -n "$card" ] || { echo "no Fireface card found" >&2; exit 1; }
+node=/dev/snd/hwC${card#card}D0
 get() { "$bin" "$node" 2>/dev/null | sed -n "s/.*[[:space:]]$1=\([0-9][0-9]*\).*/\1/p"; }
 xrun() { pw-top -b -n 2 2>/dev/null | grep -E '^R .*Fireface.*pro-output' | tail -1 | awk '{print $9}'; }
-state() { awk '/^state:/ {print $2}' /proc/asound/card2/pcm0p/sub0/status 2>/dev/null; }
-q() { grep -E 'period_size|buffer_size' /proc/asound/card2/pcm0p/sub0/hw_params 2>/dev/null | tr '\n' ' '; }
+state() { awk '/^state:/ {print $2}' "/proc/asound/$card/pcm0p/sub0/status" 2>/dev/null; }
+q() { grep -E 'period_size|buffer_size' "/proc/asound/$card/pcm0p/sub0/hw_params" 2>/dev/null | tr '\n' ' '; }
 
 fields="out_gaps out_shorts out_status_errors urb_errors recoveries in_gaps in_shorts in_status_errors"
 declare -A prev
