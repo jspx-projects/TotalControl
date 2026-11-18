@@ -2542,8 +2542,6 @@ pub enum Message {
     EngineQuantum(u32),
     /// Zero the transport-error display against the driver's current counters.
     ResetTransportErrors,
-    /// A fresh PipeWire graph xrun count for the RME output node.
-    GraphXruns(Option<u64>),
     /// Periodic re-read of the PipeWire clock (another app may change it).
     EnginePoll,
     /// The graph clock, the card's own open stream (`None` = idle), whether
@@ -3126,9 +3124,6 @@ pub struct TotalControl {
     /// shown relative to (set on connect or by the reset button).
     pub transport_counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
     pub transport_baseline: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
-    /// Cumulative PipeWire graph xrun count and its reset baseline.
-    pub graph_xruns: Option<u64>,
-    pub graph_xruns_baseline: Option<u64>,
     /// In/out short packets attributed to completed and current rate-switch
     /// settling windows.  `rate_switch_shorts` is cumulative since reset;
     /// `rate_switch_burst` is the current window not yet committed.
@@ -3701,8 +3696,6 @@ pub fn new_with_device(
         card_stream: None,
         transport_counters: None,
         transport_baseline: None,
-        graph_xruns: None,
-        graph_xruns_baseline: None,
         rate_switch_shorts: (0, 0),
         rate_switch_burst: (0, 0),
         rate_switch_base: None,
@@ -9427,20 +9420,6 @@ fn follow_graph_stream(
     })
 }
 
-/// Poll the PipeWire graph xrun counter once a second while the device
-/// settings drawer is open.  `pw-top` is a separate process, so keep it off
-/// the UI thread.
-fn graph_xruns_stream() -> impl iced::futures::Stream<Item = Option<u64>> {
-    iced::futures::stream::unfold((), |_| async {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let count = tokio::task::spawn_blocking(totalcontrol_core::pw_xrun::read)
-            .await
-            .ok()
-            .flatten();
-        Some((count, ()))
-    })
-}
-
 /// Apply one source cell edit.  A pair is 1/2, 3/4: an odd and an even
 /// channel, linked or unlinked.  Every rule keeps the source channel's
 /// parity (GUI spec 8.1.2).
@@ -9920,10 +9899,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
             }
             // Driver transport health: cumulative counters, shown relative
-            // to the first reading of this connection (or the reset button).
+            // to a baseline set on driver reattach or the reset button.
+            // Counting runs on every tick, independent of the settings drawer.
             let counters = state.device.transport_counters();
             if counters.is_some() && state.transport_baseline.is_none() {
                 state.transport_baseline = counters;
+            }
+            // A backwards throughput counter means the driver reattached and
+            // zeroed its counters; re-base so the delta stays meaningful.
+            if let (Some(c), Some(b)) = (counters, state.transport_baseline) {
+                if c.out_urbs < b.out_urbs {
+                    state.transport_baseline = counters;
+                    state.rate_switch_shorts = (0, 0);
+                    state.rate_switch_burst = (0, 0);
+                    state.rate_switch_base = None;
+                    state.rate_switch_until = None;
+                }
             }
             if counters.is_none() {
                 state.transport_baseline = None;
@@ -12329,17 +12320,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::SetShowOriginalNames(on) => state.show_original_names = on,
         Message::ResetTransportErrors => {
             state.transport_baseline = state.transport_counters;
-            state.graph_xruns_baseline = state.graph_xruns;
             state.rate_switch_shorts = (0, 0);
             state.rate_switch_burst = (0, 0);
             state.rate_switch_base = None;
             state.rate_switch_until = None;
-        }
-        Message::GraphXruns(count) => {
-            state.graph_xruns = count;
-            if state.graph_xruns_baseline.is_none() {
-                state.graph_xruns_baseline = count;
-            }
         }
         Message::EngineRate(rate) => {
             state.engine_rate_mode = if rate == 0 {
@@ -13129,11 +13113,6 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
         subs.push(
             Subscription::run(crate::device_service::meter_stream).map(|_| Message::MeterWake),
         );
-    }
-    // Graph xruns belong to PipeWire, not the USB transport.  Only the
-    // device settings drawer shows them, so poll only while it is open.
-    if state.show_device_panel {
-        subs.push(Subscription::run(graph_xruns_stream).map(Message::GraphXruns));
     }
     // Another app (or `pw-metadata` by hand) can change the graph clock;
     // re-read it now and then so the device card never shows a stale rate.
@@ -15275,49 +15254,29 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
-    // PipeWire graph xruns belong to the audio graph, not the USB
-    // transport.  They sit above the driver rows, next to Graph/Quantum.
-    let xruns = state
-        .graph_xruns
-        .map(|now| now.saturating_sub(state.graph_xruns_baseline.unwrap_or(now)));
-    body = body.push(
-        row![
-            strip::hint(caption("Xruns"), "PipeWire graph xruns.", scale),
-            iced::widget::Space::new().width(Length::Fill),
-            text(xruns.map(|n| n.to_string()).unwrap_or_else(|| "—".into()))
-                .size(text_size)
-                .color(if xruns.unwrap_or(0) == 0 {
-                    theme::text_sec()
-                } else {
-                    Color::from_rgb8(0xe0, 0x5a, 0x5a)
-                }),
-            button(strip::centered_label_auto(
-                "reset",
-                theme::TEXT_DIALOG * scale
-            ))
-            .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-            .style(theme::ghost_button)
-            .on_press(Message::ResetTransportErrors),
-        ]
-        .spacing(theme::SPACE_MD * scale)
-        .align_y(iced::Alignment::Center),
-    );
+    // Transport diagnostics: cumulative driver error counters, shown
+    // relative to the baseline (driver reattach or the reset button).
+    // Counting runs on every tick, independent of this drawer.  Each row
+    // is one fault domain; the manual explains meaning and mitigation.
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
         body = body.push(
             row![
-                strip::hint(
-                    caption("Driver errors"),
-                    "USB driver counters. in = device → computer, out = computer → device.",
-                    scale
-                ),
+                strip::hint(caption("Diagnostics"), "Cumulative since reset.", scale),
                 iced::widget::Space::new().width(Length::Fill),
+                button(strip::centered_label_auto(
+                    "reset",
+                    theme::TEXT_DIALOG * scale
+                ))
+                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::ResetTransportErrors),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
-        // A rate-switch short burst is expected and is shown separately;
-        // only the remainder is a real short-packet problem.
+        // A rate-switch short burst is expected, not an error; exclude it
+        // from the bad-packet count.
         let switch_in = state
             .rate_switch_shorts
             .0
@@ -15328,57 +15287,74 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .1
             .saturating_add(state.rate_switch_burst.1)
             .min(delta.out_shorts);
-        let short_in = delta.in_shorts.saturating_sub(switch_in);
-        let short_out = delta.out_shorts.saturating_sub(switch_out);
-        let rows: [(&'static str, String, u32, bool, &'static str); 6] = [
+        let short_in = (delta.in_shorts + delta.in_short).saturating_sub(switch_in);
+        let short_out = (delta.out_shorts + delta.out_pkt_len_err).saturating_sub(switch_out);
+        let bad_in = short_in + delta.in_misaligned + delta.in_bad_length;
+        let bad_out = short_out + delta.out_capacity_err + delta.out_bad_length;
+        let usb = delta.in_status_errors
+            + delta.out_status_errors
+            + delta.in_status_err
+            + delta.out_pkt_status
+            + delta.urb_errors;
+        let feedback = delta.in_pos_gap
+            + delta.in_frames_mismatch
+            + delta.rate_mismatch
+            + delta.out_fb_ahead
+            + delta.out_fb_stale;
+        let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
+        let rows: [(&'static str, String, u32, &'static str); 8] = [
             (
-                "usb",
-                format!("{} / {}", delta.in_status_errors, delta.out_status_errors),
-                delta.in_status_errors + delta.out_status_errors,
-                false,
-                "USB status errors (in/out).",
-            ),
-            (
-                "urb",
-                delta.urb_errors.to_string(),
-                delta.urb_errors,
-                false,
-                "URB errors.",
-            ),
-            (
-                "gaps",
-                format!("{} / {}", delta.in_gaps, delta.out_gaps),
-                delta.in_gaps + delta.out_gaps,
-                false,
-                "Missing packets (in/out).",
-            ),
-            (
-                "short",
-                format!("{} / {}", short_in, short_out),
-                short_in + short_out,
-                false,
-                "Short packets (in/out).",
-            ),
-            (
-                "short — rate switch",
-                format!("{} / {}", switch_in, switch_out),
-                switch_in + switch_out,
-                true,
-                "Expected during rate changes.",
+                "underrun / overrun",
+                format!("{} / {}", delta.out_underruns, delta.in_overruns),
+                delta.out_underruns + delta.in_overruns,
+                "Playback dry, capture overflow.",
             ),
             (
                 "recover",
                 delta.recoveries.to_string(),
                 delta.recoveries,
-                false,
-                "Driver recoveries.",
+                "Driver engine restarted.",
+            ),
+            (
+                "usb",
+                usb.to_string(),
+                usb,
+                "USB link errors.",
+            ),
+            (
+                "gaps",
+                format!("{} / {}", delta.in_gaps, delta.out_gaps),
+                delta.in_gaps + delta.out_gaps,
+                "Missing USB packets.",
+            ),
+            (
+                "bad packets",
+                format!("{} / {}", bad_in, bad_out),
+                bad_in + bad_out,
+                "Malformed or dropped packets.",
+            ),
+            (
+                "feedback",
+                feedback.to_string(),
+                feedback,
+                "Device clock tracking errors.",
+            ),
+            (
+                "pointer",
+                pointer.to_string(),
+                pointer,
+                "Driver pointer divergence.",
+            ),
+            (
+                "events dropped",
+                delta.events_dropped.to_string(),
+                delta.events_dropped,
+                "Control events discarded.",
             ),
         ];
-        for (label, value, bad, expected, tip) in rows {
+        for (label, value, bad, tip) in rows {
             let colour = if bad == 0 {
                 theme::text_sec()
-            } else if expected {
-                theme::ysim()
             } else {
                 Color::from_rgb8(0xe0, 0x5a, 0x5a)
             };
@@ -15396,27 +15372,6 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 .align_y(iced::Alignment::Center),
             );
         }
-        body = body.push(
-            row![
-                strip::hint(
-                    text("Host event drops")
-                        .size(text_size)
-                        .color(theme::text_sec()),
-                    "Host reader fell behind; event discarded.",
-                    scale
-                ),
-                iced::widget::Space::new().width(Length::Fill),
-                text(delta.events_dropped.to_string())
-                    .size(text_size)
-                    .color(if delta.events_dropped == 0 {
-                        theme::text_sec()
-                    } else {
-                        theme::ysim()
-                    }),
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
-        );
     }
     if let Some((percent, db)) = state.host_volume {
         let colour = if db < -0.5 {
@@ -15498,6 +15453,23 @@ fn transport_delta(
         in_gaps: now.in_gaps.saturating_sub(base.in_gaps),
         in_shorts: now.in_shorts.saturating_sub(base.in_shorts),
         in_status_errors: now.in_status_errors.saturating_sub(base.in_status_errors),
+        out_underruns: now.out_underruns.saturating_sub(base.out_underruns),
+        in_overruns: now.in_overruns.saturating_sub(base.in_overruns),
+        out_capacity_err: now.out_capacity_err.saturating_sub(base.out_capacity_err),
+        out_pkt_len_err: now.out_pkt_len_err.saturating_sub(base.out_pkt_len_err),
+        out_pkt_status: now.out_pkt_status.saturating_sub(base.out_pkt_status),
+        in_status_err: now.in_status_err.saturating_sub(base.in_status_err),
+        in_short: now.in_short.saturating_sub(base.in_short),
+        in_misaligned: now.in_misaligned.saturating_sub(base.in_misaligned),
+        in_bad_length: now.in_bad_length.saturating_sub(base.in_bad_length),
+        out_bad_length: now.out_bad_length.saturating_sub(base.out_bad_length),
+        in_pos_gap: now.in_pos_gap.saturating_sub(base.in_pos_gap),
+        in_frames_mismatch: now.in_frames_mismatch.saturating_sub(base.in_frames_mismatch),
+        rate_mismatch: now.rate_mismatch.saturating_sub(base.rate_mismatch),
+        out_fb_ahead: now.out_fb_ahead.saturating_sub(base.out_fb_ahead),
+        out_fb_stale: now.out_fb_stale.saturating_sub(base.out_fb_stale),
+        hw_ptr_mismatch: now.hw_ptr_mismatch.saturating_sub(base.hw_ptr_mismatch),
+        delta_zero: now.delta_zero.saturating_sub(base.delta_zero),
     }
 }
 

@@ -298,6 +298,23 @@ static int ffuc_hwdep_counters(struct ffuc *chip,
 	c.in_gaps = atomic_read(&chip->in_gaps);
 	c.in_shorts = atomic_read(&chip->in_shorts);
 	c.in_status_errors = atomic_read(&chip->in_status_errors);
+	c.out_underruns = atomic_read(&chip->out_underruns);
+	c.in_overruns = atomic_read(&chip->in_overruns);
+	c.out_capacity_err = atomic_read(&chip->out_capacity_err);
+	c.out_pkt_len_err = atomic_read(&chip->out_pkt_len_err);
+	c.out_pkt_status = atomic_read(&chip->out_pkt_status);
+	c.in_status_err = atomic_read(&chip->in_status_err);
+	c.in_short = atomic_read(&chip->in_short);
+	c.in_misaligned = atomic_read(&chip->in_misaligned);
+	c.in_bad_length = atomic_read(&chip->in_bad_length);
+	c.out_bad_length = atomic_read(&chip->out_bad_length);
+	c.in_pos_gap = atomic_read(&chip->in_pos_gap);
+	c.in_frames_mismatch = atomic_read(&chip->in_frames_mismatch);
+	c.rate_mismatch = atomic_read(&chip->rate_mismatch);
+	c.out_fb_ahead = atomic_read(&chip->out_fb_ahead);
+	c.out_fb_stale = atomic_read(&chip->out_fb_stale);
+	c.hw_ptr_mismatch = atomic_read(&chip->hw_ptr_mismatch);
+	c.delta_zero = atomic_read(&chip->delta_zero);
 	if (copy_to_user(arg, &c, sizeof(c)))
 		return -EFAULT;
 	return 0;
