@@ -173,6 +173,22 @@ The transport operation of each personality is defined in §4.3 (AP mode),
 The UC keeps its rate family across personality switches; a USB reset
 restores the 1x multiplier and forces a session replay on PC.
 
+### 3.1 Device/transport families (control)
+
+Research (agfline/RME-Fireface-UC-Drivers; michaelforney/oscmix + Babyface-Pro
+wiki; huddx01/oscmix; Openface-Mixer) shows two control families. The official
+vendor driver is common to UFX/UFX+/802/UCX/Babyface/Babyface Pro/MADIface.
+
+| Device | Control transport | hwdep ABI fit |
+|---|---|---|
+| UC / UCX / Babyface classic | vendor EP0 + IF1 | supported |
+| Babyface Pro (vendor), UFX (original) | vendor EP0 + IF1 | fits; HAL model work; watch EVENT_MAX for UFX meters |
+| Babyface Pro FS / UCX II / UFX+/II/III / 802 (CC) | SysEx-over-MIDI | outside hwdep ABI; generic rawmidi + HAL SysEx |
+
+Same-transport devices need only HAL/descriptor work (no ABI change). A new
+transport (CC SysEx) is an ABI/driver extension with a minimum-driver-version
+demand (§5).
+
 ## 4. Streaming engine
 
 ### 4.1 URB and buffer geometry
@@ -337,6 +353,20 @@ the engine. The host sees an xrun and re-prepares.
 ## 5. Control transports and hwdep ABI
 
 The hwdep ABI is versioned (`FFUC_ABI_VERSION`). The host checks it at open.
+
+Versioning follows the standard kernel UAPI practice (never break userspace):
+the `_IOC` command encodes the struct size, so the driver dispatches on the
+command number and copies using the caller's size (`copy_struct_from_user` /
+`_to_user`), zero-extending older/smaller and truncating newer/larger structs.
+Structs grow only into reserved space (append-only, fixed-width, no implicit
+padding, zero-init before copy-back). New behavior is a new ioctl number /
+capability bit, never an overloaded command. `HwdepInfo.abi` reports the
+layout version spoken to the caller, plus `abi_max`/caps for negotiation. The
+host accepts a unit iff the driver serves its needs; a driver too old for a
+new device's features is *incompatible* (surfaced, fall back), not a hard
+failure. Kernel rebuilds that don't change the interface do not change the
+ABI. A new transport (e.g. CC-mode SysEx) is the case that legitimately
+demands a minimum driver version; old hosts never use it and keep working.
 
 U2 carries two transfer modes with opposite characteristics:
 
@@ -720,3 +750,19 @@ The reasons behind the design, kept separate from the model itself.
    coalescing, pacing, backpressure) is device-independent; only the
    I/O surface differs. Sharing the worker across the Fireface and
    Babyface-classic backends keeps one implementation of the hard parts.
+8. **Userspace HAL, thin kernel (deliberate deviation from ALSA).** Mainline
+   ALSA puts device knowledge in kernel quirks/drivers (the mailing-list
+   quirk churn); we instead keep the kernel a generic transport and all
+   device policy in the userspace HAL (`totalcontrol-core/src/fireface/`).
+   This is the userspace-control model (FFADO/oscmix/rmectl family).
+   Advantages: stable small kernel, no per-device rebuilds, new devices are
+   userspace edits, safe contributor surface, distro-kernel-update resilience.
+   Costs: out-of-tree (not mainline-able as-is), occasional kernel-level USB
+   quirks still required, control-path ioctl latency (non-real-time), raw
+   vendor passthrough surface. Chosen for stability + fast device integration.
+9. **Stabilization target.** Bind by vendor id + dynamic ids; derive endpoint
+   geometry/alt/packet sizes from descriptors; PCM config via a userspace
+   ioctl; init/rate/mode as HAL VENDOR requests; meters/state raw events. One
+   installed driver then binds all known devices without rebuilds; CC-mode
+   devices use generic rawmidi + HAL SysEx (no kernel driver). New-device
+   support becomes a HAL-only change.
