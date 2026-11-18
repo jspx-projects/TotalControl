@@ -1358,15 +1358,16 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		struct snd_pcm_runtime *rt = subs->runtime;
 		/* A completion that overwrites unread frames means the
 		 * reader lagged the device by more than the ring minus
-		 * this payload.  Counted, not prevented: the goal is to
-		 * attribute the q48 zero runs.  Unread bytes are the ring
-		 * span [appl_ptr, hw_ptr); a write at [hw_ptr,
-		 * hw_ptr + frames) collides with unread data when it
-		 * passes appl_ptr + buffer_size.  ALSA compares pointers
-		 * modulo runtime->boundary, so the span length is taken
-		 * modularly, not by plain subtraction. */
+		 * this payload.  Unread bytes are the ring span [appl_ptr,
+		 * hw_ptr); a write at [hw_ptr, hw_ptr + frames) collides
+		 * with unread data when it passes appl_ptr + buffer_size.
+		 * The write position is this endpoint's own ring position,
+		 * not the published status hw_ptr (which lags until the next
+		 * period signal).  ALSA compares pointers modulo
+		 * runtime->boundary, so the span length is taken modularly,
+		 * not by plain subtraction. */
 		unsigned long appl = READ_ONCE(rt->control->appl_ptr);
-		unsigned long own = READ_ONCE(rt->status->hw_ptr);
+		unsigned long own = s->pos[ep->index] % rt->boundary;
 		unsigned long unread = (own + rt->boundary - appl) %
 				       rt->boundary;
 
@@ -1399,6 +1400,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	unsigned long flags;
 	bool elapsed = false;
 	bool bad = false;
+	bool starved = false;
 
 	/* The engine submitted this OUT URB with urb_frames frames, so the
 	 * nominal case equals it.  Copy exactly what left the wire, and
@@ -1420,33 +1422,44 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
 		struct snd_pcm_runtime *rt = subs->runtime;
-		/* A completion that sends frames the application never
-		 * wrote is a literal underrun with no error reported by
-		 * anyone: the ring holds whatever was written last cycle
-		 * at that position.  Counted, not prevented. */
+		/* Starvation is measured against the ring position this
+		 * endpoint reads, not the published status hw_ptr (which
+		 * lags until the next period signal).  A dry ring stops the
+		 * stream as an XRUN below; unwritten ring content is never
+		 * valid playback. */
 		unsigned long appl = READ_ONCE(rt->control->appl_ptr);
-		unsigned long own = READ_ONCE(rt->status->hw_ptr);
+		unsigned long own = s->pos[ep->index] % rt->boundary;
 		unsigned long filled = (appl + rt->boundary - own) %
 				       rt->boundary;
 
-		if (frames > filled)
+		if (frames > filled) {
+			starved = true;
 			ffuc_ring_event(chip, subs, &chip->out_underruns,
 					"playback underrun", appl, own);
-		if (chip->s32_samples)
+		}
+		if (starved) {
+			memset(urb->transfer_buffer, 0,
+			       urb->transfer_buffer_length);
+		} else if (chip->s32_samples) {
 			ffuc_playback_copy_int32(subs->runtime, s->pos[ep->index],
 						 urb->transfer_buffer, frames,
 						 words, ep->index * words,
 						 words);
-		else
+			elapsed = ffuc_stream_advance(chip, s, subs->runtime,
+						      ep->index, frames);
+		} else {
 			ffuc_playback_copy(subs->runtime, s->pos[ep->index],
 					   urb->transfer_buffer, frames, words,
 					   ep->index * words, words);
-		elapsed = ffuc_stream_advance(chip, s, subs->runtime,
-					      ep->index, frames);
+			elapsed = ffuc_stream_advance(chip, s, subs->runtime,
+						      ep->index, frames);
+		}
 	} else {
 		memset(urb->transfer_buffer, 0, urb->transfer_buffer_length);
 	}
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	if (starved)
+		snd_pcm_stop_xrun(subs);
 	if (elapsed)
 		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_PLAYBACK);
 }
@@ -1621,12 +1634,12 @@ cadence_skip:
 
 		for (i = 0; i < urb->number_of_packets; i++)
 			total += frames[i];
-		/* Same attribution as the interrupt transport, once per
-		 * URB: a write that passes appl_ptr + buffer_size overwrites
-		 * frames the reader has not consumed.  Counted, not
-		 * prevented. */
+		/* A write that passes appl_ptr + buffer_size overwrites
+		 * frames the reader has not consumed.  The write position is
+		 * the driver's own ring position, not the published status
+		 * hw_ptr (which lags until the next period signal). */
 		appl = READ_ONCE(rt->control->appl_ptr);
-		own = READ_ONCE(rt->status->hw_ptr);
+		own = s->hw_ptr % rt->boundary;
 		unread = (own + rt->boundary - appl) % rt->boundary;
 		if (unread + total > rt->buffer_size)
 			ffuc_ring_event(chip, subs, &chip->in_overruns,
@@ -1676,6 +1689,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	unsigned int off = 0;
 	unsigned long flags;
 	bool elapsed = false;
+	bool starved = false;
 	int i;
 
 	/* Per-packet delivery check from the previous submission. */
@@ -1735,18 +1749,23 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 
 		for (i = 0; i < urb->number_of_packets; i++)
 			total += frames[i];
-		/* Same attribution as the interrupt transport, once per
-		 * URB: sending more frames than the application wrote
-		 * transmits ring content nobody wrote.  Counted, not
-		 * prevented. */
+		/* The frames about to be copied are read from this stream's
+		 * own ring position, so starvation is measured against it.
+		 * The published status hw_ptr only refreshes on a period
+		 * signal and lags the driver position by up to a period; it
+		 * would mask a dry ring.  When the ring cannot supply the
+		 * mirrored frames the stream is stopped as an XRUN below:
+		 * sending unwritten ring content is never valid playback. */
 		appl = READ_ONCE(rt->control->appl_ptr);
-		own = READ_ONCE(rt->status->hw_ptr);
+		own = s->hw_ptr % rt->boundary;
 		filled = (appl + rt->boundary - own) % rt->boundary;
-		if (total > filled)
+		if (total > filled) {
+			starved = true;
 			ffuc_ring_event(chip, subs, &chip->out_underruns,
 					"playback underrun", appl, own);
+		}
 	}
-	if (s->running && !s->out_counter_valid) {
+	if (s->running && !starved && !s->out_counter_valid) {
 		for (i = 0; i < urb->number_of_packets; i++) {
 			if (frames[i]) {
 				s->out_counter = (u32)pos[i] + chip->out_lead;
@@ -1762,7 +1781,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 
 		urb->iso_frame_desc[i].offset = off;
 		urb->iso_frame_desc[i].length = len;
-		if (s->running && frames[i]) {
+		if (s->running && frames[i] && !starved) {
 			if (chip->s32_samples)
 				ffuc_playback_copy_int32(subs->runtime, s->pos[0],
 					   dst + 1, frames[i], nch, 0, fwords);
@@ -1772,6 +1791,9 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 			elapsed |= ffuc_stream_advance(chip, s, subs->runtime, 0,
 						       frames[i]);
 		} else {
+			/* Silence, not stale ring content.  The lead words
+			 * below still advance: the device timeline must stay
+			 * fed while the host stream recovers. */
 			memset(dst, 0, len);
 		}
 		if (frames[i]) {
@@ -1811,6 +1833,12 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	}
 	urb->transfer_buffer_length = off;
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	/* Report the XRUN to ALSA so the application recovers through the
+	 * normal prepare/start path.  The engine keeps running and feeds the
+	 * device silence; only the host PCM stream stops.  Called outside the
+	 * stream lock: snd_pcm_stop_xrun takes it itself. */
+	if (starved)
+		snd_pcm_stop_xrun(subs);
 	if (elapsed)
 		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_PLAYBACK);
 }

@@ -1364,7 +1364,7 @@ or the audio graph.
 
 | Row | Meaning | What to do |
 |---|---|---|
-| underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
+| underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). On an underrun the driver stops the playback stream and the audio graph restarts it, so a dry ring is heard as a brief dropout rather than stale audio. An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
 | recover | The driver restarted the streaming engine after a serious fault. | Check the other rows for the cause; if it repeats, reseat the USB cable or try another port. |
 | usb | USB link errors: status-stage errors and URB submission/completion errors. | Try another USB port or cable; avoid hubs; check for bandwidth contention. |
 | gaps | Missing packets: a completion arrived late or a packet was absent. | Reduce USB bus load; try a dedicated controller or port. |
