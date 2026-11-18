@@ -163,6 +163,10 @@ Each read returns 4 bytes.  The `0x1c` payload is a 32-bit firmware
 revision word: bits 31..16 are the firmware revision.  The lower 16 bits are
 not interpreted.
 
+The Windows host runs this cycle at about 31 Hz (1880 cycles in 60.6 s,
+USBPcap settings-dialog capture).  The tray applet polls the same four
+requests at about 2 Hz and writes nothing.
+
 ### 2.3 Alternate settings
 
 The unit accepts one SET_INTERFACE at connect: interface 5, alternate
@@ -874,6 +878,11 @@ IF1 burst each.
 | 44.1 kHz | `0x10`, index 48, value `0x0010` |
 | 48 kHz | `0x10`, index 48, value `0x0020` |
 
+A rate apply writes the options word (§11.5), the level word
+(`0x17/0x0fc0`), and then the full four-word `0x1b` DDS quad (§11.3).
+The settings-dialog capture records the quad rewrite on every rate apply,
+with the audio stream idle.
+
 ### 11.2 Clock source
 
 The clock index is written with request `0x10`:
@@ -896,11 +905,11 @@ The unit has no LTC source; the clock field is two bits.
 
 1. `SET_CONFIGURATION`
 2. `SET_INTERFACE(5, 1)`
-3. 60 × `0x16` (indices 0..29 and 32..61)
+3. 60 × `0x16`, value 0 (indices 0..29 and 32..61)
 4. 4 × `0x1b` clock quad
-5. `0x10/0x05ff = 0x0028`
+5. `0x10/0x05ff = 0x0028` (`0x0018` in a later capture; §12.4)
 6. `0x17/0x0fc0 = 0x3c00`
-7. the `0x10/0x3000` and `0x10/0x0800` group
+7. the `0x10/0x3000` and `0x10/0x0800` group (sequence below)
 8. 30 × `0x15` loopback bank
 9. `0x3f99 = 0x0812`
 10. 1087-word bulk scene
@@ -916,7 +925,26 @@ The `0x1b` quad is:
 
 These are the same four DDS words as the UC. A pitch change scales the quad
 as `base / (1 + pitch / 100)` and writes all four words. The control is the
-host varispeed setting, not the family selection in §11.1.
+host varispeed setting, not the family selection in §11.1. The four words
+are the four base-rate family divisors: 32 kHz, 44.1 kHz, 48 kHz and 50 kHz
+(family 0..3); the fourth word is the 50 kHz divisor, verified by the UC
+pitch capture where it tracks the 48 kHz word at 25/24.
+
+The mode group (item 7) writes, in order:
+
+```text
+0x10/0x3000 = 0x0000
+0x10/0x3000 = 0x0000
+0x10/0x0800 = 0x0800
+0x10/0x0800 = 0x0000
+0x10/0x3000 = 0x2000
+   (gap of about 110 ms, the interface-reselect settle)
+0x10/0x3000 = 0x0000
+0x10/0x0800 = 0x0800   (five writes over about 40 ms)
+```
+
+The sequence, values and gap are capture-verified; the bit semantics are
+an open item (§12.4).
 
 ### 11.4 Application reconnect
 
@@ -946,6 +974,14 @@ Request `0x10`, index 1487, carries the unit's options as one full word:
 Every option change writes the word under mask `0x05cf` (index 1487),
 including the current clock source in bits 1–2; the mask preserves the bits
 above it. Bit 10 is not an index of its own.
+
+The settings dialog applies each option as a full-word write. A USBPcap
+capture records individual toggles of bits 3, 6, 7, 8 and 10, and clock
+source changes in bits 0–2 consistent with §11.2 (Optical = `0x0004`,
+Coaxial = `0x0002`, bit 0 clear on an external source). The same capture
+records the level word `0x17/0x0fc0` toggling between `0x3c00` and
+`0x3d00` alongside a bit-8 change; the level-word bit layout is an open
+item (§12.4).
 
 The read form (request `0x10` in) returns the options plus further bits above
 `0x05cf` (measured on firmware 46). A full-word write changes them, so they
@@ -1057,16 +1093,31 @@ The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
 1. The 2x/4x alternate selection on interface 5: alt 1 is the verified
    1x path; a reference-host capture streaming at 96/192 kHz decides
    alt 2/3.
-2. DDS quad rate dependence: the quad is written once at connect and
-   stays unchanged across the captured 44.1↔48 kHz transitions; a
-   connect capture at a 32 kHz-family rate decides the other bands.
-3. Settings-group field semantics: the `0x10` indices 0x3000/0x0800
-   carry the mode setup; the bit meanings are undecoded.
-4. The `0x10` 0x0028/0x05ff word at connect: role undecoded.
+2. Settings-group field semantics: the `0x10` indices 0x3000/0x0800
+   connect sequence, values and the ~110 ms gap are capture-verified
+   (§11.3). The captured writes carry bit 11 (`0x0800`) and bit 13
+   (`0x2000`); their relation to the options-word fields written under
+   the same masks (§11.5) is undecoded.
+3. The `0x10/0x05ff` connect word varies between captures: `0x0028`
+   (40) and `0x0018` (24). Hypothesis: the host streaming buffer or
+   latency setting in samples. A capture that varies the host buffer
+   setting decides it.
+4. The level word `0x17/0x0fc0`: observed `0x3c00` and `0x3d00`
+   (bit 8 of the word). The bit layout is undecoded; a settings-dialog
+   capture changing one level control at a time decides it.
+5. Rate transition under stream: the settings-dialog captures apply
+   rate with audio idle. Whether the device tolerates a live same-band
+   rate write without an engine restart, and how the output latch
+   behaves during the transition, needs a capture with a tone playing:
+   the status word (rate code, sync, out-latched bit), any mute
+   requests, and the audio output recorded across the switch.
 
 ## 13. Metering
 
 The meter endpoint is IF1 IN `0x85`. A packet is 244 bytes.
+
+The device publishes the five banks continuously at about 30 Hz per bank
+(about 149 packets/s, USBPcap capture); the host consumes at its own rate.
 
 | Bytes | Contents |
 |---|---|
