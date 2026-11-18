@@ -176,9 +176,8 @@ request; do not commit or push directly to `main`.
 - Be honest about impact. If no audible or user-visible problem is solved
   (for example a correctness or diagnostics fix), say so explicitly. Do not
   imply an audible fix that was not verified.
-- Follow the publication rules: no disassembly references and no development
-  history. "Capture-verified" is acceptable; naming the disassembly as a
-  source is not.
+- Follow the specification publication rules: positive, verified statements
+  backed by capture or test evidence, and no development history.
 
 ## Shared behaviour and device delegation
 
