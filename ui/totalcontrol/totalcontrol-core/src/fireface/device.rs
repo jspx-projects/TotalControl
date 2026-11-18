@@ -83,9 +83,17 @@ pub struct DeviceInfo {
     pub firmware: u32,
     pub name: String,
     pub serial: String,
+    /// The hwdep ABI version the driver reports for this unit.
+    pub abi: u32,
 }
 
 impl DeviceInfo {
+    /// A driver serves this build iff its ABI is at least ours (newer is
+    /// forward-compatible). An older driver is *incompatible*: present but
+    /// not usable, surfaced in the selector rather than hidden.
+    pub fn abi_compatible(&self) -> bool {
+        self.abi >= ABI_VERSION
+    }
     fn from_abi(card: i32, info: HwdepInfo) -> Option<Self> {
         let model = Model::from_abi(info.model)?;
         let iso = match info.transport {
@@ -113,6 +121,7 @@ impl DeviceInfo {
             firmware: info.firmware,
             name: info.name_str(),
             serial: info.serial_str(),
+            abi: info.abi,
         })
     }
 }
@@ -1120,6 +1129,15 @@ impl Fireface {
     /// List every hwdep-visible Fireface without opening a mixer.
     pub fn enumerate() -> Vec<DeviceInfo> {
         hwdep::enumerate()
+            .into_iter()
+            .filter_map(|d| DeviceInfo::from_abi(d.card, d.info))
+            .collect()
+    }
+
+    /// Like [`enumerate`] but includes ABI-incompatible units (present but
+    /// unusable) so the selector can show them with a warning.
+    pub fn enumerate_all() -> Vec<DeviceInfo> {
+        hwdep::enumerate_all()
             .into_iter()
             .filter_map(|d| DeviceInfo::from_abi(d.card, d.info))
             .collect()
@@ -7790,6 +7808,7 @@ mod tests {
                 firmware: 1,
                 name: model.name().into(),
                 serial: "TEST".into(),
+                abi: ABI_VERSION,
             };
             (
                 Self {

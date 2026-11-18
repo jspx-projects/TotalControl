@@ -34,24 +34,43 @@ pub struct Hwdep {
 }
 
 impl Hwdep {
-    /// Open `/dev/snd/hwC{card}D0` and verify that it is our ABI.
+    /// Open `/dev/snd/hwC{card}D0` and verify the driver serves our ABI.
     pub fn open(card: i32) -> io::Result<Self> {
-        let path = PathBuf::from(format!("/dev/snd/hwC{card}D0"));
-        let file = OpenOptions::new().read(true).write(true).open(&path)?;
-        let hwdep = Self { file, path, card };
+        let hwdep = Self::open_unchecked(card)?;
         let info = hwdep.info()?;
-        if info.abi != ABI_VERSION {
+        // The kernel module is rebuilt per kernel release; a NEWER driver is
+        // forward-compatible, an OLDER one cannot serve this build and is
+        // *incompatible* (present but unusable, surfaced not hidden). The INFO
+        // ioctl encodes the struct size, so a successful read already implies
+        // a matching layout.
+        if info.abi < ABI_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "{}: hwdep ABI {} (expected {})",
+                    "{}: incompatible driver (hwdep ABI {} < {})",
                     hwdep.path.display(),
                     info.abi,
                     ABI_VERSION
                 ),
             ));
         }
+        if info.abi != ABI_VERSION {
+            log::warn!(
+                "{}: hwdep ABI {} newer than built {}; compatible, continuing",
+                hwdep.path.display(),
+                info.abi,
+                ABI_VERSION
+            );
+        }
         Ok(hwdep)
+    }
+
+    /// Open without the ABI gate, to enumerate/identify units whose driver
+    /// may be incompatible so the selector can list them with a warning.
+    pub fn open_unchecked(card: i32) -> io::Result<Self> {
+        let path = PathBuf::from(format!("/dev/snd/hwC{card}D0"));
+        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        Ok(Self { file, path, card })
     }
 
     pub fn card(&self) -> i32 {
@@ -232,9 +251,24 @@ pub struct Discovered {
 }
 
 pub fn enumerate() -> Vec<Discovered> {
+    enumerate_with(false)
+}
+
+/// Like [`enumerate`] but includes units whose driver is ABI-incompatible,
+/// so the selector can list them with an "incompatible driver" warning.
+pub fn enumerate_all() -> Vec<Discovered> {
+    enumerate_with(true)
+}
+
+fn enumerate_with(include_incompatible: bool) -> Vec<Discovered> {
     let mut out = Vec::new();
     for card in candidate_cards() {
-        let Ok(hw) = Hwdep::open(card) else {
+        let opened = if include_incompatible {
+            Hwdep::open_unchecked(card)
+        } else {
+            Hwdep::open(card)
+        };
+        let Ok(hw) = opened else {
             continue;
         };
         let Ok(info) = hw.info() else {

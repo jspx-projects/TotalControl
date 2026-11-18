@@ -196,15 +196,25 @@ fn choose_startup_kind(
 
 /// One selectable physical device: a model plus the serial of the unit.
 /// The serial is what survives a card-index change or a USB reconnect.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `incompatible` marks a present unit whose driver cannot serve this build;
+/// it is display-only and does not participate in identity equality.
+#[derive(Clone, Debug)]
 pub struct DeviceTarget {
     pub kind: DeviceKind,
     pub serial: Option<String>,
+    pub incompatible: bool,
 }
+
+impl PartialEq for DeviceTarget {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.serial == other.serial
+    }
+}
+impl Eq for DeviceTarget {}
 
 impl DeviceTarget {
     pub fn kind_only(kind: DeviceKind) -> Self {
-        Self { kind, serial: None }
+        Self { kind, serial: None, incompatible: false }
     }
 
     pub fn from_identity(identity: totalcontrol_core::FirefaceIdentity) -> Self {
@@ -215,6 +225,7 @@ impl DeviceTarget {
         Self {
             kind,
             serial: (!identity.serial.is_empty()).then_some(identity.serial),
+            incompatible: false,
         }
     }
 
@@ -222,6 +233,16 @@ impl DeviceTarget {
         match &self.serial {
             Some(serial) => format!("{} ({serial})", self.kind.label()),
             None => self.kind.label().to_string(),
+        }
+    }
+
+    /// Selector label: an incompatible unit is prefixed with an exclamation
+    /// mark (rendered red) and explained by the "incompatible driver" tooltip.
+    pub fn menu_label(&self) -> String {
+        if self.incompatible {
+            format!("! {}", self.label())
+        } else {
+            self.label()
         }
     }
 }
@@ -1019,8 +1040,9 @@ impl DeviceHandle {
         #[cfg(feature = "alsa")]
         {
             let mut out = Vec::new();
-            for info in Fireface::enumerate() {
-                let target = DeviceTarget::from_identity(info.identity());
+            for info in Fireface::enumerate_all() {
+                let mut target = DeviceTarget::from_identity(info.identity());
+                target.incompatible = !info.abi_compatible();
                 if !out.contains(&target) {
                     out.push(target);
                 }
@@ -9966,6 +9988,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.last_conn_check = Some(Instant::now());
                 let was_connected = state.connected;
                 state.connected = state.device.is_connected();
+                // A present unit whose driver is ABI-incompatible is unusable:
+                // treat it as lost so we fall back to the next usable unit or
+                // the default simulation (and flag it in the selector).
+                let active_incompatible = DeviceHandle::available_targets()
+                    .iter()
+                    .any(|t| *t == state.device.target() && t.incompatible);
+                if active_incompatible {
+                    state.connected = false;
+                }
                 if !state.connected {
                     if was_connected {
                         // The device is about to lose its handle: keep the
@@ -10000,6 +10031,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             .as_ref()
                             .and_then(DeviceHandle::open_target)
                             .or_else(|| DeviceHandle::open_real())
+                            // Active unit lost and no other real unit present:
+                            // fall to a simulation so TC stays usable. A real
+                            // unit that (re)appears takes over again via the
+                            // fallback-mock path above.
+                            .or_else(|| Some(DeviceHandle::open_mock_ucx()))
                     };
                     if let Some(fresh) = fresh {
                         log::info!("Device connected: {}", fresh.target().label());
@@ -15998,24 +16034,32 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     if !targets.contains(&current_target) {
         targets.push(current_target.clone());
     }
-    let device_labels: Vec<String> = targets.iter().map(DeviceTarget::label).collect();
+    let device_labels: Vec<String> = targets.iter().map(DeviceTarget::menu_label).collect();
     let targets_for_pick = targets.clone();
+    let current_incompatible = current_target.incompatible;
+    let picker = pick_list(device_labels, Some(current_target.menu_label()), move |label| {
+        let target = targets_for_pick
+            .iter()
+            .find(|target| target.menu_label() == label)
+            .cloned()
+            .unwrap_or_else(|| current_target.clone());
+        Message::SelectDevice(target)
+    },)
+    .style(theme::pick_list)
+    .menu_style(theme::menu)
+    .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+    .text_size(theme::TEXT_MD * scale);
+    // A present-but-incompatible unit is flagged; hovering explains why.
+    let picker: Element<'_, Message> = if current_incompatible {
+        crate::widgets::strip::hint(picker, "incompatible driver", scale)
+    } else {
+        picker.into()
+    };
     let mut session = row![
         text("Device")
             .color(theme::text_sec())
             .size(theme::TEXT_XS * scale),
-        pick_list(device_labels, Some(current_target.label()), move |label| {
-            let target = targets_for_pick
-                .iter()
-                .find(|target| target.label() == label)
-                .cloned()
-                .unwrap_or_else(|| current_target.clone());
-            Message::SelectDevice(target)
-        },)
-        .style(theme::pick_list)
-        .menu_style(theme::menu)
-        .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-        .text_size(theme::TEXT_MD * scale),
+        picker,
     ]
     .spacing(theme::SPACE_SM * scale)
     .align_y(iced::Alignment::Center);
@@ -22233,11 +22277,17 @@ mod tests {
         let a = DeviceTarget {
             kind: DeviceKind::Ucx,
             serial: Some("A".into()),
+            incompatible: false,
         };
         let b = DeviceTarget {
             kind: DeviceKind::Ucx,
             serial: Some("B".into()),
+            incompatible: false,
         };
+        // The incompatible flag is display-only; identity is kind + serial.
+        let mut a_flagged = a.clone();
+        a_flagged.incompatible = true;
+        assert_eq!(a, a_flagged);
         let available = vec![a.clone(), b.clone()];
         assert_eq!(
             choose_startup_target(&available, Some(DeviceKind::Ucx), Some("B")),
