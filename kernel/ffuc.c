@@ -182,9 +182,13 @@ static unsigned int ffuc_urb_frames(struct ffuc *chip, unsigned int rate)
 
 static unsigned int ffuc_iso_wrap(struct ffuc *chip)
 {
-	/* The UCX counts 12 bits (wrap 3072); the UC Mac path was captured
-	 * with a 13-bit position (wrap 8192). */
-	return chip->ucx ? 3072 : FFUC_ISO_COUNTER_MOD;
+	/* The AP-mode position counter wraps at 8192 (13-bit) at 1x rates on
+	 * every model: UC, UCX and Babyface-classic share the same header
+	 * (capture-verified on UCX and UC; Babyface from the reference
+	 * set_format, which converges on the same mask/modulus write).  The
+	 * reference widens the counter to 16384/32768 at 2x/4x; that rate
+	 * scaling is an open item, so the 1x wrap is used at all rates. */
+	return FFUC_ISO_COUNTER_MOD;
 }
 
 unsigned int ffuc_rate_from_index(unsigned int idx)
@@ -1454,12 +1458,9 @@ static void ffuc_fb_put(struct ffuc *chip, unsigned int pos, unsigned int frames
 {
 	u32 e;
 
-	if (chip->ucx)
-		e = ((phase & 0x7ff) << 21) | ((pos & 0xfff) << 5) |
-		    (frames & 0x1f);
-	else
-		e = ((phase & 0x3fff) << 18) | ((pos & 0x1fff) << 5) |
-		    (frames & 0x1f);
+	/* One header layout for every AP-mode model: frame count bits 0-4,
+	 * position bits 5-17 (13-bit), phase bits 18-31 (14-bit). */
+	e = ((phase & 0x3fff) << 18) | ((pos & 0x1fff) << 5) | (frames & 0x1f);
 	chip->fb[chip->in_pkts++ & (FFUC_FB_SIZE - 1)] = e;
 	chip->in_end = (pos + frames) % ffuc_iso_wrap(chip);
 }
@@ -1481,13 +1482,8 @@ static bool ffuc_fb_get(struct ffuc *chip, u64 k, unsigned int *pos,
 	    chip->in_pkts - src > FFUC_FB_SIZE)
 		return false;
 	e = chip->fb[src & (FFUC_FB_SIZE - 1)];
-	if (chip->ucx) {
-		*pos = (e >> 5) & 0xfff;
-		*phase = e >> 21;
-	} else {
-		*pos = (e >> 5) & 0x1fff;
-		*phase = (e >> 18) & 0x3fff;
-	}
+	*pos = (e >> 5) & 0x1fff;
+	*phase = (e >> 18) & 0x3fff;
 	*frames = min(e & 0x1f, chip->mode->max_frames);
 	return true;
 }
@@ -1588,14 +1584,14 @@ cadence_skip:
 			;
 		}
 		hdr = le32_to_cpup((const __le32 *)pkt);
-		/* The wrap is not a power of two on the UCX (3072), so a
-		 * mask derived from it would clear payload bits: mask the
-		 * header field, then reduce modulo the wrap.  A header-only
+		/* One header layout for every AP-mode model: frame count
+		 * bits 0-4, position bits 5-17 (13-bit, wrap 8192), phase
+		 * bits 18-31 (14-bit).  The wrap is a power of two, so the
+		 * field mask and the modulo reduction agree.  A header-only
 		 * packet carries the current position with zero frames; it
 		 * must advance the feedback position, not reset it. */
 		{
-			unsigned int pos = chip->ucx ? ((hdr >> 5) & 0xfff) :
-						      ((hdr >> 5) & 0x1fff);
+			unsigned int pos = (hdr >> 5) & 0x1fff;
 			unsigned int hframes = hdr & 0x1f;
 			unsigned int wrap = ffuc_iso_wrap(chip);
 
@@ -1605,9 +1601,7 @@ cadence_skip:
 			if (chip->in_pkts &&
 			    pos != chip->in_end % wrap)
 				atomic_inc(&chip->in_pos_gap);
-			ffuc_fb_put(chip, pos, frames[i],
-				    chip->ucx ? ((hdr >> 21) & 0x7ff) :
-						((hdr >> 18) & 0x3fff));
+			ffuc_fb_put(chip, pos, frames[i], (hdr >> 18) & 0x3fff);
 		}
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
@@ -1662,12 +1656,12 @@ cadence_skip:
 
 /*
  * ISO OUT packet:
- *   UCX: frames interleaved, each frame = lead word + nch float32 samples.
- *        The first frame's lead word is the stream position the packet plays
- *        at (mod 3072).  Writing all lead words keeps every frame
- *        self-describing and matches the UCX's own format.
+ *   UCX / Babyface-classic: frames interleaved, each frame = lead word +
+ *        nch float32 samples.  Every lead word is the stream position that
+ *        frame plays at (mod 8192), keeping each frame self-describing.
  *   UC:  frames interleaved, each frame = lead word + nch float32 samples;
- *        only the first lead word is used by the device.
+ *        only the first lead word is used by the device, the rest are
+ *        padding.
  */
 static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 {
@@ -2244,7 +2238,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
 	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin.
-	 * Reduce modulo the wrap: it is not a power of two on the UCX. */
+	 * Reduce modulo the wrap (8192 at 1x). */
 	chip->out_lead = (DIV_ROUND_CLOSEST(chip->fb_delay * chip->rate,
 					    8000) +
 			  (chip->ucx ? 60 : 2 * m->max_frames - 2)) %

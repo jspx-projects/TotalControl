@@ -791,14 +791,17 @@ sample words starting at body word `c × frames`.
 The IN header is a four-byte little-endian value.  Bits 0..4 carry the frame
 count, bits 5..17 the position, bits 18..31 the phase.  The frame count in
 the header equals the count derived from the packet length.  The position is
-the stream position modulo 8192.
+a 13-bit free-running counter wrapping at 8192 at 1x rates.  The
+position-counter width at 2x/4x rates is an open item.
 
-The phase field is a 14-bit fractional-sample accumulator counting in
-units of 1/10000 sample (modulus 10000).  It integrates the device clock
-against the host microframe clock and wraps when a whole sample
-accumulates.  A packet at the wrap carries one extra frame; the device
-spreads the correction over a few packets at the boundary.  The field
-predicts frame add/drop; it does not give an absolute rate.
+The phase field is a 14-bit fractional-sample accumulator counting 480 MHz
+ticks (2.0833 ns).  Its modulus is ticks-per-sample, 480000000/rate; at
+48 kHz this is 10000 (i.e. 1/10000 sample), at 44.1 kHz it is 10884.  It
+integrates the device clock against the host microframe clock and wraps
+when a whole sample accumulates.  A packet at the wrap carries one extra
+frame; the device spreads the correction over a few packets at the
+boundary.  The field predicts frame add/drop; it does not give an absolute
+rate.
 
 Every OUT sample frame starts with a lead word.  The UC uses the first lead
 word in a packet; the remaining lead words are padding.  The first lead word
@@ -878,10 +881,11 @@ init sequence does not set it.
    decoded.
 6. The PC interrupt URB size.  The 48/96/192 sample-frame size is the host's
    choice; the device contract is the packet size and the rate class.
-7. The AP header phase field on the UCX.  The 12-bit position, 11-bit phase
-   and the 3072 wrap are the implemented mapping; they are not verified
-   against a UCX capture.  On the UC the accumulator semantics are verified
-   at 48 kHz; isolated add/drop events away from the wrap are unattributed.
+7. AP header rate-band scaling.  The position width and modulus at 2x/4x
+   (16384/32768).  The 1x layout (13-bit position / 8192 wrap, 14-bit phase
+   counting 480 MHz ticks) is capture-verified; a 2x/4x ISO capture confirms
+   the wider bands.  Isolated add/drop events away from the wrap are
+   unattributed.
 8. Status bytes 0 and 1.  "Front-panel events" uses bytes 2 and 3; the roles
    of bytes 0 and 1 are not decoded.
 9. The bulk endpoints on interface 0 at 1x and 2x.  `0x03` and `0x84` are
