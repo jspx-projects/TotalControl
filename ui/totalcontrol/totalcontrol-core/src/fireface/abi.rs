@@ -114,6 +114,23 @@ pub struct HwdepCounters {
     pub in_gaps: u32,
     pub in_shorts: u32,
     pub in_status_errors: u32,
+    pub out_underruns: u32,
+    pub in_overruns: u32,
+    pub out_capacity_err: u32,
+    pub out_pkt_len_err: u32,
+    pub out_pkt_status: u32,
+    pub in_status_err: u32,
+    pub in_short: u32,
+    pub in_misaligned: u32,
+    pub in_bad_length: u32,
+    pub out_bad_length: u32,
+    pub in_pos_gap: u32,
+    pub in_frames_mismatch: u32,
+    pub rate_mismatch: u32,
+    pub out_fb_ahead: u32,
+    pub out_fb_stale: u32,
+    pub hw_ptr_mismatch: u32,
+    pub delta_zero: u32,
 }
 
 /// Linux `_IOC` encoding (the generic asm-generic layout used on x86_64,
@@ -171,7 +188,8 @@ mod tests {
         // ffuc_hwdep_vendor: 1 + 1 + 2 + 2 + 2 + 2 + 64 = 74, aligned to 2
         assert_eq!(size_of::<HwdepVendor>(), 74);
         assert_eq!(size_of::<HwdepWords>(), 4 + 4 + 63 * 4);
-        assert_eq!(size_of::<HwdepCounters>(), 56);
+        // ffuc_hwdep_counters: 31 * 4 = 124
+        assert_eq!(size_of::<HwdepCounters>(), 124);
     }
 
     #[test]

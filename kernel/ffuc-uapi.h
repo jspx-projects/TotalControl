@@ -132,6 +132,25 @@ struct ffuc_hwdep_counters {
 	__u32 in_gaps;
 	__u32 in_shorts;
 	__u32 in_status_errors;
+	/* Error counters surfaced for the transport diagnostics.  Cumulative
+	 * per driver instance; zeroed on reattach. */
+	__u32 out_underruns;
+	__u32 in_overruns;
+	__u32 out_capacity_err;
+	__u32 out_pkt_len_err;
+	__u32 out_pkt_status;
+	__u32 in_status_err;
+	__u32 in_short;
+	__u32 in_misaligned;
+	__u32 in_bad_length;
+	__u32 out_bad_length;
+	__u32 in_pos_gap;
+	__u32 in_frames_mismatch;
+	__u32 rate_mismatch;
+	__u32 out_fb_ahead;
+	__u32 out_fb_stale;
+	__u32 hw_ptr_mismatch;
+	__u32 delta_zero;
 };
 
 #define FFUC_HWDEP_IOCTL_INFO \
