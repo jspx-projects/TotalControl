@@ -505,6 +505,11 @@ The host:
   the control-I/O worker, and the drain thread performs model work only;
 - keeps one meter reader;
 - chooses a buffer/quantum that covers the URB queue plus margin;
+- sets the refill wake cushion (`api.alsa.headroom`) for the scheduling
+  margin (§4.1.1);
+- keeps the duplex playback follower linked to the capture driver
+  (`api.alsa.auto-link` in IRQ mode) so a recovery re-prepares both
+  directions;
 - checks engine state before control writes that assume a running engine;
 - treats recovery as an xrun and re-prepares;
 - uses the hwdep node as the control owner.
