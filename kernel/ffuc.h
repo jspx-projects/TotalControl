@@ -383,11 +383,20 @@ struct ffuc {
 	u64 ts_anchor_ns;      /* sof_ns(f) = ts_anchor_ns + f * 125000 */
 	bool ts_anchor_valid;
 	u64 ts_frames;         /* IN frame index of the next completion */
-	u64 in_total;          /* unwrapped device position, whole frames */
+	u64 in_total;          /* unwrapped count model, whole frames */
+	u64 in_field;          /* unwrapped field position (jump-carrying) */
 	bool in_total_valid;
 	u64 ts_ns;             /* latest sample: host time */
 	u64 ts_pos;            /* latest sample: unwrapped position */
 	u32 ts_phase;          /* latest sample: raw phase field */
+	u64 ts_frac_q32;       /* phase/tps in Q32 frames (exact position) */
+	u64 ts_tps_q32;        /* ticks per sample, Q32 (per rate) */
+	s64 ts_seed_span;      /* seed diagnostics: packets rewound */
+	u64 ts_seed_pos_q32;   /* seed diagnostics: position at the slot */
+	u64 ts_seed_in;        /* seed diagnostics: in_pkts at the seed */
+	u64 ts_seed_out;       /* seed diagnostics: out_pkts at the seed */
+	u32 ts_seed_in_end;    /* seed diagnostics: in_end at the seed */
+	u32 ts_seed_counter;   /* seed diagnostics: out_counter at the seed */
 	bool ts_pos_valid;
 	u64 ts_win_ns;         /* rate_meas window start */
 	u64 ts_win_pos;
