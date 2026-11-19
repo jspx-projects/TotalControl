@@ -84,6 +84,7 @@
 #define FFUC_SAMPLE_BYTES	4
 #define FFUC_MAX_URB_ERRORS	16
 #define FFUC_MIN_QUEUE_FRAMES	64
+#define FFUC_START_GRACE_URBS	4	/* starved URBs tolerated after start */
 #define FFUC_MIDI_IN_URBS	2	/* bulk IN URBs kept queued */
 #define FFUC_MIDI_PORTS		2	/* logical ports on the endpoint pair */
 #define FFUC_CTL_TIMEOUT	1000	/* ms */
@@ -208,6 +209,10 @@ struct ffuc_stream {
 	 * of an episode sends silence and is counted; the second consecutive
 	 * one stops the stream as an XRUN.  Reset at prepare and start. */
 	unsigned int out_starve_streak;
+	/* Start grace: the first URBs after trigger start send silence on
+	 * starvation without stopping, so a stream-start prefill shortfall
+	 * (rate transition, renegotiation) recovers without an XRUN. */
+	unsigned int out_start_urbs;
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must
