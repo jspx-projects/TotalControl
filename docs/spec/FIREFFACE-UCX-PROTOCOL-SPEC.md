@@ -882,6 +882,7 @@ The family word selects the base-rate family:
 
 | Change | EP0 write |
 |---|---|
+| 32 kHz | `0x10`, index 48, value `0x0000` |
 | 44.1 kHz | `0x10`, index 48, value `0x0010` |
 | 48 kHz | `0x10`, index 48, value `0x0020` |
 
@@ -1020,6 +1021,35 @@ settings applet writes no options word on a cold init. The host
 readback is never written back. The host reads the options at open and keeps
 the live values over a stale scene, as on the UC. The reference levels have
 no readback and are written from the scene at connect.
+
+### 11.6 Rate status word
+
+Request `0x19` (IN, 4 bytes) returns the rate status word:
+
+| Bits | Field | Encoding |
+|---|---|---|
+| 0–1 | readiness | 0 = ready; the reference host polls until these bits clear |
+| 2 | constant 1 | set at every rate and engine state observed |
+| 7–8 | constant 1 | set at every rate and engine state observed |
+| 11–12 | base-rate family | 0 = 32 kHz, 1 = 44.1 kHz, 2 = 48 kHz |
+| 13–14 | band multiplier | 0 = 1x, 1 = 2x, 2 = 4x |
+
+The word is `0x0184 | (family << 11) | (band << 13)`. Verified across all
+nine supported rates on the UCX (firmware 49): 32000 → `0x0184`,
+44100 → `0x0984`, 48000 → `0x1184`, 64000 → `0x2184`, 88200 → `0x2984`,
+96000 → `0x3184`, 128000 → `0x4184`, 176400 → `0x4984`,
+192000 → `0x5184`. The word tracks the device's actual rate during
+streaming rate changes. A family change under a band change passes
+through the old family's multiplier state: 44.1 → 192 kHz shows 176.4 kHz
+transiently in the status word.
+
+Open items:
+
+- Bits 0–1 never asserted in live rate-switch captures (54 µs sampling,
+  260k reads), at idle, or with the engine stopped. The busy window, if
+  any, is unobserved; a cold-init capture decides it.
+- The meaning of the constant bits 2, 7, 8 is undecoded; they are
+  invariant across rate and engine state.
 
 ## 12. Streaming
 

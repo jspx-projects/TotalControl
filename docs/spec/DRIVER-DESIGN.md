@@ -671,7 +671,7 @@ Scope labels are defined in §10.
 | Item | Scope |
 |---|---|
 | Replace fixed session gaps with a bounded poll of a device-visible readiness condition where one exists; keep documented quirks where the device has no acknowledgement | `WIN_SESSION` |
-| Add a rate-readiness poll after the rate commit word (every personality sends the commit) | UC, UCX |
+| Poll the rate status word (`0x19`, UCX spec §11.6) for readiness (bits 0–1 clear) after the rate commit, bounded with a timeout; replace fixed session gaps where the device acknowledges | UC, UCX |
 | Move ISO continuity logging to per-endpoint state | ISO |
 | Preallocate the hwdep read buffer per reader | all |
 | Make buffer poison and verbose stop diagnostics optional module parameters | all |
