@@ -869,14 +869,17 @@ the header equals the count derived from the packet length.  The position is
 a 13-bit free-running counter wrapping at 8192 at 1x rates.  The
 position-counter width at 2x/4x rates is an open item.
 
-The phase field is a 14-bit fractional-sample accumulator counting 480 MHz
-ticks (2.0833 ns).  Its modulus is ticks-per-sample, 480000000/rate; at
-48 kHz this is 10000 (i.e. 1/10000 sample), at 44.1 kHz it is 10884.  It
-integrates the device clock against the host microframe clock and wraps
-when a whole sample accumulates.  A packet at the wrap carries one extra
-frame; the device spreads the correction over a few packets at the
-boundary.  The field predicts frame add/drop; it does not give an absolute
-rate.
+The phase field is a 14-bit accumulator counting 480 MHz ticks (2.0833 ns).
+Per frame it advances by `tps = 480000000/rate` ticks — fractional at
+44.1 kHz (10884.354), exactly 10000 at 48 kHz — and the field wraps at 2^14.
+It integrates the device clock against the host microframe clock; the
+whole-sample accumulation of the fraction is the add/drop: a packet at the
+wrap carries one extra frame, and the device spreads the correction over a
+few packets at the boundary.  The field predicts frame add/drop; it does
+not give an absolute rate.  The sub-sample law against the microframe
+boundary — the sign and offset of `exact position = pos ± phase/tps` — is
+a capture item; the field varies even at 48 kHz, so it carries the
+device-vs-bus sub-sample drift at every rate.
 
 Every OUT sample frame starts with a lead word.  The UC uses the first lead
 word in a packet; the remaining lead words are padding.  The first lead word

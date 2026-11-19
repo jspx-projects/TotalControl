@@ -1121,10 +1121,13 @@ Input packet:
 - up to 8 ISO packets per URB.
 
 At 1x rates the position is a 13-bit free-running counter wrapping at 8192.
-The phase is a 14-bit fractional-sample accumulator counting 480 MHz ticks
-(2.0833 ns); its modulus is ticks-per-sample, 480000000/rate (10000 at
-48 kHz, 10884 at 44.1 kHz). It predicts frame add/drop, not an absolute
-rate. The position-counter width at 2x and 4x rates is an open item (§12.4).
+The phase is a 14-bit accumulator counting 480 MHz ticks (2.0833 ns); per
+frame it advances by `tps = 480000000/rate` ticks — fractional at 44.1 kHz
+(10884.354), exactly 10000 at 48 kHz — and the field wraps at 2^14.  It
+predicts frame add/drop, not an absolute rate; the sub-sample law against
+the microframe boundary (the sign and offset of `pos ± phase/tps`) is a
+capture item, and the field varies even at 48 kHz.  The position-counter
+width at 2x and 4x rates is an open item (§12.4).
 
 Output packet:
 
