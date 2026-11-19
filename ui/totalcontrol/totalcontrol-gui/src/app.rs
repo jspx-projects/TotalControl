@@ -12521,6 +12521,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.last_sink_running = sink_running;
                 state.engine = clock;
                 state.card_stream = stream;
+                // PipeWire may move the graph rate on its own (a player or
+                // another client). Keep the forced quantum at or above the new
+                // rate's period floor so the request never reads as impossible.
+                enforce_quantum_floor(state, current_graph_rate(state));
                 if let Some((wanted, since)) = state.pending_device_rate {
                     let actual = stream.map(|s| s.rate);
                     if actual == Some(wanted) {
@@ -15270,7 +15274,9 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let quantum_sel = if clock.force_quantum == 0 {
         quantum_opts[0].clone()
     } else {
-        let shown = actual_quantum.max(floor);
+        // Show the requested quantum; the warning reports any divergence from
+        // the quantum the graph actually runs.
+        let shown = clock.force_quantum;
         quantum_opts
             .iter()
             .find(|o| o.as_str() == format!("{shown} samples"))
@@ -15317,7 +15323,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Rate follows"),
                 strip::hint(
-                    text("Determined by device")
+                    text("Device")
                         .color(theme::text_sec())
                         .size(text_size)
                         .width(Length::Fill),
@@ -15344,7 +15350,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Source"),
-                text(source).color(theme::text_primary()).size(text_size),
+                text(source).color(theme::text_sec()).size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -15356,7 +15362,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         row![
             caption("Graph"),
             text(rate_label(current_graph_rate(state)))
-                .color(theme::text_primary())
+                .color(theme::text_sec())
                 .size(text_size),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -15611,7 +15617,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                     _ => None,
                 };
                 if let Some(rtl) = measured {
-                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.summary(), theme::text_sec()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else if let Some(queue) = state.driver_queue {
                     let (usb, lead) = uc_rtl_frames(card.rate, queue);
@@ -15623,12 +15629,12 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         rate: card.rate,
                         tolerance_ms: 1.5,
                     };
-                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.summary(), theme::text_sec()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::text_primary(),
+                        theme::text_sec(),
                     ));
                 }
             } else if state.device.is_ucx_model() {
@@ -15642,18 +15648,18 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         rate: card.rate,
                         tolerance_ms: 1.2,
                     };
-                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.summary(), theme::text_sec()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::text_primary(),
+                        theme::text_sec(),
                     ));
                 }
             } else {
                 col = col.push(line(
                     ring_text(card.buffer, card.period, card.rate),
-                    theme::text_primary(),
+                    theme::text_sec(),
                 ));
             }
             // The forced quantum is a request; the graph runs at the card's
@@ -15704,7 +15710,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                 };
                 if let Some(rtl) = measured {
                     return column![
-                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.summary(), theme::text_sec()),
                         line(rtl.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)
@@ -15721,7 +15727,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         tolerance_ms: 1.5,
                     };
                     return column![
-                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.summary(), theme::text_sec()),
                         line(rtl.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)
@@ -15741,7 +15747,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         tolerance_ms: 1.2,
                     };
                     return column![
-                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.summary(), theme::text_sec()),
                         line(rtl.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)

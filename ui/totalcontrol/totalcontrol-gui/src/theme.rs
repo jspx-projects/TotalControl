@@ -1338,6 +1338,9 @@ pub fn thin_scrollbar() -> iced::widget::scrollable::Scrollbar {
     iced::widget::scrollable::Scrollbar::new()
         .width(THIN_SCROLLBAR_WIDTH)
         .scroller_width(THIN_SCROLLBAR_WIDTH)
+        // A defined spacing makes the scrollable reserve room for the bar;
+        // with None it reserves nothing and the bar overlays the content.
+        .spacing(0)
 }
 
 /// A scrollbar with no visible rail or scroller.  Slideout panels use it so

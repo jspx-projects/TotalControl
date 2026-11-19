@@ -317,7 +317,7 @@ only when the clock source is Internal:
   it reads `Waiting for playback` and keeps the last rate.
 
 When the device is slaved to an external clock, the rate is determined by the
-device and `Rate follows` reads `Determined by device` (read-only).
+device and `Rate follows` reads `Device` (read-only).
 
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A followed rate change is a runtime change, so it does not add an undo step or

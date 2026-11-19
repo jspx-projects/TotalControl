@@ -1215,7 +1215,9 @@ editable picker of the device-supported rates; selecting a rate drives the card
 through the engine-rate path. When `Rate follows` is PipeWire or SW playback
 1/2, or the clock source is external, the row is a read-only readout of the rate
 the unit reports (status `0x11`), with a hint that it is device-reported. The
-rate authority lives in the host engine group, not here.
+rate authority lives in the host engine group, not here. Read-only reports (the
+device rate, Graph, Source and the latency readout) use the secondary text
+colour; editable controls use the primary colour.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
 wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
@@ -1256,7 +1258,7 @@ follows the player feeding SW playback 1/2. The rate value itself is set in the
 DEVICE group's Sample rate picker (Device mode); the control offers no rate
 list. It is usable only when the device clock source is Internal. Slaved to an
 external clock, the rate is determined by the device and `Rate follows` is a
-read-only `Determined by device` label. The engine group always shows `Graph`,
+read-only `Device` label. The engine group always shows `Graph`,
 the rate PipeWire is currently running at, in every mode. With `SW playback 1/2`
 and an Internal clock it also shows `Source`; `Source` reads
 `<application> · <rate>` for the stream setting the graph, and reads `Waiting
