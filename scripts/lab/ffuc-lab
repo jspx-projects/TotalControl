@@ -1,16 +1,26 @@
 #!/bin/sh
-# Lab helper for the Fireface UC meter driver probes.
+# Lab helper for the Fireface UC driver debugfs surface.
 # Fixed subcommands only; installed with a NOPASSWD sudoers rule.
+# stats/ringtrace are read-only diagnostics; pause/double/kill probe the
+# meter pump.
 set -eu
 
 find_dbg() {
     for d in /sys/kernel/debug/*/; do
-        [ -f "$d/meter_pause_ms" ] && echo "$d" && return 0
+        [ -f "$d/stats" ] && echo "$d" && return 0
     done
     return 1
 }
 
 case "${1:-}" in
+    stats)
+        d=$(find_dbg) || { echo "no driver debugfs" >&2; exit 1; }
+        cat "$d/stats"
+        ;;
+    ringtrace)
+        d=$(find_dbg) || { echo "no driver debugfs" >&2; exit 1; }
+        cat "$d/ringtrace"
+        ;;
     pause)
         N=${2:?usage: ffuc-lab pause <ms>}
         case "$N" in ''|*[!0-9]*) echo "bad ms" >&2; exit 2;; esac
@@ -29,7 +39,7 @@ case "${1:-}" in
         echo 1 > "$d/meter_kill_next"
         ;;
     *)
-        echo "usage: ffuc-lab pause <ms> | double <0|1> | kill" >&2
+        echo "usage: ffuc-lab stats | ringtrace | pause <ms> | double <0|1> | kill" >&2
         exit 2
         ;;
 esac
