@@ -273,10 +273,22 @@ period floor, plus the exact floor, so the lowest achievable latency is
 selectable. A larger quantum is a larger period: more latency, more scheduling
 margin.
 
-The PCM buffer covers the URBs already in flight plus margin. A completion
-that overwrites unread capture frames or sends unwritten playback frames is
-counted as `in_overruns` / `out_underruns`. The host prevents these through
-its buffer/quantum choice.
+The PCM buffer covers the URBs already in flight plus margin. Ring pressure
+is measured against the driver's own ring position — the position the
+completion reads (playback) or writes (capture) — not the published status
+pointer, which refreshes only on a period signal and lags the driver position.
+
+A playback completion that cannot supply its frames from written ring data
+sends silence for that URB. It never sends unwritten ring content. The lead
+words advance by the mirrored frame count, so the device timeline stays fed.
+The first starved completion of an episode is counted once as `out_underruns`.
+A single starved completion is a grace: the next completion resumes normally
+when the ring has caught up, and the episode is heard as a one-URB gap. Two
+consecutive starved completions stop the stream as an XRUN. The engine keeps
+running and feeds the device silence while the application recovers through
+prepare/start. A capture completion that overwrites unread frames is counted
+as `in_overruns`; the device keeps streaming, so the capture stream is not
+stopped. The host prevents both through its buffer/quantum choice.
 
 ### 4.2 Period signalling gate
 
