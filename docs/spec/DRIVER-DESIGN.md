@@ -265,13 +265,23 @@ owns that policy.
 
 The installer also sets the refill wake cushion (`api.alsa.headroom`).
 PipeWire in `disable-tsched` mode wakes the refill thread when the queued
-delay falls to `quantum + headroom` (`avail_min = buffer − quantum −
-headroom`). With headroom 0 the wake leaves one period, and at the period
-floor a single late write starves the next URB. Headroom equal to the
-largest URB across the supported rates (192 frames at 192 kHz) guarantees
-one missed-write tolerance at every rate; the buffer clamp
-(`buffer − quantum`) scales the effective cushion at lower rates. The
-cushion adds up to one URB of queued latency at the highest rate.
+delay falls to `quantum + headroom`. With headroom 0 the wake leaves one
+period, and at the period floor a single late write starves the next URB.
+Headroom equal to the largest URB across the supported rates (192 frames)
+guarantees one missed-write tolerance.
+
+The cushion is effective only while `buffer > period + headroom`. The SPA
+IRQ-mode wake thresholds are `avail_min = buffer − (period + headroom)`
+(playback) and `avail_min = min(period + headroom, buffer)` (capture).
+When `headroom ≥ buffer − period`, the capture driver node wakes once per
+full buffer instead of once per period and the playback threshold reads
+always-ready; the graph cycles at buffer granularity and XRUN-storms. The
+packaged policy requests 8 periods, so `buffer = 8 × period` stays above
+`period + headroom` down to the 32-frame period floor with headroom 192.
+The larger buffer is latency-neutral: the queued delay target is
+`period + headroom` and the start prefill is
+`start-delay + period + headroom`; neither depends on the buffer size.
+The cushion adds up to one URB of queued latency at the highest rate.
 
 Lower `urb_frames` shortens the URB and lowers the period floor (lower
 latency). Raising `nurbs` enlarges the buffer (more margin); the period floor
@@ -507,6 +517,9 @@ The host:
 - chooses a buffer/quantum that covers the URB queue plus margin;
 - sets the refill wake cushion (`api.alsa.headroom`) for the scheduling
   margin (§4.1.1);
+- keeps the ALSA buffer above `period + headroom` so the IRQ wake
+  thresholds stay at period granularity (§4.1.1; the packaged
+  `period-num` covers the smallest supported period);
 - keeps the duplex playback follower linked to the capture driver
   (`api.alsa.auto-link` in IRQ mode) so a recovery re-prepares both
   directions;
