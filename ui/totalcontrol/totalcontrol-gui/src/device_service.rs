@@ -1220,6 +1220,10 @@ impl RmeDevice for Mirror {
     }
 
     fn set_sample_rate(&mut self, rate: u32) -> Result<(), Error> {
+        // Update the local rate at once: the rate-change reapply captures the
+        // mirror scene immediately after this call.  A stale rate in that
+        // capture would be written back to the unit when the reapply fires.
+        self.scene.settings.sample_rate = rate;
         self.run(move |d| {
             let _ = d.set_sample_rate(rate);
         });
@@ -1927,7 +1931,8 @@ fn apply(device: &mut DeviceHandle, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::{
-        mirror_matrix_blocks, Command, CommandInbox, DeviceService, MeterBallistics, COMMAND_CAP,
+        mirror_matrix_blocks, Command, CommandInbox, DeviceService, MeterBallistics, Mirror,
+        COMMAND_CAP,
     };
     use crate::app::DeviceHandle;
     use std::sync::Arc;
@@ -1984,6 +1989,34 @@ mod tests {
             "the model snapshot follows the mute command"
         );
 
+        service.stop();
+    }
+
+    /// The mirror's rate setter updates the local scene at once.  The
+    /// rate-change reapply captures the mirror scene right after the setter;
+    /// a stale rate in that capture would be written back to the unit when
+    /// the reapply fires.
+    #[test]
+    fn the_mirror_rate_setter_updates_the_local_scene_at_once() {
+        let service = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| !service.snapshot().scene.outputs.is_empty()),
+            "the initial snapshot arrives"
+        );
+        let mut mirror = Mirror::new(
+            service.snapshot(),
+            service.command_sender(),
+            service.meter_bus(),
+        );
+        let before = mirror.settings().sample_rate;
+        let rate = if before == 32_000 { 48_000 } else { 32_000 };
+        mirror.set_sample_rate(rate).expect("rate setter");
+        assert_eq!(mirror.settings().sample_rate, rate);
+        assert_eq!(mirror.capture_scene().settings.sample_rate, rate);
+        assert!(
+            wait_for(|| service.snapshot().scene.settings.sample_rate == rate),
+            "the service model follows the rate command"
+        );
         service.stop();
     }
 
