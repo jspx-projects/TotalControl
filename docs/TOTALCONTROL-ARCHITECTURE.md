@@ -461,6 +461,12 @@ playback follower PCM to the capture driver PCM (`api.alsa.auto-link`).
 The driver's XRUN recovery re-prepares the driver and then each linked
 follower; an unlinked follower is skipped and must recover on its own.
 
+The refill wake cushion (`api.alsa.headroom`) requires
+`buffer > period + headroom`; below that limit the SPA IRQ-mode wake
+thresholds degenerate and the graph cycles at buffer granularity. The
+packaged policy requests eight periods so the inequality holds at every
+supported quantum (DRIVER-DESIGN §4.1.1).
+
 The both-pending wake adds a deferral latency equal to the phase offset
 between the two directions' period crossings. The offset is a property of
 the implicit-feedback data path: the playback ring position leads capture
