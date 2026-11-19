@@ -31,9 +31,9 @@ cargo run -p totalcontrol-gui
 The kernel exposes no ALSA mixer controls; TotalControl uses the hwdep node.
 
 The WirePlumber rule in `ui/totalcontrol/tools/alsa/wireplumber-uc.conf` selects the
-18-channel Pro Audio profile and keeps ALSA scheduling polled.  Install it as
-`~/.config/wireplumber/wireplumber.conf.d/60-fireface-uc.conf` and restart
-WirePlumber.
+18-channel Pro Audio profile and runs the device in timer-based scheduling.
+Install it as `~/.config/wireplumber/wireplumber.conf.d/60-fireface-uc.conf`
+and restart WirePlumber.
 
 ## Documentation
 
