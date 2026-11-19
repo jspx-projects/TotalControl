@@ -267,6 +267,12 @@ Lower `urb_frames` shortens the URB and lowers the period floor (lower
 latency). Raising `nurbs` enlarges the buffer (more margin); the period floor
 is unchanged.
 
+The period floor bounds the quantum from below: the driver accepts any period
+≥ the period floor. The GUI offers the standard quantum steps filtered to ≥ the
+period floor, plus the exact floor, so the lowest achievable latency is
+selectable. A larger quantum is a larger period: more latency, more scheduling
+margin.
+
 The PCM buffer covers the URBs already in flight plus margin. A completion
 that overwrites unread capture frames or sends unwritten playback frames is
 counted as `in_overruns` / `out_underruns`. The host prevents these through
