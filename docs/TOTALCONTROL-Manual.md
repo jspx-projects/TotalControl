@@ -294,7 +294,16 @@ LED) and no software control; the later revision supports the software setting.
 On the UCX, termination is always software-controlled. TotalControl reads the
 setting from the unit when it connects.
 
-The sample-rate control has three kinds of choice:
+The panel separates what the device owns from what the host engine drives. In
+the device group, `Clock source` picks one of the unit's own clock options
+(Internal, SPDIF coax., Optical, Word clock). `Sample rate` shows the device
+rate: an editable picker of the device-supported rates when the clock is
+Internal and the engine Mode is Auto or a fixed rate, and a read-only readout
+of the rate the unit reports when the engine Mode is Follow or the clock source
+is external.
+
+The engine `Mode` control has three kinds of choice, usable only when the clock
+source is Internal:
 
 - **Auto (PipeWire)** lets PipeWire choose the graph rate.
 - **Follow SW playback 1/2** makes the rate follow the player feeding software
@@ -302,8 +311,10 @@ The sample-rate control has three kinds of choice:
   reverse-DNS name is shortened to the application name, so
   `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing
   playing it reads `Waiting for playback` and keeps the last rate.
-- A fixed rate (32, 44.1, 48, 64, 88.2, 96, 128, 176.4 or 192 kHz) forces that
-  rate.
+- A fixed rate (the device-supported rates) forces that rate.
+
+When the device is slaved to an external clock, the rate is determined by the
+device and `Mode` reads `Determined by device` (read-only).
 
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A followed rate change is a runtime change, so it does not add an undo step or

@@ -1305,6 +1305,16 @@ impl DeviceHandle {
         }
     }
 
+    /// The rate the unit reports it is set to, read from the device status.
+    pub fn device_rate(&self) -> Option<u32> {
+        match self {
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => d.device_rate(),
+            DeviceHandle::Mirror(d) => d.device_rate(),
+            _ => None,
+        }
+    }
+
     pub fn device_output_meters(&self) -> Option<Vec<f32>> {
         match self {
             DeviceHandle::Mirror(d) => Some(d.meters().outputs.to_vec()),
@@ -12383,6 +12393,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if state.device.is_mock()
                 || state.engine_rate_mode != EngineRateMode::Follow
                 || !state.device.rate_follows_sound_server()
+                || state.device.settings().clock_source != "Internal"
             {
                 return Task::none();
             }
@@ -13810,7 +13821,9 @@ fn popover<'a>(
         .max_height(available)
         .style(theme::dialog)
         .padding(theme::SPACE_XL * scale)
-        .width(Length::Fixed(width * scale)),
+        // Reserve the scrollbar's width so an appearing scrollbar does not
+        // overlay the content's right edge.
+        .width(Length::Fixed((width + theme::THIN_SCROLLBAR_WIDTH) * scale)),
     );
 
     // One layer, not a catcher stacked under the card: in a `stack`, the
@@ -14996,26 +15009,9 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .serial()
         .map(str::to_string)
         .unwrap_or_else(|| "\u{2014}".into());
-    // The same mode picker everywhere: Auto, Follow, then every rate class
-    // the connected device supports.  The kernel keeps a constant 18-channel
-    // ALSA node at all rates; at 2x/4x the USB packet carries fewer words and
-    // the unused ADAT channels stay silent.
-    let (rate_labels, rate_selected, rate_choices_vec) = rate_choices(state);
-    let labels_for_pick = rate_labels.clone();
-    let choices_for_pick = rate_choices_vec;
-    let engine_rate_row = row![
-        caption("Sample rate"),
-        field(pick_list(rate_labels, Some(rate_selected), move |label| {
-            let idx = labels_for_pick
-                .iter()
-                .position(|l| *l == label)
-                .unwrap_or(0);
-            rate_choice_message(choices_for_pick[idx])
-        })),
-    ]
-    .spacing(theme::SPACE_MD * scale)
-    .align_y(iced::Alignment::Center);
-    // The device-owned rate list, used when the device owns the rate.
+    // The device rate row: an editable picker of the device-supported rates.
+    // Selecting a rate routes through the engine-rate path for rate-following
+    // devices, so it changes the card, not just the model value.
     let device_rate_row = row![
         caption("Sample rate"),
         pick_list(
@@ -15045,9 +15041,40 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     ];
-    if uc {
-        body = body.push(engine_rate_row);
-    } else if !state.device.rate_follows_sound_server() && !state.device.is_mock() {
+    // The device rate is a device fact. In Follow mode, or when the device is
+    // slaved to an external clock, it is a read-only readout of the rate the
+    // unit reports; otherwise it is an editable picker. The mode that drives
+    // it lives in the AUDIO ENGINE group, not here.
+    let internal = settings.clock_source == "Internal";
+    let follow = state.engine_rate_mode == EngineRateMode::Follow;
+    if !state.device.is_mock() && (!internal || follow) {
+        let dev_rate = state
+            .device
+            .device_rate()
+            .filter(|r| *r > 0)
+            .or_else(|| (settings.sample_rate > 0).then_some(settings.sample_rate));
+        let rate_text = dev_rate.map(rate_label).unwrap_or_else(|| "\u{2014}".into());
+        let hint = if internal {
+            "Reported by the device \u{2014} follows the graph in Follow mode."
+        } else {
+            "Reported by the device \u{2014} set by the external clock source."
+        };
+        body = body.push(
+            row![
+                caption("Sample rate"),
+                strip::hint(
+                    text(rate_text)
+                        .color(theme::text_sec())
+                        .size(text_size)
+                        .width(Length::Fill),
+                    hint,
+                    scale,
+                ),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    } else {
         body = body.push(device_rate_row);
     }
     if state.device.capabilities().pitch {
@@ -15266,31 +15293,34 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     }));
 
     let follow = state.engine_rate_mode == EngineRateMode::Follow;
+    let internal = state.device.settings().clock_source == "Internal";
     let mut body = column![heading];
-    // The UC's single sample-rate control lives in the DEVICE group above;
-    // the other models pick the mode here.
-    if !state.device.is_uc_model() {
+    // The mode is ours to set only when the device runs on its internal clock.
+    // Slaved to an external clock, the rate is determined by the device.
+    if internal {
         body = body.push(
-            row![
-                caption(if follow { "Mode" } else { "Sample rate" }),
-                rate_pick
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
+            row![caption("Mode"), rate_pick]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
         );
-    } else if follow {
+    } else {
         body = body.push(
             row![
                 caption("Mode"),
-                text(RATE_MODE_FOLLOW)
-                    .color(theme::text_primary())
-                    .size(text_size),
+                strip::hint(
+                    text("Determined by device")
+                        .color(theme::text_sec())
+                        .size(text_size)
+                        .width(Length::Fill),
+                    "Rate follows the external clock source.",
+                    scale,
+                ),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
     }
-    if follow {
+    if follow && internal {
         let source = state
             .rate_follow
             .owner()
@@ -15617,11 +15647,16 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                     theme::text_primary(),
                 ));
             }
-            // Only when the user asked for a size and the card ignores it
-            // (a fixed period in a WirePlumber rule); "Auto" follows clients.
-            if clock.force_quantum != 0 && card.period != clock.effective_quantum() {
+            // The forced quantum is a request; the graph runs at the card's
+            // negotiated quantum (one ALSA period). They differ when PipeWire
+            // policy (min-quantum) or the driver's period floor clamps the
+            // request. Report the actual versus the request.
+            if clock.force_quantum != 0 && card.period != clock.force_quantum {
                 col = col.push(line(
-                    "The card keeps its own fixed period.".into(),
+                    format!(
+                        "Graph quantum {} samples (requested {}).",
+                        card.period, clock.force_quantum
+                    ),
                     theme::ysim(),
                 ));
             }

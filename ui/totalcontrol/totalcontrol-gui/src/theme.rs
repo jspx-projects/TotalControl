@@ -1326,13 +1326,18 @@ pub fn pick_list_no_text(
     style
 }
 
+/// The width of the thin scrollbar's rail and scroller. A scrollable reserves
+/// this much horizontal space when the scrollbar appears, so a fixed-width
+/// panel must add it to its width to keep the content's right edge clear.
+pub const THIN_SCROLLBAR_WIDTH: f32 = 4.0;
+
 /// The default 10px scrollbar/scroller reads chunky next to everything
 /// else we've thinned down — 4px is still comfortably grabbable but looks
 /// modern rather than like default browser chrome.
 pub fn thin_scrollbar() -> iced::widget::scrollable::Scrollbar {
     iced::widget::scrollable::Scrollbar::new()
-        .width(4)
-        .scroller_width(4)
+        .width(THIN_SCROLLBAR_WIDTH)
+        .scroller_width(THIN_SCROLLBAR_WIDTH)
 }
 
 /// A scrollbar with no visible rail or scroller.  Slideout panels use it so

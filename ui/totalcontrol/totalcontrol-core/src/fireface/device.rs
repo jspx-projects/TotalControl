@@ -1156,6 +1156,21 @@ impl Fireface {
         self.transport.lock().ok().and_then(|t| t.counters())
     }
 
+    /// The rate the unit reports it is set to, read from its status register
+    /// (EP0 IN request `0x11`; byte 3 is the rate index). This is the device's
+    /// own clock setting, distinct from the host graph rate.
+    pub fn device_rate(&self) -> Option<u32> {
+        const MAP: [u32; 12] = [
+            32000, 44100, 48000, 48000, 64000, 88200, 96000, 96000, 128000, 176400,
+            192000, 192000,
+        ];
+        let d = self.vendor_in(protocol::req::STATUS, 0, 0, 4).ok()?;
+        if d.len() < 4 {
+            return None;
+        }
+        MAP.get(d[3] as usize).copied()
+    }
+
     fn from_transport_async(
         transport: Box<dyn ControlTransport>,
         info: DeviceInfo,

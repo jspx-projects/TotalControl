@@ -1208,13 +1208,24 @@ The options rows belong to the unit's own group. The UC offers five clock
 sources, including LTC; the UCX offers four: Internal, SPDIF coax., Optical
 and Word.
 
+The `Clock source` row is a picker of the unit's own clock options only; it
+never lists host engine modes. The `Sample rate` row reports the device rate.
+When the clock source is Internal and the engine Mode is Auto or a fixed rate,
+it is an editable picker of the device-supported rates; selecting a rate drives
+the card through the engine-rate path. When the engine Mode is Follow, or the
+clock source is external, the row is a read-only readout of the rate the unit
+reports (status `0x11`), with a hint that it is device-reported. The mode that
+drives the rate lives in the host engine group, not here.
+
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
 wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
 Every change is written immediately to the device.
 
-The panel is 360 px wide at scale 1 and its caption column is 110 px. It is
-only as tall as its content, capped at the window height. Longer labels wrap
-rather than widening the column; `Single speed:` sits above `word clock`.
+The panel is 360 px wide at scale 1 and its caption column is 110 px. The
+width reserves the thin scrollbar's width so an appearing scrollbar does not
+overlay the content's right edge. It is only as tall as its content, capped at
+the window height. Longer labels wrap rather than widening the column;
+`Single speed:` sits above `word clock`.
 
 On the UCX the options word, the reference levels and the 48 V/Inst/Level
 switches have no readback. The saved scene value is written at connect and the
@@ -1238,15 +1249,23 @@ sink's host volume in percent and dB, with a `0 dB` action. The host volume is a
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
 
-The rate control offers `Auto (PipeWire)`, `Follow SW playback 1/2` and the
-connected device's fixed rates: 32, 44.1, 48, 64, 88.2, 96, 128, 176.4 and
-192 kHz. The engine group always shows `Graph`, the rate PipeWire is currently
-running at, in every mode. In Follow mode it also shows `Mode` and `Source`;
-`Source` reads `<application> · <rate>` for the stream setting the graph, and
-reads `Waiting for playback` with the last graph rate when no stream feeds SW
-playback 1/2. A reverse-DNS PipeWire application name is reduced to its final
-component, so `io.github.celluloid_player.Celluloid` reads `Celluloid`. The
-source is always SW playback 1/2, never the focused strip.
+The engine `Mode` control offers `Auto (PipeWire)`, `Follow SW playback 1/2`
+and the connected device's fixed rates (the driver-reported rate list). It is
+usable only when the device clock source is Internal. Slaved to an external
+clock, the rate is determined by the device and `Mode` is a read-only
+`Determined by device` label. The engine group always shows `Graph`, the rate
+PipeWire is currently running at, in every mode. In Follow mode with an Internal
+clock it also shows `Source`; `Source` reads `<application> · <rate>` for the
+stream setting the graph, and reads `Waiting for playback` with the last graph
+rate when no stream feeds SW playback 1/2. A reverse-DNS PipeWire application
+name is reduced to its final component, so
+`io.github.celluloid_player.Celluloid` reads `Celluloid`. The source is always
+SW playback 1/2, never the focused strip.
+
+When a forced quantum differs from the quantum the graph runs (the card's
+period), the latency readout warns `Graph quantum <actual> samples (requested
+<forced>)`. This happens when PipeWire's `min-quantum` policy or the driver's
+period floor clamps the request.
 
 Follow uses the stream linked to `playback_AUX0`/`playback_AUX1`, including a
 player feeding a TotalControl 5.1/7.1 sink through the sink's input stream, not

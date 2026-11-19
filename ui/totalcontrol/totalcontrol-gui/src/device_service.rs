@@ -285,6 +285,11 @@ impl Mirror {
         self.meters.lock().ok()?.counters
     }
 
+    /// The rate the unit reports it is set to, as last polled by the service.
+    pub fn device_rate(&self) -> Option<u32> {
+        self.meters.lock().ok()?.device_rate
+    }
+
     /// Apply a snapshot published by the service.  Returns false once the
     /// service has stopped.
     pub fn update(&mut self, snapshot: Snapshot) -> bool {
@@ -1394,6 +1399,8 @@ pub struct MeterSnapshot {
     pub connected: bool,
     /// Driver transport health, when the backend exposes it.
     pub counters: Option<HwdepCounters>,
+    /// The rate the unit reports it is set to (device status), when known.
+    pub device_rate: Option<u32>,
     /// Whether anything is visibly moving.  The service derives this from
     /// the levels, the held peaks and the FX values; a canvas that sees
     /// `false` stops scheduling frames and waits for [`meter_stream`].
@@ -1798,6 +1805,7 @@ fn run(
             if last_counters.elapsed() >= Duration::from_millis(250) {
                 last_counters = Instant::now();
                 m.counters = device.transport_counters();
+                m.device_rate = device.device_rate();
             }
             let active = meter_activity(&m);
             m.active = active;
