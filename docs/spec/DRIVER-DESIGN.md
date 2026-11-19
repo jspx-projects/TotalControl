@@ -714,7 +714,7 @@ driver's transports. The owning sections carry the full detail:
 | Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
 | AP header rate-band scaling: the position width and modulus at 2x/4x (16384/32768); the 1x layout (13-bit position / 8192, 14-bit phase) is capture-verified | UCX IF0, UC IF0, Babyface | a 2x/4x ISO capture; isolated add/drop events away from the wrap are unattributed |
 | IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
-| Live rate-switch verification of the generic rate sequence on the UCX: the device cadence follows the requested rate across family and band changes, with the output lead intact | UCX | a tone-playing rate round-trip with the ring trace and status across each switch |
+| Optional audible characterization of the rate transition: the protocol is bench-verified (cadence follows, lead intact); an analog output capture across the switch measures the audible gap | UCX | a tone-playing round-trip with the output recorded across each switch |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
 | Phase consumption by the reference host: the scheduler records the phase accumulator and mirrors the frame count, which carries the add/drop; whether the macOS host additionally consumes phase for fractional prediction is unverified | ISO | a kext disassembly of the OUT scheduling path |
 | MIDI port 2 physical output: packets carry both ports | UC | a loopback on the candidate output |

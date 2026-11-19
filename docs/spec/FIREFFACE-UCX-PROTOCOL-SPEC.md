@@ -1128,12 +1128,11 @@ The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
 4. The level word `0x17/0x0fc0`: observed `0x3c00` and `0x3d00`
    (bit 8 of the word). The bit layout is undecoded; a settings-dialog
    capture changing one level control at a time decides it.
-5. Live rate-switch verification: the driver applies the generic rate
-   sequence (§11.1) with an engine restart. A tone-playing round-trip
-   across family and band changes must show the device cadence following
-   the requested rate with the output lead intact: the ring trace, the
-   status word (rate code, sync, out-latched bit), and the audio output
-   across each switch.
+5. Optional audible characterization of the rate transition: the
+   generic rate sequence (§11.1) is bench-verified — the device cadence
+   follows the requested rate across family and band changes with the
+   output lead intact. An analog output capture across a tone-playing
+   round-trip measures the audible gap.
 6. ISO position-counter rate-band scaling: the position field width and
    modulus at 2x (14-bit / 16384) and 4x (15-bit / 32768), the phase field
    taking the remaining upper bits. The 1x layout (13-bit / 8192) is
