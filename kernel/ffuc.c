@@ -1582,6 +1582,46 @@ static bool ffuc_fb_get(struct ffuc *chip, u64 k, unsigned int *pos,
 }
 
 /*
+ * The lead anchor: the value the fb-ring seed produced, computed from
+ * the device timestamp instead of a ring entry.
+ *
+ * The old seed read the position the device reported for the fb-ring
+ * slot the fill consumes (ring slot out_pkts − fb_delay) and added
+ * out_lead.  The device timestamp carries the same timeline as the
+ * unwrapped in_total: the position at that slot is in_total rewound by
+ * the frames the device captured in the packets between the slot and
+ * the fill moment — (in_pkts − out_pkts + fb_delay) packets at the
+ * nominal rate, Q32.  The fb_get validity check at the call site still
+ * gates the seed: before the ring reaches that slot there is no device
+ * anchor for the rewind, and seeding across the stream start would
+ * guess the phase against the device's own ring.
+ *
+ * Exact to a frame today (the interpolation over a few ms is
+ * sub-frame); sub-sample once the phase convention is captured
+ * (DRIVER-DESIGN §4.3).  Everything is mod the wrap: in_total is
+ * congruent with the wrap-domain in_end, and the lead-word writes
+ * reduce mod the wrap.
+ */
+static u32 ffuc_lead_seed(struct ffuc *chip)
+{
+	u64 wrap = ffuc_iso_wrap(chip);
+	u64 step_q32 = div64_u64((u64)chip->rate << 32, 8000);
+	s64 span_pkts, pos_q32;
+
+	/* Packets between the fb slot the seed represents and the fill
+	 * moment.  The fill consumes fb slot (out_pkts − fb_delay); the
+	 * device position at that slot is in_total rewound. */
+	span_pkts = (s64)chip->in_pkts - (s64)chip->out_pkts
+		  + (s64)chip->fb_delay;
+	pos_q32 = (s64)((chip->in_total % wrap) << 32)
+		- span_pkts * (s64)step_q32;
+
+	/* Floor at Q32 (arithmetic shift); out_lead then the wrap mask.
+	 * The mask is a power of two, so it is the true residue. */
+	return (u32)(((pos_q32 >> 32) + (s64)chip->out_lead) & (s64)(wrap - 1));
+}
+
+/*
  * Cadence check: the mean frames per packet times 8000 is the device
  * clock the packets reveal.  A disagreement with chip->rate means the
  * rate write did not take effect (or the device was reprogrammed).
@@ -1915,7 +1955,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	if (s->running && !s->out_counter_valid) {
 		for (i = 0; i < urb->number_of_packets; i++) {
 			if (frames[i]) {
-				s->out_counter = (u32)pos[i] + chip->out_lead;
+				s->out_counter = ffuc_lead_seed(chip);
 				s->out_counter_valid = true;
 				break;
 			}
@@ -2124,6 +2164,8 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 		   atomic_read(&chip->signal_deferred),
 		   atomic_read(&chip->signal_overdue),
 		   READ_ONCE(chip->max_pending));
+	seq_printf(m, "out_lag_min %d\nout_lag_max %d\n",
+		   chip->out_lag_min, chip->out_lag_max);
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(ffuc_stats);
