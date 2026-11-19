@@ -249,15 +249,23 @@ where
         let (space_below, space_above) =
             menu_spaces(self.viewport, self.position, self.target_height);
 
+        // The natural menu height, before the side's space caps it.
+        let natural = self.list.layout(
+            self.tree,
+            renderer,
+            &layout::Limits::new(
+                Size::ZERO,
+                Size::new(bounds.width - self.position.x, f32::INFINITY),
+            )
+            .width(self.width),
+        );
+        let below = menu_side(natural.size().height, space_below, space_above);
+
         let limits = layout::Limits::new(
             Size::ZERO,
             Size::new(
                 bounds.width - self.position.x,
-                if space_below > space_above {
-                    space_below
-                } else {
-                    space_above
-                },
+                if below { space_below } else { space_above },
             ),
         )
         .width(self.width);
@@ -265,7 +273,7 @@ where
         let node = self.list.layout(self.tree, renderer, &limits);
         let size = node.size();
 
-        node.move_to(if space_below > space_above {
+        node.move_to(if below {
             self.position + Vector::new(0.0, self.target_height)
         } else {
             self.position - Vector::new(0.0, size.height)
@@ -345,6 +353,14 @@ fn menu_spaces(
     (below.max(0.0), above.max(0.0))
 }
 
+/// Whether the menu opens below the field. A menu that fits below opens
+/// below, like any dropdown; only when it does not fit below does the
+/// larger side win, so a field in the lower half of a tall viewport still
+/// opens downward when there is room.
+fn menu_side(natural_height: f32, space_below: f32, space_above: f32) -> bool {
+    natural_height <= space_below || space_below >= space_above
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +396,18 @@ mod tests {
             menu_spaces(viewport, Point::new(100.0, 800.0), 40.0);
         assert_eq!(below, 0.0);
         assert_eq!(above, 740.0);
+    }
+
+    #[test]
+    fn a_menu_that_fits_below_opens_below_even_in_the_lower_half() {
+        // Field below the viewport midline, but the menu fits underneath.
+        assert!(menu_side(300.0, 360.0, 600.0));
+    }
+
+    #[test]
+    fn a_menu_that_does_not_fit_below_opens_toward_the_larger_side() {
+        assert!(!menu_side(500.0, 360.0, 600.0));
+        assert!(menu_side(500.0, 600.0, 360.0));
     }
 }
 
