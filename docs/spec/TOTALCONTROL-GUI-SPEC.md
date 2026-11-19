@@ -1267,6 +1267,12 @@ reverse-DNS PipeWire application name is reduced to its final component, so
 `io.github.celluloid_player.Celluloid` reads `Celluloid`. The source is always
 SW playback 1/2, never the focused strip.
 
+The device rate is the hub: the selected authority sets the device rate, and the
+graph rate and the available quantum both derive from the device rate
+(`authority -> device rate -> graph rate + quantum`). The device rate always
+wins over a stale graph request. The quantum picker offers only quanta at or
+above the device rate's period floor (one URB), plus the exact floor.
+
 When a forced quantum differs from the quantum the graph runs (the card's
 period), the latency readout warns `Graph quantum <actual> samples (requested
 <forced>)`. This happens when PipeWire's `min-quantum` policy or the driver's

@@ -316,6 +316,18 @@ only when the clock source is Internal:
   `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing playing
   it reads `Waiting for playback` and keeps the last rate.
 
+Whatever the authority, the **device rate is the hub**. The authority sets the
+device rate, and the graph rate and the available quantum both derive from it:
+
+```text
+authority (Device / PipeWire / SW playback 1/2) -> device rate -> graph rate + quantum
+```
+
+The device rate always wins; a stale graph request never overrides it. The
+quantum picker offers only quanta at or above the device rate's period floor
+(one URB), so an impossible quantum cannot be selected. The `Sample rate` row
+shows the device rate, and the `Graph` row shows the graph rate that follows it.
+
 When the device is slaved to an external clock, the rate is determined by the
 device and `Rate follows` reads `Device` (read-only).
 

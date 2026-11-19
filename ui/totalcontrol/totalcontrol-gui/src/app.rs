@@ -5675,14 +5675,17 @@ pub fn restore_engine(state: &mut TotalControl) {
             if state.device.is_uc_model() {
                 state.pending_device_rate = None;
             }
-            if state.engine_force_rate > 0 {
-                if let Err(e) = pw_clock::force_rate(state.engine_force_rate) {
+            // Device mode: the device's set rate is the boss, on startup too.
+            let rate = device_mode_rate(state);
+            state.engine_force_rate = rate;
+            if rate > 0 {
+                if let Err(e) = pw_clock::force_rate(rate) {
                     log::warn!("Restoring the PipeWire rate failed: {e}");
                 }
                 // The input capture PCM shares the device clock; release it
                 // so the kernel driver can move the card to the requested
                 // rate.
-                state.device.set_meter_rate(state.engine_force_rate);
+                state.device.set_meter_rate(rate);
             } else if let Err(e) = pw_clock::force_rate(0) {
                 log::warn!("Releasing the PipeWire rate override failed: {e}");
             }
@@ -5717,7 +5720,7 @@ pub fn restore_engine(state: &mut TotalControl) {
         .and_then(totalcontrol_core::fireface::hwdep::query_rate_envelope);
     // A remembered quantum may sit below the floor of the rate the graph opens
     // at; raise it to the floor instead of forcing an impossible value.
-    enforce_quantum_floor(state, current_graph_rate(state));
+    enforce_quantum_floor(state, running_rate(state));
 }
 
 /// Writes the host settings if something changed (and a path is set).
@@ -12380,17 +12383,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 EngineRateMode::Fixed => {
                     state.engine_rate_mode = EngineRateMode::Fixed;
                     state.rate_follow.clear_owner();
-                    // Device mode: the device's set rate is the boss; the graph
-                    // follows it, not a stale host force value.
-                    let device_rate = state.device.settings().sample_rate;
-                    let rate = if device_rate > 0 {
-                        device_rate
-                    } else if state.engine_force_rate > 0 {
-                        state.engine_force_rate
-                    } else {
-                        current_graph_rate(state)
-                    };
-                    apply_graph_rate(state, rate, true);
+                    apply_graph_rate(state, device_mode_rate(state), true);
                 }
             }
             let shown = state
@@ -12529,7 +12522,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 // PipeWire may move the graph rate on its own (a player or
                 // another client). Keep the forced quantum at or above the new
                 // rate's period floor so the request never reads as impossible.
-                enforce_quantum_floor(state, current_graph_rate(state));
+                enforce_quantum_floor(state, running_rate(state));
                 if let Some((wanted, since)) = state.pending_device_rate {
                     let actual = stream.map(|s| s.rate);
                     if actual == Some(wanted) {
@@ -14802,6 +14795,36 @@ pub(crate) fn current_graph_rate(state: &TotalControl) -> u32 {
         .unwrap_or_else(|| state.device.settings().sample_rate)
 }
 
+/// The actual device rate — the hub from which the graph rate and the
+/// available quantum derive, whatever the upstream authority selected in
+/// "Rate follows" (Device, SW playback 1/2, PipeWire). The device's own
+/// report is authoritative; the running card stream and the graph rate are
+/// fallbacks. Unlike `current_graph_rate`, this never prefers the requested
+/// `force-rate`, so a stale request cannot poison the quantum floor.
+fn running_rate(state: &TotalControl) -> u32 {
+    state
+        .device
+        .device_rate()
+        .filter(|rate| *rate > 0)
+        .or_else(|| state.card_stream.map(|stream| stream.rate).filter(|rate| *rate > 0))
+        .unwrap_or_else(|| current_graph_rate(state))
+}
+
+/// The rate Device mode forces: the device's set rate is the boss. Falls back
+/// to the stored host force, then the running graph rate, when no device rate
+/// is set. Used by both the mode handler and the startup restore so they
+/// cannot diverge.
+fn device_mode_rate(state: &TotalControl) -> u32 {
+    let device_rate = state.device.settings().sample_rate;
+    if device_rate > 0 {
+        device_rate
+    } else if state.engine_force_rate > 0 {
+        state.engine_force_rate
+    } else {
+        current_graph_rate(state)
+    }
+}
+
 /// The smallest graph quantum the driver can run at `rate`: one URB
 /// (`pw_clock::period_floor`). With `api.alsa.disable-tsched` the graph quantum
 /// is one ALSA period, so this is the period floor the card negotiates. The
@@ -15260,7 +15283,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // achievable latency is selectable. PipeWire takes quanta that are not
     // powers of two.
     const ALL_QUANTA: [u32; 11] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048];
-    let floor = quantum_floor(state, current_graph_rate(state));
+    let floor = quantum_floor(state, running_rate(state));
     let mut quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();
     if !quanta.contains(&floor) {
         quanta.push(floor);
