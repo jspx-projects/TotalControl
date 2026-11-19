@@ -180,7 +180,7 @@ static unsigned int ffuc_urb_frames(struct ffuc *chip, unsigned int rate)
 	return chip->base_urb_frames << ffuc_mode_index(rate);
 }
 
-static unsigned int ffuc_iso_wrap(struct ffuc *chip)
+unsigned int ffuc_iso_wrap(struct ffuc *chip)
 {
 	/* The AP-mode position counter wraps at 8192 (13-bit) at 1x rates on
 	 * every model: UC, UCX and Babyface-classic share the same header

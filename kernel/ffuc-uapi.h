@@ -18,7 +18,7 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 
-#define FFUC_ABI_VERSION	5
+#define FFUC_ABI_VERSION	6
 
 /* Largest payload in one FFUC_HWDEP_IOCTL_VENDOR request. */
 #define FFUC_HWDEP_MAX_DATA	64
@@ -185,5 +185,26 @@ struct ffuc_hwdep_envelope {
 	_IOR('F', 0x13, struct ffuc_hwdep_counters)
 #define FFUC_HWDEP_IOCTL_ENVELOPE \
 	_IOR('F', 0x14, struct ffuc_hwdep_envelope)
+#define FFUC_HWDEP_IOCTL_CLOCK \
+	_IOR('F', 0x15, struct ffuc_hwdep_clock)
+
+/* The device timestamp (Stage 1): where the device clock was, at a host
+ * time.  The start-frame anchor maps the running IN packet index to host
+ * nanoseconds: sof_ns(f) = anchor_ns + f * 125000 for high-speed (one
+ * unit per ISO packet).  The sample pairs the unwrapped device position
+ * at a packet end with the host time of the next packet boundary;
+ * timestamp_phase is the raw phase field of that packet, its sign and
+ * offset convention an open capture item.  rate_meas is the windowed,
+ * add/drop-inclusive device rate.  ABI 6. */
+struct ffuc_hwdep_clock {
+	__u64 timestamp_ns;
+	__u64 timestamp_pos;
+	__u32 timestamp_phase;
+	__u32 rate_meas;
+	__u64 anchor_ns;
+	__u64 frames;
+	__u32 wrap;
+	__u32 reserved;
+};
 
 #endif /* _FFUC_UAPI_H */

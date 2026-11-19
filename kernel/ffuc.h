@@ -96,6 +96,9 @@
 #define FFUC_FB_SIZE		1024
 #define FFUC_ISO_FRAME_MASK	0x7ff
 
+struct ffuc;
+unsigned int ffuc_iso_wrap(struct ffuc *chip);
+
 #define FFUC_STATE_BUF_SIZE	1024
 #define FFUC_EVENT_FIFO_SIZE	(64 * 1024)
 #define FFUC_METER_PAIR_MAX	648
