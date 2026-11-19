@@ -1202,7 +1202,10 @@ sheet shows that value. A value is written when it changes there.
 
 On/off options are checkboxes after their caption. `Optical` and `SPDIF` are
 dropdowns (`ADAT`/`SPDIF`, `Consumer`/`Professional`). Every caption and
-control shares one left edge, and every dropdown has the same width.
+control shares one left edge, and every dropdown has the same width. A
+dropdown menu opens on the side of its field with more free space inside the
+panel viewport, measured from the viewport edges. The menu stays inside the
+viewport; its background is opaque on every row.
 
 The options rows belong to the unit's own group. The UC offers five clock
 sources, including LTC; the UCX offers four: Internal, SPDIF coax., Optical
