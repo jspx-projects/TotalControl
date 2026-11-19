@@ -1671,7 +1671,10 @@ fn run(
             None => {}
         }
         for command in inbox.drain() {
-            if matches!(command, Command::Stop) {
+            // Stop preempts the backlog even mid-drain: the flag is checked
+            // per command, not only at the loop top, so a queued batch of
+            // slow closures never delays shutdown by its full duration.
+            if inbox.stopped() || matches!(command, Command::Stop) {
                 return;
             }
             apply(device, command);
