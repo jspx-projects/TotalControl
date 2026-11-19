@@ -406,8 +406,7 @@ three nominal URB durations.
 
 Rate and session handling on the UC:
 
-- The rate write is the family word plus the commit word. The DDS word is
-  part of the ISO rate sequence only.
+- The rate write is the generic rate sequence (§7).
 - A live rate change closes the session, writes the rate, and replays the
   session trio on the next open. The `WIN_SESSION` gaps (§7) apply.
 
@@ -428,8 +427,8 @@ Status and watchdog:
 | OUT payload | sample words | lead word + sample words |
 | IN payload | sample words | header (position, phase, frame count) + planar frames |
 | URB granularity | `urb_frames` per URB, scaled by rate band | up to 8 packets per URB, one per microframe |
-| UC rate sequence | family + commit; session close/reopen with `WIN_SESSION` gaps | DDS + family + commit; session words back-to-back |
-| UCX rate sequence | family + commit (IF5) | family (IF0) |
+| UC rate sequence | generic (§7); session close/reopen with `WIN_SESSION` gaps | generic (§7); session words back-to-back |
+| UCX rate sequence | generic (§7) | generic (§7) |
 | UC status transport | interrupt ticker IF5, always open | bulk IF4 |
 | Output-latch watchdog | `STATUS_LATCH` personalities | UC AP carries no latch quirk; UCX IF0 uses the ISO guards |
 | Dropout detection | `out_gaps`, output latch, URB errors | cadence guard, ISO continuity, URB errors |
@@ -506,6 +505,11 @@ The host:
   the control-I/O worker, and the drain thread performs model work only;
 - keeps one meter reader;
 - chooses a buffer/quantum that covers the URB queue plus margin;
+- sets the refill wake cushion (`api.alsa.headroom`) for the scheduling
+  margin (§4.1.1);
+- keeps the duplex playback follower linked to the capture driver
+  (`api.alsa.auto-link` in IRQ mode) so a recovery re-prepares both
+  directions;
 - checks engine state before control writes that assume a running engine;
 - treats recovery as an xrun and re-prepares;
 - uses the hwdep node as the control owner.
@@ -522,6 +526,22 @@ message must fit one transfer. Output is polled by a delayed work at 1 ms.
 
 ## 7. Rate, session and startup timing
 
+The rate sequence is one generic flow for every model and transport:
+
+| Order | Request | wValue | wIndex |
+|---|---|---|---|
+| 1 | `0x1b` | high16(p1) | (p1 & 0xff00) \| family |
+| 2 | `0x10` | family << 4 | 0x0030 |
+| 3 | `0x10` | current options word | 0x05cf (1487) |
+
+p1 = 0x5f5e10000000 / rate, shifted left 1 above 57000 Hz and left 2
+above 114000 Hz. family: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz,
+2 = 48/96/192 kHz. The third word is the options commit: the driver reads
+the options word the device holds (`0x10` in) and rewrites it under the
+mask, so the mixer's settings survive the rate change. The DDS word
+carries the active family's divisor; the band multiplier follows the
+streaming alternate setting.
+
 Engine start selects the alternate setting, commits the rate, sends the
 session-open words where required, sets up URBs, submits them, and unmutes.
 
@@ -529,12 +549,16 @@ The UC Windows-personality path uses three timed gaps:
 
 | Gap | Value | Reason |
 |---|---|---|
-| stop -> start settle | 250 ms | minimum gap the device requires after the close word before a start |
-| close -> rate write | 200 ms | minimum gap the device requires after the close word before the rate write |
-| close -> session trio | 200 ms | minimum gap the device requires after the close word before the session trio |
+| stop -> start settle | 250 ms | capture-derived gap after the close word before a start |
+| close -> rate write | 200 ms | capture-derived gap after the close word before the rate write |
+| close -> session trio | 200 ms | capture-derived gap after the close word before the session trio |
 
-These are device-mandated timing measured on the Windows reference-host
-captures. The AP personality sends the session words back-to-back.
+These gaps are fixed approximations of the reference host's bounded
+readiness polling. The Windows rate orchestrator polls a readiness
+condition instead of sleeping; the gaps in the USBPcap captures are the
+device's actual ready time. The exact UC session-readiness condition is
+undecoded (UC spec §9.1); the fixed gaps stay until it is pinned. The AP
+personality sends the session words back-to-back.
 
 Design principle: prefer a deterministic readiness condition over a timed
 guess. Where the device exposes a status that can be polled (rate index,
@@ -637,8 +661,9 @@ is the refinement.
 A **heuristic wait** is a fixed sleep used where a readiness condition or
 flow control could decide the next step.
 
-- The session gaps (§7) are device-mandated timing, implemented as fixed
-  sleeps. **[`WIN_SESSION`]**
+- The session gaps (§7) are capture-derived approximations of the
+  reference host's readiness polling, implemented as fixed sleeps.
+  **[`WIN_SESSION`]**
 - The **meter pump** (§5.1) resubmits pages from a 4 ms delayed work and
   retries a paused pump after 10 ms. The pair-boundary pause is UC-specific;
   the pump itself serves every personality. **[all]**
@@ -656,7 +681,8 @@ Scope labels are defined in §10.
 | Item | Scope |
 |---|---|
 | Replace fixed session gaps with a bounded poll of a device-visible readiness condition where one exists; keep documented quirks where the device has no acknowledgement | `WIN_SESSION` |
-| Add a rate-readiness poll after the rate commit word (UC PC, UC AP, UCX IF5 send it; UCX IF0 commits the family alone) | UC, UCX IF5 |
+| Poll the rate status word (`0x19`, UCX spec §11.6) after the rate commit: ready when bits 0–1 clear and the family/band field matches the requested rate, bounded with a timeout fallback. The rate-field match catches a write that did not land. Replace the fixed post-commit gap where the poll acknowledges | UCX |
+| Identify the UC session-readiness condition before replacing the `WIN_SESSION` gaps: `0x19` is not a rate word on the UC and its bits 0–1 never assert (UC spec §9.1). A state-word (`0x11`) rate-index effectiveness poll is the proposed enhancement; it is not reference behavior | UC |
 | Move ISO continuity logging to per-endpoint state | ISO |
 | Preallocate the hwdep read buffer per reader | all |
 | Make buffer poison and verbose stop diagnostics optional module parameters | all |
@@ -699,7 +725,7 @@ driver's transports. The owning sections carry the full detail:
 | Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
 | AP header rate-band scaling: the position width and modulus at 2x/4x (16384/32768); the 1x layout (13-bit position / 8192, 14-bit phase) is capture-verified | UCX IF0, UC IF0, Babyface | a 2x/4x ISO capture; isolated add/drop events away from the wrap are unattributed |
 | IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
-| DDS quad rate dependence: the quad is written once at connect; rate changes write the family word alone across the captured 44.1↔48 transitions | UCX IF5 | a connect capture at a 32 kHz-family rate |
+| Optional audible characterization of the rate transition: the protocol is bench-verified (cadence follows, lead intact); an analog output capture across the switch measures the audible gap | UCX | a tone-playing round-trip with the output recorded across each switch |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
 | Phase consumption by the reference host: the scheduler records the phase accumulator and mirrors the frame count, which carries the add/drop; whether the macOS host additionally consumes phase for fractional prediction is unverified | ISO | a kext disassembly of the OUT scheduling path |
 | MIDI port 2 physical output: packets carry both ports | UC | a loopback on the candidate output |

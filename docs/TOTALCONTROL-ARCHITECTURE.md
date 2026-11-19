@@ -212,7 +212,11 @@ heartbeats.
 The UI sends commands such as `SetVolume`, `SetMute`, `ApplyScene`, or a
 `Run(closure)` for controls without a dedicated command. Setters on the mirror
 queue the command and return. The local model changes when the confirming
-snapshot arrives, not optimistically.
+snapshot arrives, not optimistically. A setter whose value a follow-up
+action reads before the next snapshot updates the local model at once: the
+rate setter (the rate-change reapply captures the scene immediately after
+it) and the output-link setter (the next balance or pan move reads the link
+state).
 
 `TOTALCONTROL_DEVICE_SERVICE=0` keeps the device on the UI thread. Unit tests
 use the direct path unless they attach the service explicitly.
@@ -383,7 +387,8 @@ A connect restore leaves output registers that match the pre-connect dump
 unchanged.  A reapply after a runtime rate change or stream restart writes the
 full scene instead: the unit may have reloaded its own state, so the startup
 dump no longer describes the registers, and skipping matching values can leave
-effects or routing from the old rate active.
+effects or routing from the old rate active.  The reapply scene carries the
+confirmed rate: the rate the card reopened at, in every rate mode.
 
 The startup restore follows the same rule once the card stream has started.
 The connect write happens at the card's previous rate; opening the stream
@@ -447,6 +452,14 @@ the follower's deadline; the daemon substitutes silence when its follower
 cycle misses by about one period. A quantum of 96 frames or more at 48 kHz
 gives the follower one period of slack, and the default quantum of 256 is
 outside the window. This is a host tuning property, not a driver property.
+
+In the Pro Audio profile the capture node is the graph driver and the
+playback node is its follower (`priority.driver`; verified in the journal).
+Nodes of one device share a clock and are not resampled against each other.
+With IRQ scheduling (`api.alsa.disable-tsched`) the SPA plugin links the
+playback follower PCM to the capture driver PCM (`api.alsa.auto-link`).
+The driver's XRUN recovery re-prepares the driver and then each linked
+follower; an unlinked follower is skipped and must recover on its own.
 
 The both-pending wake adds a deferral latency equal to the phase offset
 between the two directions' period crossings. The offset is a property of

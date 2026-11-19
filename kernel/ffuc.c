@@ -394,66 +394,46 @@ static int ffuc_set_rate_family(struct ffuc *chip, unsigned int rate)
 				ffuc_rate_family(rate) << 4, 0x0030, NULL, 0);
 }
 
-static int ffuc_uc_set_rate(struct ffuc *chip, unsigned int rate)
+/* The rate sequence is one generic flow for every model and transport:
+ * the DDS divisor word, the family select, then the options commit.
+ * The DDS word carries base/rate with the 2x/4x shift; the family word
+ * selects the base-rate family at index 0x30.  The commit applies the
+ * change and rewrites the options word the device already holds, so the
+ * mixer's settings (clock source, word clock, SPDIF and optical output
+ * format) survive the rate change. */
+static int ffuc_set_rate(struct ffuc *chip, unsigned int rate)
 {
 	__le32 cur;
 	u16 opts;
 	u32 dds;
 	int ret;
 
-	dev_dbg(&chip->dev->dev, "UC rate -> %u Hz (iso=%d)\n", rate,
-		chip->iso);
-	/* Windows UC PC uses only 0x10/48 (family) + the 0x10/1487 commit.
-	 * The DDS word is needed by the ISO/Mac personality, not the
-	 * interrupt/Windows one; sending it there can override the committed
-	 * family and leave the device silent. */
-	if (chip->iso) {
-		dds = (u32)div_u64(0x5f5e10000000ULL, rate);
-		if (rate > 114000)
-			dds <<= 2;
-		else if (rate > 57000)
-			dds <<= 1;
+	dds = (u32)div_u64(0x5f5e10000000ULL, rate);
+	if (rate > 114000)
+		dds <<= 2;
+	else if (rate > 57000)
+		dds <<= 1;
 
-		ret = ffuc_vendor_send(chip, FFUC_REQ_DDS, dds >> 16,
-				       (dds & 0xff00) | ffuc_rate_family(rate),
-				       NULL, 0);
-		dev_dbg(&chip->dev->dev,
-			"UC DDS 0x%04x/0x%04x ret=%d\n", dds >> 16,
-			(dds & 0xff00) | ffuc_rate_family(rate), ret);
-		if (ret < 0)
-			return ret;
-	}
-	ret = ffuc_set_rate_family(chip, rate);
-	dev_dbg(&chip->dev->dev,
-		"UC rate family 0x%02x index 48 ret=%d\n",
-		ffuc_rate_family(rate) << 4, ret);
+	ret = ffuc_vendor_send(chip, FFUC_REQ_DDS, dds >> 16,
+			       (dds & 0xff00) | ffuc_rate_family(rate),
+			       NULL, 0);
 	if (ret < 0)
 		return ret;
-	/* Windows commits every rate change with 0x10 / wIndex 1487, the
-	 * options mask.  Without the commit the new family is written but not
-	 * applied; the stream can run while the device output stays closed.
-	 * The commit rewrites every option bit, and the options (clock
-	 * source, word clock, SPDIF and optical output format) belong to the
-	 * mixer application.  Commit the word the device already holds, so a
-	 * stream start does not reset what the application set. */
+	ret = ffuc_set_rate_family(chip, rate);
+	if (ret < 0)
+		return ret;
 	ret = ffuc_vendor_recv(chip, FFUC_REQ_SETTINGS, 0, 0, &cur,
 			       sizeof(cur));
 	if (ret < 0)
 		return ret;
-	opts = le32_to_cpu(cur) & FFUC_UC_OPTIONS_MASK;
+	opts = le32_to_cpu(cur) & FFUC_OPTIONS_MASK;
 	ret = ffuc_vendor_send(chip, FFUC_REQ_SETTINGS, opts,
-			       FFUC_UC_OPTIONS_MASK, NULL, 0);
-	dev_dbg(&chip->dev->dev, "UC rate commit 0x%04x/1487 ret=%d\n",
-		opts, ret);
+			       FFUC_OPTIONS_MASK, NULL, 0);
+	dev_dbg(&chip->dev->dev,
+		"rate %u Hz: dds 0x%04x/0x%04x family 0x%02x commit 0x%04x ret=%d\n",
+		rate, dds >> 16, (dds & 0xff00) | ffuc_rate_family(rate),
+		ffuc_rate_family(rate) << 4, opts, ret);
 	return ret;
-}
-
-/* UCX: the rate family is one masked control write on both transports;
- * the multiplier follows the streaming alternate setting (E8/E9: a rate
- * change writes the family word alone). */
-static int ffuc_ucx_set_rate(struct ffuc *chip, unsigned int rate)
-{
-	return ffuc_set_rate_family(chip, rate);
 }
 
 static int ffuc_uc_hw_mute(struct ffuc *chip, bool mute)
@@ -574,7 +554,7 @@ static int ffuc_uc_stream_stop(struct ffuc *chip, unsigned int channels)
 
 static const struct ffuc_ops ffuc_uc_ops = {
 	.init = ffuc_uc_init,
-	.set_rate = ffuc_uc_set_rate,
+	.set_rate = ffuc_set_rate,
 	.stream_start = ffuc_uc_stream_start,
 	.stream_stop = ffuc_uc_stream_stop,
 	.hw_mute = ffuc_uc_hw_mute,
@@ -582,7 +562,7 @@ static const struct ffuc_ops ffuc_uc_ops = {
 
 static const struct ffuc_ops ffuc_ucx_ops = {
 	.init = ffuc_uc_init,
-	.set_rate = ffuc_ucx_set_rate,
+	.set_rate = ffuc_set_rate,
 	.stream_start = ffuc_ucx_stream_start,
 	.stream_stop = ffuc_ucx_stream_stop,
 	.hw_mute = ffuc_ucx_hw_mute,
@@ -649,7 +629,7 @@ static int ffuc_ucx_if5_init(struct ffuc *chip)
 
 static const struct ffuc_ops ffuc_ucx_if5_ops = {
 	.init = ffuc_ucx_if5_init,
-	.set_rate = ffuc_ucx_set_rate,
+	.set_rate = ffuc_set_rate,
 	.stream_start = ffuc_ucx_stream_start,
 	.stream_stop = ffuc_ucx_stream_stop,
 	.hw_mute = ffuc_ucx_hw_mute,

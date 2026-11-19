@@ -1214,7 +1214,7 @@ When the clock source is Internal and `Rate follows` is Device, it is an
 editable picker of the device-supported rates; selecting a rate drives the card
 through the engine-rate path. When `Rate follows` is PipeWire or SW playback
 1/2, or the clock source is external, the row is a read-only readout of the rate
-the unit reports (status `0x11`), with a hint that it is device-reported. The
+the unit reports (state word `0x11`), with a hint that it is device-reported. The
 rate authority lives in the host engine group, not here. Read-only reports (the
 device rate, Graph, Source and the latency readout) use the secondary text
 colour; editable controls use the primary colour.
@@ -1282,20 +1282,36 @@ comparing actual to desired, and the latency readout shows `Quantum <actual>
 samples — applying <desired>…`. A bottom-centre toast announces the change
 ("Setting quantum to N samples — applying…"). When the actual matches the
 desired the pending state clears to grey. The device rate is verified by reading
-the unit's status (`0x11`) and comparing it to the set rate.
+the unit's state word (`0x11`) and comparing its rate index to the set rate
+(UC spec §9.1, UCX spec §11.7). The readback polls the rate value at 50 ms
+while pending; the rate index matching the selection is the confirmation.
+The selected rate stays the desired value until the user selects another.
+If the device does not reach the selected rate within three seconds while a
+stream is open, a toast reports the rate the device is still at.
 
 Follow uses the stream linked to `playback_AUX0`/`playback_AUX1`, including a
 player feeding a TotalControl 5.1/7.1 sink through the sink's input stream, not
 the loopback output. A live owner keeps the rate while its node exists; another
 client does not take it, a same-client replacement does, and after two seconds
-without one the most recent remaining candidate takes over. A new rate is
+without one the most recent remaining candidate takes over. Owner continuation
+matches the PipeWire client identity (`client.id` and the application name),
+not the node ID. The owner's native rate is the stream's first `Format.rate`;
+without a format rate, the `node.rate` denominator is used. A new rate is
 forced after it has been stable for 300 ms. Unsupported rates stay visible but
 are not forced. A followed rate is runtime state: it does not create an undo
-step, mark the workspace dirty, or replace the fixed-rate preference.
+step, mark the workspace dirty, or replace the fixed-rate preference. The
+mixer reapply after a followed rate change carries the followed rate, not the
+stored fixed-rate preference. A paused
+owner that keeps its stream open holds the rate. Follow reconciles the live
+`clock.force-rate` against the owner's rate on every evaluation (graph changes
+and a 2 s heartbeat). A divergence — an external metadata write or a stale
+seed — is re-applied once the owner's rate has been stable for 300 ms; an
+external force change is transient, not a new rate authority.
 
 At connect TotalControl replaces PipeWire's `clock.allowed-rates` with the
 connected device's nine rates, keeping the previous value. On disconnect or a
-clean exit it restores that value if the list is still the one it wrote. No
+clean exit it restores that value if the list is still the one it wrote. A
+clean exit also releases TotalControl's `clock.force-rate` override. No
 persistent PipeWire configuration file is installed.
 
 `Diagnostics` lists the kernel transport error counters, cumulative since

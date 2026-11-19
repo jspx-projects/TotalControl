@@ -1220,6 +1220,10 @@ impl RmeDevice for Mirror {
     }
 
     fn set_sample_rate(&mut self, rate: u32) -> Result<(), Error> {
+        // Update the local rate at once: the rate-change reapply captures the
+        // mirror scene immediately after this call.  A stale rate in that
+        // capture would be written back to the unit when the reapply fires.
+        self.scene.settings.sample_rate = rate;
         self.run(move |d| {
             let _ = d.set_sample_rate(rate);
         });
@@ -1652,6 +1656,7 @@ fn run(
     let mut last_meter_active = false;
     let mut last_overload = [false; 2];
     let mut last_counters = Instant::now() - Duration::from_secs(1);
+    let mut last_rate = Instant::now() - Duration::from_secs(1);
     let mut peak_at = [[(Instant::now(), 0.0); 18]; 3];
 
     loop {
@@ -1666,7 +1671,10 @@ fn run(
             None => {}
         }
         for command in inbox.drain() {
-            if matches!(command, Command::Stop) {
+            // Stop preempts the backlog even mid-drain: the flag is checked
+            // per command, not only at the loop top, so a queued batch of
+            // slow closures never delays shutdown by its full duration.
+            if inbox.stopped() || matches!(command, Command::Stop) {
                 return;
             }
             apply(device, command);
@@ -1805,6 +1813,12 @@ fn run(
             if last_counters.elapsed() >= Duration::from_millis(250) {
                 last_counters = Instant::now();
                 m.counters = device.transport_counters();
+            }
+            // The device rate is polled at 50 ms so the rate-switch
+            // feedback clears promptly once the unit accepts the rate
+            // (the rate value is the confirmation; internal clock).
+            if last_rate.elapsed() >= Duration::from_millis(50) {
+                last_rate = Instant::now();
                 m.device_rate = device.device_rate();
             }
             let active = meter_activity(&m);
@@ -1920,7 +1934,8 @@ fn apply(device: &mut DeviceHandle, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::{
-        mirror_matrix_blocks, Command, CommandInbox, DeviceService, MeterBallistics, COMMAND_CAP,
+        mirror_matrix_blocks, Command, CommandInbox, DeviceService, MeterBallistics, Mirror,
+        COMMAND_CAP,
     };
     use crate::app::DeviceHandle;
     use std::sync::Arc;
@@ -1977,6 +1992,34 @@ mod tests {
             "the model snapshot follows the mute command"
         );
 
+        service.stop();
+    }
+
+    /// The mirror's rate setter updates the local scene at once.  The
+    /// rate-change reapply captures the mirror scene right after the setter;
+    /// a stale rate in that capture would be written back to the unit when
+    /// the reapply fires.
+    #[test]
+    fn the_mirror_rate_setter_updates_the_local_scene_at_once() {
+        let service = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| !service.snapshot().scene.outputs.is_empty()),
+            "the initial snapshot arrives"
+        );
+        let mut mirror = Mirror::new(
+            service.snapshot(),
+            service.command_sender(),
+            service.meter_bus(),
+        );
+        let before = mirror.settings().sample_rate;
+        let rate = if before == 32_000 { 48_000 } else { 32_000 };
+        mirror.set_sample_rate(rate).expect("rate setter");
+        assert_eq!(mirror.settings().sample_rate, rate);
+        assert_eq!(mirror.capture_scene().settings.sample_rate, rate);
+        assert!(
+            wait_for(|| service.snapshot().scene.settings.sample_rate == rate),
+            "the service model follows the rate command"
+        );
         service.stop();
     }
 

@@ -9438,15 +9438,24 @@ fn select_strip(state: &mut TotalControl, cid: ChannelId) {
 /// Poll the PipeWire graph at 4 Hz and yield only when it changes.
 fn follow_graph_stream(
 ) -> impl iced::futures::Stream<Item = Option<totalcontrol_core::pw_follow::GraphSnapshot>> {
-    iced::futures::stream::unfold((None, false), |(last, seeded)| async move {
-        loop {
-            let graph = totalcontrol_core::pw_follow::read_graph();
-            if !seeded || graph != last {
-                return Some((graph.clone(), (graph, true)));
+    iced::futures::stream::unfold(
+        (None, false, Instant::now()),
+        |(last, seeded, mut last_deliver)| async move {
+            loop {
+                let graph = totalcontrol_core::pw_follow::read_graph();
+                // Deliver on change, and at least every 2 s: a static graph
+                // still needs evaluation so a diverged force is reconciled.
+                if !seeded
+                    || graph != last
+                    || last_deliver.elapsed() >= Duration::from_secs(2)
+                {
+                    last_deliver = Instant::now();
+                    return Some((graph.clone(), (graph, true, last_deliver)));
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
             }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    })
+        },
+    )
 }
 
 /// Apply one source cell edit.  A pair is 1/2, 3/4: an odd and an even
@@ -12415,6 +12424,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             };
             let candidates = totalcontrol_core::pw_follow::candidates(&graph, None);
             let supported = device_rates(state);
+            // Reconcile against the live force: an external metadata write
+            // or a stale seed must not block the owner's rate forever.
+            let live_force = pw_clock::read().map(|c| c.force_rate).filter(|r| *r > 0);
+            state.rate_follow.reconcile(live_force);
             let rate = state
                 .rate_follow
                 .observe(&candidates, &supported, Instant::now());
@@ -12533,6 +12546,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         "Fireface playback started"
                     };
                     schedule_mixer_reapply(state, Duration::from_secs(1), reason);
+                    // The reapply scene carries the rate the card runs at,
+                    // in every rate mode.  In Follow mode the model keeps
+                    // the user's fixed-rate preference, so the captured
+                    // scene would otherwise write that stale rate back to
+                    // the unit while the graph streams at the followed rate.
+                    if let Some(scene) = state.startup_scene.as_mut() {
+                        if let Some(rate) = new_rate {
+                            scene.settings.sample_rate = rate;
+                        }
+                    }
                 }
                 state.last_sink_running = sink_running;
                 state.engine = clock;
@@ -13178,9 +13201,9 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
         };
         subs.push(iced::time::every(poll).map(|_| Message::EnginePoll));
         if state.engine_rate_mode == EngineRateMode::Follow && !state.device.is_mock() {
-            // Poll the graph at 4 Hz but only deliver a message when the
-            // snapshot changes: otherwise every poll rebuilt the whole view
-            // to draw the same pixels.
+            // Poll the graph at 4 Hz; deliver on change and on a 2 s
+            // heartbeat, so a static graph still reconciles a diverged
+            // force without rebuilding the view on every poll.
             subs.push(Subscription::run(follow_graph_stream).map(Message::FollowRead));
         }
     }
@@ -14854,6 +14877,16 @@ fn graph_rate_pending(state: &TotalControl) -> bool {
     desired > 0 && actual > 0 && desired != actual
 }
 
+/// True while the device has not yet accepted the selected rate. The device
+/// section shows the rate in orange until the live device readback matches
+/// the selection (internal clock; the rate value is the confirmation, polled
+/// at 50 ms by the service).
+fn device_rate_pending(state: &TotalControl) -> bool {
+    let desired = state.device.settings().sample_rate;
+    let actual = state.device.device_rate().unwrap_or(0);
+    desired > 0 && actual > 0 && desired != actual
+}
+
 /// True while a forced quantum waits to take effect on the running stream.
 fn quantum_pending(state: &TotalControl) -> bool {
     let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
@@ -15101,7 +15134,11 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 Some(settings.sample_rate),
                 Message::SampleRateSelected,
             )
-            .style(theme::pick_list)
+            .style(if device_rate_pending(state) {
+                theme::pick_list_pending
+            } else {
+                theme::pick_list
+            })
             .menu_style(theme::menu)
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .text_size(text_size)
@@ -26385,6 +26422,43 @@ mod tests {
         assert_eq!(
             host_settings_of(&state).engine_rate_mode,
             Some(EngineRateMode::Follow)
+        );
+    }
+
+    #[test]
+    fn a_followed_rate_change_reapplies_the_followed_rate_not_the_fixed_choice() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        attach_device_service(&mut state);
+        // The sound-server rate path is gated on the backend flag; the mock
+        // reports false, so present the mirror as a rate-following unit.
+        let (mut snapshot, sender, bus) = {
+            let service = state.device_service.as_ref().expect("service attached");
+            (service.snapshot(), service.command_sender(), service.meter_bus())
+        };
+        snapshot.info.rate_follows = true;
+        state.device = DeviceHandle::Mirror(crate::device_service::Mirror::new(
+            snapshot, sender, bus,
+        ));
+
+        state.engine_rate_mode = EngineRateMode::Follow;
+        state.device.settings_mut().sample_rate = 88_200;
+        state.last_card_rate = Some(48_000);
+        let stream =
+            totalcontrol_core::pw_clock::CardStream { rate: 96_000, period: 48, buffer: 384 };
+        let _ = update(&mut state, Message::EngineRead(None, Some(stream), false, None));
+
+        assert_eq!(
+            state.device.settings().sample_rate, 88_200,
+            "Follow keeps the user's fixed-rate preference in the model"
+        );
+        let scene = state
+            .startup_scene
+            .as_ref()
+            .expect("the rate change schedules a reapply");
+        assert_eq!(
+            scene.settings.sample_rate, 96_000,
+            "the reapply carries the followed rate, not the stale preference"
         );
     }
 

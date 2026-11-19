@@ -64,6 +64,13 @@ law behind each; these lines say what was measured.
   `0 = 32k`, `1 = 44.1k`, `2 = 48k`, `4 = 64k`, `5 = 88.2k`, `6 = 96k`,
   `8 = 128k`, `9 = 176.4k`, `10 = 192k`. Family word `0x10` index 48 selects
   the 32/44.1/48 kHz base; the alternate setting selects the multiplier.
+  Verified across all nine rates on both UC personalities (firmware 127),
+  including while the host is still reconfiguring.
+- `0x19` is personality-specific: on the UCX it is the stable rate status
+  word (UCX spec §11.6, all nine rates, firmware 49); on the UC (PC and AP)
+  it fluctuates (low byte `0x04`) and is not a rate word. Its bits 0–1 never
+  assert on either UC personality (80 303 reads through two AP rate
+  switches; the PC nine-rate sweep).
 - The fourth DDS word is 25/24 of the 48 kHz-family clock (50 kHz at nominal
   pitch) and tracks pitch with the other three.
 - The device keeps its rate across sessions and personality switches; the
@@ -150,6 +157,8 @@ design specification. Do not duplicate them here.
 | Lock bit layout | needs-capture | Bits for optical, S/PDIF coax, word clock and LTC lock. |
 | LTC transport | needs-capture | LTC packet format, rate and endpoint; current captures show no LTC payload. |
 | GUI lock mapping | open | How the status maps to the clock-source picker and the lock indicator. |
+| UCX `0x19` constant bits 2/7/8 | needs-capture | Invariant across rate, engine state and reset (UCX spec §11.6). Hypotheses: bit 7 = SPDIF professional mirror, bit 8 = EQ+D active (inverted options bit 8), bit 2 = clock locked. Deciding captures: external clock with no signal, SPDIF pro toggle, optical format toggle, EQ toggle. Scene-affecting: needs approval; capture the options word first and restore exactly. |
+| `0x19` busy window (bits 0–1) | open | Never asserted on UCX firmware 49 or on either UC personality. A model/firmware that asserts it, or the pre-probe window via a libusb probe racing the kernel bind, decides it. |
 
 ### Front panel
 

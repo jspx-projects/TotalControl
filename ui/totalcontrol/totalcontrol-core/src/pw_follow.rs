@@ -199,6 +199,15 @@ impl RateFollower {
         self.last_applied_rate = rate.filter(|r| *r > 0);
     }
 
+    /// Align the apply history with the live graph force before evaluating.
+    /// The force can diverge from the last applied rate: another tool writes
+    /// the metadata, an apply fails, or a mode change seeds a stale value.
+    /// Without reconciliation the dedup below would treat the owner's rate
+    /// as already applied and never heal the divergence.
+    pub fn reconcile(&mut self, live_force: Option<u32>) {
+        self.last_applied_rate = live_force.filter(|r| *r > 0);
+    }
+
     /// Observe the graph and return a rate to force once it has been stable.
     ///
     /// `supported` is the connected device's rate list.  A candidate with an
@@ -726,6 +735,58 @@ mod tests {
                 Some(rate)
             );
         }
+    }
+
+    #[test]
+    fn a_diverged_force_is_reapplied_after_stabilization() {
+        let mut follower = RateFollower::new();
+        let now = Instant::now();
+        let owner = candidate(1, 10, 7, "Player", 96_000);
+        follower.observe(&[owner.clone()], &RATES, now);
+        assert_eq!(
+            follower.observe(&[owner.clone()], &RATES, now + STABLE),
+            Some(96_000)
+        );
+        // Another tool rewrote the force while the owner kept playing.
+        follower.reconcile(Some(192_000));
+        assert_eq!(
+            follower.observe(&[owner.clone()], &RATES, now + STABLE * 2),
+            None
+        );
+        assert_eq!(
+            follower.observe(&[owner], &RATES, now + STABLE * 3),
+            Some(96_000)
+        );
+    }
+
+    #[test]
+    fn a_matching_force_is_not_rewritten() {
+        let mut follower = RateFollower::new();
+        let now = Instant::now();
+        let owner = candidate(1, 10, 7, "Player", 96_000);
+        follower.observe(&[owner.clone()], &RATES, now);
+        follower.observe(&[owner.clone()], &RATES, now + STABLE);
+        follower.reconcile(Some(96_000));
+        assert_eq!(
+            follower.observe(&[owner], &RATES, now + STABLE * 2),
+            None
+        );
+    }
+
+    #[test]
+    fn a_stale_seed_equal_to_the_owner_does_not_block_the_apply() {
+        let mut follower = RateFollower::new();
+        let now = Instant::now();
+        // The mode change seeded the owner's rate, but the live force is
+        // elsewhere (a Fixed-mode restore forced it before the switch).
+        follower.seed_applied_rate(Some(96_000));
+        let owner = candidate(1, 10, 7, "Player", 96_000);
+        follower.reconcile(Some(192_000));
+        assert_eq!(follower.observe(&[owner.clone()], &RATES, now), None);
+        assert_eq!(
+            follower.observe(&[owner], &RATES, now + STABLE),
+            Some(96_000)
+        );
     }
 
     #[test]

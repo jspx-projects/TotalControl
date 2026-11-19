@@ -136,7 +136,8 @@ that unit. Device-specific host settings follow the incoming unit.
 
 Loading an explicit workspace saves the outgoing current workspace, applies
 the explicit scene, replaces the GUI state and writes the loaded state to the
-current workspace.
+current workspace. A workspace stores the current graph rate. Loading applies
+the stored rate only in fixed-rate mode; `Auto` and `Follow` keep their mode.
 
 Save writes the current workspace to the chosen `.tcws` file and to the
 current workspace file.

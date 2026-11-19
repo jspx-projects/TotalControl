@@ -1326,6 +1326,17 @@ pub fn pick_list_no_text(
     style
 }
 
+/// A pick list whose selected text is shown in the pending (orange) color,
+/// used while a device rate switch has not yet been accepted by the unit.
+pub fn pick_list_pending(
+    theme: &iced::Theme,
+    status: iced::widget::pick_list::Status,
+) -> iced::widget::pick_list::Style {
+    let mut style = pick_list(theme, status);
+    style.text_color = ysim();
+    style
+}
+
 /// The width of the thin scrollbar's rail and scroller. A scrollable reserves
 /// this much horizontal space when the scrollbar appears, so a fixed-width
 /// panel must add it to its width to keep the content's right edge clear.
