@@ -13733,26 +13733,8 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                     .into()
             };
         let mut output_row = row![].spacing(theme::SPACE_MD * scale);
-        if caps.pitch {
-            output_row = output_row.push(knob_cell(
-                "Pitch",
-                knob(Knob {
-                    value: settings.pitch_percent,
-                    range: (-5.0, 5.0),
-                    label: format!("{:+.1}%", settings.pitch_percent),
-                    secondary_value: None,
-                    on_readout_change: None,
-                    arc_from_center: true,
-                    level_arc_color: Some(theme::text_primary()),
-                    interactive: true,
-                    log_scale: false,
-                    modifiers,
-                    scale,
-                    on_change: Box::new(|v| Message::PitchChanged(v.clamp(-5.0, 5.0))),
-                    on_reset: Box::new(|| Message::PitchChanged(0.0)),
-                }),
-            ));
-        }
+        // Pitch is owned by the slider in the device group above; there is
+        // no pitch knob here.
         if caps.width {
             output_row = output_row.push(knob_cell(
                 "Width",
@@ -13773,9 +13755,8 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                 }),
             ));
         }
-        if caps.pitch || caps.width {
-            body =
-                body.push(column![section("OUTPUT"), output_row].spacing(theme::SPACE_MD * scale));
+        if caps.width {
+            body = body.push(output_row);
         }
 
         // The global flags as a two-column grid of equal toggles, the same
@@ -13860,19 +13841,24 @@ fn popover<'a>(
             (height - POPOVER_TOP * scale - 3.0 * theme::SPACE_XL * scale).max(220.0)
         })
         .unwrap_or(700.0 * scale);
-    let card = opaque(
-        container(
-            scrollable(body)
-                .height(Length::Shrink)
-                .direction(scrollable::Direction::Vertical(theme::thin_scrollbar())),
-        )
-        .max_height(available)
-        .style(theme::dialog)
-        .padding(theme::SPACE_XL * scale)
-        // Reserve the scrollbar's width so an appearing scrollbar does not
-        // overlay the content's right edge.
-        .width(Length::Fixed((width + theme::THIN_SCROLLBAR_WIDTH) * scale)),
-    );
+    // The scroll area fills to the height cap so dropdown menus have room
+    // below the last rows; the visible card hugs its content inside it.
+    // Clicks on the card are captured by its own `opaque`; clicks in the
+    // transparent area below it reach the closer underneath.
+    let card = container(
+        scrollable(opaque(
+            container(body)
+                .style(theme::dialog)
+                .padding(theme::SPACE_XL * scale)
+                .width(Length::Fill),
+        ))
+        .height(Length::Fill)
+        .direction(scrollable::Direction::Vertical(theme::thin_scrollbar())),
+    )
+    .max_height(available)
+    // Reserve the scrollbar's width so an appearing scrollbar does not
+    // overlay the content's right edge.
+    .width(Length::Fixed((width + theme::THIN_SCROLLBAR_WIDTH) * scale));
 
     // One layer, not a catcher stacked under the card: in a `stack`, the
     // top layer's full-window container reports a mouse interaction, which
@@ -13881,22 +13867,21 @@ fn popover<'a>(
     // captures its own clicks first, and `mouse_area` only acts on the
     // uncaptured ones: a click anywhere outside the card closes it, like a
     // menu. No dimming: it is an inspector, not a modal.
-    opaque(
-        mouse_area(
-            container(card)
-                .align_x(iced::Alignment::End)
-                .padding(iced::Padding {
-                    top: POPOVER_TOP * scale,
-                    // Glued to the left edge of the CONTROLS sidebar.
-                    right: sidebar_px(state),
-                    left: 0.0,
-                    bottom: 0.0,
-                })
-                .width(Length::Fill)
-                .height(Length::Fill),
-        )
-        .on_press(close),
+    mouse_area(
+        container(card)
+            .align_x(iced::Alignment::End)
+            .padding(iced::Padding {
+                top: POPOVER_TOP * scale,
+                // Glued to the left edge of the CONTROLS sidebar.
+                right: sidebar_px(state),
+                left: 0.0,
+                bottom: 0.0,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill),
     )
+    .on_press(close)
+    .into()
 }
 
 /// A modal dialog with a dimmed scrim, anchored below the top bar. The

@@ -27,3 +27,10 @@ codegen-units = 1
 inherits = "release"
 debug = 1
 strip = false
+
+# Vendored iced_widget 0.14.2 (MIT, vendor/iced_widget/LICENSE) with the
+# dropdown-menu viewport fix: menu placement measures the free space from
+# the viewport edges (overlay/menu.rs, menu_spaces), so menus inside a
+# scrollable panel flip correctly and never draw outside the viewport.
+[patch.crates-io]
+iced_widget = { path = "vendor/iced_widget" }
