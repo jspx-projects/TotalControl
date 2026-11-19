@@ -1587,6 +1587,16 @@ channels to a DAW.
 The buffer-size picker in TotalControl sets the graph quantum. The driver adds
 its own USB queue and device lead; the latency display explains the result.
 
+The installer's WirePlumber rule adds a scheduling cushion
+(`api.alsa.headroom = 192` frames). PipeWire normally wakes the audio thread
+when only one period of playback remains in the buffer; at the smallest
+quantum a single late write then leaves the device with nothing to play. The
+cushion wakes the thread earlier, so one late write is absorbed instead of
+starving the device. It costs up to one extra millisecond of queued audio at
+192 kHz and up to about three at the 1x rates, where the buffer clamp limits
+the cushion. The cushion is a tolerance, not a guarantee against sustained
+overload: keep the system load guidance below for the smallest quanta.
+
 The quantum is also what keeps capture steady at very low latency. At a
 quantum equal to one millisecond (48 frames at 48 kHz) the graph has no slack
 between the device's period and the reader's deadline, and PipeWire may
