@@ -180,7 +180,7 @@ static unsigned int ffuc_urb_frames(struct ffuc *chip, unsigned int rate)
 	return chip->base_urb_frames << ffuc_mode_index(rate);
 }
 
-static unsigned int ffuc_iso_wrap(struct ffuc *chip)
+unsigned int ffuc_iso_wrap(struct ffuc *chip)
 {
 	/* The AP-mode position counter wraps at 8192 (13-bit) at 1x rates on
 	 * every model: UC, UCX and Babyface-classic share the same header
@@ -1538,7 +1538,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 /* ISO implicit feedback: remember every IN packet's position and frame
  * count by packet number. */
 static void ffuc_fb_put(struct ffuc *chip, unsigned int pos, unsigned int frames,
-			unsigned int phase)
+			unsigned int phase, bool seed)
 {
 	u32 e;
 
@@ -1547,12 +1547,41 @@ static void ffuc_fb_put(struct ffuc *chip, unsigned int pos, unsigned int frames
 	e = ((phase & 0x3fff) << 18) | ((pos & 0x1fff) << 5) | (frames & 0x1f);
 	chip->fb[chip->in_pkts++ & (FFUC_FB_SIZE - 1)] = e;
 	chip->in_end = (pos + frames) % ffuc_iso_wrap(chip);
+	/* The unwrapped position advances exactly like the wrap-domain
+	 * in_end, so the two stay congruent across a 8192 wrap.  Only a
+	 * real header packet seeds the unwrapped origin, at the field's
+	 * current value: the estimated path passes the wrap-domain in_end
+	 * as its position, and in_end is zero at a stream start while the
+	 * device's field continues from its own value.  Seeding from the
+	 * estimate would offset the two domains by the device's absolute
+	 * position. */
+	if (seed && !chip->in_total_valid) {
+		chip->in_total = pos;
+		chip->in_field = pos;
+		chip->in_total_valid = true;
+	}
+	if (chip->in_total_valid) {
+		chip->in_total += frames;
+		if (seed) {
+			/* Field model: the device's own position, jumps
+			 * included (the lead words are compared against it).
+			 * A non-zero jump against the frame-count advance is
+			 * the field's occasional resync; the count model
+			 * (in_total) stays continuous and drives rate_meas. */
+			s32 jump = (s32)((pos + ffuc_iso_wrap(chip) -
+					  (u32)(chip->in_field % ffuc_iso_wrap(chip))) %
+					 ffuc_iso_wrap(chip));
+			if (jump > (s32)(ffuc_iso_wrap(chip) / 2))
+				jump -= ffuc_iso_wrap(chip);
+			chip->in_field += jump + frames;
+		}
+	}
 }
 
 static void ffuc_fb_put_nominal(struct ffuc *chip)
 {
 	chip->fb_acc += chip->rate;
-	ffuc_fb_put(chip, chip->in_end, chip->fb_acc / 8000, 0);
+	ffuc_fb_put(chip, chip->in_end, chip->fb_acc / 8000, 0, false);
 	chip->fb_acc %= 8000;
 }
 
@@ -1570,6 +1599,53 @@ static bool ffuc_fb_get(struct ffuc *chip, u64 k, unsigned int *pos,
 	*phase = (e >> 18) & 0x3fff;
 	*frames = min(e & 0x1f, chip->mode->max_frames);
 	return true;
+}
+
+/*
+ * The lead anchor: the value the fb-ring seed produced, computed from
+ * the device timestamp instead of a ring entry.
+ *
+ * The old seed read the position the device reported for the fb-ring
+ * slot the fill consumes (ring slot out_pkts − fb_delay) and added
+ * out_lead.  The device timestamp carries the same timeline as the
+ * unwrapped in_total: the position at that slot is in_total rewound by
+ * the frames the device captured in the packets between the slot and
+ * the fill moment — (in_pkts − out_pkts + fb_delay) packets at the
+ * nominal rate, Q32.  The fb_get validity check at the call site still
+ * gates the seed: before the ring reaches that slot there is no device
+ * anchor for the rewind, and seeding across the stream start would
+ * guess the phase against the device's own ring.
+ *
+ * Exact to a frame today (the interpolation over a few ms is
+ * sub-frame); sub-sample once the phase convention is captured
+ * (DRIVER-DESIGN §4.3).  Everything is mod the wrap: in_total is
+ * congruent with the wrap-domain in_end, and the lead-word writes
+ * reduce mod the wrap.
+ */
+static u32 ffuc_lead_seed(struct ffuc *chip)
+{
+	u64 wrap = ffuc_iso_wrap(chip);
+	u64 step_q32 = div64_u64((u64)chip->rate << 32, 8000);
+	s64 span_pkts, pos_q32;
+
+	/* Packets between the fb slot the seed represents and the fill
+	 * moment.  The fill consumes fb slot (out_pkts − fb_delay); the
+	 * device position at that slot is in_total rewound. */
+	span_pkts = (s64)chip->in_pkts - (s64)chip->out_pkts
+		  + (s64)chip->fb_delay;
+	pos_q32 = (s64)(((chip->ts_pos % wrap) << 32) + chip->ts_frac_q32)
+		- span_pkts * (s64)step_q32;
+	chip->ts_seed_span = span_pkts;
+	chip->ts_seed_pos_q32 = (u64)pos_q32;
+	chip->ts_seed_in = chip->in_pkts;
+	chip->ts_seed_out = chip->out_pkts;
+	chip->ts_seed_in_end = chip->in_end;
+
+	/* Floor at Q32 (arithmetic shift); out_lead then the wrap mask.
+	 * The mask is a power of two, so it is the true residue. */
+	chip->ts_seed_counter =
+		(u32)(((pos_q32 >> 32) + (s64)chip->out_lead) & (s64)(wrap - 1));
+	return chip->ts_seed_counter;
 }
 
 /*
@@ -1607,8 +1683,38 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 	unsigned long flags;
 	bool elapsed = false;
 	int i;
+	u64 f_base;
 
 	spin_lock_irqsave(&chip->fb_lock, flags);
+
+	/* Start-frame anchor: sof_ns(f) = ts_anchor_ns + f * 125000.  For
+	 * high-speed, urb->start_frame advances one unit per ISO packet
+	 * (125 us microframes; the driver's own continuity math,
+	 * next_start = start_frame + number_of_packets, is in the same
+	 * units).  The completion lands shortly after the URB's last
+	 * packet window, so the raw anchor is the completion latency.  An
+	 * exponential average (1/8) keeps it jitter-free while tracking
+	 * the slow host-vs-controller clock offset; a discontinuity
+	 * (engine restart, controller hiccup) resyncs it. */
+	{
+		u64 f_end = chip->ts_frames + urb->number_of_packets;
+		u64 a_raw = ktime_get_ns() - f_end * 125000ull;
+		s64 d;
+
+		if (!chip->ts_anchor_valid) {
+			chip->ts_anchor_ns = a_raw;
+			chip->ts_anchor_valid = true;
+		} else {
+			d = (s64)(a_raw - chip->ts_anchor_ns);
+			if (d > 2000000 || d < -2000000) {
+				atomic_inc(&chip->in_anchor_resync);
+				chip->ts_anchor_ns = a_raw;
+			} else {
+				chip->ts_anchor_ns += d / 8;
+			}
+		}
+	}
+	f_base = chip->ts_frames;
 	for (i = 0; i < urb->number_of_packets; i++) {
 		const struct usb_iso_packet_descriptor *d =
 			&urb->iso_frame_desc[i];
@@ -1677,6 +1783,7 @@ cadence_skip:
 		{
 			unsigned int pos = (hdr >> 5) & 0x1fff;
 			unsigned int hframes = hdr & 0x1f;
+			unsigned int phase = (hdr >> 18) & 0x3fff;
 			unsigned int wrap = ffuc_iso_wrap(chip);
 
 			pos %= wrap;
@@ -1685,9 +1792,58 @@ cadence_skip:
 			if (chip->in_pkts &&
 			    pos != chip->in_end % wrap)
 				atomic_inc(&chip->in_pos_gap);
-			ffuc_fb_put(chip, pos, frames[i], (hdr >> 18) & 0x3fff);
+
+			/* Device timestamp: this header's (position, phase)
+			 * describe one boundary, the packet's own.  The
+			 * phase law (gate 3 captures): the value wraps at
+			 * tps, advances one microframe per packet mod
+			 * tps, and the exact position is pos + phase/tps
+			 * (the device is ahead by the owed fraction; the
+			 * add pays it at the wrap).  The whole-frame
+			 * position is the unwrapped in_total before this
+			 * packet's frames, taken after the put advanced
+			 * it. */
+			ffuc_fb_put(chip, pos, frames[i], phase, true);
+			{
+				u64 pos_k = chip->in_field - frames[i];
+				u64 cnt_k = chip->in_total - frames[i];
+				u64 ts_ns = chip->ts_anchor_ns +
+					(f_base + i) * 125000ull;
+				/* phase/tps as Q32 frames:
+				 * phase * rate * 2^32 / 480e6. */
+				u64 frac = mul_u64_u64_div_u64(
+					phase, (u64)chip->rate << 32,
+					480000000ull);
+				u64 exact_cnt = (cnt_k << 32) + frac;
+				u64 dq, dn;
+
+				(void)pos_k;
+
+				chip->ts_ns = ts_ns;
+				chip->ts_pos = pos_k;
+				chip->ts_phase = phase;
+				chip->ts_frac_q32 = frac;
+				chip->ts_pos_valid = true;
+
+				/* rate_meas over a one-second window, from the
+				 * exact (sub-sample) position. */
+				if (ts_ns - chip->ts_win_ns >= 1000000000ull) {
+					if (chip->ts_win_ns) {
+						dq = exact_cnt - chip->ts_win_pos;
+						dn = ts_ns - chip->ts_win_ns;
+						chip->ts_rate_meas = div64_u64(
+							(dq >> 32) * 1000000000ull +
+							(((dq & 0xffffffffull) *
+							 1000000000ull) >> 32),
+							dn);
+					}
+					chip->ts_win_ns = ts_ns;
+					chip->ts_win_pos = exact_cnt;
+				}
+			}
 		}
 	}
+	chip->ts_frames += urb->number_of_packets;
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 
 	if (!subs) {
@@ -1849,7 +2005,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	if (s->running && !s->out_counter_valid) {
 		for (i = 0; i < urb->number_of_packets; i++) {
 			if (frames[i]) {
-				s->out_counter = (u32)pos[i] + chip->out_lead;
+				s->out_counter = ffuc_lead_seed(chip);
 				s->out_counter_valid = true;
 				break;
 			}
@@ -2058,9 +2214,58 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 		   atomic_read(&chip->signal_deferred),
 		   atomic_read(&chip->signal_overdue),
 		   READ_ONCE(chip->max_pending));
+	seq_printf(m, "out_lag_min %d\nout_lag_max %d\n",
+		   chip->out_lag_min, chip->out_lag_max);
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(ffuc_stats);
+
+static int ffuc_clock_show(struct seq_file *m, void *v)
+{
+	struct ffuc *chip = m->private;
+	unsigned long flags;
+	u64 anchor, ns, pos, win_ns, win_pos, frames, frac;
+	u32 phase;
+	unsigned int rate;
+	bool valid;
+
+	spin_lock_irqsave(&chip->fb_lock, flags);
+	anchor = chip->ts_anchor_ns;
+	ns = chip->ts_ns;
+	pos = chip->ts_pos;
+	phase = chip->ts_phase;
+	frac = chip->ts_frac_q32;
+	win_ns = chip->ts_win_ns;
+	win_pos = chip->ts_win_pos;
+	frames = chip->ts_frames;
+	rate = chip->ts_rate_meas;
+	valid = chip->ts_pos_valid;
+	spin_unlock_irqrestore(&chip->fb_lock, flags);
+
+	seq_printf(m, "ts_valid %d\n", valid);
+	seq_printf(m, "ts_ns %llu\nts_pos %llu\nts_phase %u\nts_frac_q32 %llu\n",
+		   (unsigned long long)ns, (unsigned long long)pos, phase,
+		   (unsigned long long)chip->ts_frac_q32);
+	seq_printf(m, "rate_meas %u\n", rate);
+	seq_printf(m, "win_ns %llu\nwin_pos %llu\n",
+		   (unsigned long long)win_ns, (unsigned long long)win_pos);
+	seq_printf(m, "anchor_ns %llu\nts_frames %llu\n",
+		   (unsigned long long)anchor, (unsigned long long)frames);
+	seq_printf(m, "anchor_resync %d\n",
+		   atomic_read(&chip->in_anchor_resync));
+	seq_printf(m, "tps_q32 %llu\n", (unsigned long long)chip->ts_tps_q32);
+	seq_printf(m, "in_total %llu in_end %u valid %d\n",
+		   (unsigned long long)chip->in_total, chip->in_end,
+		   chip->in_total_valid);
+	seq_printf(m, "seed span %lld pos_q32 %llu in %llu out %llu in_end %u counter %u\n",
+		   (long long)chip->ts_seed_span,
+		   (unsigned long long)chip->ts_seed_pos_q32,
+		   (unsigned long long)chip->ts_seed_in,
+		   (unsigned long long)chip->ts_seed_out,
+		   chip->ts_seed_in_end, chip->ts_seed_counter);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(ffuc_clock);
 
 static int ffuc_ringtrace_show(struct seq_file *m, void *v)
 {
@@ -2369,6 +2574,28 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->fb_delay = (chip->nurbs + 1) * chip->iso_packets;
 	chip->out_lag_min = 0x7fffffff;
 	chip->out_lag_max = -0x7fffffff;
+	/* Device timestamp: the stream-side state restarts with the device
+	 * stream; the start-frame anchor re-anchors too, because the frame
+	 * index restarts at the first submitted URB. */
+	chip->in_total_valid = false;
+	chip->in_total = 0;
+	chip->ts_pos_valid = false;
+	chip->ts_pos = 0;
+	chip->ts_ns = 0;
+	chip->ts_phase = 0;
+	chip->ts_rate_meas = 0;
+	chip->ts_win_ns = 0;
+	chip->ts_win_pos = 0;
+	chip->ts_frames = 0;
+	chip->ts_anchor_valid = false;
+	chip->ts_seed_span = 0;
+	chip->ts_seed_pos_q32 = 0;
+	chip->ts_seed_in = 0;
+	chip->ts_seed_out = 0;
+	chip->ts_seed_in_end = 0;
+	chip->ts_seed_counter = 0;
+	chip->ts_frac_q32 = 0;
+	chip->ts_tps_q32 = div64_u64(480000000ull << 32, chip->rate);
 	/* Per-run diagnostics: a stop line describes this stream only. */
 	memset(chip->iso_frames_hist, 0, sizeof(chip->iso_frames_hist));
 	atomic_set(&chip->in_hdr_only, 0);
@@ -3326,6 +3553,8 @@ static int ffuc_probe(struct usb_interface *intf,
 				    &ffuc_stats_fops);
 		debugfs_create_file("ringtrace", 0444, chip->debugfs, chip,
 				    &ffuc_ringtrace_fops);
+		debugfs_create_file("clock", 0444, chip->debugfs, chip,
+				    &ffuc_clock_fops);
 	}
 	chip->ring_min_filled = UINT_MAX;
 	mutex_init(&chip->mutex);

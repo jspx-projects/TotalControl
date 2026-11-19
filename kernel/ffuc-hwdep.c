@@ -278,6 +278,29 @@ static int ffuc_hwdep_words(struct ffuc *chip,
 	return ffuc_reg_send(chip, w.words, w.count);
 }
 
+/* The device timestamp: a snapshot of the Stage 1 state under fb_lock. */
+static int ffuc_hwdep_clock(struct ffuc *chip,
+			    struct ffuc_hwdep_clock __user *arg)
+{
+	struct ffuc_hwdep_clock c;
+	unsigned long flags;
+
+	spin_lock_irqsave(&chip->fb_lock, flags);
+	c.timestamp_ns = chip->ts_ns;
+	c.timestamp_pos = chip->ts_pos;
+	c.timestamp_phase = chip->ts_phase;
+	c.rate_meas = chip->ts_rate_meas;
+	c.anchor_ns = chip->ts_anchor_ns;
+	c.frames = chip->ts_frames;
+	c.wrap = ffuc_iso_wrap(chip);
+	c.reserved = 0;
+	spin_unlock_irqrestore(&chip->fb_lock, flags);
+
+	if (copy_to_user(arg, &c, sizeof(c)))
+		return -EFAULT;
+	return 0;
+}
+
 static int ffuc_hwdep_counters(struct ffuc *chip,
 			       struct ffuc_hwdep_counters __user *arg)
 {
@@ -337,6 +360,8 @@ static int ffuc_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
 		return ffuc_hwdep_words(chip, (void __user *)arg);
 	case FFUC_HWDEP_IOCTL_COUNTERS:
 		return ffuc_hwdep_counters(chip, (void __user *)arg);
+	case FFUC_HWDEP_IOCTL_CLOCK:
+		return ffuc_hwdep_clock(chip, (void __user *)arg);
 	case FFUC_HWDEP_IOCTL_ENVELOPE: {
 		struct ffuc_hwdep_envelope env;
 

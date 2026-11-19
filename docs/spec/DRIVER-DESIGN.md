@@ -366,7 +366,21 @@ add/drop, and OUT reproduces it. The long-term OUT rate therefore
 equals the device's capture rate, fractional part included.
 
 The phase is recorded in `fb[]` and exposed for diagnostics; the
-scheduler mirrors the frame count, which already carries the add/drop.
+The scheduler mirrors the frame count, which already carries the add/drop.
+The driver also consumes the phase for the device timestamp: each IN
+packet pairs the unwrapped device position with the host time of the next
+packet boundary (the start-frame anchor), and the one-second window over
+those pairs is `rate_meas`, the add/drop-inclusive device rate.  The seed
+of the OUT lead anchor is computed from the same timeline (rewinding the
+unwrapped position by the packets between the feedback slot and the fill
+moment), value-equivalent to reading the feedback ring.  The phase's
+fractional term is capture-pinned (Stage 1 gate 3): the exact position is
+`pos + phase/tps` (the device is ahead of its delivered count by the owed
+fraction; the add pays it at the wrap), and the phase advances one
+microframe per packet mod tps regardless of the frame count.  The
+timestamp position follows the device's own field, whose occasional
+resync (~one per stream, recorded as `pos_gap`) is carried in the
+unwrapped field model; rate_meas uses the continuous count model.
 Whether the macOS reference host additionally consumes phase for
 fractional prediction is an open item (§12).
 
@@ -380,7 +394,8 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 |---|---|---|
 | position | the stream position modulo 8192 at 1x rates (UC, UCX, Babyface-classic share the header); anchors the feedback timeline | K1.3 lead anchor |
 | frame count | frames in this packet; carries the clock's add/drop | K1.3 mirrors it (rate lock) |
-| phase | 14-bit fractional-sample accumulator (bits 18–31) counting 480 MHz ticks, modulus 480000000/rate | K1.1 records it; diagnostics |
+| phase | 14-bit field (bits 18–31): a 480 MHz tick accumulator; the value wraps at `tps = 480000000/rate` (ticks per sample: 10000 at 48 kHz, 10884.354 at 44.1 kHz) and advances one microframe per packet mod tps, independent of the frame count | K1.1 records it; the device timestamp and `rate_meas` |
+| device timestamp | the pair (unwrapped position, host time) of the device clock, taken per IN packet: the position at a packet end against the host time of the next packet boundary, from the start-frame anchor | the `rate_meas` window, the lead anchor seed, the `CLOCK` ioctl |
 | lead word | the stream position an OUT frame plays at; keeps the device output buffer supplied | K1.3 |
 | `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
@@ -482,6 +497,7 @@ a bounded reply wait (§5.2).
 | `VENDOR` | one EP0 vendor request (read or write, up to 64 bytes) |
 | `WRITE_WORDS` | up to 63 IF1 register words; the kernel adds odd parity |
 | `COUNTERS` | cumulative transport error counters (host ring, USB, feedback, pointer, events); zeroed on reattach |
+| `CLOCK` | the device timestamp: the unwrapped device position at a host time, the raw phase field, the windowed device rate `rate_meas`, and the start-frame anchor (`sof_ns(f) = anchor_ns + f·125000`, one unit per ISO packet); ABI 6 |
 
 `read()`/`poll()` deliver events:
 

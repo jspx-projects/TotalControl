@@ -239,6 +239,14 @@ mechanism, FX returns and unsupported controls.
   `scripts/lab/` and the full usage, recovery sequence and sudoers setup
   are in `docs/DEVELOPMENT-TOOLS.md` ("Lab helpers"). `scripts/bench-reload.sh`
   automates a checkout-build swap.
+- Investigation tooling, scratch scripts, fetched reference source and
+  measurement data live under `docs/work/bench/` (`tools/`, `ref/`,
+  `data/`), kept local by the existing `docs/work/` exclude mechanism.
+  Never store them in `/tmp` — it is wiped on reboot. Scripts locate
+  themselves relative to their own path, not an absolute scratch dir.
+  Reusable tools graduate to `tools/` or `scripts/` through a PR. Git
+  worktrees live in a persistent sibling directory
+  (`<checkout>-wt/`), never under `/tmp`.
 - Verify with `cargo test -p totalcontrol-core --lib --features alsa` and
   `cargo test -p totalcontrol-gui`.
 - When a change resolves or advances a published open work item — a
