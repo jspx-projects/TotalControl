@@ -1652,6 +1652,7 @@ fn run(
     let mut last_meter_active = false;
     let mut last_overload = [false; 2];
     let mut last_counters = Instant::now() - Duration::from_secs(1);
+    let mut last_rate = Instant::now() - Duration::from_secs(1);
     let mut peak_at = [[(Instant::now(), 0.0); 18]; 3];
 
     loop {
@@ -1805,6 +1806,12 @@ fn run(
             if last_counters.elapsed() >= Duration::from_millis(250) {
                 last_counters = Instant::now();
                 m.counters = device.transport_counters();
+            }
+            // The device rate is polled at 50 ms so the rate-switch
+            // feedback clears promptly once the unit accepts the rate
+            // (the rate value is the confirmation; internal clock).
+            if last_rate.elapsed() >= Duration::from_millis(50) {
+                last_rate = Instant::now();
                 m.device_rate = device.device_rate();
             }
             let active = meter_activity(&m);

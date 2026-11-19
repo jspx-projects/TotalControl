@@ -14854,6 +14854,16 @@ fn graph_rate_pending(state: &TotalControl) -> bool {
     desired > 0 && actual > 0 && desired != actual
 }
 
+/// True while the device has not yet accepted the selected rate. The device
+/// section shows the rate in orange until the live device readback matches
+/// the selection (internal clock; the rate value is the confirmation, polled
+/// at 50 ms by the service).
+fn device_rate_pending(state: &TotalControl) -> bool {
+    let desired = state.device.settings().sample_rate;
+    let actual = state.device.device_rate().unwrap_or(0);
+    desired > 0 && actual > 0 && desired != actual
+}
+
 /// True while a forced quantum waits to take effect on the running stream.
 fn quantum_pending(state: &TotalControl) -> bool {
     let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
@@ -15101,7 +15111,11 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 Some(settings.sample_rate),
                 Message::SampleRateSelected,
             )
-            .style(theme::pick_list)
+            .style(if device_rate_pending(state) {
+                theme::pick_list_pending
+            } else {
+                theme::pick_list
+            })
             .menu_style(theme::menu)
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .text_size(text_size)
