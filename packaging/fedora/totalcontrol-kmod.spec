@@ -51,6 +51,8 @@ find %{buildroot}%{_usrsrc}/%{kmod_name}-%{kmod_version} \
 rm -rf %{buildroot}%{_usrsrc}/%{kmod_name}-%{kmod_version}/.tmp_versions
 install -Dm644 packaging/systemd/snd-fireface-uc-load.service \
     %{buildroot}%{_unitdir}/snd-fireface-uc-load.service
+install -Dm644 packaging/modprobe.d/fireface-uc.conf \
+    %{buildroot}%{_sysconfdir}/modprobe.d/fireface-uc.conf
 
 %post
 if [ -x /usr/sbin/dkms ]; then
@@ -75,6 +77,7 @@ systemctl daemon-reload || :
 %files
 %{_usrsrc}/%{kmod_name}-%{kmod_version}
 %{_unitdir}/snd-fireface-uc-load.service
+%config(noreplace) %{_sysconfdir}/modprobe.d/fireface-uc.conf
 
 %changelog
 * Sun Nov 08 2026 TotalControl contributors <noreply@localhost> - 0.1-1

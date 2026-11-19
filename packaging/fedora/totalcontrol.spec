@@ -72,6 +72,10 @@ install -Dm644 README.md %{buildroot}%{_docdir}/totalcontrol/README.md
 for f in data/midi-controllers/*.json; do
     install -Dm644 "$f" %{buildroot}%{_datadir}/totalcontrol/midi-controllers/"$(basename "$f")"
 done
+install -Dm644 packaging/pipewire/99-fireface.conf \
+    %{buildroot}%{_sysconfdir}/pipewire/pipewire.conf.d/99-fireface.conf
+install -Dm644 packaging/wireplumber/60-fireface.conf \
+    %{buildroot}%{_sysconfdir}/wireplumber/wireplumber.conf.d/60-fireface.conf
 
 %check
 desktop-file-validate ui/totalcontrol/totalcontrol-gui/assets/totalcontrol.desktop
@@ -79,6 +83,8 @@ desktop-file-validate ui/totalcontrol/totalcontrol-gui/assets/totalcontrol.deskt
 %post
 update-desktop-database &>/dev/null || :
 touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
+echo "TotalControl: Fireface PipeWire/WirePlumber policy installed to /etc."
+echo "Restart PipeWire and WirePlumber (or log out and back in) to apply it."
 
 %postun
 update-desktop-database &>/dev/null || :
@@ -92,6 +98,8 @@ touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
 %{_datadir}/icons/hicolor/128x128/apps/totalcontrol.png
 %{_datadir}/icons/hicolor/256x256/apps/totalcontrol.png
 %{_datadir}/totalcontrol/midi-controllers/*.json
+%config(noreplace) %{_sysconfdir}/pipewire/pipewire.conf.d/99-fireface.conf
+%config(noreplace) %{_sysconfdir}/wireplumber/wireplumber.conf.d/60-fireface.conf
 %license %{_licensedir}/totalcontrol/LICENSE
 %doc %{_docdir}/totalcontrol/README.md
 
