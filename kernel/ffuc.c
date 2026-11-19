@@ -2582,11 +2582,8 @@ static int ffuc_rule_period(struct snd_pcm_hw_params *params,
 				   SNDRV_PCM_HW_PARAM_PERIOD_SIZE), &t);
 }
 
-static int ffuc_rule_buffer(struct snd_pcm_hw_params *params,
-			    struct snd_pcm_hw_rule *rule)
+static unsigned int ffuc_buffer_min(struct ffuc *chip, unsigned int rate)
 {
-	struct ffuc *chip = rule->private;
-	struct snd_interval *r = hw_param_interval(params, SNDRV_PCM_HW_PARAM_RATE);
 	/*
 	 * The ALSA ring must cover the USB URBs already in flight plus two
 	 * more URBs of margin.  It must also cover the UCX output lead: at
@@ -2594,26 +2591,58 @@ static int ffuc_rule_buffer(struct snd_pcm_hw_params *params,
 	 * lead, which is the 96-and-below crackle threshold.  Add two URBs
 	 * of margin beyond the lead and keep the result URB-aligned.
 	 */
-	unsigned int urb = ffuc_urb_frames(chip, r->min);
+	unsigned int urb = ffuc_urb_frames(chip, rate);
 	unsigned int min = (chip->nurbs + 2) * urb;
 
 	if (chip->ucx) {
 		unsigned int fb_delay = (chip->nurbs + 1) * chip->iso_packets;
-		unsigned int lead = DIV_ROUND_CLOSEST(fb_delay * r->min, 8000) + 60;
+		unsigned int lead = DIV_ROUND_CLOSEST(fb_delay * rate, 8000) + 60;
 
 		min = max(min, lead + 2 * urb);
 	}
 
-	min = round_up(min, urb);
+	/* roundup() rounds to any multiple; round_up() is a power-of-two
+	 * bitmask and would mis-align a non-power-of-two URB. */
+	return roundup(min, urb);
+}
 
+static int ffuc_rule_buffer(struct snd_pcm_hw_params *params,
+			    struct snd_pcm_hw_rule *rule)
+{
+	struct ffuc *chip = rule->private;
+	struct snd_interval *r = hw_param_interval(params, SNDRV_PCM_HW_PARAM_RATE);
 	struct snd_interval t = {
-		.min = min,
+		.min = ffuc_buffer_min(chip, r->min),
 		.max = UINT_MAX,
 		.integer = 1,
 	};
 
 	return snd_interval_refine(hw_param_interval(params,
 				   SNDRV_PCM_HW_PARAM_BUFFER_SIZE), &t);
+}
+
+/* The achievable rate/quantum envelope, reported through hwdep so userspace
+ * presents exactly what the driver accepts.  Uses the same geometry functions
+ * as the hw_params rules: one implementation, one owner. */
+void ffuc_query_envelope(struct ffuc *chip, struct ffuc_hwdep_envelope *env)
+{
+	unsigned int i, n = 0;
+
+	memset(env, 0, sizeof(*env));
+	env->urb_frames = chip->base_urb_frames;
+	env->nurbs = chip->nurbs;
+	env->iso = chip->iso ? 1 : 0;
+	for (i = 0; i < ARRAY_SIZE(ffuc_rates) && n < FFUC_HWDEP_MAX_RATES; i++) {
+		unsigned int rate = ffuc_rates[i];
+
+		if (!ffuc_rate_supported(chip, rate))
+			continue;
+		env->rates[n].rate = rate;
+		env->rates[n].period_floor = ffuc_urb_frames(chip, rate);
+		env->rates[n].buffer_min = ffuc_buffer_min(chip, rate);
+		n++;
+	}
+	env->count = n;
 }
 
 static int ffuc_pcm_open(struct snd_pcm_substream *subs)

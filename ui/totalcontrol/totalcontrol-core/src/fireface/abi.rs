@@ -7,9 +7,10 @@
 
 use std::mem::size_of;
 
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 pub const HWDEP_MAX_DATA: usize = 64;
 pub const HWDEP_MAX_WORDS: usize = 63;
+pub const HWDEP_MAX_RATES: usize = 16;
 pub const EVENT_MAX: usize = 704;
 
 pub const MODEL_UNKNOWN: u32 = 0;
@@ -133,6 +134,29 @@ pub struct HwdepCounters {
     pub delta_zero: u32,
 }
 
+/// One supported rate and the ALSA geometry the driver accepts at it.
+/// `period_floor` is one URB (the smallest period and, with disable-tsched,
+/// the smallest graph quantum); `buffer_min` is the smallest ring. The driver
+/// computes these with the same functions that refine `hw_params`, so it is
+/// the single owner of the achievable envelope.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HwdepRateEnv {
+    pub rate: u32,
+    pub period_floor: u32,
+    pub buffer_min: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct HwdepEnvelope {
+    pub count: u32,
+    pub urb_frames: u32,
+    pub nurbs: u32,
+    pub iso: u32,
+    pub rates: [HwdepRateEnv; HWDEP_MAX_RATES],
+}
+
 /// Linux `_IOC` encoding (the generic asm-generic layout used on x86_64,
 /// arm64 and most modern architectures).
 const fn ioc(dir: u32, ty: u8, nr: u8, size: usize) -> u64 {
@@ -149,6 +173,7 @@ pub const IOCTL_INFO: u64 = ioc(IOC_READ, b'F', 0x10, size_of::<HwdepInfo>());
 pub const IOCTL_VENDOR: u64 = ioc(IOC_READ | IOC_WRITE, b'F', 0x11, size_of::<HwdepVendor>());
 pub const IOCTL_WRITE_WORDS: u64 = ioc(IOC_WRITE, b'F', 0x12, size_of::<HwdepWords>());
 pub const IOCTL_COUNTERS: u64 = ioc(IOC_READ, b'F', 0x13, size_of::<HwdepCounters>());
+pub const IOCTL_ENVELOPE: u64 = ioc(IOC_READ, b'F', 0x14, size_of::<HwdepEnvelope>());
 
 impl HwdepInfo {
     pub fn name_str(&self) -> String {
@@ -190,11 +215,16 @@ mod tests {
         assert_eq!(size_of::<HwdepWords>(), 4 + 4 + 63 * 4);
         // ffuc_hwdep_counters: 31 * 4 = 124
         assert_eq!(size_of::<HwdepCounters>(), 124);
+        // ffuc_hwdep_rate_env: 3 * 4 = 12; envelope: 4 * 4 + 16 * 12 = 208
+        assert_eq!(size_of::<HwdepRateEnv>(), 12);
+        assert_eq!(size_of::<HwdepEnvelope>(), 208);
     }
 
     #[test]
     fn ioc_number_is_stable() {
         // _IOR('F', 0x10, 196) = 0x80c44610
         assert_eq!(IOCTL_INFO, 0x80c4_4610);
+        // _IOR('F', 0x14, 208) = 0x80d04614
+        assert_eq!(IOCTL_ENVELOPE, 0x80d0_4614);
     }
 }

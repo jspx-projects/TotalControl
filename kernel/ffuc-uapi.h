@@ -18,7 +18,7 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 
-#define FFUC_ABI_VERSION	4
+#define FFUC_ABI_VERSION	5
 
 /* Largest payload in one FFUC_HWDEP_IOCTL_VENDOR request. */
 #define FFUC_HWDEP_MAX_DATA	64
@@ -153,6 +153,28 @@ struct ffuc_hwdep_counters {
 	__u32 delta_zero;
 };
 
+/* Largest rate table in one FFUC_HWDEP_IOCTL_ENVELOPE reply. */
+#define FFUC_HWDEP_MAX_RATES	16
+
+/* One supported rate and the ALSA geometry the driver accepts at it.
+ * period_floor is one URB: the smallest period, and (with disable-tsched)
+ * the smallest graph quantum. buffer_min is the smallest ring. Both are
+ * computed by the same functions that refine hw_params, so the driver is
+ * the single owner of the achievable envelope. */
+struct ffuc_hwdep_rate_env {
+	__u32 rate;		/* Hz */
+	__u32 period_floor;	/* frames */
+	__u32 buffer_min;	/* frames */
+};
+
+struct ffuc_hwdep_envelope {
+	__u32 count;		/* valid entries in rates[] */
+	__u32 urb_frames;	/* base URB frames (module parameter) */
+	__u32 nurbs;		/* URBs in flight per endpoint */
+	__u32 iso;		/* 1 ISO transport, 0 interrupt */
+	struct ffuc_hwdep_rate_env rates[FFUC_HWDEP_MAX_RATES];
+};
+
 #define FFUC_HWDEP_IOCTL_INFO \
 	_IOR('F', 0x10, struct ffuc_hwdep_info)
 #define FFUC_HWDEP_IOCTL_VENDOR \
@@ -161,5 +183,7 @@ struct ffuc_hwdep_counters {
 	_IOW('F', 0x12, struct ffuc_hwdep_words)
 #define FFUC_HWDEP_IOCTL_COUNTERS \
 	_IOR('F', 0x13, struct ffuc_hwdep_counters)
+#define FFUC_HWDEP_IOCTL_ENVELOPE \
+	_IOR('F', 0x14, struct ffuc_hwdep_envelope)
 
 #endif /* _FFUC_UAPI_H */

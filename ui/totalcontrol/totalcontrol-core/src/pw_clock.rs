@@ -219,6 +219,24 @@ pub fn driver_urb_queue() -> Option<(u32, u32)> {
     Some((frames, urbs))
 }
 
+/// The ALSA card number for a card id string, read from `/proc/asound`.
+/// `None` when the card is not present.
+pub fn card_number(card_id: &str) -> Option<i32> {
+    let cards = std::fs::read_dir("/proc/asound").ok()?;
+    for entry in cards.flatten() {
+        let dir = entry.path();
+        let name = dir.file_name()?.to_str()?.to_string();
+        if !name.starts_with("card") {
+            continue;
+        }
+        let id = std::fs::read_to_string(dir.join("id")).unwrap_or_default();
+        if id.trim() == card_id {
+            return name.trim_start_matches("card").parse().ok();
+        }
+    }
+    None
+}
+
 /// Whether the RME Pro Audio sink is actually running a playback stream.
 /// `pactl list short sinks` reports the node state in its last field.
 pub fn fireface_sink_running() -> bool {

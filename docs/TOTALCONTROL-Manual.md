@@ -294,16 +294,48 @@ LED) and no software control; the later revision supports the software setting.
 On the UCX, termination is always software-controlled. TotalControl reads the
 setting from the unit when it connects.
 
-The sample-rate control has three kinds of choice:
+The panel separates what the device owns from what the host engine drives. In
+the device group, `Clock source` picks one of the unit's own clock options
+(Internal, SPDIF coax., Optical, Word clock). `Sample rate` shows the device
+rate: an editable picker of the device-supported rates when the clock is
+Internal and `Rate follows` is Device, and a read-only readout of the rate the
+unit reports when `Rate follows` is PipeWire or SW playback 1/2, or the clock
+source is external.
 
-- **Auto (PipeWire)** lets PipeWire choose the graph rate.
-- **Follow SW playback 1/2** makes the rate follow the player feeding software
-  playback 1/2. The engine section names the application and its rate. A
-  reverse-DNS name is shortened to the application name, so
-  `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing
-  playing it reads `Waiting for playback` and keeps the last rate.
-- A fixed rate (32, 44.1, 48, 64, 88.2, 96, 128, 176.4 or 192 kHz) forces that
-  rate.
+The engine `Rate follows` control chooses who determines the rate. It is usable
+only when the clock source is Internal:
+
+- **Device** (the default) uses the rate you set in the device group's Sample
+  rate picker; the graph follows it.
+- **PipeWire** lets the sound server's graph conduct; the device follows whatever
+  rate the graph runs at. Useful when a DAW or another application drives the
+  graph rate.
+- **SW playback 1/2** makes the rate follow the player feeding software playback
+  1/2. The engine section names the application and its rate. A reverse-DNS name
+  is shortened to the application name, so
+  `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing playing
+  it reads `Waiting for playback` and keeps the last rate.
+
+Whatever the authority, the **device rate is the hub**. The authority sets the
+device rate, and the graph rate and the available quantum both derive from it:
+
+```text
+authority (Device / PipeWire / SW playback 1/2) -> device rate -> graph rate + quantum
+```
+
+The device rate always wins; a stale graph request never overrides it. The
+quantum picker offers only quanta at or above the device rate's period floor
+(one URB), so an impossible quantum cannot be selected. The `Sample rate` row
+shows the device rate, and the `Graph` row shows the graph rate that follows it.
+
+Rate and quantum changes apply over a few seconds while playback continues (the
+player is never stopped). Until a change takes effect, the affected row is
+orange with an "applying…" note and a toast at the bottom of the window
+announces the change; it clears to grey once the actual value matches the
+setting.
+
+When the device is slaved to an external clock, the rate is determined by the
+device and `Rate follows` reads `Device` (read-only).
 
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A followed rate change is a runtime change, so it does not add an undo step or

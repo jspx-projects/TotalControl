@@ -1208,13 +1208,26 @@ The options rows belong to the unit's own group. The UC offers five clock
 sources, including LTC; the UCX offers four: Internal, SPDIF coax., Optical
 and Word.
 
+The `Clock source` row is a picker of the unit's own clock options only; it
+never lists host engine modes. The `Sample rate` row reports the device rate.
+When the clock source is Internal and `Rate follows` is Device, it is an
+editable picker of the device-supported rates; selecting a rate drives the card
+through the engine-rate path. When `Rate follows` is PipeWire or SW playback
+1/2, or the clock source is external, the row is a read-only readout of the rate
+the unit reports (status `0x11`), with a hint that it is device-reported. The
+rate authority lives in the host engine group, not here. Read-only reports (the
+device rate, Graph, Source and the latency readout) use the secondary text
+colour; editable controls use the primary colour.
+
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
 wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
 Every change is written immediately to the device.
 
-The panel is 360 px wide at scale 1 and its caption column is 110 px. It is
-only as tall as its content, capped at the window height. Longer labels wrap
-rather than widening the column; `Single speed:` sits above `word clock`.
+The panel is 360 px wide at scale 1 and its caption column is 110 px. The
+width reserves the thin scrollbar's width so an appearing scrollbar does not
+overlay the content's right edge. It is only as tall as its content, capped at
+the window height. Longer labels wrap rather than widening the column;
+`Single speed:` sits above `word clock`.
 
 On the UCX the options word, the reference levels and the 48 V/Inst/Level
 switches have no readback. The saved scene value is written at connect and the
@@ -1238,15 +1251,38 @@ sink's host volume in percent and dB, with a `0 dB` action. The host volume is a
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
 
-The rate control offers `Auto (PipeWire)`, `Follow SW playback 1/2` and the
-connected device's fixed rates: 32, 44.1, 48, 64, 88.2, 96, 128, 176.4 and
-192 kHz. The engine group always shows `Graph`, the rate PipeWire is currently
-running at, in every mode. In Follow mode it also shows `Mode` and `Source`;
-`Source` reads `<application> · <rate>` for the stream setting the graph, and
-reads `Waiting for playback` with the last graph rate when no stream feeds SW
-playback 1/2. A reverse-DNS PipeWire application name is reduced to its final
-component, so `io.github.celluloid_player.Celluloid` reads `Celluloid`. The
-source is always SW playback 1/2, never the focused strip.
+The engine `Rate follows` control selects who determines the graph (and thus
+device) rate: `Device` (the default) forces the device-set rate; `PipeWire` lets
+the sound server's graph conduct and the device follows it; `SW playback 1/2`
+follows the player feeding SW playback 1/2. The rate value itself is set in the
+DEVICE group's Sample rate picker (Device mode); the control offers no rate
+list. It is usable only when the device clock source is Internal. Slaved to an
+external clock, the rate is determined by the device and `Rate follows` is a
+read-only `Device` label. The engine group always shows `Graph`,
+the rate PipeWire is currently running at, in every mode. With `SW playback 1/2`
+and an Internal clock it also shows `Source`; `Source` reads
+`<application> · <rate>` for the stream setting the graph, and reads `Waiting
+for playback` with the last graph rate when no stream feeds SW playback 1/2. A
+reverse-DNS PipeWire application name is reduced to its final component, so
+`io.github.celluloid_player.Celluloid` reads `Celluloid`. The source is always
+SW playback 1/2, never the focused strip.
+
+The device rate is the hub: the selected authority sets the device rate, and the
+graph rate and the available quantum both derive from the device rate
+(`authority -> device rate -> graph rate + quantum`). The device rate always
+wins over a stale graph request. The quantum picker offers only quanta at or
+above the device rate's period floor (one URB), plus the exact floor.
+
+Rate and quantum changes apply asynchronously: PipeWire renegotiates the
+running stream over a few seconds while the player keeps playing (resampled);
+no restart is needed. While a desired value differs from the actual running
+value the panel shows a pending state: the Graph row shows the actual rate in
+orange, the quantum row and the device-rate picker carry an "applying…" hint
+comparing actual to desired, and the latency readout shows `Quantum <actual>
+samples — applying <desired>…`. A bottom-centre toast announces the change
+("Setting quantum to N samples — applying…"). When the actual matches the
+desired the pending state clears to grey. The device rate is verified by reading
+the unit's status (`0x11`) and comparing it to the set rate.
 
 Follow uses the stream linked to `playback_AUX0`/`playback_AUX1`, including a
 player feeding a TotalControl 5.1/7.1 sink through the sink's input stream, not

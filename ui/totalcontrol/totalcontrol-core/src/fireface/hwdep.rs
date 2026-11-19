@@ -96,6 +96,24 @@ impl Hwdep {
         Ok(unsafe { info.assume_init() })
     }
 
+    /// The achievable rate/quantum envelope the driver accepts (ABI 5).
+    /// Static for a module load; the driver computes it with the same
+    /// functions that refine `hw_params`.
+    pub fn envelope(&self) -> io::Result<HwdepEnvelope> {
+        let mut env = MaybeUninit::<HwdepEnvelope>::zeroed();
+        let ret = unsafe {
+            libc::ioctl(
+                self.file.as_raw_fd(),
+                IOCTL_ENVELOPE as libc::c_ulong,
+                env.as_mut_ptr(),
+            )
+        };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { env.assume_init() })
+    }
+
     /// One EP0 vendor request.  For [`Direction::In`] the returned vector is
     /// the payload the device sent; for [`Direction::Out`] it is empty.
     pub fn vendor(
@@ -369,6 +387,59 @@ fn parse_card_number(s: &str) -> Option<i32> {
         .ok()
 }
 
+/// One supported rate and the driver's achievable geometry at it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RateEnv {
+    pub rate: u32,
+    pub period_floor: u32,
+    pub buffer_min: u32,
+}
+
+/// The driver-reported achievable envelope for the loaded module and device.
+/// Static for a module load; re-query on reattach. The driver is the single
+/// owner — userspace presents exactly this, never a recomputed copy.
+#[derive(Clone, Debug)]
+pub struct RateEnvelope {
+    pub urb_frames: u32,
+    pub nurbs: u32,
+    pub iso: bool,
+    pub rates: Vec<RateEnv>,
+}
+
+impl RateEnvelope {
+    /// The supported rates, in the driver's order.
+    pub fn rate_list(&self) -> Vec<u32> {
+        self.rates.iter().map(|r| r.rate).collect()
+    }
+
+    /// The period floor (minimum graph quantum) at `rate`, if supported.
+    pub fn period_floor(&self, rate: u32) -> Option<u32> {
+        self.rates.iter().find(|r| r.rate == rate).map(|r| r.period_floor)
+    }
+}
+
+/// Query the envelope from the driver's hwdep node for `card`. `None` when the
+/// node is absent or the driver predates the envelope ioctl. A read-only
+/// query; the hwdep node refcounts opens, so it coexists with the service.
+pub fn query_rate_envelope(card: i32) -> Option<RateEnvelope> {
+    let hw = Hwdep::open_unchecked(card).ok()?;
+    let env = hw.envelope().ok()?;
+    let n = (env.count as usize).min(HWDEP_MAX_RATES);
+    Some(RateEnvelope {
+        urb_frames: env.urb_frames,
+        nurbs: env.nurbs,
+        iso: env.iso != 0,
+        rates: env.rates[..n]
+            .iter()
+            .map(|r| RateEnv {
+                rate: r.rate,
+                period_floor: r.period_floor,
+                buffer_min: r.buffer_min,
+            })
+            .collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +448,21 @@ mod tests {
     fn direction_maps_to_the_abi() {
         assert_eq!(Direction::Out as u8, 0);
         assert_eq!(Direction::In as u8, 1);
+    }
+
+    #[test]
+    fn envelope_exposes_rates_and_per_rate_floor() {
+        let env = RateEnvelope {
+            urb_frames: 48,
+            nurbs: 2,
+            iso: true,
+            rates: vec![
+                RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336 },
+                RateEnv { rate: 96_000, period_floor: 96, buffer_min: 576 },
+            ],
+        };
+        assert_eq!(env.rate_list(), vec![48_000, 96_000]);
+        assert_eq!(env.period_floor(96_000), Some(96));
+        assert_eq!(env.period_floor(44_100), None);
     }
 }

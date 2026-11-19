@@ -480,6 +480,7 @@ int ffuc_reg_send(struct ffuc *chip, const struct ffuc_hwdep_word *words,
 int ffuc_claim_interface(struct usb_interface *intf);
 void ffuc_release_interface(struct usb_interface *intf);
 unsigned int ffuc_rate_from_index(unsigned int idx);
+void ffuc_query_envelope(struct ffuc *chip, struct ffuc_hwdep_envelope *env);
 
 /* ffuc-hwdep.c */
 void ffuc_event_put(struct ffuc *chip, u32 type, const void *data, u32 size,

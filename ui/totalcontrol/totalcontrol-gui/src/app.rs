@@ -1305,6 +1305,16 @@ impl DeviceHandle {
         }
     }
 
+    /// The rate the unit reports it is set to, read from the device status.
+    pub fn device_rate(&self) -> Option<u32> {
+        match self {
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => d.device_rate(),
+            DeviceHandle::Mirror(d) => d.device_rate(),
+            _ => None,
+        }
+    }
+
     pub fn device_output_meters(&self) -> Option<Vec<f32>> {
         match self {
             DeviceHandle::Mirror(d) => Some(d.meters().outputs.to_vec()),
@@ -3147,6 +3157,10 @@ pub struct TotalControl {
     /// The UC USB queue: `(frames per URB, URBs in flight)`, for the
     /// actual latency readout.
     pub driver_queue: Option<(u32, u32)>,
+    /// The driver-reported achievable rate/quantum envelope, queried once at
+    /// attach. The driver is the single owner; the rate list and the quantum
+    /// picker derive from it. `None` for the mock or before the first query.
+    pub device_envelope: Option<totalcontrol_core::fireface::hwdep::RateEnvelope>,
 }
 
 impl TotalControl {
@@ -3689,7 +3703,7 @@ pub fn new_with_device(
         engine: simulated.then_some(SIMULATED_ENGINE),
         engine_force_rate: 0,
         engine_force_quantum: 0,
-        engine_rate_mode: EngineRateMode::Auto,
+        engine_rate_mode: EngineRateMode::Fixed,
         rate_follow: totalcontrol_core::pw_follow::RateFollower::new(),
         allowed_rates_saved: None,
         allowed_rates_written: None,
@@ -3707,6 +3721,7 @@ pub fn new_with_device(
         // The mock stands for the stock driver.
         driver_floor: simulated.then_some(32),
         driver_queue: simulated.then_some((48, 2)),
+        device_envelope: None,
     };
 
     state
@@ -5555,6 +5570,9 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     }
     state.engine = pw_clock::read();
     state.card_stream = pw_clock::card_stream(&state.device.card_id());
+    // The new rate may carry a higher period floor; keep the forced quantum
+    // achievable so a Follow switch never leaves an impossible setting.
+    enforce_quantum_floor(state, rate);
 }
 
 /// Replace `clock.allowed-rates` with the connected device's list, saving the
@@ -5565,7 +5583,7 @@ fn apply_allowed_rates(state: &mut TotalControl) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return;
     }
-    let wanted = state.device.sample_rates().to_vec();
+    let wanted = device_rates(state);
     if wanted.is_empty() {
         return;
     }
@@ -5657,14 +5675,17 @@ pub fn restore_engine(state: &mut TotalControl) {
             if state.device.is_uc_model() {
                 state.pending_device_rate = None;
             }
-            if state.engine_force_rate > 0 {
-                if let Err(e) = pw_clock::force_rate(state.engine_force_rate) {
+            // Device mode: the device's set rate is the boss, on startup too.
+            let rate = device_mode_rate(state);
+            state.engine_force_rate = rate;
+            if rate > 0 {
+                if let Err(e) = pw_clock::force_rate(rate) {
                     log::warn!("Restoring the PipeWire rate failed: {e}");
                 }
                 // The input capture PCM shares the device clock; release it
                 // so the kernel driver can move the card to the requested
                 // rate.
-                state.device.set_meter_rate(state.engine_force_rate);
+                state.device.set_meter_rate(rate);
             } else if let Err(e) = pw_clock::force_rate(0) {
                 log::warn!("Releasing the PipeWire rate override failed: {e}");
             }
@@ -5692,6 +5713,14 @@ pub fn restore_engine(state: &mut TotalControl) {
     schedule_startup_full_reapply(state);
     state.driver_floor = pw_clock::driver_period_floor();
     state.driver_queue = pw_clock::driver_urb_queue();
+    // The achievable envelope comes from the driver, once per attach. The
+    // driver is the single owner of the supported rates and the per-rate
+    // period floor; the GUI presents exactly what it reports.
+    state.device_envelope = pw_clock::card_number(&state.device.card_id())
+        .and_then(totalcontrol_core::fireface::hwdep::query_rate_envelope);
+    // A remembered quantum may sit below the floor of the rate the graph opens
+    // at; raise it to the floor instead of forcing an impossible value.
+    enforce_quantum_floor(state, running_rate(state));
 }
 
 /// Writes the host settings if something changed (and a path is set).
@@ -12336,6 +12365,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 begin_rate_switch_window(state);
             }
             apply_graph_rate(state, rate, true);
+            if state.device.rate_follows_sound_server() {
+                state.notice = Some((
+                    if rate > 0 {
+                        format!("Setting rate to {} \u{2014} applying\u{2026}", rate_label(rate))
+                    } else {
+                        "Rate set to Auto \u{2014} PipeWire chooses.".into()
+                    },
+                    Instant::now(),
+                ));
+            }
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(rate as i32)]);
         }
         Message::EngineRateMode(mode) => {
@@ -12354,7 +12393,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 EngineRateMode::Fixed => {
                     state.engine_rate_mode = EngineRateMode::Fixed;
                     state.rate_follow.clear_owner();
-                    apply_graph_rate(state, state.engine_force_rate, true);
+                    apply_graph_rate(state, device_mode_rate(state), true);
                 }
             }
             let shown = state
@@ -12367,6 +12406,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if state.device.is_mock()
                 || state.engine_rate_mode != EngineRateMode::Follow
                 || !state.device.rate_follows_sound_server()
+                || state.device.settings().clock_source != "Internal"
             {
                 return Task::none();
             }
@@ -12374,10 +12414,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 return Task::none();
             };
             let candidates = totalcontrol_core::pw_follow::candidates(&graph, None);
-            let supported = state.device.sample_rates();
+            let supported = device_rates(state);
             let rate = state
                 .rate_follow
-                .observe(&candidates, supported, Instant::now());
+                .observe(&candidates, &supported, Instant::now());
             if let Some(rate) = rate {
                 apply_graph_rate(state, rate, false);
             }
@@ -12396,6 +12436,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
                 state.engine = pw_clock::read();
                 state.card_stream = pw_clock::card_stream(&state.device.card_id());
+                state.notice = Some((
+                    if quantum > 0 {
+                        format!("Setting quantum to {quantum} samples \u{2014} applying\u{2026}")
+                    } else {
+                        "Quantum set to Auto \u{2014} PipeWire chooses.".into()
+                    },
+                    Instant::now(),
+                ));
             }
         }
         Message::HostVolumeUnity => {
@@ -12489,6 +12537,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.last_sink_running = sink_running;
                 state.engine = clock;
                 state.card_stream = stream;
+                // PipeWire may move the graph rate on its own (a player or
+                // another client). Keep the forced quantum at or above the new
+                // rate's period floor so the request never reads as impossible.
+                enforce_quantum_floor(state, running_rate(state));
                 if let Some((wanted, since)) = state.pending_device_rate {
                     let actual = stream.map(|s| s.rate);
                     if actual == Some(wanted) {
@@ -13794,7 +13846,9 @@ fn popover<'a>(
         .max_height(available)
         .style(theme::dialog)
         .padding(theme::SPACE_XL * scale)
-        .width(Length::Fixed(width * scale)),
+        // Reserve the scrollbar's width so an appearing scrollbar does not
+        // overlay the content's right edge.
+        .width(Length::Fixed((width + theme::THIN_SCROLLBAR_WIDTH) * scale)),
     );
 
     // One layer, not a catcher stacked under the card: in a `stack`, the
@@ -14759,49 +14813,155 @@ pub(crate) fn current_graph_rate(state: &TotalControl) -> u32 {
         .unwrap_or_else(|| state.device.settings().sample_rate)
 }
 
-const RATE_MODE_AUTO: &str = "Auto (PipeWire)";
-const RATE_MODE_FOLLOW: &str = "Follow SW playback 1/2";
+/// The device rate hub: the rate the device is set to run at, from which the
+/// graph rate and the available quantum derive. A forced graph rate is the
+/// target device rate — Device mode forces the device's set rate and SW
+/// playback forces the player's rate, so the force equals the device rate.
+/// Without a force (PipeWire mode) the device follows the graph, so the actual
+/// device report / card stream is the hub. The idle status report alone is not
+/// used when a force is set: it lags at the last-running rate.
+fn running_rate(state: &TotalControl) -> u32 {
+    state
+        .engine
+        .map(|engine| engine.force_rate)
+        .filter(|rate| *rate > 0)
+        .or_else(|| state.device.device_rate().filter(|rate| *rate > 0))
+        .or_else(|| state.card_stream.map(|stream| stream.rate).filter(|rate| *rate > 0))
+        .unwrap_or_else(|| current_graph_rate(state))
+}
+
+/// The rate Device mode forces: the device's set rate is the boss. Falls back
+/// to the stored host force, then the running graph rate, when no device rate
+/// is set. Used by both the mode handler and the startup restore so they
+/// cannot diverge.
+fn device_mode_rate(state: &TotalControl) -> u32 {
+    let device_rate = state.device.settings().sample_rate;
+    if device_rate > 0 {
+        device_rate
+    } else if state.engine_force_rate > 0 {
+        state.engine_force_rate
+    } else {
+        current_graph_rate(state)
+    }
+}
+
+/// True while a forced graph rate waits to take effect on the running stream.
+/// PipeWire applies it asynchronously (the player keeps playing); the Graph
+/// row shows the actual rate in orange until it matches the desired rate.
+fn graph_rate_pending(state: &TotalControl) -> bool {
+    let desired = state.engine.map(|engine| engine.force_rate).unwrap_or(0);
+    let actual = state.card_stream.map(|stream| stream.rate).unwrap_or(0);
+    desired > 0 && actual > 0 && desired != actual
+}
+
+/// True while a forced quantum waits to take effect on the running stream.
+fn quantum_pending(state: &TotalControl) -> bool {
+    let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
+    let actual = state.card_stream.map(|stream| stream.period).unwrap_or(0);
+    desired > 0 && actual > 0 && desired != actual
+}
+
+/// The smallest graph quantum the driver can run at `rate`: one URB
+/// (`pw_clock::period_floor`). With `api.alsa.disable-tsched` the graph quantum
+/// is one ALSA period, so this is the period floor the card negotiates. The
+/// mock keeps a low floor so its picker stays populated.
+fn quantum_floor(state: &TotalControl, rate: u32) -> u32 {
+    if let Some(env) = &state.device_envelope {
+        if let Some(floor) = env.period_floor(rate) {
+            return floor.max(1);
+        }
+    }
+    // The mock, or a rate the driver did not report: keep a low floor so the
+    // picker stays populated.
+    state.driver_floor.unwrap_or(32)
+}
+
+/// The supported rates the GUI offers: the driver-reported envelope when
+/// present, otherwise the backend's static list (the mock). The driver is the
+/// single owner of the rate list.
+fn device_rates(state: &TotalControl) -> Vec<u32> {
+    if let Some(env) = &state.device_envelope {
+        let rates = env.rate_list();
+        if !rates.is_empty() {
+            return rates;
+        }
+    }
+    state.device.sample_rates().to_vec()
+}
+
+/// Keep a forced quantum achievable at `rate`. A Follow rate change can raise
+/// the period floor above the forced value; raise the force to the floor so
+/// the GUI never holds an impossible setting. Auto (0) is left alone.
+fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() || rate == 0 {
+        return;
+    }
+    if state.engine_force_quantum == 0 {
+        return;
+    }
+    let floor = quantum_floor(state, rate);
+    if state.engine_force_quantum < floor {
+        state.engine_force_quantum = floor;
+        if let Some(engine) = state.engine.as_mut() {
+            engine.force_quantum = floor;
+        }
+        if let Err(e) = pw_clock::force_quantum(floor) {
+            log::warn!("Raising the PipeWire quantum to the rate floor failed: {e}");
+        }
+    }
+}
+
+const RATE_FOLLOW_DEVICE: &str = "Device";
+const RATE_FOLLOW_PIPEWIRE: &str = "PipeWire";
+const RATE_FOLLOW_SW: &str = "SW playback 1/2";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RateChoice {
-    Auto,
-    Follow,
-    Fixed(u32),
+    Device,
+    PipeWire,
+    SwPlayback,
 }
 
-fn rate_choices(state: &TotalControl) -> (Vec<String>, String, Vec<RateChoice>) {
-    let mut labels = vec![RATE_MODE_AUTO.to_string(), RATE_MODE_FOLLOW.to_string()];
-    let mut choices = vec![RateChoice::Auto, RateChoice::Follow];
-    for rate in state.device.sample_rates() {
-        labels.push(rate_label(*rate));
-        choices.push(RateChoice::Fixed(*rate));
+/// The "Rate follows" picker: who determines the graph (and thus device) rate.
+/// Device forces the device-set rate; PipeWire lets the graph conduct; SW
+/// playback follows the player feeding SW playback 1/2. The rate value itself
+/// is set in the DEVICE group's Sample rate picker (Device mode only).
+fn rate_choices() -> (Vec<String>, String, Vec<RateChoice>) {
+    let labels = vec![
+        RATE_FOLLOW_DEVICE.to_string(),
+        RATE_FOLLOW_PIPEWIRE.to_string(),
+        RATE_FOLLOW_SW.to_string(),
+    ];
+    let choices = vec![
+        RateChoice::Device,
+        RateChoice::PipeWire,
+        RateChoice::SwPlayback,
+    ];
+    (labels, String::new(), choices)
+}
+
+/// The selected "Rate follows" label for the current mode.
+fn rate_selected_label(mode: EngineRateMode) -> String {
+    match mode {
+        EngineRateMode::Fixed => RATE_FOLLOW_DEVICE.to_string(),
+        EngineRateMode::Auto => RATE_FOLLOW_PIPEWIRE.to_string(),
+        EngineRateMode::Follow => RATE_FOLLOW_SW.to_string(),
     }
-    let selected = match state.engine_rate_mode {
-        EngineRateMode::Auto => labels[0].clone(),
-        EngineRateMode::Follow => labels[1].clone(),
-        EngineRateMode::Fixed => {
-            let rate = if state.engine_force_rate > 0 {
-                state.engine_force_rate
-            } else {
-                current_graph_rate(state)
-            };
-            let label = rate_label(rate);
-            if labels.contains(&label) {
-                label
-            } else {
-                labels[2].clone()
-            }
-        }
-    };
-    (labels, selected, choices)
 }
 
 fn rate_choice_message(choice: RateChoice) -> Message {
     match choice {
-        RateChoice::Auto => Message::EngineRateMode(EngineRateMode::Auto),
-        RateChoice::Follow => Message::EngineRateMode(EngineRateMode::Follow),
-        RateChoice::Fixed(rate) => Message::EngineRate(rate),
+        RateChoice::Device => Message::EngineRateMode(EngineRateMode::Fixed),
+        RateChoice::PipeWire => Message::EngineRateMode(EngineRateMode::Auto),
+        RateChoice::SwPlayback => Message::EngineRateMode(EngineRateMode::Follow),
     }
+}
+
+/// A read-only value in the secondary colour. The panel's visual language:
+/// read-only reports are grey; interactive controls (pickers, sliders,
+/// buttons) are primary.
+fn readout(value: String, text_size: f32) -> Element<'static, Message> {
+    text(value).color(theme::text_sec()).size(text_size).into()
 }
 
 /// A sample rate as people say it: "48 kHz", "44.1 kHz", "176.4 kHz".
@@ -14930,38 +15090,32 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .serial()
         .map(str::to_string)
         .unwrap_or_else(|| "\u{2014}".into());
-    // The same mode picker everywhere: Auto, Follow, then every rate class
-    // the connected device supports.  The kernel keeps a constant 18-channel
-    // ALSA node at all rates; at 2x/4x the USB packet carries fewer words and
-    // the unused ADAT channels stay silent.
-    let (rate_labels, rate_selected, rate_choices_vec) = rate_choices(state);
-    let labels_for_pick = rate_labels.clone();
-    let choices_for_pick = rate_choices_vec;
-    let engine_rate_row = row![
-        caption("Sample rate"),
-        field(pick_list(rate_labels, Some(rate_selected), move |label| {
-            let idx = labels_for_pick
-                .iter()
-                .position(|l| *l == label)
-                .unwrap_or(0);
-            rate_choice_message(choices_for_pick[idx])
-        })),
-    ]
-    .spacing(theme::SPACE_MD * scale)
-    .align_y(iced::Alignment::Center);
-    // The device-owned rate list, used when the device owns the rate.
+    // The device rate row: an editable picker of the device-supported rates.
+    // Selecting a rate routes through the engine-rate path for rate-following
+    // devices, so it changes the card, not just the model value.
     let device_rate_row = row![
         caption("Sample rate"),
-        pick_list(
-            state.device.sample_rates().to_vec(),
-            Some(settings.sample_rate),
-            Message::SampleRateSelected,
-        )
-        .style(theme::pick_list)
-        .menu_style(theme::menu)
-        .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-        .text_size(text_size)
-        .width(Length::Fill),
+        strip::hint(
+            pick_list(
+                device_rates(state),
+                Some(settings.sample_rate),
+                Message::SampleRateSelected,
+            )
+            .style(theme::pick_list)
+            .menu_style(theme::menu)
+            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+            .text_size(text_size)
+            .width(Length::Fill),
+            match state.device.device_rate().filter(|rate| *rate > 0) {
+                Some(actual) if actual != settings.sample_rate => format!(
+                    "Device reports {}; applying {}\u{2026}",
+                    rate_label(actual),
+                    rate_label(settings.sample_rate)
+                ),
+                _ => "The device sample rate.".to_string(),
+            },
+            scale,
+        ),
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
@@ -14979,9 +15133,42 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     ];
-    if uc {
-        body = body.push(engine_rate_row);
-    } else if !state.device.rate_follows_sound_server() && !state.device.is_mock() {
+    // The device rate is a device fact. In Follow mode, or when the device is
+    // slaved to an external clock, it is a read-only readout of the rate the
+    // unit reports; otherwise it is an editable picker. The mode that drives
+    // it lives in the AUDIO ENGINE group, not here.
+    let internal = settings.clock_source == "Internal";
+    let device_mode = state.engine_rate_mode == EngineRateMode::Fixed;
+    if !state.device.is_mock() && (!internal || !device_mode) {
+        let dev_rate = state
+            .device
+            .device_rate()
+            .filter(|r| *r > 0)
+            .or_else(|| (settings.sample_rate > 0).then_some(settings.sample_rate));
+        let rate_text = dev_rate.map(rate_label).unwrap_or_else(|| "\u{2014}".into());
+        let hint = if !internal {
+            "Reported by the device \u{2014} set by the external clock source."
+        } else if state.engine_rate_mode == EngineRateMode::Follow {
+            "Reported by the device \u{2014} follows SW playback 1/2."
+        } else {
+            "Reported by the device \u{2014} follows the PipeWire graph."
+        };
+        body = body.push(
+            row![
+                caption("Sample rate"),
+                strip::hint(
+                    text(rate_text)
+                        .color(theme::text_sec())
+                        .size(text_size)
+                        .width(Length::Fill),
+                    hint,
+                    scale,
+                ),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    } else {
         body = body.push(device_rate_row);
     }
     if state.device.capabilities().pitch {
@@ -14998,7 +15185,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     || Message::PitchChanged(0.0),
                 ),
                 text(format!("{value:+.1} %"))
-                    .color(theme::text_primary())
+                    .color(theme::text_sec())
                     .size(text_size)
                     .width(Length::Fixed(58.0 * scale)),
             ]
@@ -15076,7 +15263,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Firmware"),
-                text(firmware).color(theme::text_primary()).size(text_size),
+                readout(firmware, text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -15086,7 +15273,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Serial"),
-                text(serial).color(theme::text_primary()).size(text_size),
+                readout(serial, text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -15135,22 +15322,31 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     };
 
     // Auto, Follow, then the connected device's fixed rates.
-    let (rate_labels, rate_selected, rate_choices_vec) = rate_choices(state);
-    // 48 and 96 are 1 and 2 ms at 48 kHz, whole USB packets; PipeWire takes
-    // quanta that are not powers of two. 16 and 24 only when the driver can
-    // run them: its period floor is one URB, `urb_frames_min` (32 unless
-    // the module is loaded lower). Measured 2026-10-21 (the driver's
-    // KERNEL-DRIVER.md): 10-minute real-time soaks at 16 and 24 ran clean
-    // once loaded with `urb_frames_min=8`; 8 still loses capture buffers,
-    // so it is never offered.
+    let (rate_labels, _, rate_choices_vec) = rate_choices();
+    let rate_selected = rate_selected_label(state.engine_rate_mode);
+    // The period floor is one URB and scales with rate; the driver reports it
+    // in the envelope (the single owner). Offer only quanta at or above the
+    // current rate's floor, and include the exact floor so the lowest
+    // achievable latency is selectable. PipeWire takes quanta that are not
+    // powers of two.
     const ALL_QUANTA: [u32; 11] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048];
-    let floor = state.driver_floor.unwrap_or(32);
-    let quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();
-    // "Auto" follows the graph.  Show what the graph actually runs, so the
-    // setting is not a blind choice; the latency line below adds the
-    // hardware buffer and chain.
-    let auto_label = if clock.effective_quantum() > 0 {
-        format!("Auto ({} samples)", clock.effective_quantum())
+    let floor = quantum_floor(state, running_rate(state));
+    let mut quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();
+    if !quanta.contains(&floor) {
+        quanta.push(floor);
+        quanta.sort_unstable();
+    }
+    // "Auto" follows the graph. Show the quantum the graph actually runs (the
+    // card period), not just the request: a stale or clamped force must not
+    // read as the running value. The latency line below adds the hardware
+    // buffer and chain.
+    let actual_quantum = state
+        .card_stream
+        .map(|c| c.period)
+        .filter(|p| *p > 0)
+        .unwrap_or_else(|| clock.effective_quantum());
+    let auto_label = if actual_quantum > 0 {
+        format!("Auto ({actual_quantum} samples)")
     } else {
         "Auto".to_string()
     };
@@ -15160,7 +15356,14 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let quantum_sel = if clock.force_quantum == 0 {
         quantum_opts[0].clone()
     } else {
-        format!("{} samples", clock.force_quantum)
+        // Show the requested quantum; the warning reports any divergence from
+        // the quantum the graph actually runs.
+        let shown = clock.force_quantum;
+        quantum_opts
+            .iter()
+            .find(|o| o.as_str() == format!("{shown} samples"))
+            .cloned()
+            .unwrap_or_else(|| format!("{shown} samples"))
     };
     let field = |p: iced::widget::PickList<'static, String, Vec<String>, String, Message>| {
         p.style(theme::pick_list)
@@ -15187,31 +15390,34 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     }));
 
     let follow = state.engine_rate_mode == EngineRateMode::Follow;
+    let internal = state.device.settings().clock_source == "Internal";
     let mut body = column![heading];
-    // The UC's single sample-rate control lives in the DEVICE group above;
-    // the other models pick the mode here.
-    if !state.device.is_uc_model() {
+    // The mode is ours to set only when the device runs on its internal clock.
+    // Slaved to an external clock, the rate is determined by the device.
+    if internal {
         body = body.push(
-            row![
-                caption(if follow { "Mode" } else { "Sample rate" }),
-                rate_pick
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
+            row![caption("Rate follows"), rate_pick]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
         );
-    } else if follow {
+    } else {
         body = body.push(
             row![
-                caption("Mode"),
-                text(RATE_MODE_FOLLOW)
-                    .color(theme::text_primary())
-                    .size(text_size),
+                caption("Rate follows"),
+                strip::hint(
+                    text("Device")
+                        .color(theme::text_sec())
+                        .size(text_size)
+                        .width(Length::Fill),
+                    "Rate follows the external clock source.",
+                    scale,
+                ),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
     }
-    if follow {
+    if follow && internal {
         let source = state
             .rate_follow
             .owner()
@@ -15226,7 +15432,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Source"),
-                text(source).color(theme::text_primary()).size(text_size),
+                text(source).color(theme::text_sec()).size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -15237,17 +15443,49 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     body = body.push(
         row![
             caption("Graph"),
-            text(rate_label(current_graph_rate(state)))
-                .color(theme::text_primary())
-                .size(text_size),
+            strip::hint(
+                text(rate_label(
+                    state
+                        .card_stream
+                        .map(|stream| stream.rate)
+                        .filter(|rate| *rate > 0)
+                        .unwrap_or_else(|| running_rate(state)),
+                ))
+                .color(if graph_rate_pending(state) {
+                    theme::ysim()
+                } else {
+                    theme::text_sec()
+                })
+                .size(text_size)
+                .width(Length::Fill),
+                if graph_rate_pending(state) {
+                    "Applying the new rate\u{2026}"
+                } else {
+                    "The rate the graph is running at."
+                },
+                scale,
+            ),
         ]
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     );
     body = body.push(
-        row![caption("Quantum"), quantum_pick]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
+        row![
+            caption("Quantum"),
+            strip::hint(
+                quantum_pick,
+                if quantum_pending(state) {
+                    let actual = state.card_stream.map(|stream| stream.period).unwrap_or(0);
+                    let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
+                    format!("Current {actual} samples; applying {desired}\u{2026}")
+                } else {
+                    "The graph quantum, one ALSA period.".to_string()
+                },
+                scale,
+            ),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
     );
     body = body.push(
         row![caption("Latency"), latency_readout(state, clock)]
@@ -15377,7 +15615,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         let colour = if db < -0.5 {
             theme::ysim()
         } else {
-            theme::text_primary()
+            theme::text_sec()
         };
         body = body.push(
             row![
@@ -15493,7 +15731,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                     _ => None,
                 };
                 if let Some(rtl) = measured {
-                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.summary(), theme::text_sec()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else if let Some(queue) = state.driver_queue {
                     let (usb, lead) = uc_rtl_frames(card.rate, queue);
@@ -15505,12 +15743,12 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         rate: card.rate,
                         tolerance_ms: 1.5,
                     };
-                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.summary(), theme::text_sec()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::text_primary(),
+                        theme::text_sec(),
                     ));
                 }
             } else if state.device.is_ucx_model() {
@@ -15524,25 +15762,30 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         rate: card.rate,
                         tolerance_ms: 1.2,
                     };
-                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.summary(), theme::text_sec()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::text_primary(),
+                        theme::text_sec(),
                     ));
                 }
             } else {
                 col = col.push(line(
                     ring_text(card.buffer, card.period, card.rate),
-                    theme::text_primary(),
+                    theme::text_sec(),
                 ));
             }
-            // Only when the user asked for a size and the card ignores it
-            // (a fixed period in a WirePlumber rule); "Auto" follows clients.
-            if clock.force_quantum != 0 && card.period != clock.effective_quantum() {
+            // The forced quantum is a request; the graph runs at the card's
+            // negotiated quantum (one ALSA period). They differ when PipeWire
+            // policy (min-quantum) or the driver's period floor clamps the
+            // request. Report the actual versus the request.
+            if clock.force_quantum != 0 && card.period != clock.force_quantum {
                 col = col.push(line(
-                    "The card keeps its own fixed period.".into(),
+                    format!(
+                        "Quantum {} samples \u{2014} applying {}\u{2026}",
+                        card.period, clock.force_quantum
+                    ),
                     theme::ysim(),
                 ));
             }
@@ -15581,7 +15824,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                 };
                 if let Some(rtl) = measured {
                     return column![
-                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.summary(), theme::text_sec()),
                         line(rtl.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)
@@ -15598,7 +15841,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         tolerance_ms: 1.5,
                     };
                     return column![
-                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.summary(), theme::text_sec()),
                         line(rtl.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)
@@ -15618,7 +15861,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         tolerance_ms: 1.2,
                     };
                     return column![
-                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.summary(), theme::text_sec()),
                         line(rtl.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)
@@ -21604,7 +21847,7 @@ mod tests {
         control_room_width, converter_frames, frames_ms, fx_reserve, fx_slot, global_feedback,
         global_feedback_is_typed, global_messages, global_state_commands, host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
-        power_sum_output_meters, rate_choices, reorder_pair_volumes, save_workspace_to, solo_armed,
+        power_sum_output_meters, rate_choices, rate_selected_label, reorder_pair_volumes, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
         temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
         uc_measured_rtl, uc_min_buffer_frames, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames,
@@ -26161,19 +26404,16 @@ mod tests {
     }
 
     #[test]
-    fn the_rate_picker_offers_auto_follow_and_every_device_rate() {
+    fn the_rate_follows_picker_offers_device_pipewire_and_sw_playback() {
         let state = new(true, None, None);
-        let (labels, selected, choices) = rate_choices(&state);
-        assert_eq!(labels[0], "Auto (PipeWire)");
-        assert_eq!(labels[1], "Follow SW playback 1/2");
-        assert_eq!(labels.len(), 11);
-        assert_eq!(selected, labels[0]);
-        assert_eq!(choices[0], RateChoice::Auto);
-        assert_eq!(choices[1], RateChoice::Follow);
-        assert_eq!(choices[2], RateChoice::Fixed(32_000));
-        assert_eq!(choices[10], RateChoice::Fixed(192_000));
-        assert_eq!(labels[2], "32 kHz");
-        assert_eq!(labels[10], "192 kHz");
+        let (labels, _, choices) = rate_choices();
+        assert_eq!(labels, vec!["Device", "PipeWire", "SW playback 1/2"]);
+        assert_eq!(
+            choices,
+            vec![RateChoice::Device, RateChoice::PipeWire, RateChoice::SwPlayback]
+        );
+        // Device is the default rate authority.
+        assert_eq!(rate_selected_label(state.engine_rate_mode), labels[0]);
     }
 
     #[test]
