@@ -198,10 +198,25 @@ quantum envelope. It computes them with the same functions that refine
 attach and presents exactly what the driver reports. It does not recompute
 the geometry.
 
-| Term | Shape | Definition |
+| Term | Layer | Definition |
 |---|---|---|
-| period floor | frames | the smallest ALSA period at a rate; one URB; with `disable-tsched`, the smallest graph quantum |
-| buffer min | frames | the smallest ALSA ring at a rate; URB-aligned |
+| URB | USB | one USB transfer; carries `urb_frames` frames at 1x, scaled by rate |
+| period | ALSA | `period_size`; the buffer chunk the driver signals on completion |
+| period floor | driver | the minimum period the driver accepts at a rate; one URB |
+| buffer | ALSA | `buffer_size`; the circular buffer, an integer number of periods |
+| buffer min | driver | the minimum buffer the driver accepts at a rate; URB-aligned |
+| quantum | PipeWire | the graph cycle in frames (`clock.quantum`) |
+
+With `api.alsa.disable-tsched` the quantum equals the period; the period floor
+is therefore the minimum quantum. `urb_frames` sets the period floor; `nurbs`
+sets the buffer.
+
+USB high-speed carries 8000 microframes per second (125 µs each). At rate R a
+microframe carries R/8000 frames. The ISO engine bundles `iso_packets`
+microframes into one URB; at `urb_frames=48`, `iso_packets=8`, so one URB spans
+1 ms and carries `8 × ceil(R/8000)` frames. The driver signals completion one
+URB at a time, so the period floor is one URB. The ceiling packs whole frames
+per microframe; the fractional remainder is the feedback add/drop (§4.3).
 
 ```text
 ISO:           urb = iso_packets * ceil(rate / 8000)
@@ -247,6 +262,10 @@ envelope is static for a module load. It changes only on reload (new
 parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
 `allowed-rates` are host policy and must permit the envelope; the installer
 owns that policy.
+
+Lower `urb_frames` shortens the URB and lowers the period floor (lower
+latency). Raising `nurbs` enlarges the buffer (more margin); the period floor
+is unchanged.
 
 The PCM buffer covers the URBs already in flight plus margin. A completion
 that overwrites unread capture frames or sends unwritten playback frames is
