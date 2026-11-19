@@ -51,7 +51,8 @@ card. TotalControl drives the mixer through that node; PipeWire and the DAW use
 the PCM device.
 
 The WirePlumber rule in `tools/alsa/wireplumber-uc.conf` selects the 18-channel
-Pro Audio profile and keeps ALSA scheduling polled.
+Pro Audio profile and runs the device in timer-based scheduling, where the
+server holds the queued buffer level against the device clock.
 
 ## Workspace
 
