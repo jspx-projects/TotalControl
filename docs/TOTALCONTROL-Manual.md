@@ -1611,6 +1611,17 @@ wait and PipeWire replaces missed cycles with silence. With two milliseconds
 of quantum the corner disappears; 512 frames is a safe low-latency choice at
 192 kHz.
 
+For the smallest quanta, keep the host quiet. The audio thread runs at
+real-time priority and is not displaced by ordinary CPU load; the realistic
+disturbances are IO bursts and graph renegotiations. A file indexer
+(for example KDE Baloo) scanning the disk can delay the refill wake-ups;
+pause it while recording at the smallest quantum. Keep the device on its own
+USB controller where possible, and avoid heavy disk IO on the audio machine
+during a session. Sustained IO load also erodes the scheduling cushion over
+minutes: the graph's rate lock to the device clock loosens under wake-up
+jitter, and the buffered margin drains until a small disturbance starves the
+device. A quiet host keeps the lock and the margin.
+
 The WirePlumber rule in
 [`ui/totalcontrol/tools/alsa/wireplumber-uc.conf`](../ui/totalcontrol/tools/alsa/wireplumber-uc.conf)
 selects polled scheduling and the 18-channel Pro Audio profile.
