@@ -263,6 +263,16 @@ parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
 `allowed-rates` are host policy and must permit the envelope; the installer
 owns that policy.
 
+The installer also sets the refill wake cushion (`api.alsa.headroom`).
+PipeWire in `disable-tsched` mode wakes the refill thread when the queued
+delay falls to `quantum + headroom` (`avail_min = buffer − quantum −
+headroom`). With headroom 0 the wake leaves one period, and at the period
+floor a single late write starves the next URB. Headroom equal to the
+largest URB across the supported rates (192 frames at 192 kHz) guarantees
+one missed-write tolerance at every rate; the buffer clamp
+(`buffer − quantum`) scales the effective cushion at lower rates. The
+cushion adds up to one URB of queued latency at the highest rate.
+
 Lower `urb_frames` shortens the URB and lowers the period floor (lower
 latency). Raising `nurbs` enlarges the buffer (more margin); the period floor
 is unchanged.
