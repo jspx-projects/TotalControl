@@ -14795,17 +14795,19 @@ pub(crate) fn current_graph_rate(state: &TotalControl) -> u32 {
         .unwrap_or_else(|| state.device.settings().sample_rate)
 }
 
-/// The actual device rate — the hub from which the graph rate and the
-/// available quantum derive, whatever the upstream authority selected in
-/// "Rate follows" (Device, SW playback 1/2, PipeWire). The device's own
-/// report is authoritative; the running card stream and the graph rate are
-/// fallbacks. Unlike `current_graph_rate`, this never prefers the requested
-/// `force-rate`, so a stale request cannot poison the quantum floor.
+/// The device rate hub: the rate the device is set to run at, from which the
+/// graph rate and the available quantum derive. A forced graph rate is the
+/// target device rate — Device mode forces the device's set rate and SW
+/// playback forces the player's rate, so the force equals the device rate.
+/// Without a force (PipeWire mode) the device follows the graph, so the actual
+/// device report / card stream is the hub. The idle status report alone is not
+/// used when a force is set: it lags at the last-running rate.
 fn running_rate(state: &TotalControl) -> u32 {
     state
-        .device
-        .device_rate()
+        .engine
+        .map(|engine| engine.force_rate)
         .filter(|rate| *rate > 0)
+        .or_else(|| state.device.device_rate().filter(|rate| *rate > 0))
         .or_else(|| state.card_stream.map(|stream| stream.rate).filter(|rate| *rate > 0))
         .unwrap_or_else(|| current_graph_rate(state))
 }
@@ -15396,7 +15398,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     body = body.push(
         row![
             caption("Graph"),
-            text(rate_label(current_graph_rate(state)))
+            text(rate_label(running_rate(state)))
                 .color(theme::text_sec())
                 .size(text_size),
         ]
