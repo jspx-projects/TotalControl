@@ -371,6 +371,24 @@ struct ffuc {
 	unsigned int out_lead;
 	bool iso_frames_ok;
 
+	/* Device timestamp (Stage 1): the start-frame anchor maps the
+	 * running IN frame index to host nanoseconds (the USB frame clock
+	 * is 1 kHz), and the sample is the unwrapped device position at a
+	 * packet end paired with the host time of that frame boundary.
+	 * All fields in this block are under fb_lock. */
+	u64 ts_anchor_ns;      /* sof_ns(f) = ts_anchor_ns + f * 1e6 */
+	bool ts_anchor_valid;
+	u64 ts_frames;         /* IN frame index of the next completion */
+	u64 in_total;          /* unwrapped device position, whole frames */
+	bool in_total_valid;
+	u64 ts_ns;             /* latest sample: host time */
+	u64 ts_pos;            /* latest sample: unwrapped position */
+	u32 ts_phase;          /* latest sample: raw phase field */
+	bool ts_pos_valid;
+	u64 ts_win_ns;         /* rate_meas window start */
+	u64 ts_win_pos;
+	unsigned int ts_rate_meas; /* windowed device rate, Hz */
+
 	/* status ticker (core output-latch watchdog) */
 	struct usb_interface *status_intf;
 	struct urb *status_urb;
@@ -449,6 +467,7 @@ struct ffuc {
 	atomic_t in_misaligned;
 	atomic_t in_frames_mismatch;
 	atomic_t in_pos_gap;
+	atomic_t in_anchor_resync; /* start-frame anchor discontinuity */
 	atomic_t out_capacity_err;
 	atomic_t out_pkt_len_err;
 	atomic_t out_fb_priming;
