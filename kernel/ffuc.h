@@ -372,11 +372,12 @@ struct ffuc {
 	bool iso_frames_ok;
 
 	/* Device timestamp (Stage 1): the start-frame anchor maps the
-	 * running IN frame index to host nanoseconds (the USB frame clock
-	 * is 1 kHz), and the sample is the unwrapped device position at a
-	 * packet end paired with the host time of that frame boundary.
-	 * All fields in this block are under fb_lock. */
-	u64 ts_anchor_ns;      /* sof_ns(f) = ts_anchor_ns + f * 1e6 */
+	 * running IN packet index to host nanoseconds (for high-speed,
+	 * urb->start_frame advances one unit per ISO packet: 125 us
+	 * microframes), and the sample is the unwrapped device position at
+	 * a packet end paired with the host time of the next packet
+	 * boundary.  All fields in this block are under fb_lock. */
+	u64 ts_anchor_ns;      /* sof_ns(f) = ts_anchor_ns + f * 125000 */
 	bool ts_anchor_valid;
 	u64 ts_frames;         /* IN frame index of the next completion */
 	u64 in_total;          /* unwrapped device position, whole frames */

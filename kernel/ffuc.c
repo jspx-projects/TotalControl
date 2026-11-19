@@ -1620,15 +1620,18 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 
 	spin_lock_irqsave(&chip->fb_lock, flags);
 
-	/* Start-frame anchor: sof_ns(f) = ts_anchor_ns + f * 1e6.  The
-	 * completion lands shortly after the URB's last frame window
-	 * began, so the raw anchor is the completion latency.  An
+	/* Start-frame anchor: sof_ns(f) = ts_anchor_ns + f * 125000.  For
+	 * high-speed, urb->start_frame advances one unit per ISO packet
+	 * (125 us microframes; the driver's own continuity math,
+	 * next_start = start_frame + number_of_packets, is in the same
+	 * units).  The completion lands shortly after the URB's last
+	 * packet window, so the raw anchor is the completion latency.  An
 	 * exponential average (1/8) keeps it jitter-free while tracking
 	 * the slow host-vs-controller clock offset; a discontinuity
 	 * (engine restart, controller hiccup) resyncs it. */
 	{
 		u64 f_end = chip->ts_frames + urb->number_of_packets;
-		u64 a_raw = ktime_get_ns() - f_end * 1000000ull;
+		u64 a_raw = ktime_get_ns() - f_end * 125000ull;
 		s64 d;
 
 		if (!chip->ts_anchor_valid) {
@@ -1730,7 +1733,7 @@ cadence_skip:
 			 * Stage 1 capture (DRIVER-DESIGN §4.3). */
 			{
 				u64 ts_ns = chip->ts_anchor_ns +
-					(f_base + i + 1) * 1000000ull;
+					(f_base + i + 1) * 125000ull;
 
 				chip->ts_ns = ts_ns;
 				chip->ts_pos = chip->in_total;
