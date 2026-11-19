@@ -1441,10 +1441,12 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 				ffuc_ring_event(chip, subs, &chip->out_underruns,
 						"playback underrun", appl, own);
 			s->out_starve_streak++;
-			stop = s->out_starve_streak >= 2;
+			stop = s->out_starve_streak >= 2 && !s->out_start_urbs;
 		} else {
 			s->out_starve_streak = 0;
 		}
+		if (s->out_start_urbs)
+			s->out_start_urbs--;
 		if (starved) {
 			memset(urb->transfer_buffer, 0,
 			       urb->transfer_buffer_length);
@@ -1775,12 +1777,14 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 				ffuc_ring_event(chip, subs, &chip->out_underruns,
 						"playback underrun", appl, own);
 			s->out_starve_streak++;
-			stop = s->out_starve_streak >= 2;
+			stop = s->out_starve_streak >= 2 && !s->out_start_urbs;
 		} else {
 			s->out_starve_streak = 0;
 		}
+		if (s->out_start_urbs)
+			s->out_start_urbs--;
 	}
-	if (s->running && !starved && !s->out_counter_valid) {
+	if (s->running && !s->out_counter_valid) {
 		for (i = 0; i < urb->number_of_packets; i++) {
 			if (frames[i]) {
 				s->out_counter = (u32)pos[i] + chip->out_lead;
@@ -2811,6 +2815,7 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	s->signalled = 0;
 	s->deferrals = 0;
 	s->out_starve_streak = 0;
+	s->out_start_urbs = 0;
 	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		s->out_counter_valid = false;
 		if (chip->iso)
@@ -2854,6 +2859,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->signalled = 0;
 		s->deferrals = 0;
 		s->out_starve_streak = 0;
+		s->out_start_urbs = FFUC_START_GRACE_URBS;
 		s->out_counter_valid = false;
 		s->running = true;
 		/* q48 diagnostics: log the negotiated geometry once per
@@ -2887,6 +2893,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->signalled = 0;
 		s->deferrals = 0;
 		s->out_starve_streak = 0;
+		s->out_start_urbs = FFUC_START_GRACE_URBS;
 		s->out_counter_valid = false;
 		s->running = true;
 		return 0;

@@ -290,15 +290,21 @@ pointer, which refreshes only on a period signal and lags the driver position.
 
 A playback completion that cannot supply its frames from written ring data
 sends silence for that URB. It never sends unwritten ring content. The lead
-words advance by the mirrored frame count, so the device timeline stays fed.
-The first starved completion of an episode is counted once as `out_underruns`.
-A single starved completion is a grace: the next completion resumes normally
-when the ring has caught up, and the episode is heard as a one-URB gap. Two
-consecutive starved completions stop the stream as an XRUN. The engine keeps
-running and feeds the device silence while the application recovers through
-prepare/start. A capture completion that overwrites unread frames is counted
-as `in_overruns`; the device keeps streaming, so the capture stream is not
-stopped. The host prevents both through its buffer/quantum choice.
+counter anchors at the first feedback position even when that URB is starved,
+and the lead words advance by the mirrored frame count, so the silence URBs
+carry the device timeline. The first starved completion of an episode is
+counted once as `out_underruns`. A single starved completion is a grace: the
+next completion resumes normally when the ring has caught up, and the episode
+is heard as a one-URB gap. The first four completions after trigger start are
+a start grace: starved URBs send silence without stopping, because the
+stream-start prefill can be smaller than the first URB's demand after a rate
+change or renegotiation and the host catches up within a few URBs. After the
+start grace, two consecutive starved completions stop the stream as an XRUN.
+The engine keeps running and feeds the device silence while the application
+recovers through prepare/start. A capture completion that overwrites unread
+frames is counted as `in_overruns`; the device keeps streaming, so the capture
+stream is not stopped. The host prevents both through its buffer/quantum
+choice.
 
 ### 4.2 Period signalling gate
 
