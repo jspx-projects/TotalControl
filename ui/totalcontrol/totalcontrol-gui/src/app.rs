@@ -3703,7 +3703,7 @@ pub fn new_with_device(
         engine: simulated.then_some(SIMULATED_ENGINE),
         engine_force_rate: 0,
         engine_force_quantum: 0,
-        engine_rate_mode: EngineRateMode::Auto,
+        engine_rate_mode: EngineRateMode::Fixed,
         rate_follow: totalcontrol_core::pw_follow::RateFollower::new(),
         allowed_rates_saved: None,
         allowed_rates_written: None,
@@ -12380,7 +12380,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 EngineRateMode::Fixed => {
                     state.engine_rate_mode = EngineRateMode::Fixed;
                     state.rate_follow.clear_owner();
-                    apply_graph_rate(state, state.engine_force_rate, true);
+                    let rate = if state.engine_force_rate > 0 {
+                        state.engine_force_rate
+                    } else {
+                        state.device.settings().sample_rate
+                    };
+                    apply_graph_rate(state, rate, true);
                 }
             }
             let shown = state
@@ -14838,48 +14843,49 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
     }
 }
 
-const RATE_MODE_AUTO: &str = "Auto (PipeWire)";
-const RATE_MODE_FOLLOW: &str = "Follow SW playback 1/2";
+const RATE_FOLLOW_DEVICE: &str = "Device";
+const RATE_FOLLOW_PIPEWIRE: &str = "PipeWire";
+const RATE_FOLLOW_SW: &str = "SW playback 1/2";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RateChoice {
-    Auto,
-    Follow,
-    Fixed(u32),
+    Device,
+    PipeWire,
+    SwPlayback,
 }
 
-fn rate_choices(state: &TotalControl) -> (Vec<String>, String, Vec<RateChoice>) {
-    let mut labels = vec![RATE_MODE_AUTO.to_string(), RATE_MODE_FOLLOW.to_string()];
-    let mut choices = vec![RateChoice::Auto, RateChoice::Follow];
-    for rate in device_rates(state) {
-        labels.push(rate_label(rate));
-        choices.push(RateChoice::Fixed(rate));
+/// The "Rate follows" picker: who determines the graph (and thus device) rate.
+/// Device forces the device-set rate; PipeWire lets the graph conduct; SW
+/// playback follows the player feeding SW playback 1/2. The rate value itself
+/// is set in the DEVICE group's Sample rate picker (Device mode only).
+fn rate_choices() -> (Vec<String>, String, Vec<RateChoice>) {
+    let labels = vec![
+        RATE_FOLLOW_DEVICE.to_string(),
+        RATE_FOLLOW_PIPEWIRE.to_string(),
+        RATE_FOLLOW_SW.to_string(),
+    ];
+    let choices = vec![
+        RateChoice::Device,
+        RateChoice::PipeWire,
+        RateChoice::SwPlayback,
+    ];
+    (labels, String::new(), choices)
+}
+
+/// The selected "Rate follows" label for the current mode.
+fn rate_selected_label(mode: EngineRateMode) -> String {
+    match mode {
+        EngineRateMode::Fixed => RATE_FOLLOW_DEVICE.to_string(),
+        EngineRateMode::Auto => RATE_FOLLOW_PIPEWIRE.to_string(),
+        EngineRateMode::Follow => RATE_FOLLOW_SW.to_string(),
     }
-    let selected = match state.engine_rate_mode {
-        EngineRateMode::Auto => labels[0].clone(),
-        EngineRateMode::Follow => labels[1].clone(),
-        EngineRateMode::Fixed => {
-            let rate = if state.engine_force_rate > 0 {
-                state.engine_force_rate
-            } else {
-                current_graph_rate(state)
-            };
-            let label = rate_label(rate);
-            if labels.contains(&label) {
-                label
-            } else {
-                labels[2].clone()
-            }
-        }
-    };
-    (labels, selected, choices)
 }
 
 fn rate_choice_message(choice: RateChoice) -> Message {
     match choice {
-        RateChoice::Auto => Message::EngineRateMode(EngineRateMode::Auto),
-        RateChoice::Follow => Message::EngineRateMode(EngineRateMode::Follow),
-        RateChoice::Fixed(rate) => Message::EngineRate(rate),
+        RateChoice::Device => Message::EngineRateMode(EngineRateMode::Fixed),
+        RateChoice::PipeWire => Message::EngineRateMode(EngineRateMode::Auto),
+        RateChoice::SwPlayback => Message::EngineRateMode(EngineRateMode::Follow),
     }
 }
 
@@ -15046,18 +15052,20 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // unit reports; otherwise it is an editable picker. The mode that drives
     // it lives in the AUDIO ENGINE group, not here.
     let internal = settings.clock_source == "Internal";
-    let follow = state.engine_rate_mode == EngineRateMode::Follow;
-    if !state.device.is_mock() && (!internal || follow) {
+    let device_mode = state.engine_rate_mode == EngineRateMode::Fixed;
+    if !state.device.is_mock() && (!internal || !device_mode) {
         let dev_rate = state
             .device
             .device_rate()
             .filter(|r| *r > 0)
             .or_else(|| (settings.sample_rate > 0).then_some(settings.sample_rate));
         let rate_text = dev_rate.map(rate_label).unwrap_or_else(|| "\u{2014}".into());
-        let hint = if internal {
-            "Reported by the device \u{2014} follows the graph in Follow mode."
-        } else {
+        let hint = if !internal {
             "Reported by the device \u{2014} set by the external clock source."
+        } else if state.engine_rate_mode == EngineRateMode::Follow {
+            "Reported by the device \u{2014} follows SW playback 1/2."
+        } else {
+            "Reported by the device \u{2014} follows the PipeWire graph."
         };
         body = body.push(
             row![
@@ -15228,7 +15236,8 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     };
 
     // Auto, Follow, then the connected device's fixed rates.
-    let (rate_labels, rate_selected, rate_choices_vec) = rate_choices(state);
+    let (rate_labels, _, rate_choices_vec) = rate_choices();
+    let rate_selected = rate_selected_label(state.engine_rate_mode);
     // The period floor is one URB and scales with rate; the driver reports it
     // in the envelope (the single owner). Offer only quanta at or above the
     // current rate's floor, and include the exact floor so the lowest
@@ -15299,14 +15308,14 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // Slaved to an external clock, the rate is determined by the device.
     if internal {
         body = body.push(
-            row![caption("Mode"), rate_pick]
+            row![caption("Rate follows"), rate_pick]
                 .spacing(theme::SPACE_MD * scale)
                 .align_y(iced::Alignment::Center),
         );
     } else {
         body = body.push(
             row![
-                caption("Mode"),
+                caption("Rate follows"),
                 strip::hint(
                     text("Determined by device")
                         .color(theme::text_sec())
@@ -21718,7 +21727,7 @@ mod tests {
         control_room_width, converter_frames, frames_ms, fx_reserve, fx_slot, global_feedback,
         global_feedback_is_typed, global_messages, global_state_commands, host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
-        power_sum_output_meters, rate_choices, reorder_pair_volumes, save_workspace_to, solo_armed,
+        power_sum_output_meters, rate_choices, rate_selected_label, reorder_pair_volumes, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
         temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
         uc_measured_rtl, uc_min_buffer_frames, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames,
@@ -26275,19 +26284,16 @@ mod tests {
     }
 
     #[test]
-    fn the_rate_picker_offers_auto_follow_and_every_device_rate() {
+    fn the_rate_follows_picker_offers_device_pipewire_and_sw_playback() {
         let state = new(true, None, None);
-        let (labels, selected, choices) = rate_choices(&state);
-        assert_eq!(labels[0], "Auto (PipeWire)");
-        assert_eq!(labels[1], "Follow SW playback 1/2");
-        assert_eq!(labels.len(), 11);
-        assert_eq!(selected, labels[0]);
-        assert_eq!(choices[0], RateChoice::Auto);
-        assert_eq!(choices[1], RateChoice::Follow);
-        assert_eq!(choices[2], RateChoice::Fixed(32_000));
-        assert_eq!(choices[10], RateChoice::Fixed(192_000));
-        assert_eq!(labels[2], "32 kHz");
-        assert_eq!(labels[10], "192 kHz");
+        let (labels, _, choices) = rate_choices();
+        assert_eq!(labels, vec!["Device", "PipeWire", "SW playback 1/2"]);
+        assert_eq!(
+            choices,
+            vec![RateChoice::Device, RateChoice::PipeWire, RateChoice::SwPlayback]
+        );
+        // Device is the default rate authority.
+        assert_eq!(rate_selected_label(state.engine_rate_mode), labels[0]);
     }
 
     #[test]

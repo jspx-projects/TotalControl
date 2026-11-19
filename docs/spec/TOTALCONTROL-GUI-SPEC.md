@@ -1210,12 +1210,12 @@ and Word.
 
 The `Clock source` row is a picker of the unit's own clock options only; it
 never lists host engine modes. The `Sample rate` row reports the device rate.
-When the clock source is Internal and the engine Mode is Auto or a fixed rate,
-it is an editable picker of the device-supported rates; selecting a rate drives
-the card through the engine-rate path. When the engine Mode is Follow, or the
-clock source is external, the row is a read-only readout of the rate the unit
-reports (status `0x11`), with a hint that it is device-reported. The mode that
-drives the rate lives in the host engine group, not here.
+When the clock source is Internal and `Rate follows` is Device, it is an
+editable picker of the device-supported rates; selecting a rate drives the card
+through the engine-rate path. When `Rate follows` is PipeWire or SW playback
+1/2, or the clock source is external, the row is a read-only readout of the rate
+the unit reports (status `0x11`), with a hint that it is device-reported. The
+rate authority lives in the host engine group, not here.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
 wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
@@ -1249,16 +1249,19 @@ sink's host volume in percent and dB, with a `0 dB` action. The host volume is a
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
 
-The engine `Mode` control offers `Auto (PipeWire)`, `Follow SW playback 1/2`
-and the connected device's fixed rates (the driver-reported rate list). It is
-usable only when the device clock source is Internal. Slaved to an external
-clock, the rate is determined by the device and `Mode` is a read-only
-`Determined by device` label. The engine group always shows `Graph`, the rate
-PipeWire is currently running at, in every mode. In Follow mode with an Internal
-clock it also shows `Source`; `Source` reads `<application> · <rate>` for the
-stream setting the graph, and reads `Waiting for playback` with the last graph
-rate when no stream feeds SW playback 1/2. A reverse-DNS PipeWire application
-name is reduced to its final component, so
+The engine `Rate follows` control selects who determines the graph (and thus
+device) rate: `Device` (the default) forces the device-set rate; `PipeWire` lets
+the sound server's graph conduct and the device follows it; `SW playback 1/2`
+follows the player feeding SW playback 1/2. The rate value itself is set in the
+DEVICE group's Sample rate picker (Device mode); the control offers no rate
+list. It is usable only when the device clock source is Internal. Slaved to an
+external clock, the rate is determined by the device and `Rate follows` is a
+read-only `Determined by device` label. The engine group always shows `Graph`,
+the rate PipeWire is currently running at, in every mode. With `SW playback 1/2`
+and an Internal clock it also shows `Source`; `Source` reads
+`<application> · <rate>` for the stream setting the graph, and reads `Waiting
+for playback` with the last graph rate when no stream feeds SW playback 1/2. A
+reverse-DNS PipeWire application name is reduced to its final component, so
 `io.github.celluloid_player.Celluloid` reads `Celluloid`. The source is always
 SW playback 1/2, never the focused strip.
 

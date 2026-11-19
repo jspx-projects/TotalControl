@@ -298,23 +298,26 @@ The panel separates what the device owns from what the host engine drives. In
 the device group, `Clock source` picks one of the unit's own clock options
 (Internal, SPDIF coax., Optical, Word clock). `Sample rate` shows the device
 rate: an editable picker of the device-supported rates when the clock is
-Internal and the engine Mode is Auto or a fixed rate, and a read-only readout
-of the rate the unit reports when the engine Mode is Follow or the clock source
-is external.
+Internal and `Rate follows` is Device, and a read-only readout of the rate the
+unit reports when `Rate follows` is PipeWire or SW playback 1/2, or the clock
+source is external.
 
-The engine `Mode` control has three kinds of choice, usable only when the clock
-source is Internal:
+The engine `Rate follows` control chooses who determines the rate. It is usable
+only when the clock source is Internal:
 
-- **Auto (PipeWire)** lets PipeWire choose the graph rate.
-- **Follow SW playback 1/2** makes the rate follow the player feeding software
-  playback 1/2. The engine section names the application and its rate. A
-  reverse-DNS name is shortened to the application name, so
-  `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing
-  playing it reads `Waiting for playback` and keeps the last rate.
-- A fixed rate (the device-supported rates) forces that rate.
+- **Device** (the default) uses the rate you set in the device group's Sample
+  rate picker; the graph follows it.
+- **PipeWire** lets the sound server's graph conduct; the device follows whatever
+  rate the graph runs at. Useful when a DAW or another application drives the
+  graph rate.
+- **SW playback 1/2** makes the rate follow the player feeding software playback
+  1/2. The engine section names the application and its rate. A reverse-DNS name
+  is shortened to the application name, so
+  `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing playing
+  it reads `Waiting for playback` and keeps the last rate.
 
 When the device is slaved to an external clock, the rate is determined by the
-device and `Mode` reads `Determined by device` (read-only).
+device and `Rate follows` reads `Determined by device` (read-only).
 
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A followed rate change is a runtime change, so it does not add an undo step or
