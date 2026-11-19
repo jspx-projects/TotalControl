@@ -3147,6 +3147,9 @@ pub struct TotalControl {
     /// The UC USB queue: `(frames per URB, URBs in flight)`, for the
     /// actual latency readout.
     pub driver_queue: Option<(u32, u32)>,
+    /// The UCX interrupt-transport URB size (`ucx_if5_frames`), for the
+    /// per-rate period floor on the IF5 personality.
+    pub driver_if5_frames: Option<u32>,
 }
 
 impl TotalControl {
@@ -3707,6 +3710,7 @@ pub fn new_with_device(
         // The mock stands for the stock driver.
         driver_floor: simulated.then_some(32),
         driver_queue: simulated.then_some((48, 2)),
+        driver_if5_frames: simulated.then_some(1024),
     };
 
     state
@@ -5555,6 +5559,9 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     }
     state.engine = pw_clock::read();
     state.card_stream = pw_clock::card_stream(&state.device.card_id());
+    // The new rate may carry a higher period floor; keep the forced quantum
+    // achievable so a Follow switch never leaves an impossible setting.
+    enforce_quantum_floor(state, rate);
 }
 
 /// Replace `clock.allowed-rates` with the connected device's list, saving the
@@ -5692,6 +5699,10 @@ pub fn restore_engine(state: &mut TotalControl) {
     schedule_startup_full_reapply(state);
     state.driver_floor = pw_clock::driver_period_floor();
     state.driver_queue = pw_clock::driver_urb_queue();
+    state.driver_if5_frames = pw_clock::driver_if5_frames();
+    // A remembered quantum may sit below the floor of the rate the graph opens
+    // at; raise it to the floor instead of forcing an impossible value.
+    enforce_quantum_floor(state, current_graph_rate(state));
 }
 
 /// Writes the host settings if something changed (and a path is set).
@@ -12441,6 +12452,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::EngineRead(clock, stream, sink_running, host_volume) => {
             if !state.device.is_mock() {
                 state.driver_queue = pw_clock::driver_urb_queue();
+                state.driver_if5_frames = pw_clock::driver_if5_frames();
             }
             if host_volume.is_some() {
                 state.host_volume = host_volume;
@@ -14759,6 +14771,43 @@ pub(crate) fn current_graph_rate(state: &TotalControl) -> u32 {
         .unwrap_or_else(|| state.device.settings().sample_rate)
 }
 
+/// The smallest graph quantum the driver can run at `rate`: one URB
+/// (`pw_clock::period_floor`). With `api.alsa.disable-tsched` the graph quantum
+/// is one ALSA period, so this is the period floor the card negotiates. The
+/// mock keeps a low floor so its picker stays populated.
+fn quantum_floor(state: &TotalControl, rate: u32) -> u32 {
+    if state.device.is_mock() {
+        return state.driver_floor.unwrap_or(32);
+    }
+    let iso = matches!(state.device.personality_label(), Some("AP") | Some("ISO"));
+    let ucx = state.device.is_ucx_model();
+    let urb = state.driver_queue.map(|q| q.0).unwrap_or(48);
+    let if5 = state.driver_if5_frames.unwrap_or(1024);
+    pw_clock::period_floor(rate, urb, if5, iso, ucx).max(1)
+}
+
+/// Keep a forced quantum achievable at `rate`. A Follow rate change can raise
+/// the period floor above the forced value; raise the force to the floor so
+/// the GUI never holds an impossible setting. Auto (0) is left alone.
+fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() || rate == 0 {
+        return;
+    }
+    if state.engine_force_quantum == 0 {
+        return;
+    }
+    let floor = quantum_floor(state, rate);
+    if state.engine_force_quantum < floor {
+        state.engine_force_quantum = floor;
+        if let Some(engine) = state.engine.as_mut() {
+            engine.force_quantum = floor;
+        }
+        if let Err(e) = pw_clock::force_quantum(floor) {
+            log::warn!("Raising the PipeWire quantum to the rate floor failed: {e}");
+        }
+    }
+}
+
 const RATE_MODE_AUTO: &str = "Auto (PipeWire)";
 const RATE_MODE_FOLLOW: &str = "Follow SW playback 1/2";
 
@@ -15136,21 +15185,29 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
 
     // Auto, Follow, then the connected device's fixed rates.
     let (rate_labels, rate_selected, rate_choices_vec) = rate_choices(state);
-    // 48 and 96 are 1 and 2 ms at 48 kHz, whole USB packets; PipeWire takes
-    // quanta that are not powers of two. 16 and 24 only when the driver can
-    // run them: its period floor is one URB, `urb_frames_min` (32 unless
-    // the module is loaded lower). Measured 2026-10-21 (the driver's
-    // KERNEL-DRIVER.md): 10-minute real-time soaks at 16 and 24 ran clean
-    // once loaded with `urb_frames_min=8`; 8 still loses capture buffers,
-    // so it is never offered.
+    // The period floor is one URB and scales with rate (pw_clock::period_floor).
+    // Offer only quanta at or above the current rate's floor, and include the
+    // exact floor so the lowest achievable latency is selectable. PipeWire
+    // takes quanta that are not powers of two; a lower urb_frames module
+    // parameter lowers the floor and exposes the 16/24/32 steps.
     const ALL_QUANTA: [u32; 11] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048];
-    let floor = state.driver_floor.unwrap_or(32);
-    let quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();
-    // "Auto" follows the graph.  Show what the graph actually runs, so the
-    // setting is not a blind choice; the latency line below adds the
-    // hardware buffer and chain.
-    let auto_label = if clock.effective_quantum() > 0 {
-        format!("Auto ({} samples)", clock.effective_quantum())
+    let floor = quantum_floor(state, current_graph_rate(state));
+    let mut quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();
+    if !quanta.contains(&floor) {
+        quanta.push(floor);
+        quanta.sort_unstable();
+    }
+    // "Auto" follows the graph. Show the quantum the graph actually runs (the
+    // card period), not just the request: a stale or clamped force must not
+    // read as the running value. The latency line below adds the hardware
+    // buffer and chain.
+    let actual_quantum = state
+        .card_stream
+        .map(|c| c.period)
+        .filter(|p| *p > 0)
+        .unwrap_or_else(|| clock.effective_quantum());
+    let auto_label = if actual_quantum > 0 {
+        format!("Auto ({actual_quantum} samples)")
     } else {
         "Auto".to_string()
     };
@@ -15160,7 +15217,12 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let quantum_sel = if clock.force_quantum == 0 {
         quantum_opts[0].clone()
     } else {
-        format!("{} samples", clock.force_quantum)
+        let shown = actual_quantum.max(floor);
+        quantum_opts
+            .iter()
+            .find(|o| o.as_str() == format!("{shown} samples"))
+            .cloned()
+            .unwrap_or_else(|| format!("{shown} samples"))
     };
     let field = |p: iced::widget::PickList<'static, String, Vec<String>, String, Message>| {
         p.style(theme::pick_list)
