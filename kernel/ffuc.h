@@ -188,6 +188,24 @@ struct ffuc_ep {
 	struct ffuc_urb urbs[FFUC_MAX_URBS];
 };
 
+/* Ring-fill model trace: one record per playback URB completion while
+ * the stream runs.  Diagnostic only; the audio path is unchanged. */
+#define FFUC_RING_TRACE		4096
+#define FFUC_RING_F_UNDERRUN	0x1	/* dry against the published status hw_ptr */
+#define FFUC_RING_F_STARVED	0x2	/* dry against the driver read position */
+#define FFUC_RING_F_MISSED	0x4	/* a full period passed without a write */
+#define FFUC_RING_F_BEHIND	0x8	/* appl_ptr is behind the read position */
+
+struct ffuc_ring_rec {
+	u64 ktime_ns;
+	u64 appl;		/* control->appl_ptr at refill time */
+	u64 hw;			/* ring position this completion reads */
+	u32 status_hw;		/* low 32 bits of the published status hw_ptr */
+	u32 filled;		/* (appl - hw) mod boundary */
+	u32 total;		/* frames this URB sends */
+	u32 flags;		/* FFUC_RING_F_* */
+};
+
 struct ffuc_stream {
 	struct snd_pcm_substream *substream;
 	bool running;
@@ -466,6 +484,17 @@ struct ffuc {
 	atomic_t out_bad_length;
 	atomic_t delta_zero;
 	unsigned int hw_ptr_logged;
+	/* Ring-fill diagnostics, reset at engine start.  ring_head is
+	 * monotonic across runs so the trace keeps its history. */
+	struct ffuc_ring_rec ring_trace[FFUC_RING_TRACE];
+	u32 ring_head;
+	u64 ring_last_appl;
+	u64 ring_last_appl_ts;
+	u64 ring_prev_ts;
+	u64 ring_max_stall_ns;
+	unsigned int ring_min_filled;
+	atomic_t ring_missed;
+	atomic_t ring_starved;
 	ktime_t last_out_complete;
 	unsigned long engine_stopped_at;	/* jiffies; 0 = never stopped */
 	ktime_t last_in_complete;

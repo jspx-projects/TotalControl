@@ -9,7 +9,7 @@ sequence.
 |---|---|---|
 | `reset-fireface-usb` | `/usr/local/sbin/reset-fireface-usb` | USB port reset without unplugging; waits for the card to reappear. |
 | `reload-fireface-uc` | `/usr/local/sbin/reload-fireface-uc` | Discover the newest module build, unbind, `rmmod` + `insmod`. |
-| `ffuc-lab` | `/usr/local/sbin/ffuc-lab` | Meter-driver debugfs probes (`pause`/`double`/`kill`). |
+| `ffuc-lab` | `/usr/local/sbin/ffuc-lab` | Driver debugfs surface: read-only `stats`/`ringtrace`, meter probes `pause`/`double`/`kill`. |
 
 ## Install
 

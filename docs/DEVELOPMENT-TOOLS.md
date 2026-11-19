@@ -165,7 +165,7 @@ raw `sudo rmmod`/`insmod`. Source copies live in [`scripts/lab/`](../scripts/lab
 |---|---|---|
 | `reset-fireface-usb` | `sudo -n reset-fireface-usb` | USB port reset (`usbreset`) without unplugging. Finds the unit by product string, waits for the card to reappear in `/proc/asound/cards`. Use when the card vanished or the interface will not re-bind. |
 | `reload-fireface-uc` | `sudo -n reload-fireface-uc` | Full module reload: discovers the newest `snd-fireface-uc.ko` (prefers `/usr/local/lib/ffuc-lab/`, else the newest build under any checkout), refuses a world-writable module, unbinds interfaces, `rmmod` + `insmod`, prints cards and hwdep nodes. |
-| `ffuc-lab` | `sudo -n ffuc-lab pause <ms>` / `double <0\|1>` / `kill` | Meter-driver debugfs probes for the UC meter consolidation: pause metering, double the meter URB, or kill the next meter URB. Fixed subcommands only. |
+| `ffuc-lab` | `sudo -n ffuc-lab stats` / `ringtrace` / `pause <ms>` / `double <0\|1>` / `kill` | Driver debugfs surface. `stats` reads the transport counters; `ringtrace` reads the playback ring-fill trace (one record per URB completion). `pause`/`double`/`kill` probe the UC meter pump. Fixed subcommands only; `stats` and `ringtrace` are read-only. |
 
 Recovery sequence when the card disappears or a reload fails: stop the user
 audio graph (`systemctl --user stop wireplumber pipewire-pulse pipewire

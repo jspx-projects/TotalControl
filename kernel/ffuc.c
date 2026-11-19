@@ -1064,6 +1064,85 @@ static void ffuc_ring_event(struct ffuc *chip, struct snd_pcm_substream *subs,
 			    subs->runtime->buffer_size);
 }
 
+/* Ring-fill model trace: sample the ring at a playback URB completion,
+ * before the copy advances the read position.  `read_pos` is the ring
+ * position this completion reads; `status_hw` is the published pointer,
+ * which lags the driver position until the next period signal.  The
+ * caller holds the playback stream lock.  Diagnostic only.
+ *
+ * The pointer difference is signed: when the application is behind the
+ * read position (a dry ring that kept sending), the modular span would
+ * read near-boundary and mask every later event.  A negative difference
+ * clamps the fill to zero and sets FFUC_RING_F_BEHIND. */
+static void ffuc_ring_trace(struct ffuc *chip, struct snd_pcm_substream *subs,
+			    unsigned long read_pos, unsigned long appl,
+			    unsigned long status_hw, unsigned int total)
+{
+	struct snd_pcm_runtime *rt = subs->runtime;
+	unsigned long span = (appl + rt->boundary - read_pos) % rt->boundary;
+	unsigned long pspan = (appl + rt->boundary - status_hw) % rt->boundary;
+	unsigned long filled = 0, pub = 0;
+	u64 now = ktime_get_ns();
+	u32 flags = 0;
+	struct ffuc_ring_rec *r;
+
+	/* The true difference is within a few buffers of zero, far below
+	 * boundary/2: a span above boundary/2 is a negative difference. */
+	if (span <= rt->boundary / 2)
+		filled = span;
+	else
+		flags |= FFUC_RING_F_BEHIND;
+	if (pspan <= rt->boundary / 2)
+		pub = pspan;
+	if (total > filled)
+		flags |= FFUC_RING_F_STARVED;
+	if (total > pub)
+		flags |= FFUC_RING_F_UNDERRUN;
+	if (chip->ring_last_appl_ts) {
+		if (appl == chip->ring_last_appl) {
+			/* A write is overdue when a full period passes
+			 * without an appl_ptr advance.  At period > URB
+			 * the host writes once per period, so quiet URB
+			 * cycles are normal; count the episode once, at
+			 * the completion that crosses the period mark. */
+			u64 period_ns = (u64)rt->period_size * NSEC_PER_SEC /
+					rt->rate;
+			u64 gap = now - chip->ring_last_appl_ts;
+
+			if (gap >= period_ns &&
+			    chip->ring_prev_ts - chip->ring_last_appl_ts <
+			    period_ns) {
+				flags |= FFUC_RING_F_MISSED;
+				atomic_inc(&chip->ring_missed);
+			}
+		} else {
+			u64 gap = now - chip->ring_last_appl_ts;
+
+			if (gap > chip->ring_max_stall_ns)
+				chip->ring_max_stall_ns = gap;
+		}
+	}
+	if (appl != chip->ring_last_appl) {
+		chip->ring_last_appl = appl;
+		chip->ring_last_appl_ts = now;
+	}
+	chip->ring_prev_ts = now;
+	if (filled < chip->ring_min_filled)
+		chip->ring_min_filled = filled;
+	if (flags & FFUC_RING_F_STARVED)
+		atomic_inc(&chip->ring_starved);
+
+	r = &chip->ring_trace[chip->ring_head % FFUC_RING_TRACE];
+	r->ktime_ns = now;
+	r->appl = appl;
+	r->hw = read_pos;
+	r->status_hw = (u32)status_hw;
+	r->filled = (u32)filled;
+	r->total = total;
+	r->flags = flags;
+	chip->ring_head++;
+}
+
 /* The core's shared status pointer diverged from this stream's driver
  * pointer right after a period-elapsed refresh.  Count every occurrence;
  * the first one dmesg-logs the two values. */
@@ -1447,6 +1526,8 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 		}
 		if (s->out_start_urbs)
 			s->out_start_urbs--;
+		ffuc_ring_trace(chip, subs, s->pos[ep->index], appl, own,
+				frames);
 		if (starved) {
 			memset(urb->transfer_buffer, 0,
 			       urb->transfer_buffer_length);
@@ -1783,6 +1864,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		}
 		if (s->out_start_urbs)
 			s->out_start_urbs--;
+		ffuc_ring_trace(chip, subs, s->hw_ptr, appl, own, total);
 	}
 	if (s->running && !s->out_counter_valid) {
 		for (i = 0; i < urb->number_of_packets; i++) {
@@ -1988,9 +2070,58 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 		   chip->meter_paused, chip->meter_pairs, chip->meter_realigns);
 	seq_printf(m, "urb_frames %u\nnurbs %u\n", chip->urb_frames,
 		   chip->nurbs);
+	seq_printf(m, "ring_min_filled %u\nring_missed %d\nring_starved %d\nring_max_stall_ns %llu\n",
+		   chip->ring_min_filled, atomic_read(&chip->ring_missed),
+		   atomic_read(&chip->ring_starved),
+		   (unsigned long long)chip->ring_max_stall_ns);
+	seq_printf(m, "gate deferred %d overdue %d max_pending %u\n",
+		   atomic_read(&chip->signal_deferred),
+		   atomic_read(&chip->signal_overdue),
+		   READ_ONCE(chip->max_pending));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(ffuc_stats);
+
+static int ffuc_ringtrace_show(struct seq_file *m, void *v)
+{
+	struct ffuc *chip = m->private;
+	struct snd_pcm_substream *subs =
+		READ_ONCE(chip->streams[SNDRV_PCM_STREAM_PLAYBACK].substream);
+	struct ffuc_ring_rec *snap;
+	unsigned long flags;
+	u32 head, n, i;
+
+	snap = kmalloc_array(FFUC_RING_TRACE, sizeof(*snap), GFP_KERNEL);
+	if (!snap)
+		return -ENOMEM;
+	if (subs)
+		snd_pcm_stream_lock_irqsave(subs, flags);
+	head = chip->ring_head;
+	n = min(head, (u32)FFUC_RING_TRACE);
+	for (i = 0; i < n; i++)
+		snap[i] = chip->ring_trace[(head - n + i) % FFUC_RING_TRACE];
+	if (subs)
+		snd_pcm_stream_unlock_irqrestore(subs, flags);
+
+	seq_printf(m, "# %u completions total, last %u shown\n", head, n);
+	seq_printf(m, "# min_filled %u missed %d starved %d max_stall_ns %llu\n",
+		   chip->ring_min_filled, atomic_read(&chip->ring_missed),
+		   atomic_read(&chip->ring_starved),
+		   (unsigned long long)chip->ring_max_stall_ns);
+	seq_puts(m, "# ktime_ns appl hw status_hw filled total flags\n");
+	for (i = 0; i < n; i++) {
+		const struct ffuc_ring_rec *r = &snap[i];
+
+		seq_printf(m, "%llu %llu %llu %u %u %u %u\n",
+			   (unsigned long long)r->ktime_ns,
+			   (unsigned long long)r->appl,
+			   (unsigned long long)r->hw, r->status_hw,
+			   r->filled, r->total, r->flags);
+	}
+	kfree(snap);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(ffuc_ringtrace);
 
 static void ffuc_urb_complete(struct urb *urb)
 {
@@ -2368,6 +2499,16 @@ static int ffuc_engine_start(struct ffuc *chip)
 		}
 	if (READ_ONCE(chip->disconnected))
 		return -ENODEV;
+
+	/* Fresh ring-fill watermarks for a fresh engine; the trace ring
+	 * keeps its history across runs. */
+	chip->ring_min_filled = UINT_MAX;
+	chip->ring_last_appl = 0;
+	chip->ring_last_appl_ts = 0;
+	chip->ring_prev_ts = 0;
+	chip->ring_max_stall_ns = 0;
+	atomic_set(&chip->ring_missed, 0);
+	atomic_set(&chip->ring_starved, 0);
 
 	chip->urb_frames = ffuc_urb_frames(chip, chip->rate);
 	if (chip->iso)
@@ -3200,9 +3341,13 @@ static int ffuc_probe(struct usb_interface *intf,
 	chip->in_ep = desc->in_ep;
 	chip->modes = desc->modes;
 	chip->debugfs = debugfs_create_dir(dev_name(&intf->dev), NULL);
-	if (!IS_ERR_OR_NULL(chip->debugfs))
+	if (!IS_ERR_OR_NULL(chip->debugfs)) {
 		debugfs_create_file("stats", 0444, chip->debugfs, chip,
 				    &ffuc_stats_fops);
+		debugfs_create_file("ringtrace", 0444, chip->debugfs, chip,
+				    &ffuc_ringtrace_fops);
+	}
+	chip->ring_min_filled = UINT_MAX;
 	mutex_init(&chip->mutex);
 	mutex_init(&chip->ctl_lock);
 	spin_lock_init(&chip->fb_lock);
