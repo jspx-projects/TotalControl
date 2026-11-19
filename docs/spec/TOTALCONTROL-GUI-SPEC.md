@@ -1302,10 +1302,11 @@ are not forced. A followed rate is runtime state: it does not create an undo
 step, mark the workspace dirty, or replace the fixed-rate preference. The
 mixer reapply after a followed rate change carries the followed rate, not the
 stored fixed-rate preference. A paused
-owner that keeps its stream open holds the rate. An external `clock.force-rate`
-change while Follow is active is displayed, not immediately overwritten; the
-owner policy evaluates again on the next owner rate event, mode change or
-reconnect.
+owner that keeps its stream open holds the rate. Follow reconciles the live
+`clock.force-rate` against the owner's rate on every evaluation (graph changes
+and a 2 s heartbeat). A divergence — an external metadata write or a stale
+seed — is re-applied once the owner's rate has been stable for 300 ms; an
+external force change is transient, not a new rate authority.
 
 At connect TotalControl replaces PipeWire's `clock.allowed-rates` with the
 connected device's nine rates, keeping the previous value. On disconnect or a

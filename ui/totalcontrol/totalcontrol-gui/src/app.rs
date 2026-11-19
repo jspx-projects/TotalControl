@@ -9438,15 +9438,24 @@ fn select_strip(state: &mut TotalControl, cid: ChannelId) {
 /// Poll the PipeWire graph at 4 Hz and yield only when it changes.
 fn follow_graph_stream(
 ) -> impl iced::futures::Stream<Item = Option<totalcontrol_core::pw_follow::GraphSnapshot>> {
-    iced::futures::stream::unfold((None, false), |(last, seeded)| async move {
-        loop {
-            let graph = totalcontrol_core::pw_follow::read_graph();
-            if !seeded || graph != last {
-                return Some((graph.clone(), (graph, true)));
+    iced::futures::stream::unfold(
+        (None, false, Instant::now()),
+        |(last, seeded, mut last_deliver)| async move {
+            loop {
+                let graph = totalcontrol_core::pw_follow::read_graph();
+                // Deliver on change, and at least every 2 s: a static graph
+                // still needs evaluation so a diverged force is reconciled.
+                if !seeded
+                    || graph != last
+                    || last_deliver.elapsed() >= Duration::from_secs(2)
+                {
+                    last_deliver = Instant::now();
+                    return Some((graph.clone(), (graph, true, last_deliver)));
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
             }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    })
+        },
+    )
 }
 
 /// Apply one source cell edit.  A pair is 1/2, 3/4: an odd and an even
@@ -12415,6 +12424,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             };
             let candidates = totalcontrol_core::pw_follow::candidates(&graph, None);
             let supported = device_rates(state);
+            // Reconcile against the live force: an external metadata write
+            // or a stale seed must not block the owner's rate forever.
+            let live_force = pw_clock::read().map(|c| c.force_rate).filter(|r| *r > 0);
+            state.rate_follow.reconcile(live_force);
             let rate = state
                 .rate_follow
                 .observe(&candidates, &supported, Instant::now());
@@ -13188,9 +13201,9 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
         };
         subs.push(iced::time::every(poll).map(|_| Message::EnginePoll));
         if state.engine_rate_mode == EngineRateMode::Follow && !state.device.is_mock() {
-            // Poll the graph at 4 Hz but only deliver a message when the
-            // snapshot changes: otherwise every poll rebuilt the whole view
-            // to draw the same pixels.
+            // Poll the graph at 4 Hz; deliver on change and on a 2 s
+            // heartbeat, so a static graph still reconciles a diverged
+            // force without rebuilding the view on every poll.
             subs.push(Subscription::run(follow_graph_stream).map(Message::FollowRead));
         }
     }
