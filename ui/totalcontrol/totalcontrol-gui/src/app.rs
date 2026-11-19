@@ -12533,6 +12533,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         "Fireface playback started"
                     };
                     schedule_mixer_reapply(state, Duration::from_secs(1), reason);
+                    // The reapply scene carries the rate the card runs at,
+                    // in every rate mode.  In Follow mode the model keeps
+                    // the user's fixed-rate preference, so the captured
+                    // scene would otherwise write that stale rate back to
+                    // the unit while the graph streams at the followed rate.
+                    if let Some(scene) = state.startup_scene.as_mut() {
+                        if let Some(rate) = new_rate {
+                            scene.settings.sample_rate = rate;
+                        }
+                    }
                 }
                 state.last_sink_running = sink_running;
                 state.engine = clock;
@@ -26399,6 +26409,43 @@ mod tests {
         assert_eq!(
             host_settings_of(&state).engine_rate_mode,
             Some(EngineRateMode::Follow)
+        );
+    }
+
+    #[test]
+    fn a_followed_rate_change_reapplies_the_followed_rate_not_the_fixed_choice() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        attach_device_service(&mut state);
+        // The sound-server rate path is gated on the backend flag; the mock
+        // reports false, so present the mirror as a rate-following unit.
+        let (mut snapshot, sender, bus) = {
+            let service = state.device_service.as_ref().expect("service attached");
+            (service.snapshot(), service.command_sender(), service.meter_bus())
+        };
+        snapshot.info.rate_follows = true;
+        state.device = DeviceHandle::Mirror(crate::device_service::Mirror::new(
+            snapshot, sender, bus,
+        ));
+
+        state.engine_rate_mode = EngineRateMode::Follow;
+        state.device.settings_mut().sample_rate = 88_200;
+        state.last_card_rate = Some(48_000);
+        let stream =
+            totalcontrol_core::pw_clock::CardStream { rate: 96_000, period: 48, buffer: 384 };
+        let _ = update(&mut state, Message::EngineRead(None, Some(stream), false, None));
+
+        assert_eq!(
+            state.device.settings().sample_rate, 88_200,
+            "Follow keeps the user's fixed-rate preference in the model"
+        );
+        let scene = state
+            .startup_scene
+            .as_ref()
+            .expect("the rate change schedules a reapply");
+        assert_eq!(
+            scene.settings.sample_rate, 96_000,
+            "the reapply carries the followed rate, not the stale preference"
         );
     }
 

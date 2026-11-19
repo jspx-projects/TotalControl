@@ -1299,7 +1299,9 @@ not the node ID. The owner's native rate is the stream's first `Format.rate`;
 without a format rate, the `node.rate` denominator is used. A new rate is
 forced after it has been stable for 300 ms. Unsupported rates stay visible but
 are not forced. A followed rate is runtime state: it does not create an undo
-step, mark the workspace dirty, or replace the fixed-rate preference. A paused
+step, mark the workspace dirty, or replace the fixed-rate preference. The
+mixer reapply after a followed rate change carries the followed rate, not the
+stored fixed-rate preference. A paused
 owner that keeps its stream open holds the rate. An external `clock.force-rate`
 change while Follow is active is displayed, not immediately overwritten; the
 owner policy evaluates again on the next owner rate event, mode change or

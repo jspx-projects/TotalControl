@@ -388,7 +388,7 @@ unchanged.  A reapply after a runtime rate change or stream restart writes the
 full scene instead: the unit may have reloaded its own state, so the startup
 dump no longer describes the registers, and skipping matching values can leave
 effects or routing from the old rate active.  The reapply scene carries the
-confirmed rate: the rate the card reopened at.
+confirmed rate: the rate the card reopened at, in every rate mode.
 
 The startup restore follows the same rule once the card stream has started.
 The connect write happens at the card's previous rate; opening the stream
