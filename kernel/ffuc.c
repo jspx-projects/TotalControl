@@ -2011,6 +2011,17 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 			}
 		}
 	}
+	/* The in-flight queue for .pointer's delay (R4): this URB's
+	 * playback frames, added at submit and removed at completion. */
+	{
+		struct ffuc_urb *u = urb->context;
+		unsigned int total = 0;
+
+		for (i = 0; i < urb->number_of_packets; i++)
+			total += frames[i];
+		if (u)
+			u->frames = total;
+	}
 	for (i = 0; i < urb->number_of_packets; i++) {
 		__le32 *dst = (__le32 *)((u8 *)urb->transfer_buffer + off);
 		unsigned int len = frames[i] * fwords * FFUC_SAMPLE_BYTES;
@@ -2323,6 +2334,10 @@ static void ffuc_urb_complete(struct urb *urb)
 			ffuc_track_capture_urb(chip, urb);
 	}
 
+	if (u->frames && ep->dir == SNDRV_PCM_STREAM_PLAYBACK)
+		atomic_sub(u->frames, &chip->streams[
+			SNDRV_PCM_STREAM_PLAYBACK].inflight);
+
 	switch (urb->status) {
 	case 0:
 		atomic_set(&chip->urb_errors, 0);
@@ -2371,6 +2386,13 @@ resubmit:
 		return;
 	ret = usb_submit_urb(urb, GFP_ATOMIC);
 	if (ret == 0) {
+		if (!ep->dir) {
+			struct ffuc_urb *uu = urb->context;
+
+			if (uu && uu->frames)
+				atomic_add(uu->frames,
+					   &chip->streams[SNDRV_PCM_STREAM_PLAYBACK].inflight);
+		}
 		if (!READ_ONCE(chip->iso_frames_ok) ||
 		    ffuc_iso_contiguous(ep, urb))
 			return;
@@ -2502,6 +2524,8 @@ static void ffuc_engine_stop(struct ffuc *chip)
 	for (i = 0; i < 2; i++)
 		for (j = 0; j < FFUC_MAX_EPS; j++)
 			chip->eps[i][j].last_start = -1;
+	atomic_set(&chip->streams[SNDRV_PCM_STREAM_PLAYBACK].inflight, 0);
+	atomic_set(&chip->streams[SNDRV_PCM_STREAM_CAPTURE].inflight, 0);
 	dev_dbg(&chip->dev->dev,
 		"engine stop: rate=%u session=%d\n",
 		chip->rate, chip->session_reopen);
@@ -2902,7 +2926,12 @@ static const struct snd_pcm_hardware ffuc_pcm_hw = {
 		SNDRV_PCM_INFO_MMAP_VALID |
 		SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_BLOCK_TRANSFER |
-		SNDRV_PCM_INFO_RESUME,
+		SNDRV_PCM_INFO_RESUME |
+		/* BATCH: the pointer advances at the period boundary (one
+		 * URB), which is what the device delivers.  JOINT_DUPLEX:
+		 * both directions share the one device clock. */
+		SNDRV_PCM_INFO_BATCH |
+		SNDRV_PCM_INFO_JOINT_DUPLEX,
 	.formats = SNDRV_PCM_FMTBIT_FLOAT_LE | SNDRV_PCM_FMTBIT_S32_LE,
 	.rates = SNDRV_PCM_RATE_KNOT,
 	.rate_min = 32000,
@@ -3164,16 +3193,9 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	s->deferrals = 0;
 	s->out_starve_streak = 0;
 	s->out_start_urbs = 0;
-	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+	atomic_set(&s->inflight, 0);
+	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		s->out_counter_valid = false;
-		if (chip->iso)
-			subs->runtime->delay = DIV_ROUND_CLOSEST(
-				chip->nurbs * chip->iso_packets *
-				(int)chip->rate, 8000);
-		else
-			subs->runtime->delay =
-				chip->nurbs * chip->urb_frames;
-	}
 	/* Preparation never zeroed the ring; inherit the last session's
 	 * (or the allocator's) bytes.  Poison so that a recorded zero can
 	 * never be confused with never-written memory.  Safe amplitude in
@@ -3209,6 +3231,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->out_starve_streak = 0;
 		s->out_start_urbs = FFUC_START_GRACE_URBS;
 		s->out_counter_valid = false;
+		atomic_set(&s->inflight, 0);
 		s->running = true;
 		/* q48 diagnostics: log the negotiated geometry once per
 		 * start so a capture session can be matched to it. */
@@ -3243,6 +3266,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->out_starve_streak = 0;
 		s->out_start_urbs = FFUC_START_GRACE_URBS;
 		s->out_counter_valid = false;
+		atomic_set(&s->inflight, 0);
 		s->running = true;
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:
@@ -3325,8 +3349,30 @@ static snd_pcm_uframes_t ffuc_pcm_pointer(struct snd_pcm_substream *subs)
 {
 	struct ffuc *chip = snd_pcm_substream_chip(subs);
 
+	/* The pointer is the driver's read/write position.  runtime->delay
+	 * is the queue between it and the device: for playback, the frames
+	 * handed to USB but not yet completed; the capture in-flight queue
+	 * is the same quantity in the other direction.  ALSA adds
+	 * hw_avail to it, so snd_pcm_delay()/htimestamp see the real
+	 * queue (audit R4). */
+	subs->runtime->delay = atomic_read(&chip->streams[subs->stream].inflight);
+
 	return chip->streams[subs->stream].hw_ptr %
 	       subs->runtime->buffer_size;
+}
+
+static int ffuc_pcm_sync_stop(struct snd_pcm_substream *subs)
+{
+	/* The stop is a flag change under the stream lock, and the URB
+	 * kill is synchronous.  Taking the lock synchronises with a
+	 * completion that is between its running check and its period
+	 * signal, so nothing is pending when the core proceeds to
+	 * hw_free/reconfigure (audit R6). */
+	unsigned long flags;
+
+	snd_pcm_stream_lock_irqsave(subs, flags);
+	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	return 0;
 }
 
 static const struct snd_pcm_ops ffuc_pcm_ops = {
@@ -3337,6 +3383,7 @@ static const struct snd_pcm_ops ffuc_pcm_ops = {
 	.prepare = ffuc_pcm_prepare,
 	.trigger = ffuc_pcm_trigger,
 	.pointer = ffuc_pcm_pointer,
+	.sync_stop = ffuc_pcm_sync_stop,
 };
 
 static int ffuc_create_pcm(struct ffuc *chip)

@@ -179,6 +179,7 @@ struct ffuc_urb {
 	struct ffuc_ep *ep;
 	void *buf;
 	dma_addr_t dma;
+	unsigned int frames;	/* playback frames in the last fill */
 };
 
 struct ffuc_ep {
@@ -234,6 +235,11 @@ struct ffuc_stream {
 	 * starvation without stopping, so a stream-start prefill shortfall
 	 * (rate transition, renegotiation) recovers without an XRUN. */
 	unsigned int out_start_urbs;
+	/* Playback frames handed to USB but not yet completed: the real
+	 * in-flight queue behind hw_ptr.  Reported as runtime->delay in
+	 * .pointer (R4).  Atomic: submits and completions run in different
+	 * contexts. */
+	atomic_t inflight;
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must
