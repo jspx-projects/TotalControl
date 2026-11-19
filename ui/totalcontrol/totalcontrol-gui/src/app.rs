@@ -3147,9 +3147,10 @@ pub struct TotalControl {
     /// The UC USB queue: `(frames per URB, URBs in flight)`, for the
     /// actual latency readout.
     pub driver_queue: Option<(u32, u32)>,
-    /// The UCX interrupt-transport URB size (`ucx_if5_frames`), for the
-    /// per-rate period floor on the IF5 personality.
-    pub driver_if5_frames: Option<u32>,
+    /// The driver-reported achievable rate/quantum envelope, queried once at
+    /// attach. The driver is the single owner; the rate list and the quantum
+    /// picker derive from it. `None` for the mock or before the first query.
+    pub device_envelope: Option<totalcontrol_core::fireface::hwdep::RateEnvelope>,
 }
 
 impl TotalControl {
@@ -3710,7 +3711,7 @@ pub fn new_with_device(
         // The mock stands for the stock driver.
         driver_floor: simulated.then_some(32),
         driver_queue: simulated.then_some((48, 2)),
-        driver_if5_frames: simulated.then_some(1024),
+        device_envelope: None,
     };
 
     state
@@ -5572,7 +5573,7 @@ fn apply_allowed_rates(state: &mut TotalControl) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return;
     }
-    let wanted = state.device.sample_rates().to_vec();
+    let wanted = device_rates(state);
     if wanted.is_empty() {
         return;
     }
@@ -5699,7 +5700,11 @@ pub fn restore_engine(state: &mut TotalControl) {
     schedule_startup_full_reapply(state);
     state.driver_floor = pw_clock::driver_period_floor();
     state.driver_queue = pw_clock::driver_urb_queue();
-    state.driver_if5_frames = pw_clock::driver_if5_frames();
+    // The achievable envelope comes from the driver, once per attach. The
+    // driver is the single owner of the supported rates and the per-rate
+    // period floor; the GUI presents exactly what it reports.
+    state.device_envelope = pw_clock::card_number(&state.device.card_id())
+        .and_then(totalcontrol_core::fireface::hwdep::query_rate_envelope);
     // A remembered quantum may sit below the floor of the rate the graph opens
     // at; raise it to the floor instead of forcing an impossible value.
     enforce_quantum_floor(state, current_graph_rate(state));
@@ -12385,10 +12390,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 return Task::none();
             };
             let candidates = totalcontrol_core::pw_follow::candidates(&graph, None);
-            let supported = state.device.sample_rates();
+            let supported = device_rates(state);
             let rate = state
                 .rate_follow
-                .observe(&candidates, supported, Instant::now());
+                .observe(&candidates, &supported, Instant::now());
             if let Some(rate) = rate {
                 apply_graph_rate(state, rate, false);
             }
@@ -12452,7 +12457,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::EngineRead(clock, stream, sink_running, host_volume) => {
             if !state.device.is_mock() {
                 state.driver_queue = pw_clock::driver_urb_queue();
-                state.driver_if5_frames = pw_clock::driver_if5_frames();
             }
             if host_volume.is_some() {
                 state.host_volume = host_volume;
@@ -14776,14 +14780,27 @@ pub(crate) fn current_graph_rate(state: &TotalControl) -> u32 {
 /// is one ALSA period, so this is the period floor the card negotiates. The
 /// mock keeps a low floor so its picker stays populated.
 fn quantum_floor(state: &TotalControl, rate: u32) -> u32 {
-    if state.device.is_mock() {
-        return state.driver_floor.unwrap_or(32);
+    if let Some(env) = &state.device_envelope {
+        if let Some(floor) = env.period_floor(rate) {
+            return floor.max(1);
+        }
     }
-    let iso = matches!(state.device.personality_label(), Some("AP") | Some("ISO"));
-    let ucx = state.device.is_ucx_model();
-    let urb = state.driver_queue.map(|q| q.0).unwrap_or(48);
-    let if5 = state.driver_if5_frames.unwrap_or(1024);
-    pw_clock::period_floor(rate, urb, if5, iso, ucx).max(1)
+    // The mock, or a rate the driver did not report: keep a low floor so the
+    // picker stays populated.
+    state.driver_floor.unwrap_or(32)
+}
+
+/// The supported rates the GUI offers: the driver-reported envelope when
+/// present, otherwise the backend's static list (the mock). The driver is the
+/// single owner of the rate list.
+fn device_rates(state: &TotalControl) -> Vec<u32> {
+    if let Some(env) = &state.device_envelope {
+        let rates = env.rate_list();
+        if !rates.is_empty() {
+            return rates;
+        }
+    }
+    state.device.sample_rates().to_vec()
 }
 
 /// Keep a forced quantum achievable at `rate`. A Follow rate change can raise
@@ -14821,9 +14838,9 @@ enum RateChoice {
 fn rate_choices(state: &TotalControl) -> (Vec<String>, String, Vec<RateChoice>) {
     let mut labels = vec![RATE_MODE_AUTO.to_string(), RATE_MODE_FOLLOW.to_string()];
     let mut choices = vec![RateChoice::Auto, RateChoice::Follow];
-    for rate in state.device.sample_rates() {
-        labels.push(rate_label(*rate));
-        choices.push(RateChoice::Fixed(*rate));
+    for rate in device_rates(state) {
+        labels.push(rate_label(rate));
+        choices.push(RateChoice::Fixed(rate));
     }
     let selected = match state.engine_rate_mode {
         EngineRateMode::Auto => labels[0].clone(),
@@ -15002,7 +15019,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let device_rate_row = row![
         caption("Sample rate"),
         pick_list(
-            state.device.sample_rates().to_vec(),
+            device_rates(state),
             Some(settings.sample_rate),
             Message::SampleRateSelected,
         )
@@ -15185,11 +15202,11 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
 
     // Auto, Follow, then the connected device's fixed rates.
     let (rate_labels, rate_selected, rate_choices_vec) = rate_choices(state);
-    // The period floor is one URB and scales with rate (pw_clock::period_floor).
-    // Offer only quanta at or above the current rate's floor, and include the
-    // exact floor so the lowest achievable latency is selectable. PipeWire
-    // takes quanta that are not powers of two; a lower urb_frames module
-    // parameter lowers the floor and exposes the 16/24/32 steps.
+    // The period floor is one URB and scales with rate; the driver reports it
+    // in the envelope (the single owner). Offer only quanta at or above the
+    // current rate's floor, and include the exact floor so the lowest
+    // achievable latency is selectable. PipeWire takes quanta that are not
+    // powers of two.
     const ALL_QUANTA: [u32; 11] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048];
     let floor = quantum_floor(state, current_graph_rate(state));
     let mut quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();

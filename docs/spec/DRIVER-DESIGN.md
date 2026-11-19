@@ -189,6 +189,65 @@ Module parameters: `urb_frames` (default 48), `nurbs` (default 2),
 - The period floor is one URB. The graph quantum follows at 48 frames and
   above.
 
+#### 4.1.1 The achievable envelope
+
+The driver is the single owner of the supported rates and the per-rate
+quantum envelope. It computes them with the same functions that refine
+`hw_params` (`ffuc_urb_frames`, `ffuc_buffer_min`) and reports them through
+`FFUC_HWDEP_IOCTL_ENVELOPE` (ABI 5). Userspace queries the envelope once per
+attach and presents exactly what the driver reports. It does not recompute
+the geometry.
+
+| Term | Shape | Definition |
+|---|---|---|
+| period floor | frames | the smallest ALSA period at a rate; one URB; with `disable-tsched`, the smallest graph quantum |
+| buffer min | frames | the smallest ALSA ring at a rate; URB-aligned |
+
+```text
+ISO:           urb = iso_packets * ceil(rate / 8000)
+               iso_packets = clamp(ceil(urb_frames / 6), 1, 8)
+interrupt UC:  urb = urb_frames << band(rate)
+               band = 0 (<=48k), 1 (<=96k), 2 (>96k)
+interrupt UCX: urb = ucx_if5_frames
+period_floor   = urb
+buffer_min     = roundup(max((nurbs + 2) * urb, lead + 2 * urb), urb)
+               UCX only: lead = round((nurbs + 1) * iso_packets * rate / 8000) + 60
+```
+
+`roundup()` rounds to any multiple. `round_up()` is a power-of-two bitmask and
+mis-aligns a non-power-of-two URB; the buffer rule uses `roundup()`.
+
+ISO envelope at the defaults (`urb_frames = 48`, `nurbs = 2`), as reported by
+the envelope ioctl:
+
+| Rate | period floor | buffer min |
+|---|---|---|
+| 32000 | 32 | 224 |
+| 44100 | 48 | 288 |
+| 48000 | 48 | 336 |
+| 64000 | 64 | 384 |
+| 88200 | 96 | 576 |
+| 96000 | 96 | 576 |
+| 128000 | 128 | 768 |
+| 176400 | 184 | 1104 |
+| 192000 | 192 | 1152 |
+
+The envelope ioctl reply (`struct ffuc_hwdep_envelope`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| count | u32 | valid rate entries |
+| urb_frames | u32 | base URB frames (loaded parameter) |
+| nurbs | u32 | URBs in flight per endpoint |
+| iso | u32 | 1 ISO, 0 interrupt |
+| rates[16] | u32×3 each | `{rate, period_floor, buffer_min}` per supported rate |
+
+The supported rates are `ffuc_rates` filtered by the model's `max_rate`. The
+envelope is static for a module load. It changes only on reload (new
+parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
+`allowed-rates` are host policy and must permit the envelope; the installer
+owns that policy.
+
 The PCM buffer covers the URBs already in flight plus margin. A completion
 that overwrites unread capture frames or sends unwritten playback frames is
 counted as `in_overruns` / `out_underruns`. The host prevents these through

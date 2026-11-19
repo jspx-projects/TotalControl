@@ -219,56 +219,22 @@ pub fn driver_urb_queue() -> Option<(u32, u32)> {
     Some((frames, urbs))
 }
 
-/// The UCX interrupt-transport URB size (`ucx_if5_frames`), when the module
-/// is loaded.
-pub fn driver_if5_frames() -> Option<u32> {
-    std::fs::read_to_string("/sys/module/snd_fireface_uc/parameters/ucx_if5_frames")
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
-}
-
-/// The driver's per-rate period floor: one URB (`ffuc_rule_period`).
-///
-/// ISO packs `iso_packets` microframes per URB. The interrupt transport scales
-/// `urb_frames` by the rate band (UC) or uses the fixed `if5_frames` (UCX).
-/// Mirrors `ffuc_urb_frames` in `kernel/ffuc.c`; the graph quantum follows this
-/// floor when `api.alsa.disable-tsched` makes the quantum one ALSA period.
-pub fn period_floor(rate: u32, urb_frames: u32, if5_frames: u32, iso: bool, ucx: bool) -> u32 {
-    let rate = rate.max(1);
-    if iso {
-        let packets = urb_frames.next_multiple_of(8).clamp(8, 256).div_ceil(6).clamp(1, 8);
-        packets * rate.div_ceil(8000)
-    } else if ucx {
-        if5_frames.next_multiple_of(8).clamp(8, 1024)
-    } else {
-        let base = urb_frames.next_multiple_of(8).clamp(8, 256);
-        let band = if rate <= 48_000 { 0 } else if rate <= 96_000 { 1 } else { 2 };
-        base << band
+/// The ALSA card number for a card id string, read from `/proc/asound`.
+/// `None` when the card is not present.
+pub fn card_number(card_id: &str) -> Option<i32> {
+    let cards = std::fs::read_dir("/proc/asound").ok()?;
+    for entry in cards.flatten() {
+        let dir = entry.path();
+        let name = dir.file_name()?.to_str()?.to_string();
+        if !name.starts_with("card") {
+            continue;
+        }
+        let id = std::fs::read_to_string(dir.join("id")).unwrap_or_default();
+        if id.trim() == card_id {
+            return name.trim_start_matches("card").parse().ok();
+        }
     }
-}
-
-/// The driver's per-rate ALSA ring minimum (`ffuc_rule_buffer`), URB-aligned.
-/// It covers the in-flight URBs plus margin; the UCX also covers the output
-/// lead plus two URBs. Mirrors `ffuc_rule_buffer` in `kernel/ffuc.c`.
-pub fn buffer_min(rate: u32, urb_frames: u32, nurbs: u32, if5_frames: u32, iso: bool, ucx: bool) -> u32 {
-    let rate = rate.max(1);
-    let urb = period_floor(rate, urb_frames, if5_frames, iso, ucx);
-    let base = if ucx && !iso {
-        if5_frames.next_multiple_of(8).clamp(8, 1024)
-    } else {
-        urb_frames.next_multiple_of(8).clamp(8, 256)
-    };
-    let packets = base.div_ceil(6).clamp(1, 8);
-    let nurbs = nurbs.max(2);
-    let mut min = (nurbs + 2) * urb;
-    if ucx {
-        let fb_delay = (nurbs + 1) * packets;
-        let lead = (fb_delay * rate + 4000) / 8000 + 60;
-        min = min.max(lead + 2 * urb);
-    }
-    min.next_multiple_of(urb)
+    None
 }
 
 /// Whether the RME Pro Audio sink is actually running a playback stream.
@@ -515,49 +481,5 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
     fn no_pipewire_settings_is_none() {
         assert_eq!(parse(""), None);
         assert_eq!(parse("Found \"settings\" metadata 31\n"), None);
-    }
-
-    // Contract with `ffuc_rule_period` / `ffuc_rule_buffer` (kernel/ffuc.c).
-    // The ISO column is the loaded default: urb_frames=48, nurbs=2.
-    #[test]
-    fn iso_period_floor_is_one_urb_per_rate() {
-        let cases = [
-            (32_000, 32),
-            (44_100, 48),
-            (48_000, 48),
-            (64_000, 64),
-            (88_200, 96),
-            (96_000, 96),
-            (128_000, 128),
-            (176_400, 184),
-            (192_000, 192),
-        ];
-        for (rate, floor) in cases {
-            assert_eq!(period_floor(rate, 48, 1024, true, true), floor, "rate {rate}");
-        }
-        // A requested 48 at 96 kHz is below the floor; the driver clamps to 96.
-        assert!(period_floor(96_000, 48, 1024, true, true) > 48);
-    }
-
-    #[test]
-    fn iso_buffer_min_covers_lead_and_margin() {
-        // 336 is the capture test buffer (work note §12); 576 at 96 kHz.
-        assert_eq!(buffer_min(44_100, 48, 2, 1024, true, true), 288);
-        assert_eq!(buffer_min(48_000, 48, 2, 1024, true, true), 336);
-        assert_eq!(buffer_min(96_000, 48, 2, 1024, true, true), 576);
-        assert_eq!(buffer_min(88_200, 48, 2, 1024, true, true), 576);
-        assert_eq!(buffer_min(176_400, 48, 2, 1024, true, true), 1104);
-        assert_eq!(buffer_min(192_000, 48, 2, 1024, true, true), 1152);
-    }
-
-    #[test]
-    fn interrupt_floor_scales_by_band_or_is_fixed() {
-        // UC interrupt: urb_frames shifted by the rate band.
-        assert_eq!(period_floor(48_000, 48, 1024, false, false), 48);
-        assert_eq!(period_floor(96_000, 48, 1024, false, false), 96);
-        assert_eq!(period_floor(192_000, 48, 1024, false, false), 192);
-        // UCX interrupt: the fixed IF5 URB at every rate.
-        assert_eq!(period_floor(44_100, 48, 1024, false, true), 1024);
-        assert_eq!(period_floor(192_000, 48, 1024, false, true), 1024);
     }
 }

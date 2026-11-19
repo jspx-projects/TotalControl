@@ -337,6 +337,14 @@ static int ffuc_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
 		return ffuc_hwdep_words(chip, (void __user *)arg);
 	case FFUC_HWDEP_IOCTL_COUNTERS:
 		return ffuc_hwdep_counters(chip, (void __user *)arg);
+	case FFUC_HWDEP_IOCTL_ENVELOPE: {
+		struct ffuc_hwdep_envelope env;
+
+		ffuc_query_envelope(chip, &env);
+		if (copy_to_user((void __user *)arg, &env, sizeof(env)))
+			return -EFAULT;
+		return 0;
+	}
 	default:
 		return -ENOTTY;
 	}
