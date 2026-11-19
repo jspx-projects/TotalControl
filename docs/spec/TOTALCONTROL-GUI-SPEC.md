@@ -1203,9 +1203,10 @@ sheet shows that value. A value is written when it changes there.
 On/off options are checkboxes after their caption. `Optical` and `SPDIF` are
 dropdowns (`ADAT`/`SPDIF`, `Consumer`/`Professional`). Every caption and
 control shares one left edge, and every dropdown has the same width. A
-dropdown menu opens on the side of its field with more free space inside the
-panel viewport, measured from the viewport edges. The menu stays inside the
-viewport; its background is opaque on every row.
+dropdown menu opens below its field when it fits in the free space below,
+measured from the panel viewport edges; otherwise it opens toward the larger
+side. The menu stays inside the viewport; its background is opaque on every
+row.
 
 The options rows belong to the unit's own group. The UC offers five clock
 sources, including LTC; the UCX offers four: Internal, SPDIF coax., Optical
@@ -1228,8 +1229,9 @@ Every change is written immediately to the device.
 
 The panel is 360 px wide at scale 1 and its caption column is 110 px. The
 width reserves the thin scrollbar's width so an appearing scrollbar does not
-overlay the content's right edge. It is only as tall as its content, capped at
-the window height. Longer labels wrap rather than widening the column;
+overlay the content's right edge. The card is as tall as its content; its
+scroll area fills to the window-height cap, so dropdown menus have room below
+the last rows. Longer labels wrap rather than widening the column;
 `Single speed:` sits above `word clock`.
 
 On the UCX the options word, the reference levels and the 48 V/Inst/Level
