@@ -1401,6 +1401,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	bool elapsed = false;
 	bool bad = false;
 	bool starved = false;
+	bool stop = false;
 
 	/* The engine submitted this OUT URB with urb_frames frames, so the
 	 * nominal case equals it.  Copy exactly what left the wire, and
@@ -1424,9 +1425,11 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 		struct snd_pcm_runtime *rt = subs->runtime;
 		/* Starvation is measured against the ring position this
 		 * endpoint reads, not the published status hw_ptr (which
-		 * lags until the next period signal).  A dry ring stops the
-		 * stream as an XRUN below; unwritten ring content is never
-		 * valid playback. */
+		 * lags until the next period signal).  Unwritten ring
+		 * content is never valid playback: a starved URB carries
+		 * silence.  One starved URB is a grace (a single late write
+		 * becomes a one-URB gap); two consecutive starved URBs stop
+		 * the stream as an XRUN below. */
 		unsigned long appl = READ_ONCE(rt->control->appl_ptr);
 		unsigned long own = s->pos[ep->index] % rt->boundary;
 		unsigned long filled = (appl + rt->boundary - own) %
@@ -1434,8 +1437,13 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 
 		if (frames > filled) {
 			starved = true;
-			ffuc_ring_event(chip, subs, &chip->out_underruns,
-					"playback underrun", appl, own);
+			if (!s->out_starve_streak)
+				ffuc_ring_event(chip, subs, &chip->out_underruns,
+						"playback underrun", appl, own);
+			s->out_starve_streak++;
+			stop = s->out_starve_streak >= 2;
+		} else {
+			s->out_starve_streak = 0;
 		}
 		if (starved) {
 			memset(urb->transfer_buffer, 0,
@@ -1458,7 +1466,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 		memset(urb->transfer_buffer, 0, urb->transfer_buffer_length);
 	}
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
-	if (starved)
+	if (stop)
 		snd_pcm_stop_xrun(subs);
 	if (elapsed)
 		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_PLAYBACK);
@@ -1690,6 +1698,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	unsigned long flags;
 	bool elapsed = false;
 	bool starved = false;
+	bool stop = false;
 	int i;
 
 	/* Per-packet delivery check from the previous submission. */
@@ -1753,16 +1762,22 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		 * own ring position, so starvation is measured against it.
 		 * The published status hw_ptr only refreshes on a period
 		 * signal and lags the driver position by up to a period; it
-		 * would mask a dry ring.  When the ring cannot supply the
-		 * mirrored frames the stream is stopped as an XRUN below:
-		 * sending unwritten ring content is never valid playback. */
+		 * would mask a dry ring.  A starved URB carries silence, never
+		 * unwritten ring content.  One starved URB is a grace (a
+		 * single late write becomes a one-URB gap); two consecutive
+		 * starved URBs stop the stream as an XRUN below. */
 		appl = READ_ONCE(rt->control->appl_ptr);
 		own = s->hw_ptr % rt->boundary;
 		filled = (appl + rt->boundary - own) % rt->boundary;
 		if (total > filled) {
 			starved = true;
-			ffuc_ring_event(chip, subs, &chip->out_underruns,
-					"playback underrun", appl, own);
+			if (!s->out_starve_streak)
+				ffuc_ring_event(chip, subs, &chip->out_underruns,
+						"playback underrun", appl, own);
+			s->out_starve_streak++;
+			stop = s->out_starve_streak >= 2;
+		} else {
+			s->out_starve_streak = 0;
 		}
 	}
 	if (s->running && !starved && !s->out_counter_valid) {
@@ -1837,7 +1852,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	 * normal prepare/start path.  The engine keeps running and feeds the
 	 * device silence; only the host PCM stream stops.  Called outside the
 	 * stream lock: snd_pcm_stop_xrun takes it itself. */
-	if (starved)
+	if (stop)
 		snd_pcm_stop_xrun(subs);
 	if (elapsed)
 		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_PLAYBACK);
@@ -2795,6 +2810,7 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	s->period = 0;
 	s->signalled = 0;
 	s->deferrals = 0;
+	s->out_starve_streak = 0;
 	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		s->out_counter_valid = false;
 		if (chip->iso)
@@ -2837,6 +2853,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->period = 0;
 		s->signalled = 0;
 		s->deferrals = 0;
+		s->out_starve_streak = 0;
 		s->out_counter_valid = false;
 		s->running = true;
 		/* q48 diagnostics: log the negotiated geometry once per
@@ -2869,6 +2886,7 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->period = 0;
 		s->signalled = 0;
 		s->deferrals = 0;
+		s->out_starve_streak = 0;
 		s->out_counter_valid = false;
 		s->running = true;
 		return 0;

@@ -204,6 +204,10 @@ struct ffuc_stream {
 	 * period.  Bounds the gate's added latency to about one URB at any
 	 * period size; reset on every signal and at stream start. */
 	u32 deferrals;
+	/* Consecutive starved playback completions.  The first starved URB
+	 * of an episode sends silence and is counted; the second consecutive
+	 * one stops the stream as an XRUN.  Reset at prepare and start. */
+	unsigned int out_starve_streak;
 };
 
 /* Per-model core callbacks.  They may touch the device transport but must
