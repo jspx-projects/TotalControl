@@ -406,8 +406,7 @@ three nominal URB durations.
 
 Rate and session handling on the UC:
 
-- The rate write is the family word plus the commit word. The DDS word is
-  part of the ISO rate sequence only.
+- The rate write is the generic rate sequence (§7).
 - A live rate change closes the session, writes the rate, and replays the
   session trio on the next open. The `WIN_SESSION` gaps (§7) apply.
 
@@ -428,8 +427,8 @@ Status and watchdog:
 | OUT payload | sample words | lead word + sample words |
 | IN payload | sample words | header (position, phase, frame count) + planar frames |
 | URB granularity | `urb_frames` per URB, scaled by rate band | up to 8 packets per URB, one per microframe |
-| UC rate sequence | family + commit; session close/reopen with `WIN_SESSION` gaps | DDS + family + commit; session words back-to-back |
-| UCX rate sequence | family + commit (IF5) | family (IF0) |
+| UC rate sequence | generic (§7); session close/reopen with `WIN_SESSION` gaps | generic (§7); session words back-to-back |
+| UCX rate sequence | generic (§7) | generic (§7) |
 | UC status transport | interrupt ticker IF5, always open | bulk IF4 |
 | Output-latch watchdog | `STATUS_LATCH` personalities | UC AP carries no latch quirk; UCX IF0 uses the ISO guards |
 | Dropout detection | `out_gaps`, output latch, URB errors | cadence guard, ISO continuity, URB errors |
@@ -521,6 +520,22 @@ numbers. The unit parses each bulk transfer as a separate MIDI stream; a
 message must fit one transfer. Output is polled by a delayed work at 1 ms.
 
 ## 7. Rate, session and startup timing
+
+The rate sequence is one generic flow for every model and transport:
+
+| Order | Request | wValue | wIndex |
+|---|---|---|---|
+| 1 | `0x1b` | high16(p1) | (p1 & 0xff00) \| family |
+| 2 | `0x10` | family << 4 | 0x0030 |
+| 3 | `0x10` | current options word | 0x05cf (1487) |
+
+p1 = 0x5f5e10000000 / rate, shifted left 1 above 57000 Hz and left 2
+above 114000 Hz. family: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz,
+2 = 48/96/192 kHz. The third word is the options commit: the driver reads
+the options word the device holds (`0x10` in) and rewrites it under the
+mask, so the mixer's settings survive the rate change. The DDS word
+carries the active family's divisor; the band multiplier follows the
+streaming alternate setting.
 
 Engine start selects the alternate setting, commits the rate, sends the
 session-open words where required, sets up URBs, submits them, and unmutes.
@@ -656,7 +671,7 @@ Scope labels are defined in §10.
 | Item | Scope |
 |---|---|
 | Replace fixed session gaps with a bounded poll of a device-visible readiness condition where one exists; keep documented quirks where the device has no acknowledgement | `WIN_SESSION` |
-| Add a rate-readiness poll after the rate commit word (UC PC, UC AP, UCX IF5 send it; UCX IF0 commits the family alone) | UC, UCX IF5 |
+| Add a rate-readiness poll after the rate commit word (every personality sends the commit) | UC, UCX |
 | Move ISO continuity logging to per-endpoint state | ISO |
 | Preallocate the hwdep read buffer per reader | all |
 | Make buffer poison and verbose stop diagnostics optional module parameters | all |
@@ -699,7 +714,7 @@ driver's transports. The owning sections carry the full detail:
 | Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
 | AP header rate-band scaling: the position width and modulus at 2x/4x (16384/32768); the 1x layout (13-bit position / 8192, 14-bit phase) is capture-verified | UCX IF0, UC IF0, Babyface | a 2x/4x ISO capture; isolated add/drop events away from the wrap are unattributed |
 | IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
-| DDS quad rate dependence: the quad is written once at connect; rate changes write the family word alone across the captured 44.1↔48 transitions | UCX IF5 | a connect capture at a 32 kHz-family rate |
+| Live rate-switch verification of the generic rate sequence on the UCX: the device cadence follows the requested rate across family and band changes, with the output lead intact | UCX | a tone-playing rate round-trip with the ring trace and status across each switch |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
 | Phase consumption by the reference host: the scheduler records the phase accumulator and mirrors the frame count, which carries the add/drop; whether the macOS host additionally consumes phase for fractional prediction is unverified | ISO | a kext disassembly of the OUT scheduling path |
 | MIDI port 2 physical output: packets carry both ports | UC | a loopback on the candidate output |

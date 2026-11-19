@@ -256,9 +256,9 @@ group carries a ~120 ms gap between its fifth and sixth writes.  The
 initial stream opens directly after the probe sequence; the engine start
 commits the rate (§9).
 
-A rate change closes the stream with `0x13 0x000f/0xc000`, writes the new
-`0x10` rate family and the `0x10 / 1487` options commit (§9), waits 200 ms, then
-opens with:
+A rate change closes the stream with `0x13 0x000f/0xc000`, writes the DDS
+divisor word, the new `0x10` rate family and the `0x10 / 1487` options commit
+(§9), waits 200 ms, then opens with:
 
 | Request | Value / index |
 |---|---|
@@ -499,7 +499,11 @@ The host stream owns the UC sample rate.  The host restores its remembered
 engine rate at startup and on reconnect; `Auto` releases the override and
 follows the device/graph rate.
 
-Rate selection uses `0x10`, `wIndex 48`:
+The rate sequence writes the DDS divisor word (`0x1b`, wValue =
+high16(p1), wIndex = (p1 & 0xff00) | family, p1 = 0x5f5e10000000 / rate
+shifted left 1 above 57000 Hz and left 2 above 114000 Hz), then the
+family word, then the options commit. Rate selection uses `0x10`,
+`wIndex 48`:
 
 | Rate | Word |
 |---|---|

@@ -873,15 +873,32 @@ IF1 burst each.
 
 ### 11.1 Rate family
 
+| Term | Context | Definition |
+|---|---|---|
+| settings-dialog rate apply | stream idle | the full apply: options word (§11.5), level word (`0x17/0x0fc0`), four-word `0x1b` DDS quad (§11.3) |
+| streaming rate change | engine running | the DDS divisor word, the family word, the options commit |
+
+The family word selects the base-rate family:
+
 | Change | EP0 write |
 |---|---|
 | 44.1 kHz | `0x10`, index 48, value `0x0010` |
 | 48 kHz | `0x10`, index 48, value `0x0020` |
 
-A rate apply writes the options word (§11.5), the level word
-(`0x17/0x0fc0`), and then the full four-word `0x1b` DDS quad (§11.3).
-The settings-dialog capture records the quad rewrite on every rate apply,
-with the audio stream idle.
+The streaming rate change writes three EP0 words:
+
+| Order | Request | wValue | wIndex |
+|---|---|---|---|
+| 1 | `0x1b` | high16(p1) | (p1 & 0xff00) \| family |
+| 2 | `0x10` | family << 4 | 0x0030 |
+| 3 | `0x10` | current options word | 0x05cf (1487) |
+
+p1 = 0x5f5e10000000 / rate, shifted left 1 above 57000 Hz and left 2
+above 114000 Hz. family: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz,
+2 = 48/96/192 kHz. The options commit rewrites the word the device holds
+under the mask, preserving the mixer's settings. The settings-dialog
+rate apply records the quad rewrite on every apply with the audio
+stream idle.
 
 ### 11.2 Clock source
 
@@ -1075,8 +1092,8 @@ driver block in order (E2b replug capture):
 | 5 | `0x10` | 0x0800 | 0x0800 | settings group |
 
 The `0x16` value follows the wire-format pairing (0 = S32, 1 = float32).
-The DDS quad is written once at connect; a rate change writes the family
-word alone. The settings-group field semantics are an open item (§12.4).
+The DDS quad is written at connect. A streaming rate change writes the
+DDS divisor word, the family word and the options commit (§11.1). The settings-group field semantics are an open item (§12.4).
 
 Interrupt stream start:
 
@@ -1111,12 +1128,12 @@ The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
 4. The level word `0x17/0x0fc0`: observed `0x3c00` and `0x3d00`
    (bit 8 of the word). The bit layout is undecoded; a settings-dialog
    capture changing one level control at a time decides it.
-5. Rate transition under stream: the settings-dialog captures apply
-   rate with audio idle. Whether the device tolerates a live same-band
-   rate write without an engine restart, and how the output latch
-   behaves during the transition, needs a capture with a tone playing:
-   the status word (rate code, sync, out-latched bit), any mute
-   requests, and the audio output recorded across the switch.
+5. Live rate-switch verification: the driver applies the generic rate
+   sequence (§11.1) with an engine restart. A tone-playing round-trip
+   across family and band changes must show the device cadence following
+   the requested rate with the output lead intact: the ring trace, the
+   status word (rate code, sync, out-latched bit), and the audio output
+   across each switch.
 6. ISO position-counter rate-band scaling: the position field width and
    modulus at 2x (14-bit / 16384) and 4x (15-bit / 32768), the phase field
    taking the remaining upper bits. The 1x layout (13-bit / 8192) is
