@@ -263,25 +263,26 @@ parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
 `allowed-rates` are host policy and must permit the envelope; the installer
 owns that policy.
 
-The installer also sets the refill wake cushion (`api.alsa.headroom`).
-PipeWire in `disable-tsched` mode wakes the refill thread when the queued
-delay falls to `quantum + headroom`. With headroom 0 the wake leaves one
-period, and at the period floor a single late write starves the next URB.
-Headroom equal to the largest URB across the supported rates (192 frames)
-guarantees one missed-write tolerance.
+The shipped host policy uses timer-based scheduling (PipeWire's default).
+The graph wakes on the host timer and the host's DLL holds the queued
+playback delay at its target; that servo keeps the ALSA ring level constant
+against the device clock. The PCM declares `SNDRV_PCM_INFO_BATCH`: its
+pointer advances once per period, so in timer mode the host halves the
+requested period and adds one period of headroom above
+`api.alsa.headroom`. The installer sets `api.alsa.headroom` (336 frames,
+the largest URB across the supported rates) so the delay target stays above
+the quantum at every rate.
 
-The cushion is effective only while `buffer > period + headroom`. The SPA
-IRQ-mode wake thresholds are `avail_min = buffer − (period + headroom)`
-(playback) and `avail_min = min(period + headroom, buffer)` (capture).
-When `headroom ≥ buffer − period`, the capture driver node wakes once per
-full buffer instead of once per period and the playback threshold reads
-always-ready; the graph cycles at buffer granularity and XRUN-storms. The
-packaged policy requests 8 periods, so `buffer = 8 × period` stays above
-`period + headroom` down to the 32-frame period floor with headroom 192.
-The larger buffer is latency-neutral: the queued delay target is
-`period + headroom` and the start prefill is
-`start-delay + period + headroom`; neither depends on the buffer size.
-The cushion adds up to one URB of queued latency at the highest rate.
+IRQ-mode scheduling (`api.alsa.disable-tsched`) is available for
+low-latency use. Its wake thresholds are
+`avail_min = buffer − (period + headroom)` (playback) and
+`avail_min = min(period + headroom, buffer)` (capture); both degenerate
+when `headroom ≥ buffer − period`, so the shipped period count keeps
+`buffer > period + headroom` down to the 32-frame period floor. The larger
+buffer is latency-neutral: the delay target is `period + headroom` and the
+start prefill is `start-delay + period + headroom`; neither depends on the
+buffer size. The cushion adds up to one URB of queued latency at the
+highest rate.
 
 Lower `urb_frames` shortens the URB and lowers the period floor (lower
 latency). Raising `nurbs` enlarges the buffer (more margin); the period floor
@@ -531,14 +532,15 @@ The host:
   the control-I/O worker, and the drain thread performs model work only;
 - keeps one meter reader;
 - chooses a buffer/quantum that covers the URB queue plus margin;
+- runs timer-based scheduling against the declared BATCH pointer, so the
+  host DLL holds the playback delay at its target (§4.1.1);
 - sets the refill wake cushion (`api.alsa.headroom`) for the scheduling
-  margin (§4.1.1);
-- keeps the ALSA buffer above `period + headroom` so the IRQ wake
-  thresholds stay at period granularity (§4.1.1; the packaged
-  `period-num` covers the smallest supported period);
+  margin in either mode (§4.1.1);
+- keeps the ALSA buffer above `period + headroom` so the capture driver
+  node keeps waking once per period (§4.1.1; the packaged `period-num`
+  covers the smallest supported period);
 - keeps the duplex playback follower linked to the capture driver
-  (`api.alsa.auto-link` in IRQ mode) so a recovery re-prepares both
-  directions;
+  (`api.alsa.auto-link`) so a recovery re-prepares both directions;
 - checks engine state before control writes that assume a running engine;
 - treats recovery as an xrun and re-prepares;
 - uses the hwdep node as the control owner.
