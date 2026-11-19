@@ -193,7 +193,7 @@ struct ffuc_ep {
 #define FFUC_RING_TRACE		4096
 #define FFUC_RING_F_UNDERRUN	0x1	/* dry against the published status hw_ptr */
 #define FFUC_RING_F_STARVED	0x2	/* dry against the driver read position */
-#define FFUC_RING_F_MISSED	0x4	/* appl_ptr did not advance this cycle */
+#define FFUC_RING_F_MISSED	0x4	/* a full period passed without a write */
 #define FFUC_RING_F_BEHIND	0x8	/* appl_ptr is behind the read position */
 
 struct ffuc_ring_rec {
@@ -490,6 +490,7 @@ struct ffuc {
 	u32 ring_head;
 	u64 ring_last_appl;
 	u64 ring_last_appl_ts;
+	u64 ring_prev_ts;
 	u64 ring_max_stall_ns;
 	unsigned int ring_min_filled;
 	atomic_t ring_missed;

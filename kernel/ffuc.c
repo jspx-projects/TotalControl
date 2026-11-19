@@ -1100,8 +1100,21 @@ static void ffuc_ring_trace(struct ffuc *chip, struct snd_pcm_substream *subs,
 		flags |= FFUC_RING_F_UNDERRUN;
 	if (chip->ring_last_appl_ts) {
 		if (appl == chip->ring_last_appl) {
-			flags |= FFUC_RING_F_MISSED;
-			atomic_inc(&chip->ring_missed);
+			/* A write is overdue when a full period passes
+			 * without an appl_ptr advance.  At period > URB
+			 * the host writes once per period, so quiet URB
+			 * cycles are normal; count the episode once, at
+			 * the completion that crosses the period mark. */
+			u64 period_ns = (u64)rt->period_size * NSEC_PER_SEC /
+					rt->rate;
+			u64 gap = now - chip->ring_last_appl_ts;
+
+			if (gap >= period_ns &&
+			    chip->ring_prev_ts - chip->ring_last_appl_ts <
+			    period_ns) {
+				flags |= FFUC_RING_F_MISSED;
+				atomic_inc(&chip->ring_missed);
+			}
 		} else {
 			u64 gap = now - chip->ring_last_appl_ts;
 
@@ -1113,6 +1126,7 @@ static void ffuc_ring_trace(struct ffuc *chip, struct snd_pcm_substream *subs,
 		chip->ring_last_appl = appl;
 		chip->ring_last_appl_ts = now;
 	}
+	chip->ring_prev_ts = now;
 	if (filled < chip->ring_min_filled)
 		chip->ring_min_filled = filled;
 	if (flags & FFUC_RING_F_STARVED)
@@ -2491,6 +2505,7 @@ static int ffuc_engine_start(struct ffuc *chip)
 	chip->ring_min_filled = UINT_MAX;
 	chip->ring_last_appl = 0;
 	chip->ring_last_appl_ts = 0;
+	chip->ring_prev_ts = 0;
 	chip->ring_max_stall_ns = 0;
 	atomic_set(&chip->ring_missed, 0);
 	atomic_set(&chip->ring_starved, 0);
