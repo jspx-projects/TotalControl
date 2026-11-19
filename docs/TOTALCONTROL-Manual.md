@@ -328,6 +328,12 @@ quantum picker offers only quanta at or above the device rate's period floor
 (one URB), so an impossible quantum cannot be selected. The `Sample rate` row
 shows the device rate, and the `Graph` row shows the graph rate that follows it.
 
+Rate and quantum changes apply over a few seconds while playback continues (the
+player is never stopped). Until a change takes effect, the affected row is
+orange with an "applying…" note and a toast at the bottom of the window
+announces the change; it clears to grey once the actual value matches the
+setting.
+
 When the device is slaved to an external clock, the rate is determined by the
 device and `Rate follows` reads `Device` (read-only).
 

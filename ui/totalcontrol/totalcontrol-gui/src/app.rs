@@ -12365,6 +12365,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 begin_rate_switch_window(state);
             }
             apply_graph_rate(state, rate, true);
+            if state.device.rate_follows_sound_server() {
+                state.notice = Some((
+                    if rate > 0 {
+                        format!("Setting rate to {} \u{2014} applying\u{2026}", rate_label(rate))
+                    } else {
+                        "Rate set to Auto \u{2014} PipeWire chooses.".into()
+                    },
+                    Instant::now(),
+                ));
+            }
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(rate as i32)]);
         }
         Message::EngineRateMode(mode) => {
@@ -12426,6 +12436,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
                 state.engine = pw_clock::read();
                 state.card_stream = pw_clock::card_stream(&state.device.card_id());
+                state.notice = Some((
+                    if quantum > 0 {
+                        format!("Setting quantum to {quantum} samples \u{2014} applying\u{2026}")
+                    } else {
+                        "Quantum set to Auto \u{2014} PipeWire chooses.".into()
+                    },
+                    Instant::now(),
+                ));
             }
         }
         Message::HostVolumeUnity => {
@@ -14827,6 +14845,22 @@ fn device_mode_rate(state: &TotalControl) -> u32 {
     }
 }
 
+/// True while a forced graph rate waits to take effect on the running stream.
+/// PipeWire applies it asynchronously (the player keeps playing); the Graph
+/// row shows the actual rate in orange until it matches the desired rate.
+fn graph_rate_pending(state: &TotalControl) -> bool {
+    let desired = state.engine.map(|engine| engine.force_rate).unwrap_or(0);
+    let actual = state.card_stream.map(|stream| stream.rate).unwrap_or(0);
+    desired > 0 && actual > 0 && desired != actual
+}
+
+/// True while a forced quantum waits to take effect on the running stream.
+fn quantum_pending(state: &TotalControl) -> bool {
+    let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
+    let actual = state.card_stream.map(|stream| stream.period).unwrap_or(0);
+    desired > 0 && actual > 0 && desired != actual
+}
+
 /// The smallest graph quantum the driver can run at `rate`: one URB
 /// (`pw_clock::period_floor`). With `api.alsa.disable-tsched` the graph quantum
 /// is one ALSA period, so this is the period floor the card negotiates. The
@@ -15061,16 +15095,27 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // devices, so it changes the card, not just the model value.
     let device_rate_row = row![
         caption("Sample rate"),
-        pick_list(
-            device_rates(state),
-            Some(settings.sample_rate),
-            Message::SampleRateSelected,
-        )
-        .style(theme::pick_list)
-        .menu_style(theme::menu)
-        .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-        .text_size(text_size)
-        .width(Length::Fill),
+        strip::hint(
+            pick_list(
+                device_rates(state),
+                Some(settings.sample_rate),
+                Message::SampleRateSelected,
+            )
+            .style(theme::pick_list)
+            .menu_style(theme::menu)
+            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+            .text_size(text_size)
+            .width(Length::Fill),
+            match state.device.device_rate().filter(|rate| *rate > 0) {
+                Some(actual) if actual != settings.sample_rate => format!(
+                    "Device reports {}; applying {}\u{2026}",
+                    rate_label(actual),
+                    rate_label(settings.sample_rate)
+                ),
+                _ => "The device sample rate.".to_string(),
+            },
+            scale,
+        ),
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
@@ -15398,17 +15443,49 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     body = body.push(
         row![
             caption("Graph"),
-            text(rate_label(running_rate(state)))
-                .color(theme::text_sec())
-                .size(text_size),
+            strip::hint(
+                text(rate_label(
+                    state
+                        .card_stream
+                        .map(|stream| stream.rate)
+                        .filter(|rate| *rate > 0)
+                        .unwrap_or_else(|| running_rate(state)),
+                ))
+                .color(if graph_rate_pending(state) {
+                    theme::ysim()
+                } else {
+                    theme::text_sec()
+                })
+                .size(text_size)
+                .width(Length::Fill),
+                if graph_rate_pending(state) {
+                    "Applying the new rate\u{2026}"
+                } else {
+                    "The rate the graph is running at."
+                },
+                scale,
+            ),
         ]
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     );
     body = body.push(
-        row![caption("Quantum"), quantum_pick]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
+        row![
+            caption("Quantum"),
+            strip::hint(
+                quantum_pick,
+                if quantum_pending(state) {
+                    let actual = state.card_stream.map(|stream| stream.period).unwrap_or(0);
+                    let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
+                    format!("Current {actual} samples; applying {desired}\u{2026}")
+                } else {
+                    "The graph quantum, one ALSA period.".to_string()
+                },
+                scale,
+            ),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
     );
     body = body.push(
         row![caption("Latency"), latency_readout(state, clock)]
@@ -15706,7 +15783,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             if clock.force_quantum != 0 && card.period != clock.force_quantum {
                 col = col.push(line(
                     format!(
-                        "Graph quantum {} samples (requested {}).",
+                        "Quantum {} samples \u{2014} applying {}\u{2026}",
                         card.period, clock.force_quantum
                     ),
                     theme::ysim(),

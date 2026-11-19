@@ -1273,10 +1273,16 @@ graph rate and the available quantum both derive from the device rate
 wins over a stale graph request. The quantum picker offers only quanta at or
 above the device rate's period floor (one URB), plus the exact floor.
 
-When a forced quantum differs from the quantum the graph runs (the card's
-period), the latency readout warns `Graph quantum <actual> samples (requested
-<forced>)`. This happens when PipeWire's `min-quantum` policy or the driver's
-period floor clamps the request.
+Rate and quantum changes apply asynchronously: PipeWire renegotiates the
+running stream over a few seconds while the player keeps playing (resampled);
+no restart is needed. While a desired value differs from the actual running
+value the panel shows a pending state: the Graph row shows the actual rate in
+orange, the quantum row and the device-rate picker carry an "applying…" hint
+comparing actual to desired, and the latency readout shows `Quantum <actual>
+samples — applying <desired>…`. A bottom-centre toast announces the change
+("Setting quantum to N samples — applying…"). When the actual matches the
+desired the pending state clears to grey. The device rate is verified by reading
+the unit's status (`0x11`) and comparing it to the set rate.
 
 Follow uses the stream linked to `playback_AUX0`/`playback_AUX1`, including a
 player feeding a TotalControl 5.1/7.1 sink through the sink's input stream, not
