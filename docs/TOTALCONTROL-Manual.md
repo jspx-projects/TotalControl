@@ -331,8 +331,9 @@ shows the device rate, and the `Graph` row shows the graph rate that follows it.
 Rate and quantum changes apply over a few seconds while playback continues (the
 player is never stopped). Until a change takes effect, the affected row is
 orange with an "applying…" note and a toast at the bottom of the window
-announces the change; it clears to grey once the actual value matches the
-setting.
+announces the change. The `Sample rate` row confirms against the rate the unit
+itself reports; the `Graph` row confirms against the running stream. Each
+clears to grey once the actual value matches the setting.
 
 When the device is slaved to an external clock, the rate is determined by the
 device and `Rate follows` reads `Device` (read-only).

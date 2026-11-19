@@ -877,14 +877,26 @@ IF1 burst each.
 |---|---|---|
 | settings-dialog rate apply | stream idle | the full apply: options word (§11.5), level word (`0x17/0x0fc0`), four-word `0x1b` DDS quad (§11.3) |
 | streaming rate change | engine running | the DDS divisor word, the family word, the options commit |
+| base-rate family | 0, 1, 2 | the DDS divisor group: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz, 2 = 48/96/192 kHz |
+| band | 1x, 2x, 4x | the streaming multiplier, selected by the alternate setting |
 
-The family word selects the base-rate family:
+The family word is request `0x10`, index 48, value `family << 4`. The
+nine supported rates, their write words and their status readback:
 
-| Change | EP0 write |
-|---|---|
-| 32 kHz | `0x10`, index 48, value `0x0000` |
-| 44.1 kHz | `0x10`, index 48, value `0x0010` |
-| 48 kHz | `0x10`, index 48, value `0x0020` |
+| Rate | Family | Band | Family word | DDS `0x1b` wValue / wIndex | Rate status `0x19` (§11.6) | State-word index (§11.7) |
+|---|---|---|---|---|---|---|
+| 32 000 | 0 | 1x | `0x0000` | `0xc350` / `0x0000` | `0x0184` | 0 |
+| 44 100 | 1 | 1x | `0x0010` | `0x8db9` / `0x2d01` | `0x0984` | 1 |
+| 48 000 | 2 | 1x | `0x0020` | `0x8235` / `0x5502` | `0x1184` | 2 |
+| 64 000 | 0 | 2x | `0x0000` | `0xc350` / `0x0000` | `0x2184` | 4 |
+| 88 200 | 1 | 2x | `0x0010` | `0x8db9` / `0x2d01` | `0x2984` | 5 |
+| 96 000 | 2 | 2x | `0x0020` | `0x8235` / `0x5502` | `0x3184` | 6 |
+| 128 000 | 0 | 4x | `0x0000` | `0xc350` / `0x0000` | `0x4184` | 8 |
+| 176 400 | 1 | 4x | `0x0010` | `0x8db9` / `0x2d01` | `0x4984` | 9 |
+| 192 000 | 2 | 4x | `0x0020` | `0x8235` / `0x5502` | `0x5184` | 10 |
+
+The DDS divisor word depends only on the family; the band multiplier
+follows the streaming alternate setting.
 
 The streaming rate change writes three EP0 words:
 
@@ -895,11 +907,15 @@ The streaming rate change writes three EP0 words:
 | 3 | `0x10` | current options word | 0x05cf (1487) |
 
 p1 = 0x5f5e10000000 / rate, shifted left 1 above 57000 Hz and left 2
-above 114000 Hz. family: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz,
-2 = 48/96/192 kHz. The options commit rewrites the word the device holds
+above 114000 Hz. The options commit rewrites the word the device holds
 under the mask, preserving the mixer's settings. The settings-dialog
 rate apply records the quad rewrite on every apply with the audio
 stream idle.
+
+Verified across all nine rates on the UCX (firmware 49): the device
+cadence follows every family and band change with the streaming rate
+change, the output lead absorbs the transition silence, and recovery is
+clean.
 
 ### 11.2 Clock source
 
@@ -1050,6 +1066,43 @@ Open items:
   any, is unobserved; a cold-init capture decides it.
 - The meaning of the constant bits 2, 7, 8 is undecoded; they are
   invariant across rate and engine state.
+
+### 11.7 State word rate readback
+
+| Term | Address/shape | Definition |
+|---|---|---|
+| state word | request `0x11` IN, 4 bytes | the device's clock-source and rate state |
+| rate index | state word bits 24–31 on internal clock | index into the rate table below |
+
+The state word layout is the UC state word layout (UC spec §9.1). On
+internal clock the top byte is the rate index: `family | (band << 2)`,
+with family 0 = 32 kHz, 1 = 44.1 kHz, 2/3 = 48 kHz, and bit 26 = 2x,
+bit 27 = 4x. The host reads this byte as the device rate.
+
+The rate index table:
+
+| Index | Rate |
+|---|---|
+| 0 | 32 000 |
+| 1 | 44 100 |
+| 2, 3 | 48 000 |
+| 4 | 64 000 |
+| 5 | 88 200 |
+| 6, 7 | 96 000 |
+| 8 | 128 000 |
+| 9 | 176 400 |
+| 10, 11 | 192 000 |
+
+The top-byte readback is the host's device-rate confirmation. Verified on
+the UCX at 32 and 96 kHz through the device-rate pending feedback; the
+full nine-rate index sweep is verified on the UC (UC spec §9.1). The rate
+status word (§11.6) carries the same family and band state with the
+readiness bits.
+
+Open items:
+
+- External-clock rate decode. The per-source index fields need a physical
+  clock source at each digital input; deferred (UC spec §9.1).
 
 ## 12. Streaming
 

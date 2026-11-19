@@ -169,7 +169,7 @@ change the request set.
 | Request | Direction | Function |
 |---|---|---|
 | `0x10` | OUT/IN | Options word, clock source, rate family and rate commit |
-| `0x11` | IN | Device state; top byte carries the rate index |
+| `0x11` | IN | State word: clock source and rate index (§9.1) |
 | `0x12` | OUT | Mixer crosspoints, gain/phase values and output masters |
 | `0x13` | OUT | Global mute |
 | `0x14` | OUT | Global unmute |
@@ -177,6 +177,7 @@ change the request set.
 | `0x16` | OUT | Channel initialization |
 | `0x17` | IN/OUT | Reference levels, 48 V, PAD, Inst |
 | `0x18` | OUT | Input phase |
+| `0x19` | IN | Fluctuating status word, low byte `0x04` (§9.1) |
 | `0x1a` | OUT | Input gain and output-channel level |
 | `0x1b` | OUT | Rate-generator/pitch coefficients |
 | `0x1c` | IN | Hardware revision and firmware revision |
@@ -503,23 +504,31 @@ The rate sequence writes the DDS divisor word (`0x1b`, wValue =
 high16(p1), wIndex = (p1 & 0xff00) | family, p1 = 0x5f5e10000000 / rate
 shifted left 1 above 57000 Hz and left 2 above 114000 Hz), then the
 family word, then the options commit. Rate selection uses `0x10`,
-`wIndex 48`:
+`wIndex 48`, value `family << 4`. The nine supported rates, their write
+words and their state-word readback:
 
-| Rate | Word |
-|---|---|
-| 32.0 kHz | `0x0000` |
-| 44.1 kHz | `0x0010` |
-| 48.0 kHz | `0x0020` |
-| 64.0 kHz | `0x0000` |
-| 88.2 kHz | `0x0010` |
-| 96.0 kHz | `0x0020` |
-| 128.0 kHz | `0x0000` |
-| 176.4 kHz | `0x0010` |
-| 192.0 kHz | `0x0020` |
+| Rate | Family | Band | Family word | DDS `0x1b` wValue / wIndex | State-word index (§9.1) |
+|---|---|---|---|---|---|
+| 32 000 | 0 | 1x | `0x0000` | `0xc350` / `0x0000` | 0 |
+| 44 100 | 1 | 1x | `0x0010` | `0x8db9` / `0x2d01` | 1 |
+| 48 000 | 2 | 1x | `0x0020` | `0x8235` / `0x5502` | 2 |
+| 64 000 | 0 | 2x | `0x0000` | `0xc350` / `0x0000` | 4 |
+| 88 200 | 1 | 2x | `0x0010` | `0x8db9` / `0x2d01` | 5 |
+| 96 000 | 2 | 2x | `0x0020` | `0x8235` / `0x5502` | 6 |
+| 128 000 | 0 | 4x | `0x0000` | `0xc350` / `0x0000` | 8 |
+| 176 400 | 1 | 4x | `0x0010` | `0x8db9` / `0x2d01` | 9 |
+| 192 000 | 2 | 4x | `0x0020` | `0x8235` / `0x5502` | 10 |
+
+Family: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz, 2 = 48/96/192 kHz.
+Band is the streaming multiplier (1x/2x/4x), selected by the alternate
+setting. The DDS divisor word depends only on the family; the 1x words
+are the capture-verified 0% pitch words below.
 
 The word selects the 32 kHz, 44.1 kHz or 48 kHz family; the stream multiplier
 follows the active stream.  A selection is followed by the options commit,
-`0x10 / wIndex 1487`.
+`0x10 / wIndex 1487`.  Verified across all nine rates on the UC (firmware
+127), PC interrupt and AP ISO personalities: the device clock follows the
+rate sequence, and the state-word index matches the running rate (§9.1).
 
 The options word at `wIndex 1487` carries word clock input termination
 (bit 0), clock source (bits 1–3), word-clock single-speed (bit 6), SPDIF
@@ -580,6 +589,68 @@ A host rate change closes the current session with
 `0x13 / wValue 0x000F / wIndex 0xC000`, writes the new rate word when the
 family changes, waits 200 ms, then opens the new session.  The UC keeps its
 rate family across a USB reconnect.  A USB reset restores the 1× multiplier.
+
+### 9.1 State word and rate readback
+
+| Term | Address/shape | Definition |
+|---|---|---|
+| state word | request `0x11` IN, 4 bytes | the device's clock-source and rate state |
+| rate index | state word bits 24–31 on internal clock | index into the rate table below |
+
+The state word layout (the reference host's rate decode, cross-checked on
+the unit):
+
+| Bits | Field | Encoding |
+|---|---|---|
+| 8 | optical mode flag | ADAT vs SPDIF in the optical-clock path |
+| 9–11 | clock source | 1 = SPDIF coax, 2 = optical, 3 = word clock, 7 = internal |
+| 12–15 | rate index, SPDIF coax clock | rate table |
+| 16–19 | rate index, optical clock | rate table; bit 8 selects the field |
+| 20–23 | rate index, word clock | rate table |
+| 24–25 | base-rate family, internal clock | 0 = 32 kHz, 1 = 44.1 kHz, 2/3 = 48 kHz |
+| 26 | 2x band, internal clock | set at 2x |
+| 27 | 4x band, internal clock | set at 4x |
+
+On internal clock the top byte is the rate index: `family | (band << 2)`.
+The host reads this byte as the device rate. The options word bit 6 (single
+speed) forces the internal-style decode on word clock.
+
+The rate index table:
+
+| Index | Rate |
+|---|---|
+| 0 | 32 000 |
+| 1 | 44 100 |
+| 2, 3 | 48 000 |
+| 4 | 64 000 |
+| 5 | 88 200 |
+| 6, 7 | 96 000 |
+| 8 | 128 000 |
+| 9 | 176 400 |
+| 10, 11 | 192 000 |
+
+Verified on the UC (firmware 127), PC interrupt and AP ISO personalities,
+all nine rates, internal clock: the top-byte index matches the running
+rate, including while the host is still reconfiguring the stream. The
+reference decode agrees at 192 kHz: clock bits 9–11 = 7 (internal), family
+bits 24–25 = 2 (48 kHz), band bit 27 set (4x).
+
+Request `0x19` returns a fluctuating status word on both UC personalities
+(low byte `0x04`, upper bytes change every read). The rate readback is the
+state word. Bits 0–1 of `0x19` never assert: 80 303 reads at about 50 µs
+through two full AP rate switches, and the PC nine-rate sweep.
+
+Open items:
+
+1. External-clock rate decode. The per-source index fields need a physical
+   clock source at each digital input; deferred.
+2. State word bit 0 pulses low for about 0.5 ms exactly at the rate-index
+   change. Bit 4 drops for about 190 ms, 0.5–0.7 s after the switch. The
+   timing matches the engine restart; the meaning is undecoded.
+3. The UC session-readiness condition. The reference readiness poll
+   (`0x19` bits 0–1) passes instantly on the UC, so the condition that
+   ends the capture-derived session gaps is undecoded. The driver TODO
+   (DRIVER-DESIGN §7) owns the replacement.
 
 ## 10. Host-side mixer operations
 

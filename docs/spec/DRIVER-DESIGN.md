@@ -549,12 +549,16 @@ The UC Windows-personality path uses three timed gaps:
 
 | Gap | Value | Reason |
 |---|---|---|
-| stop -> start settle | 250 ms | minimum gap the device requires after the close word before a start |
-| close -> rate write | 200 ms | minimum gap the device requires after the close word before the rate write |
-| close -> session trio | 200 ms | minimum gap the device requires after the close word before the session trio |
+| stop -> start settle | 250 ms | capture-derived gap after the close word before a start |
+| close -> rate write | 200 ms | capture-derived gap after the close word before the rate write |
+| close -> session trio | 200 ms | capture-derived gap after the close word before the session trio |
 
-These are device-mandated timing measured on the Windows reference-host
-captures. The AP personality sends the session words back-to-back.
+These gaps are fixed approximations of the reference host's bounded
+readiness polling. The Windows rate orchestrator polls a readiness
+condition instead of sleeping; the gaps in the USBPcap captures are the
+device's actual ready time. The exact UC session-readiness condition is
+undecoded (UC spec §9.1); the fixed gaps stay until it is pinned. The AP
+personality sends the session words back-to-back.
 
 Design principle: prefer a deterministic readiness condition over a timed
 guess. Where the device exposes a status that can be polled (rate index,
@@ -657,8 +661,9 @@ is the refinement.
 A **heuristic wait** is a fixed sleep used where a readiness condition or
 flow control could decide the next step.
 
-- The session gaps (§7) are device-mandated timing, implemented as fixed
-  sleeps. **[`WIN_SESSION`]**
+- The session gaps (§7) are capture-derived approximations of the
+  reference host's readiness polling, implemented as fixed sleeps.
+  **[`WIN_SESSION`]**
 - The **meter pump** (§5.1) resubmits pages from a 4 ms delayed work and
   retries a paused pump after 10 ms. The pair-boundary pause is UC-specific;
   the pump itself serves every personality. **[all]**
@@ -676,7 +681,8 @@ Scope labels are defined in §10.
 | Item | Scope |
 |---|---|
 | Replace fixed session gaps with a bounded poll of a device-visible readiness condition where one exists; keep documented quirks where the device has no acknowledgement | `WIN_SESSION` |
-| Poll the rate status word (`0x19`, UCX spec §11.6) for readiness (bits 0–1 clear) after the rate commit, bounded with a timeout; replace fixed session gaps where the device acknowledges | UC, UCX |
+| Poll the rate status word (`0x19`, UCX spec §11.6) after the rate commit: ready when bits 0–1 clear and the family/band field matches the requested rate, bounded with a timeout fallback. The rate-field match catches a write that did not land. Replace the fixed post-commit gap where the poll acknowledges | UCX |
+| Identify the UC session-readiness condition before replacing the `WIN_SESSION` gaps: `0x19` is not a rate word on the UC and its bits 0–1 never assert (UC spec §9.1). A state-word (`0x11`) rate-index effectiveness poll is the proposed enhancement; it is not reference behavior | UC |
 | Move ISO continuity logging to per-endpoint state | ISO |
 | Preallocate the hwdep read buffer per reader | all |
 | Make buffer poison and verbose stop diagnostics optional module parameters | all |
