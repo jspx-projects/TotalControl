@@ -1154,7 +1154,7 @@ pub fn ghost_button(_theme: &iced::Theme, status: button::Status) -> button::Sty
             Background::Color(Color::TRANSPARENT),
             disabled_text(),
         ),
-        _ => (Background::Color(Color::TRANSPARENT), text_sec()),
+        _ => (Background::Color(Color::TRANSPARENT), text_primary()),
     };
     button::Style {
         background: Some(background),

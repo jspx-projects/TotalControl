@@ -12380,10 +12380,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 EngineRateMode::Fixed => {
                     state.engine_rate_mode = EngineRateMode::Fixed;
                     state.rate_follow.clear_owner();
-                    let rate = if state.engine_force_rate > 0 {
+                    // Device mode: the device's set rate is the boss; the graph
+                    // follows it, not a stale host force value.
+                    let device_rate = state.device.settings().sample_rate;
+                    let rate = if device_rate > 0 {
+                        device_rate
+                    } else if state.engine_force_rate > 0 {
                         state.engine_force_rate
                     } else {
-                        state.device.settings().sample_rate
+                        current_graph_rate(state)
                     };
                     apply_graph_rate(state, rate, true);
                 }
@@ -14893,6 +14898,13 @@ fn rate_choice_message(choice: RateChoice) -> Message {
     }
 }
 
+/// A read-only value in the secondary colour. The panel's visual language:
+/// read-only reports are grey; interactive controls (pickers, sliders,
+/// buttons) are primary.
+fn readout(value: String, text_size: f32) -> Element<'static, Message> {
+    text(value).color(theme::text_sec()).size(text_size).into()
+}
+
 /// A sample rate as people say it: "48 kHz", "44.1 kHz", "176.4 kHz".
 pub(crate) fn rate_label(hz: u32) -> String {
     if hz % 1000 == 0 {
@@ -15103,7 +15115,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     || Message::PitchChanged(0.0),
                 ),
                 text(format!("{value:+.1} %"))
-                    .color(theme::text_primary())
+                    .color(theme::text_sec())
                     .size(text_size)
                     .width(Length::Fixed(58.0 * scale)),
             ]
@@ -15181,7 +15193,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Firmware"),
-                text(firmware).color(theme::text_primary()).size(text_size),
+                readout(firmware, text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -15191,7 +15203,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Serial"),
-                text(serial).color(theme::text_primary()).size(text_size),
+                readout(serial, text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -15501,7 +15513,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         let colour = if db < -0.5 {
             theme::ysim()
         } else {
-            theme::text_primary()
+            theme::text_sec()
         };
         body = body.push(
             row![
