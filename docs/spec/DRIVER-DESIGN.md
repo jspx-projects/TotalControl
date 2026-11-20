@@ -317,6 +317,43 @@ frames is counted as `in_overruns`; the device keeps streaming, so the capture
 stream is not stopped. The host prevents both through its buffer/quantum
 choice.
 
+#### 4.1.2 Host timing terms
+
+![USB audio buffering: quantum, period, URB and latency](usb-audio-buffering.svg)
+
+The playback chain is: application → ALSA ring → in-flight URBs → device
+output buffer → converters. Each stage holds frames; the latency is the sum of
+what each stage holds at the moment of measurement.
+
+| Term | Layer | Definition |
+|---|---|---|
+| graph quantum `Q` | host | the frames one graph cycle processes; the application callback chunk |
+| ALSA period `P` | driver/host | the frames per period: the chunk whose completion raises a period signal and advances the pointer |
+| ALSA ring | driver | `P × periods` frames between the application and the driver |
+| URB | USB | one transfer of `iso_packets` microframes; 1 ms at the shipped geometry |
+| period floor | driver | the smallest accepted period: one URB |
+| in-flight queue | driver | frames handed to USB and not yet completed (`nurbs` URBs) |
+| device lead | device | frames the unit holds ahead of its converters |
+| converter delay | device | the AD/DA group delay |
+
+The graph quantum and the ALSA period are separate quantities. In IRQ
+scheduling the host uses `P = Q`. In timer scheduling with a BATCH device the
+host requests `P = Q/2`; the driver raises the period to the floor when the
+request falls below it, and the graph keeps running at `Q`. The period
+therefore does not identify the quantum. Measured at 48 kHz: `Q` 48 → `P` 48;
+`Q` 64 → `P` 48; `Q` 128 → `P` 64.
+
+Three "buffer" knobs belong to three layers:
+
+| Knob | Meaning | Set by |
+|---|---|---|
+| quantum `Q` ("samples" in an application's buffer setting) | the graph cycle, the application callback chunk | the user, through the host policy |
+| period `P` | the signalling granularity | the host, negotiated with the driver floor |
+| device lead | the unit's internal buffer | the device |
+
+"Samples" in a Windows or macOS driver panel mean frames: the callback chunk,
+which is the quantum here.
+
 ### 4.2 Period signalling gate
 
 A period signal announces one completed period. A direction is signalled

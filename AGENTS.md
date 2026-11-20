@@ -126,6 +126,11 @@ Authoritative files:
 All UI layout and interaction rules live in `docs/spec/TOTALCONTROL-GUI-SPEC.md`.
 Do not duplicate them here; when a rule is missing, add it to the spec.
 
+- Read and observe the owning specifications when making GUI changes:
+  `docs/spec/TOTALCONTROL-GUI-SPEC.md` for layout, interaction and visible
+  state, and the state or device specification that owns the data shown. The
+  spec is authoritative; when the implementation and the spec disagree,
+  resolve it in the same change.
 - The GUI carries labels, values and controls. Explanations belong in the user
   manual. Do not add permanent explanatory paragraphs to dialogs, panels,
   cards or sections.

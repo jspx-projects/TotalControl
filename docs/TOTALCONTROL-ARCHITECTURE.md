@@ -421,18 +421,44 @@ The host ring is the ALSA buffer managed by PipeWire or the application. The
 USB queue is the driver's feedback delay and queued URBs. The device lead is a
 fixed vendor-path delay. The converters add a fixed small delay.
 
-The GUI latency line reports a round-trip value, not a measured acoustic
-round trip. The UCX and UC paths without a loopback calibration derive the
-device side from the kernel parameters and add one graph period. The UC uses
-its own `(nurbs + 1) * urb_frames` queue and the same 60-frame device lead.
+The host clock source has one owner. The engine poll reads the graph clock
+metadata (`clock.rate`, `clock.quantum`, the forced values and the
+`min-quantum`/`max-quantum` policy bounds) and, while the device panel shows
+the quantum or a change is being applied, the graph quantum the server
+actually runs (`pw-top`). The graph quantum is the only truthful confirmation
+of a quantum change: the ALSA period is a different quantity (the batch rule
+and the driver floor let several quanta share one period). TotalControl is the
+authority for the quantum and the rate: the user's value is forced, a refused
+quantum request is forced once more, and if the host still runs another value
+the actual value is adopted with a notice. The quantum picker offers the
+driver floor intersected with the host policy bounds, so an entry it shows can
+be honoured.
 
-The UC PC and AP paths use separate loopback calibrations at 32, 44.1, 48,
-96 and 192 kHz. The calibrated device total excludes the graph period; a
-live USB-queue delta and the current graph period are added at render time.
-The engine poll reads the PipeWire inputs off the UI task and refreshes the
-module queue from sysfs. The calibration is per personality; uncalibrated
-rates use the model. The UC's full-duplex loopback evidence is kept in
-`docs/work/UC-RTL-LOOPBACK.md`.
+The GUI reports a round-trip latency, not a measured acoustic round trip. It
+has two forms, and they are never added together:
+
+- **Live:** `RTL = snd_pcm_delay + device lead + converter delay` (plus the
+  mirrored capture chain for a round trip). `snd_pcm_delay` is the ring
+  occupancy (`appl_ptr − hw_ptr`) plus the in-flight URB queue
+  (`runtime->delay`); the graph cycle is already contained in the queued
+  occupancy, so no separate quantum term is added.
+- **Model estimate:** the server's queued target (about one quantum plus the
+  headroom; two periods under timer scheduling) plus the in-flight queue, the
+  device lead and the converter delay. This is the planning value; it must
+  not be combined with a live `snd_pcm_delay`.
+
+Every buffer is counted once. The host ring and the in-flight queue are
+distinct terms.
+
+The UC PC and AP device sides are loopback-measured at 32, 44.1, 48, 96 and
+192 kHz; the display applies the live queue delta. The UCX and the
+uncalibrated UC rates use the model with the same terms. The engine poll reads
+the PipeWire inputs off the UI task and refreshes the module queue from sysfs.
+The calibration is per personality; a firmware or device-path change needs a
+repeat measurement. The measured device values are tabulated in
+[`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) §13. The
+quantum/period/URB geometry is defined in
+[`spec/DRIVER-DESIGN.md`](spec/DRIVER-DESIGN.md) §4.1.2.
 
 The vendor path and the class-compliant path are mutually exclusive device
 personalities. In class-compliant mode the stock `snd-usb-audio` driver drives

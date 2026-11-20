@@ -368,11 +368,15 @@ quantum picker offers only quanta at or above the device rate's period floor
 shows the device rate, and the `Graph` row shows the graph rate that follows it.
 
 Rate and quantum changes apply over a few seconds while playback continues (the
-player is never stopped). Until a change takes effect, the affected row is
-orange with an "applying…" note and a toast at the bottom of the window
-announces the change. The `Sample rate` row confirms against the rate the unit
-itself reports; the `Graph` row confirms against the running stream. Each
-clears to grey once the actual value matches the setting.
+player is never stopped). Until a change takes effect, the affected value is
+orange, and a toast at the bottom of the window announces the change when it is
+requested. The `Sample rate` row confirms against the rate the unit itself
+reports; the `Graph` row confirms against the running stream; the quantum
+listbox's selected value is orange until the graph runs at the requested
+quantum and then returns to its normal colour. There is no separate "applying"
+message to wait on. The graph quantum is one ALSA period in polled scheduling
+and two periods under timer scheduling, so a request of 128 is confirmed when
+the card runs 64-frame periods.
 
 When the device is slaved to an external clock, the rate is determined by the
 device and `Rate follows` reads `Device` (read-only).
@@ -1379,11 +1383,28 @@ groups with the stored ones.
 
 ## 14. Latency
 
-The Audio Configuration panel shows the round-trip latency for the current
-sample rate and buffer size, and the **Quantum** picker sets the PipeWire graph
-period in samples. The UCX and UC paths without a loopback calibration use
-the model estimate: USB queue, device lead, converter and one graph period;
-the UC estimate is labelled ±1.5 ms and the UCX ±1.2 ms.
+The Audio Configuration panel shows the round-trip latency in the `RTL
+latency` row (hover for "Round Trip Latency"): the value as `x.x ms`, and on
+the next line its contributions in milliseconds — USB queue, device lead,
+converter and graph. The **Quantum** picker sets the PipeWire graph period in
+samples.
+
+The value is the host round trip:
+
+```text
+RTL = USB queue + device lead + converter delay + one graph period
+```
+
+The USB queue is the driver's in-flight URBs (three URBs at the standard
+setting), the device lead is the margin the unit holds ahead of its
+converters, the converter delay is the interface's conversion time, and the
+graph period is one PipeWire cycle (two ALSA periods under timer scheduling).
+
+The UC device side is measured by loopback (output 5 to input 5) for both
+personalities at 32, 44.1, 48, 96 and 192 kHz; the display applies the live
+queue and adds the current graph period. Other rates, and the UCX, use the
+model with the same terms. Treat the number as the host-side budget for
+round trips; an acoustic measurement adds the room and monitoring path.
 
 On the UC the device part is a loopback calibration taken at 32, 44.1, 48,
 96 and 192 kHz in both PC and AP modes. The display says **measured PC** or

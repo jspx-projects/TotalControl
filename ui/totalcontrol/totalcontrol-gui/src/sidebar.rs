@@ -192,7 +192,8 @@ fn panel_toggle(open: bool, scale: f32) -> Element<'static, Message> {
     iced::widget::tooltip(
         toggle,
         container(
-            text(if open { "Hide panel" } else { "Show panel" }).size(theme::TEXT_XS * scale),
+            text(if open { "Hide panel" } else { "Show panel" })
+                .size(theme::TEXT_DIALOG * scale),
         )
         .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
         .style(theme::chip),
@@ -844,7 +845,7 @@ fn hint<'a>(
 ) -> Element<'a, Message> {
     iced::widget::tooltip(
         content,
-        container(text(label).size(theme::TEXT_XS * scale))
+        container(text(label).size(theme::TEXT_DIALOG * scale))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
             .style(theme::chip),
         iced::widget::tooltip::Position::Bottom,
@@ -1052,7 +1053,7 @@ fn slot_grid<'a>(
                     .width(Length::Fill)
                     .style(theme::segment_button(is_active))
                     .on_press(on_press(n)),
-                container(text(tip).size(theme::TEXT_XS * scale))
+                container(text(tip).size(theme::TEXT_DIALOG * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
                     .style(theme::chip),
                 iced::widget::tooltip::Position::Bottom,

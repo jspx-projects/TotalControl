@@ -2560,12 +2560,14 @@ pub enum Message {
     /// Periodic re-read of the PipeWire clock (another app may change it).
     EnginePoll,
     /// The graph clock, the card's own open stream (`None` = idle), whether
-    /// a Fireface playback sink is running, and the host sink's volume.
+    /// a Fireface playback sink is running, the host sink's volume, and the
+    /// graph quantum the server runs (`pw-top`; `None` = not probed).
     EngineRead(
         Option<PwClock>,
         Option<CardStream>,
         bool,
         Option<(u32, f32)>,
+        Option<u32>,
     ),
     /// Set the Fireface PipeWire sink to unity (0 dB, 100 %).
     HostVolumeUnity,
@@ -3125,6 +3127,15 @@ pub struct TotalControl {
     /// it (`rate_follows_sound_server`); simulated for the mock, which
     /// never touches the real PipeWire; `None` for the USB backend.
     pub engine: Option<PwClock>,
+    /// The graph quantum the server actually runs (`pw-top`).  The ALSA
+    /// period cannot stand in for it: the batch rule and the driver floor
+    /// let several quanta share one period.
+    pub graph_quantum: Option<u32>,
+    /// When the user last changed the quantum, for the transitory state.
+    pub quantum_change_at: Option<Instant>,
+    /// A refused request is re-forced once before the actual value is
+    /// adopted with a notice.
+    pub quantum_reforced: bool,
     /// The rate / quantum the user forced here (`0` = PipeWire's own),
     /// kept in the preferences and applied again at launch.
     pub engine_force_rate: u32,
@@ -3234,7 +3245,9 @@ const SIMULATED_ENGINE: PwClock = PwClock {
     rate: 48_000,
     quantum: 256,
     force_rate: 0,
-    force_quantum: 0,
+    min_quantum: 32,
+            max_quantum: 2048,
+            force_quantum: 0,
 };
 
 /// What a continuous control is editing. A drag, a wheel spin or a knob
@@ -3718,6 +3731,9 @@ pub fn new_with_device(
         undo_gesture: None,
         field_opening: false,
         engine: simulated.then_some(SIMULATED_ENGINE),
+        graph_quantum: None,
+        quantum_change_at: None,
+        quantum_reforced: false,
         engine_force_rate: 0,
         engine_force_quantum: 0,
         engine_rate_mode: EngineRateMode::Fixed,
@@ -5813,6 +5829,7 @@ fn changes_host_settings(message: &Message) -> bool {
         message,
         Message::SetKeepInTray(_)
             | Message::SetAudioPerformance(_)
+            | Message::SetAudioPerfMaxSleep(_)
             | Message::SetAutostart(_)
             | Message::SetSyncDirection(_)
             | Message::SetAlwaysInitDevice(_)
@@ -5827,6 +5844,20 @@ fn changes_host_settings(message: &Message) -> bool {
             | Message::OscRecvPortChanged(_)
             | Message::OscSendPortChanged(_)
             | Message::OscSendHostChanged(_)
+            | Message::SetControllersEnabled(_)
+            | Message::SelectControllerDevice(_)
+            | Message::SetControllerIn(..)
+            | Message::SetControllerOut(..)
+            | Message::SetControllerProtocol(..)
+            | Message::SetControllerOption { .. }
+            | Message::SetControllerAssignment { .. }
+            | Message::ResetControllerKeys(_)
+            | Message::WorkspaceOpen
+            | Message::WorkspaceFactory
+            | Message::LoadSurroundWorkspace(_)
+            | Message::MismatchUseTotalcontrol
+            | Message::MismatchUseDevice
+            | Message::MismatchAlwaysTotalcontrol
     )
 }
 
@@ -9077,7 +9108,20 @@ fn is_undoable(message: &Message) -> bool {
             | Message::Tray(_)
             | Message::SetKeepInTray(_)
             | Message::SetAudioPerformance(_)
+            | Message::SetAudioPerfMaxSleep(_)
             | Message::SetAutostart(_)
+            | Message::ControlRoomTalkbackInput(_)
+            | Message::ControlRoomTalkbackDim(_)
+            | Message::ControlRoomListenbackInput(_)
+            | Message::ControlRoomListenbackDim(_)
+            | Message::ControlRoomRecallDb(_)
+            | Message::ControlRoomMainDim(_)
+            | Message::ControlRoomExternalInput(_)
+            | Message::ControlRoomExternalGain(_)
+            | Message::ControlRoomPflReplacesSolo(_)
+            | Message::ControlRoomExclusiveSoloPfl(_)
+            | Message::WorkspaceOpen
+            | Message::WorkspaceFactory
             | Message::MismatchUseTotalcontrol
             | Message::MismatchUseDevice
             | Message::MismatchAlwaysTotalcontrol
@@ -9331,6 +9375,19 @@ fn changes_workspace(message: &Message) -> bool {
             | Message::ToggleMatrixMono
             | Message::SetRoutingMode(_)
             | Message::SetFreeTarget(_, _)
+            | Message::ControlRoomTalkbackInput(_)
+            | Message::ControlRoomTalkbackDim(_)
+            | Message::ControlRoomListenbackInput(_)
+            | Message::ControlRoomListenbackDim(_)
+            | Message::ControlRoomRecallDb(_)
+            | Message::ControlRoomMainDim(_)
+            | Message::ControlRoomExternalInput(_)
+            | Message::ControlRoomExternalGain(_)
+            | Message::ControlRoomPflReplacesSolo(_)
+            | Message::ControlRoomExclusiveSoloPfl(_)
+            | Message::WorkspaceOpen
+            | Message::WorkspaceFactory
+            | Message::LoadSurroundWorkspace(_)
     ) || changes_prefs(message)
         || changes_mix(message)
 }
@@ -12499,6 +12556,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::EngineQuantum(quantum) => {
+            state.quantum_change_at = Some(Instant::now());
+            state.quantum_reforced = false;
             if !state.device.is_mock() {
                 state.engine_force_quantum = quantum;
             }
@@ -12538,6 +12597,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             let card_id = state.device.card_id();
             let follows = state.device.rate_follows_sound_server();
             let is_mock = state.device.is_mock();
+            // The graph quantum is the only truthful confirmation of a
+            // quantum change; probe it while the panel shows the value or a
+            // change is being applied.
+            let probe_quantum = !is_mock
+                && (state.show_device_panel
+                    || state.quantum_change_at.is_some_and(|at| {
+                        Instant::now().duration_since(at) < Duration::from_secs(10)
+                    }));
             return Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
@@ -12547,22 +12614,38 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         } else {
                             None
                         };
+                        let graph_quantum = if probe_quantum {
+                            pw_clock::graph_quantum()
+                        } else {
+                            None
+                        };
                         (
                             pw_clock::read(),
                             pw_clock::card_stream(&card_id),
                             sink_running,
                             host_volume,
+                            graph_quantum,
                         )
                     })
                     .await
-                    .unwrap_or((None, None, false, None))
+                    .unwrap_or((None, None, false, None, None))
                 },
-                |(clock, stream, sink_running, host_volume)| {
-                    Message::EngineRead(clock, stream, sink_running, host_volume)
+                |(clock, stream, sink_running, host_volume, graph_quantum)| {
+                    Message::EngineRead(
+                        clock,
+                        stream,
+                        sink_running,
+                        host_volume,
+                        graph_quantum,
+                    )
                 },
             );
         }
-        Message::EngineRead(clock, stream, sink_running, host_volume) => {
+        Message::EngineRead(clock, stream, sink_running, host_volume, graph_quantum) => {
+            if let Some(quantum) = graph_quantum {
+                state.graph_quantum = Some(quantum);
+            }
+            reconcile_quantum(state);
             if !state.device.is_mock() {
                 state.driver_queue = pw_clock::driver_urb_queue();
             }
@@ -14007,7 +14090,7 @@ fn notice_toast(message: &str, scale: f32) -> Element<'_, Message> {
     container(
         container(
             text(message.to_string())
-                .size(theme::TEXT_SM * scale)
+                .size(theme::TEXT_DIALOG * scale)
                 .color(theme::text_primary()),
         )
         .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
@@ -14758,10 +14841,11 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         Message::SetAutostart(!state.autostart),
     ));
 
-    let mut sync = column![strip::hint(
+    let mut sync = column![strip::hint_at(
         section("STARTUP SYNC"),
         "What TotalControl writes to the device on connect.",
         scale,
+        text_size,
     )]
         .spacing(theme::SPACE_SM * scale)
         .width(Length::Fill);
@@ -14793,10 +14877,11 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     }
 
     let surround = column![
-        strip::hint(
+        strip::hint_at(
             section("SURROUND"),
             "Virtual 5.1/7.1 outputs while TotalControl runs.",
             scale,
+            text_size,
         ),
         check(
             "Virtual 5.1 output",
@@ -14827,7 +14912,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             text("RMS bar release")
                 .color(theme::text_primary())
                 .size(text_size),
-            strip::hint(
+            strip::hint_at(
                 pick_list(vu_options, Some(vu_selected), move |label| {
                     let rate = vu_rates_for_pick
                         .iter()
@@ -14841,14 +14926,16 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
                 .text_size(text_size),
                 "How fast the RMS bar falls; the peak line is unaffected",
                 scale,
+                text_size,
             ),
-            strip::hint(
+            strip::hint_at(
                 iced::widget::button(strip::centered_label_auto("Default", text_size))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::SetVuRelease(None)),
                 "Select the unit's measured TotalMix release rate",
                 scale,
+                text_size,
             ),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -14866,7 +14953,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     };
     let audio = column![
         section("AUDIO PERFORMANCE"),
-        strip::hint(
+        strip::hint_at(
             check(
                 "Keep the audio CPUs awake while streaming",
                 state.audio_performance,
@@ -14874,6 +14961,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             ),
             audio_tip,
             scale,
+            text_size,
         ),
         row![
             text("Max sleep time")
@@ -14978,17 +15066,102 @@ fn device_rate_pending(state: &TotalControl) -> bool {
     desired > 0 && actual > 0 && desired != actual
 }
 
+/// The graph quantum the card is actually running.  Under timer-based
+/// scheduling the host serves a batch device at two ALSA periods per graph
+/// cycle, so the graph quantum is twice the negotiated period; the forced
+/// value tells which of the two readings is the graph one.
+fn actual_graph_quantum(state: &TotalControl) -> u32 {
+    let period = state.card_stream.map(|stream| stream.period).unwrap_or(0);
+    let forced = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
+    if forced > 0 && period > 0 && period.saturating_mul(2) == forced {
+        period * 2
+    } else {
+        period
+    }
+}
+
 /// True while a forced quantum waits to take effect on the running stream.
+///
+/// The confirmation is the graph's own quantum (`pw-top`), never the ALSA
+/// period: the batch rule and the driver floor let several quanta share one
+/// period.  While the graph is not running there is nothing to confirm, so a
+/// fresh selection is transitory only for a short grace window.
 fn quantum_pending(state: &TotalControl) -> bool {
     let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
-    let actual = state.card_stream.map(|stream| stream.period).unwrap_or(0);
-    desired > 0 && actual > 0 && desired != actual
+    if desired == 0 {
+        return false;
+    }
+    match state.graph_quantum {
+        Some(actual) => actual != desired,
+        None => state
+            .quantum_change_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(2)),
+    }
+}
+
+/// The quantum the graph is running, for display: the probed value when
+/// known, otherwise the negotiated reading.
+fn running_graph_quantum(state: &TotalControl) -> u32 {
+    state
+        .graph_quantum
+        .unwrap_or_else(|| actual_graph_quantum(state))
+}
+
+/// The quantum authority model.  The user's value is the boss: it is forced,
+/// and a refused request is forced once more.  If the host still runs
+/// another quantum, that actual value is adopted with a notice, so the
+/// displayed value is always the truth.
+fn reconcile_quantum(state: &mut TotalControl) {
+    let Some(force) = state
+        .engine
+        .map(|engine| engine.force_quantum)
+        .filter(|quantum| *quantum > 0)
+    else {
+        state.quantum_change_at = None;
+        state.quantum_reforced = false;
+        return;
+    };
+    let Some(actual) = state.graph_quantum else {
+        return;
+    };
+    if actual == force {
+        state.quantum_change_at = None;
+        state.quantum_reforced = false;
+        return;
+    }
+    let Some(changed) = state.quantum_change_at else {
+        return;
+    };
+    let waited = changed.elapsed();
+    if !state.quantum_reforced && waited >= Duration::from_secs(3) {
+        if !state.device.is_mock() {
+            let _ = pw_clock::force_quantum(force);
+        }
+        state.quantum_reforced = true;
+        return;
+    }
+    if state.quantum_reforced && waited >= Duration::from_secs(6) {
+        if !state.device.is_mock() {
+            let _ = pw_clock::force_quantum(actual);
+        }
+        if let Some(engine) = state.engine.as_mut() {
+            engine.force_quantum = actual;
+        }
+        state.engine_force_quantum = actual;
+        state.notice = Some((
+            format!("The graph runs {actual} samples; {force} is not available."),
+            Instant::now(),
+        ));
+        state.quantum_change_at = None;
+        state.quantum_reforced = false;
+    }
 }
 
 /// The smallest graph quantum the driver can run at `rate`: one URB
-/// (`pw_clock::period_floor`). With `api.alsa.disable-tsched` the graph quantum
-/// is one ALSA period, so this is the period floor the card negotiates. The
-/// mock keeps a low floor so its picker stays populated.
+/// (`pw_clock::period_floor`). The graph quantum is the ALSA period under
+/// IRQ scheduling and two periods under timer scheduling; either way the
+/// period floor is the quantum floor. The mock keeps a low floor so its
+/// picker stays populated.
 fn quantum_floor(state: &TotalControl, rate: u32) -> u32 {
     if let Some(env) = &state.device_envelope {
         if let Some(floor) = env.period_floor(rate) {
@@ -15459,8 +15632,16 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // powers of two.
     const ALL_QUANTA: [u32; 11] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048];
     let floor = quantum_floor(state, running_rate(state));
-    let mut quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();
-    if !quanta.contains(&floor) {
+    // The host policy's own bounds are part of the achievable set: an item
+    // outside `[min-quantum, max-quantum]` could never be honoured.
+    let (policy_min, policy_max) = state
+        .engine
+        .map(|engine| (engine.min_quantum, engine.max_quantum))
+        .unwrap_or((0, 0));
+    let lower = floor.max(policy_min);
+    let in_policy = |q: &u32| *q >= lower && (policy_max == 0 || *q <= policy_max);
+    let mut quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(in_policy).collect();
+    if in_policy(&floor) && !quanta.contains(&floor) {
         quanta.push(floor);
         quanta.sort_unstable();
     }
@@ -15469,9 +15650,8 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // read as the running value. The latency line below adds the hardware
     // buffer and chain.
     let actual_quantum = state
-        .card_stream
-        .map(|c| c.period)
-        .filter(|p| *p > 0)
+        .graph_quantum
+        .or_else(|| state.card_stream.map(|c| c.period).filter(|p| *p > 0))
         .unwrap_or_else(|| clock.effective_quantum());
     let auto_label = if actual_quantum > 0 {
         format!("Auto ({actual_quantum} samples)")
@@ -15508,14 +15688,27 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     }));
     let quantum_list = quantum_opts.clone();
     let quanta_for_pick = quanta.clone();
-    let quantum_pick = field(pick_list(quantum_opts, Some(quantum_sel), move |label| {
+    // The selected value in the listbox is the pending indicator: orange
+    // while the running graph quantum differs from the request, normal
+    // colour once matched.  No separate "actual" readout.
+    let quantum_style = if quantum_pending(state) {
+        theme::pick_list_pending
+    } else {
+        theme::pick_list
+    };
+    let quantum_pick = pick_list(quantum_opts, Some(quantum_sel), move |label| {
         let idx = quantum_list.iter().position(|l| *l == label).unwrap_or(0);
         Message::EngineQuantum(if idx == 0 {
             0
         } else {
             quanta_for_pick[idx - 1]
         })
-    }));
+    })
+    .style(quantum_style)
+    .menu_style(theme::menu)
+    .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+    .text_size(text_size)
+    .width(Length::Fill);
 
     let follow = state.engine_rate_mode == EngineRateMode::Follow;
     let internal = state.device.settings().clock_source == "Internal";
@@ -15602,13 +15795,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             caption("Quantum"),
             strip::hint(
                 quantum_pick,
-                if quantum_pending(state) {
-                    let actual = state.card_stream.map(|stream| stream.period).unwrap_or(0);
-                    let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
-                    format!("Current {actual} samples; applying {desired}\u{2026}")
-                } else {
-                    "The graph quantum, one ALSA period.".to_string()
-                },
+                "The graph quantum; orange until the graph runs at the selection.",
                 scale,
             ),
         ]
@@ -15616,7 +15803,15 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .align_y(iced::Alignment::Center),
     );
     body = body.push(
-        row![caption("Latency"), latency_readout(state, clock)]
+        row![
+            strip::hint_at(
+                caption("RTL latency"),
+                "Round Trip Latency",
+                scale,
+                theme::TEXT_DIALOG * scale,
+            ),
+            latency_readout(state, clock),
+        ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
@@ -15847,15 +16042,25 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
     let line = |s: String, c: Color| text(s).color(c).size(theme::TEXT_DIALOG * scale);
     match state.card_stream {
         Some(card) => {
+            let quantum_change = quantum_pending(state);
+            let ring_color = if quantum_change {
+                theme::ysim()
+            } else {
+                theme::text_sec()
+            };
             let mut col = column![].spacing(theme::SPACE_TIGHT * scale);
             if state.device.is_uc_model() {
                 let measured = match state.device.personality_label() {
                     Some("PC") => state
                         .driver_queue
-                        .and_then(|queue| uc_measured_rtl(card.rate, queue, card.period, false)),
+                        .and_then(|queue| {
+                            uc_measured_rtl(card.rate, queue, running_graph_quantum(state), false)
+                        }),
                     Some("AP") => state
                         .driver_queue
-                        .and_then(|queue| uc_measured_rtl(card.rate, queue, card.period, true)),
+                        .and_then(|queue| {
+                            uc_measured_rtl(card.rate, queue, running_graph_quantum(state), true)
+                        }),
                     _ => None,
                 };
                 if let Some(rtl) = measured {
@@ -15867,16 +16072,15 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         usb,
                         lead,
                         converter: converter_frames(card.rate),
-                        graph: card.period,
+                        graph: running_graph_quantum(state),
                         rate: card.rate,
-                        tolerance_ms: 1.5,
                     };
                     col = col.push(line(rtl.summary(), theme::text_sec()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::text_sec(),
+                        ring_color,
                     ));
                 }
             } else if state.device.is_ucx_model() {
@@ -15886,37 +16090,25 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         usb,
                         lead,
                         converter: converter_frames(card.rate),
-                        graph: card.period,
+                        graph: running_graph_quantum(state),
                         rate: card.rate,
-                        tolerance_ms: 1.2,
                     };
                     col = col.push(line(rtl.summary(), theme::text_sec()));
                     col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::text_sec(),
+                        ring_color,
                     ));
                 }
             } else {
                 col = col.push(line(
                     ring_text(card.buffer, card.period, card.rate),
-                    theme::text_sec(),
+                    ring_color,
                 ));
             }
-            // The forced quantum is a request; the graph runs at the card's
-            // negotiated quantum (one ALSA period). They differ when PipeWire
-            // policy (min-quantum) or the driver's period floor clamps the
-            // request. Report the actual versus the request.
-            if clock.force_quantum != 0 && card.period != clock.force_quantum {
-                col = col.push(line(
-                    format!(
-                        "Quantum {} samples \u{2014} applying {}\u{2026}",
-                        card.period, clock.force_quantum
-                    ),
-                    theme::ysim(),
-                ));
-            }
+            // A forced quantum that is still being applied shows as the
+            // ring line in the pending colour; there is no separate notice.
             col.into()
         }
         None => {
@@ -15966,7 +16158,6 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         converter: converter_frames(rate),
                         graph: quantum,
                         rate,
-                        tolerance_ms: 1.5,
                     };
                     return column![
                         line(rtl.summary(), theme::text_sec()),
@@ -15986,7 +16177,6 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         converter: converter_frames(rate),
                         graph: quantum,
                         rate,
-                        tolerance_ms: 1.2,
                     };
                     return column![
                         line(rtl.summary(), theme::text_sec()),
@@ -16016,7 +16206,6 @@ struct RtlEstimate {
     converter: u32,
     graph: u32,
     rate: u32,
-    tolerance_ms: f32,
 }
 
 impl RtlEstimate {
@@ -16024,14 +16213,13 @@ impl RtlEstimate {
         self.usb + self.lead + self.converter + self.graph
     }
 
+    /// One short value: the round trip in milliseconds.  The terms and the
+    /// calibration basis live in the manual (§14).
     fn summary(&self) -> String {
-        format!(
-            "{:.1} ms RTL estimate (±{:.1} ms)",
-            frames_ms(self.total(), self.rate),
-            self.tolerance_ms
-        )
+        format!("{:.1} ms", frames_ms(self.total(), self.rate))
     }
 
+    /// The contributions under the value, one line, milliseconds.
     fn breakdown(&self) -> String {
         format!(
             "{:.1} ms USB + {:.1} ms device lead + {:.1} ms converter + {:.1} ms graph",
@@ -16114,10 +16302,10 @@ const UC_AP_MEASUREMENTS: &[UcMeasurement] = &[
 /// calibration queue, and one live graph period is added.
 struct MeasuredRtl {
     device: u32,
+    /// The live queue at display time, shown in the contributions line.
     live_queue: u32,
     graph: u32,
     rate: u32,
-    mode: &'static str,
 }
 
 impl MeasuredRtl {
@@ -16125,17 +16313,17 @@ impl MeasuredRtl {
         self.device + self.graph
     }
 
+    /// One short value: the round trip in milliseconds.  The terms and the
+    /// calibration basis live in the manual (§14).
     fn summary(&self) -> String {
-        format!(
-            "{:.1} ms RTL (measured {})",
-            frames_ms(self.total(), self.rate),
-            self.mode
-        )
+        format!("{:.1} ms", frames_ms(self.total(), self.rate))
     }
 
+    /// The contributions under the value, one line, milliseconds.  The
+    /// measured device total includes the live USB queue.
     fn breakdown(&self) -> String {
         format!(
-            "{:.1} ms measured device (including {:.1} ms live USB queue) + {:.1} ms graph",
+            "{:.1} ms device (incl. {:.1} ms queue) + {:.1} ms graph",
             frames_ms(self.device, self.rate),
             frames_ms(self.live_queue, self.rate),
             frames_ms(self.graph, self.rate)
@@ -16174,7 +16362,6 @@ fn uc_measured_rtl(rate: u32, queue: (u32, u32), graph: u32, ap: bool) -> Option
         live_queue,
         graph: graph.max(1),
         rate,
-        mode: if ap { "AP" } else { "PC" },
     })
 }
 
@@ -21967,15 +22154,18 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::{
-        any_channel_muted, any_channel_soloed, apply_control_room_assignments, apply_host_settings,
+        actual_graph_quantum, any_channel_muted, any_channel_soloed,
+        apply_control_room_assignments, apply_host_settings,
         apply_pending_resize, apply_startup_sync, apply_workspace, apply_workspace_gui,
         attach_device_service, capture_workspace, channel_is_muted, channel_is_soloed,
-        channel_parity, channel_trim, channel_with_parity, choose_startup_kind,
+        changes_host_settings, changes_workspace, channel_parity, channel_trim,
+        channel_with_parity, choose_startup_kind,
         choose_startup_target, control_room_available, control_room_visual_width,
         control_room_width, converter_frames, frames_ms, fx_reserve, fx_slot, global_feedback,
         global_feedback_is_typed, global_messages, global_state_commands, host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
-        power_sum_output_meters, rate_choices, rate_selected_label, reorder_pair_volumes, save_workspace_to, solo_armed,
+        power_sum_output_meters, quantum_pending, rate_choices, rate_selected_label,
+        reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
         temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
         uc_measured_rtl, uc_min_buffer_frames, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames,
@@ -22507,11 +22697,9 @@ mod tests {
             converter: 13,
             graph: 1024,
             rate: 44_100,
-            tolerance_ms: 1.5,
         };
         assert_eq!(rtl.total(), 1241);
-        assert_eq!(rtl.summary(), "28.1 ms RTL estimate (±1.5 ms)");
-        assert!(rtl.breakdown().contains("23.2 ms graph"));
+        assert_eq!(rtl.summary(), "28.1 ms");
     }
 
     #[test]
@@ -22538,22 +22726,19 @@ mod tests {
         assert_eq!(rtl.device, 215);
         assert_eq!(rtl.live_queue, 144);
         assert_eq!(rtl.total(), 1239);
-        assert_eq!(rtl.summary(), "28.1 ms RTL (measured PC)");
-        assert!(rtl.breakdown().contains("3.3 ms live USB queue"));
-        assert!(rtl.breakdown().contains("23.2 ms graph"));
+        assert_eq!(rtl.summary(), "28.1 ms");
 
         let rtl = uc_measured_rtl(44_100, (48, 2), 128, true).expect("AP 44.1 calibrated");
         assert_eq!(rtl.device, 179);
         assert_eq!(rtl.live_queue, 144);
         assert_eq!(rtl.total(), 307);
-        assert_eq!(rtl.summary(), "7.0 ms RTL (measured AP)");
-        assert!(rtl.breakdown().contains("3.3 ms live USB queue"));
+        assert_eq!(rtl.summary(), "7.0 ms");
 
         let rtl = uc_measured_rtl(192_000, (48, 2), 128, true).expect("AP 192 calibrated");
         assert_eq!(rtl.device, 505);
         assert_eq!(rtl.live_queue, 576);
         assert_eq!(rtl.total(), 633);
-        assert_eq!(rtl.summary(), "3.3 ms RTL (measured AP)");
+        assert_eq!(rtl.summary(), "3.3 ms");
 
         // A driver queue change is applied as a delta from the calibration,
         // without a new loopback measurement.
@@ -22574,14 +22759,9 @@ mod tests {
             converter: 13,
             graph: 128,
             rate: 44_100,
-            tolerance_ms: 1.2,
         };
         assert_eq!(rtl.total(), 345);
-        assert_eq!(rtl.summary(), "7.8 ms RTL estimate (±1.2 ms)");
-        assert_eq!(
-            rtl.breakdown(),
-            "3.3 ms USB + 1.4 ms device lead + 0.3 ms converter + 2.9 ms graph"
-        );
+        assert_eq!(rtl.summary(), "7.8 ms");
     }
 
     #[test]
@@ -23150,6 +23330,117 @@ mod tests {
     }
 
     #[test]
+    fn the_graph_quantum_is_the_pending_confirmation() {
+        let mut state = new(true, None, None);
+        state.engine = Some(totalcontrol_core::pw_clock::PwClock {
+            rate: 48_000,
+            quantum: 256,
+            min_quantum: 32,
+            max_quantum: 2048,
+            force_rate: 0,
+            force_quantum: 128,
+        });
+        // The ALSA period is 64 while the graph runs 128: applied, because
+        // the graph's own quantum is the confirmation.
+        state.card_stream = Some(totalcontrol_core::pw_clock::CardStream {
+            rate: 48_000,
+            period: 64,
+            buffer: 768,
+        });
+        state.graph_quantum = Some(128);
+        assert!(!quantum_pending(&state));
+        assert_eq!(running_graph_quantum(&state), 128);
+        // The graph reports another value: a real pending state.
+        state.graph_quantum = Some(96);
+        assert!(quantum_pending(&state));
+        // Without a running graph there is nothing to confirm; a fresh
+        // selection is transitory only during the grace window.
+        state.graph_quantum = None;
+        state.quantum_change_at = None;
+        assert!(!quantum_pending(&state));
+        state.quantum_change_at = Some(Instant::now());
+        assert!(quantum_pending(&state));
+        // No forced quantum: never pending.
+        state.engine = Some(totalcontrol_core::pw_clock::PwClock {
+            rate: 48_000,
+            quantum: 256,
+            min_quantum: 32,
+            max_quantum: 2048,
+            force_rate: 0,
+            force_quantum: 0,
+        });
+        assert!(!quantum_pending(&state));
+    }
+
+    /// Every persisted setting must mark its document dirty; the autosave
+    /// writes a document only when the matching classifier fired.
+    #[test]
+    fn every_persisted_setting_marks_its_document_dirty() {
+        let host = [
+            Message::SetControllersEnabled(true),
+            Message::SelectControllerDevice(0),
+            Message::SetControllerIn(0, true),
+            Message::SetControllerOut(0, true),
+            Message::SetControllerProtocol(0, "midi".into()),
+            Message::ResetControllerKeys("midi".into()),
+            Message::WorkspaceOpen,
+            Message::WorkspaceFactory,
+            Message::LoadSurroundWorkspace(crate::workspaces::SurroundLayout::Direct51),
+            Message::MismatchUseTotalcontrol,
+            Message::MismatchUseDevice,
+            Message::MismatchAlwaysTotalcontrol,
+        ];
+        for message in host {
+            assert!(
+                changes_host_settings(&message),
+                "host setting does not mark the host file dirty: {message:?}"
+            );
+        }
+        let workspace = [
+            Message::ControlRoomTalkbackInput(None),
+            Message::ControlRoomTalkbackDim(1.0),
+            Message::ControlRoomListenbackInput(None),
+            Message::ControlRoomListenbackDim(1.0),
+            Message::ControlRoomRecallDb(1.0),
+            Message::ControlRoomMainDim(1.0),
+            Message::ControlRoomExternalInput(None),
+            Message::ControlRoomExternalGain(1.0),
+            Message::ControlRoomPflReplacesSolo(true),
+            Message::ControlRoomExclusiveSoloPfl(true),
+            Message::WorkspaceOpen,
+            Message::WorkspaceFactory,
+        ];
+        for message in workspace {
+            assert!(
+                changes_workspace(&message),
+                "workspace setting does not mark the workspace dirty: {message:?}"
+            );
+            assert!(
+                !is_undoable(&message),
+                "a settings change must not enter the undo stack: {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn audio_performance_options_are_host_settings_not_undo_steps() {
+        for message in [
+            Message::SetAudioPerformance(true),
+            Message::SetAudioPerfMaxSleep(10),
+            Message::SetAudioPerfMaxSleep(0),
+        ] {
+            assert!(
+                changes_host_settings(&message),
+                "the option must mark the host settings dirty: {message:?}"
+            );
+            assert!(
+                !is_undoable(&message),
+                "the option is a host setting, not a mixer edit: {message:?}"
+            );
+        }
+    }
+
+    #[test]
     fn audio_performance_is_opt_in_and_persisted() {
         let mut state = new(true, None, None);
         assert!(!state.audio_performance);
@@ -23183,7 +23474,7 @@ mod tests {
             buffer: 768,
         };
         state.card_stream = Some(stream);
-        let _ = update(&mut state, Message::EngineRead(None, Some(stream), true, None));
+        let _ = update(&mut state, Message::EngineRead(None, Some(stream), true, None, None));
         assert_eq!(state.audio_perf_status, Status::Unavailable);
     }
 
@@ -25242,6 +25533,8 @@ mod tests {
             rate: 48_000,
             quantum: 256,
             force_rate: 0,
+            min_quantum: 32,
+            max_quantum: 2048,
             force_quantum: 0,
         });
         assert_eq!(super::current_graph_rate(&state), 48_000);
@@ -25436,7 +25729,7 @@ mod tests {
         // Background polls do not count as activity.
         state.last_activity = Instant::now() - Duration::from_secs(10);
         let _ = update(&mut state, Message::EnginePoll);
-        let _ = update(&mut state, Message::EngineRead(None, None, false, None));
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None));
         assert_eq!(tick_interval(&state), TICK_IDLE);
 
         // A pending window resize and a running collapse animation keep it
@@ -26543,6 +26836,8 @@ mod tests {
             rate: 48_000,
             quantum: 256,
             force_rate: 48_000,
+            min_quantum: 32,
+            max_quantum: 2048,
             force_quantum: 0,
         });
         let workspace = capture_workspace(&state);
@@ -26575,7 +26870,7 @@ mod tests {
         state.last_card_rate = Some(48_000);
         let stream =
             totalcontrol_core::pw_clock::CardStream { rate: 96_000, period: 48, buffer: 384 };
-        let _ = update(&mut state, Message::EngineRead(None, Some(stream), false, None));
+        let _ = update(&mut state, Message::EngineRead(None, Some(stream), false, None, None));
 
         assert_eq!(
             state.device.settings().sample_rate, 88_200,
