@@ -264,6 +264,14 @@ mixer may occasionally show a simulation instead of your hardware.
 
 ### Low-latency host tuning
 
+TotalControl can hold the latency constraint for you: enable `Keep the audio
+CPUs awake while streaming` in `Options > TotalControl`. The setting is off by
+default, takes effect while the card streams, and costs idle power only during
+a session. The installed package grants the logged-in user access to
+`/dev/cpu_dma_latency` the same way it grants the sound devices; for sessions
+without a seat (remote or headless) the `audio` group is the fallback. The
+manual commands below do the same without the application.
+
 At the smallest quanta the host's power management decides how quickly the
 audio thread wakes. In timer mode the thread sleeps between graph cycles; a
 CPU that enters a deep idle state pays the exit on every wake. On our desk,

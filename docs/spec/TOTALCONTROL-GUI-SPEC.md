@@ -242,8 +242,8 @@ edge just below the top bar. The top edge stays fixed while the content grows
 downward, so expanding a control never shifts the text under the pointer. A
 dialog taller than the space between the top bar and the window bottom scrolls
 its body inside the card. The app settings dialog holds BACKGROUND, STARTUP
-SYNC, SURROUND and VU FALLBACK
-sections — settings specific to TotalControl itself. Remote control has its
+SYNC, SURROUND, AUDIO PERFORMANCE and VU FALLBACK sections — settings
+specific to TotalControl itself. Remote control has its
 own dialog (§1.4). Independent options are checkboxes, one-of-many options are
 radio buttons, and the only footer action is `Close`.
 
@@ -252,6 +252,15 @@ checked output creates a PipeWire sink while TotalControl runs and removes it
 when the application exits. The setting is persisted. The sinks follow the
 selected Fireface/MR18 Pro Audio device and bridge to the first six or eight
 SW playback channels.
+
+AUDIO PERFORMANCE has the `Keep the audio CPUs awake while streaming`
+checkbox. Checked, TotalControl holds a kernel latency constraint
+(`/dev/cpu_dma_latency`) while the card streams, so the processor does not
+enter deep idle states between graph cycles; it is released when the stream
+stops or the application exits. The setting is host state, persisted, and
+opt-in (default off); it costs idle power while a stream runs. When the
+device node cannot be written, the section's help text states why instead
+of failing silently. The manual's Setup section owns the host guidance.
 
 VU FALLBACK has an `RMS bar release` dropdown (10, 15, 20, 25, 30, 40 dB/s
 plus the unit's measured rate if different) and a `Default` button. The

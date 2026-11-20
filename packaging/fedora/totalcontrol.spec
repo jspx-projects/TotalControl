@@ -34,10 +34,12 @@ BuildRequires:  fontconfig-devel
 BuildRequires:  freetype-devel
 BuildRequires:  openssl-devel
 BuildRequires:  desktop-file-utils
+BuildRequires:  systemd-rpm-macros
 BuildRequires:  tar
 BuildRequires:  gzip
 
 Requires:       hicolor-icon-theme
+Requires:       systemd-udev
 
 %description
 TotalControl is a Linux control surface for RME Fireface UC and UCX
@@ -76,6 +78,8 @@ install -Dm644 packaging/pipewire/99-fireface.conf \
     %{buildroot}%{_sysconfdir}/pipewire/pipewire.conf.d/99-fireface.conf
 install -Dm644 packaging/wireplumber/60-fireface.conf \
     %{buildroot}%{_sysconfdir}/wireplumber/wireplumber.conf.d/60-fireface.conf
+install -Dm644 packaging/udev/70-totalcontrol-cpu-dma-latency.rules \
+    %{buildroot}%{_udevrulesdir}/70-totalcontrol-cpu-dma-latency.rules
 
 %check
 desktop-file-validate ui/totalcontrol/totalcontrol-gui/assets/totalcontrol.desktop
@@ -100,6 +104,7 @@ touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
 %{_datadir}/totalcontrol/midi-controllers/*.json
 %config(noreplace) %{_sysconfdir}/pipewire/pipewire.conf.d/99-fireface.conf
 %config(noreplace) %{_sysconfdir}/wireplumber/wireplumber.conf.d/60-fireface.conf
+%{_udevrulesdir}/70-totalcontrol-cpu-dma-latency.rules
 %license %{_licensedir}/totalcontrol/LICENSE
 %doc %{_docdir}/totalcontrol/README.md
 
