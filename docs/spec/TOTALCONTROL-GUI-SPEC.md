@@ -1266,7 +1266,8 @@ rather than shown inert.
 
 Below the device group, the host engine group shows the PipeWire rate,
 quantum and latency when the sound server owns the rate. `Quantum` is the
-graph quantum, one ALSA period; the `Latency` line shows the round-trip
+graph quantum: one ALSA period under IRQ scheduling, two periods under
+timer scheduling (a batch device is served two periods per graph cycle); the `Latency` line shows the round-trip
 value (USB queue, device lead, converter and one graph period). The UC PC
 and AP modes use their loopback calibrations with a live queue and graph
 period; the UCX and uncalibrated rates use the model. It also shows the Fireface
@@ -1299,12 +1300,12 @@ above the device rate's period floor (one URB), plus the exact floor.
 Rate and quantum changes apply asynchronously: PipeWire renegotiates the
 running stream over a few seconds while the player keeps playing (resampled);
 no restart is needed. While a desired value differs from the actual running
-value the panel shows a pending state: the Graph row shows the actual rate in
-orange, the quantum row and the device-rate picker carry an "applying…" hint
-comparing actual to desired, and the latency readout shows `Quantum <actual>
-samples — applying <desired>…`. A bottom-centre toast announces the change
-("Setting quantum to N samples — applying…"). When the actual matches the
-desired the pending state clears to grey. The device rate is verified by reading
+value the panel shows one pending state per value, by colour only: the Graph
+row shows the actual rate in orange, the quantum row shows the actual graph
+quantum in orange, and the device-rate picker compares its readback to the
+selection. There is no separate "applying…" message; the actual value is the
+pending indicator. A bottom-centre toast announces the change at the moment it
+is requested. When the actual matches the desired the value returns to grey. The device rate is verified by reading
 the unit's state word (`0x11`) and comparing its rate index to the set rate
 (UC spec §9.1, UCX spec §11.7). The readback polls the rate value at 50 ms
 while pending; the rate index matching the selection is the confirmation.

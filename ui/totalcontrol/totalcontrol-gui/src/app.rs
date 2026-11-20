@@ -14978,17 +14978,32 @@ fn device_rate_pending(state: &TotalControl) -> bool {
     desired > 0 && actual > 0 && desired != actual
 }
 
+/// The graph quantum the card is actually running.  Under timer-based
+/// scheduling the host serves a batch device at two ALSA periods per graph
+/// cycle, so the graph quantum is twice the negotiated period; the forced
+/// value tells which of the two readings is the graph one.
+fn actual_graph_quantum(state: &TotalControl) -> u32 {
+    let period = state.card_stream.map(|stream| stream.period).unwrap_or(0);
+    let forced = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
+    if forced > 0 && period > 0 && period.saturating_mul(2) == forced {
+        period * 2
+    } else {
+        period
+    }
+}
+
 /// True while a forced quantum waits to take effect on the running stream.
 fn quantum_pending(state: &TotalControl) -> bool {
     let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
-    let actual = state.card_stream.map(|stream| stream.period).unwrap_or(0);
+    let actual = actual_graph_quantum(state);
     desired > 0 && actual > 0 && desired != actual
 }
 
 /// The smallest graph quantum the driver can run at `rate`: one URB
-/// (`pw_clock::period_floor`). With `api.alsa.disable-tsched` the graph quantum
-/// is one ALSA period, so this is the period floor the card negotiates. The
-/// mock keeps a low floor so its picker stays populated.
+/// (`pw_clock::period_floor`). The graph quantum is the ALSA period under
+/// IRQ scheduling and two periods under timer scheduling; either way the
+/// period floor is the quantum floor. The mock keeps a low floor so its
+/// picker stays populated.
 fn quantum_floor(state: &TotalControl, rate: u32) -> u32 {
     if let Some(env) = &state.device_envelope {
         if let Some(floor) = env.period_floor(rate) {
@@ -15600,15 +15615,16 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     body = body.push(
         row![
             caption("Quantum"),
+            quantum_pick,
             strip::hint(
-                quantum_pick,
-                if quantum_pending(state) {
-                    let actual = state.card_stream.map(|stream| stream.period).unwrap_or(0);
-                    let desired = state.engine.map(|engine| engine.force_quantum).unwrap_or(0);
-                    format!("Current {actual} samples; applying {desired}\u{2026}")
-                } else {
-                    "The graph quantum, one ALSA period.".to_string()
-                },
+                text(format!("{} samples", actual_graph_quantum(state)))
+                    .color(if quantum_pending(state) {
+                        theme::ysim()
+                    } else {
+                        theme::text_sec()
+                    })
+                    .size(text_size),
+                "The quantum the graph is running at.",
                 scale,
             ),
         ]
@@ -15847,6 +15863,12 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
     let line = |s: String, c: Color| text(s).color(c).size(theme::TEXT_DIALOG * scale);
     match state.card_stream {
         Some(card) => {
+            let quantum_change = quantum_pending(state);
+            let ring_color = if quantum_change {
+                theme::ysim()
+            } else {
+                theme::text_sec()
+            };
             let mut col = column![].spacing(theme::SPACE_TIGHT * scale);
             if state.device.is_uc_model() {
                 let measured = match state.device.personality_label() {
@@ -15876,7 +15898,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::text_sec(),
+                        ring_color,
                     ));
                 }
             } else if state.device.is_ucx_model() {
@@ -15895,28 +15917,17 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::text_sec(),
+                        ring_color,
                     ));
                 }
             } else {
                 col = col.push(line(
                     ring_text(card.buffer, card.period, card.rate),
-                    theme::text_sec(),
+                    ring_color,
                 ));
             }
-            // The forced quantum is a request; the graph runs at the card's
-            // negotiated quantum (one ALSA period). They differ when PipeWire
-            // policy (min-quantum) or the driver's period floor clamps the
-            // request. Report the actual versus the request.
-            if clock.force_quantum != 0 && card.period != clock.force_quantum {
-                col = col.push(line(
-                    format!(
-                        "Quantum {} samples \u{2014} applying {}\u{2026}",
-                        card.period, clock.force_quantum
-                    ),
-                    theme::ysim(),
-                ));
-            }
+            // A forced quantum that is still being applied shows as the
+            // ring line in the pending colour; there is no separate notice.
             col.into()
         }
         None => {
@@ -21967,7 +21978,8 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::{
-        any_channel_muted, any_channel_soloed, apply_control_room_assignments, apply_host_settings,
+        actual_graph_quantum, any_channel_muted, any_channel_soloed,
+        apply_control_room_assignments, apply_host_settings,
         apply_pending_resize, apply_startup_sync, apply_workspace, apply_workspace_gui,
         attach_device_service, capture_workspace, channel_is_muted, channel_is_soloed,
         channel_parity, channel_trim, channel_with_parity, choose_startup_kind,
@@ -21975,7 +21987,8 @@ mod tests {
         control_room_width, converter_frames, frames_ms, fx_reserve, fx_slot, global_feedback,
         global_feedback_is_typed, global_messages, global_state_commands, host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
-        power_sum_output_meters, rate_choices, rate_selected_label, reorder_pair_volumes, save_workspace_to, solo_armed,
+        power_sum_output_meters, quantum_pending, rate_choices, rate_selected_label,
+        reorder_pair_volumes, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
         temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
         uc_measured_rtl, uc_min_buffer_frames, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames,
@@ -23147,6 +23160,43 @@ mod tests {
         assert!(!state.tray_active && state.keep_in_tray);
         let _ = update(&mut state, Message::CloseRequested);
         assert!(!state.window_hidden);
+    }
+
+    #[test]
+    fn a_batch_device_reports_the_graph_quantum_and_is_not_pending() {
+        let mut state = new(true, None, None);
+        state.engine = Some(totalcontrol_core::pw_clock::PwClock {
+            rate: 48_000,
+            quantum: 256,
+            force_rate: 0,
+            force_quantum: 128,
+        });
+        // Timer-mode scheduling serves a batch device at two ALSA periods
+        // per graph cycle: the forced 128 is applied, not pending.
+        state.card_stream = Some(totalcontrol_core::pw_clock::CardStream {
+            rate: 48_000,
+            period: 64,
+            buffer: 768,
+        });
+        assert_eq!(actual_graph_quantum(&state), 128);
+        assert!(!quantum_pending(&state));
+        // A period that does not match the request stays pending and
+        // reports the quantum the card actually runs.
+        state.card_stream = Some(totalcontrol_core::pw_clock::CardStream {
+            rate: 48_000,
+            period: 48,
+            buffer: 768,
+        });
+        assert_eq!(actual_graph_quantum(&state), 48);
+        assert!(quantum_pending(&state));
+        // No forced quantum: never pending.
+        state.engine = Some(totalcontrol_core::pw_clock::PwClock {
+            rate: 48_000,
+            quantum: 256,
+            force_rate: 0,
+            force_quantum: 0,
+        });
+        assert!(!quantum_pending(&state));
     }
 
     #[test]

@@ -368,11 +368,15 @@ quantum picker offers only quanta at or above the device rate's period floor
 shows the device rate, and the `Graph` row shows the graph rate that follows it.
 
 Rate and quantum changes apply over a few seconds while playback continues (the
-player is never stopped). Until a change takes effect, the affected row is
-orange with an "applying…" note and a toast at the bottom of the window
-announces the change. The `Sample rate` row confirms against the rate the unit
-itself reports; the `Graph` row confirms against the running stream. Each
-clears to grey once the actual value matches the setting.
+player is never stopped). Until a change takes effect, the affected value is
+orange, and a toast at the bottom of the window announces the change when it is
+requested. The `Sample rate` row confirms against the rate the unit itself
+reports; the `Graph` row confirms against the running stream; the quantum row
+shows the quantum the graph is running at. Each returns to grey once the actual
+value matches the setting; there is no separate "applying" message to wait on.
+The graph quantum is one ALSA period in polled scheduling and two periods under
+timer scheduling, so a quantum of 128 reads as 128 while the card's period is
+64.
 
 When the device is slaved to an external clock, the rate is determined by the
 device and `Rate follows` reads `Device` (read-only).
