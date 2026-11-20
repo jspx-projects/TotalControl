@@ -3165,6 +3165,8 @@ pub struct TotalControl {
     pub rate_switch_burst: (u32, u32),
     rate_switch_base: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
     rate_switch_until: Option<Instant>,
+    /// The last engine-run epoch seen in the transport counters.
+    last_run_seq: Option<u32>,
     /// When the current rate-switch window opened, for the confirmation
     /// latency log.
     rate_switch_t0: Option<Instant>,
@@ -3751,6 +3753,7 @@ pub fn new_with_device(
         rate_switch_base: None,
         rate_switch_until: None,
         rate_switch_t0: None,
+        last_run_seq: None,
         host_volume: None,
         device_service: None,
         device_updates: None,
@@ -10052,6 +10055,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.rate_switch_until = None;
             }
             state.transport_counters = counters;
+            track_engine_run(state, counters);
             if let Some(until) = state.rate_switch_until {
                 if Instant::now() < until {
                     if state.rate_switch_base.is_none() {
@@ -15821,15 +15825,17 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
-    // Transport diagnostics: cumulative driver error counters, shown
-    // relative to the baseline (driver reattach or the reset button).
-    // Counting runs on every tick, independent of this drawer.  Each row
-    // is one fault domain; the manual explains meaning and mitigation.
+    // Transport diagnostics: cumulative counters shown relative to the
+    // baseline (driver reattach or the reset button); the per-run ISO packet
+    // detail and the USB error gauge show the current engine run, because
+    // they reset on every rate/quantum switch or recovery.  Counting runs on
+    // every tick, independent of this drawer.  Each row is one fault domain;
+    // the manual explains meaning and mitigation.
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
         body = body.push(
             row![
-                strip::hint(caption("Diagnostics"), "Cumulative since reset.", scale),
+                strip::hint(caption("Diagnostics"), "Since reset; packet detail is this run.", scale),
                 iced::widget::Space::new().width(Length::Fill),
                 button(strip::centered_label_auto(
                     "reset",
@@ -15854,20 +15860,22 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .1
             .saturating_add(state.rate_switch_burst.1)
             .min(delta.out_shorts);
-        let short_in = (delta.in_shorts + delta.in_short).saturating_sub(switch_in);
-        let short_out = (delta.out_shorts + delta.out_pkt_len_err).saturating_sub(switch_out);
-        let bad_in = short_in + delta.in_misaligned + delta.in_bad_length;
-        let bad_out = short_out + delta.out_capacity_err + delta.out_bad_length;
+        let short_in = (delta.in_shorts + now.in_short).saturating_sub(switch_in);
+        let short_out = (delta.out_shorts + now.out_pkt_len_err).saturating_sub(switch_out);
+        let bad_in = short_in + now.in_misaligned + delta.in_bad_length;
+        let bad_out = short_out + now.out_capacity_err + delta.out_bad_length;
+        // URB status errors are cumulative; the ISO packet-status detail and
+        // the consecutive-error gauge are this run (they reset on a restart).
         let usb = delta.in_status_errors
             + delta.out_status_errors
-            + delta.in_status_err
-            + delta.out_pkt_status
-            + delta.urb_errors;
-        let feedback = delta.in_pos_gap
-            + delta.in_frames_mismatch
+            + now.in_status_err
+            + now.out_pkt_status
+            + now.urb_errors;
+        let feedback = now.in_pos_gap
+            + now.in_frames_mismatch
             + delta.rate_mismatch
-            + delta.out_fb_ahead
-            + delta.out_fb_stale;
+            + now.out_fb_ahead
+            + now.out_fb_stale;
         let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
         let rows: [(&'static str, String, u32, &'static str); 8] = [
             (
@@ -15970,6 +15978,23 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .into()
 }
 
+/// Track the engine-run epoch.  A new run (rate/quantum switch or recovery)
+/// resets the per-run diagnostics, so close any open rate-switch window;
+/// the cumulative baseline is kept (those counters never reset).
+fn track_engine_run(
+    state: &mut TotalControl,
+    counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
+) {
+    let Some(c) = counters else {
+        state.last_run_seq = None;
+        return;
+    };
+    if state.last_run_seq.is_some_and(|seq| seq != c.run_seq) {
+        commit_rate_switch_window(state);
+    }
+    state.last_run_seq = Some(c.run_seq);
+}
+
 /// Commit the current rate-switch settling window into the cumulative
 /// expected-short total.  The driver's counters are cumulative, so keeping
 /// every window prevents an earlier expected burst from reappearing in the
@@ -16068,6 +16093,7 @@ fn transport_delta(
         out_fb_stale: now.out_fb_stale.saturating_sub(base.out_fb_stale),
         hw_ptr_mismatch: now.hw_ptr_mismatch.saturating_sub(base.hw_ptr_mismatch),
         delta_zero: now.delta_zero.saturating_sub(base.delta_zero),
+        run_seq: now.run_seq,
     }
 }
 
@@ -22202,7 +22228,7 @@ mod tests {
         engine_poll_fast, global_feedback_is_typed, global_messages, global_state_commands,
         host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
-        note_observed_rate_switch,
+        note_observed_rate_switch, track_engine_run,
         power_sum_output_meters, quantum_pending, rate_choices, rate_selected_label,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
@@ -22621,6 +22647,31 @@ mod tests {
         // A reset/restart baseline can be newer than the reading.
         let back = transport_delta(&base, &now);
         assert_eq!(back.out_gaps, 0);
+    }
+
+    #[test]
+    fn a_new_engine_run_closes_the_switch_window_and_keeps_the_baseline() {
+        use totalcontrol_core::fireface::abi::HwdepCounters;
+        let mut state = new(true, None, None);
+        let base = HwdepCounters { out_urbs: 100, run_seq: 1, ..HwdepCounters::default() };
+        state.transport_baseline = Some(base);
+        state.last_run_seq = Some(1);
+        state.rate_switch_until = Some(Instant::now() + Duration::from_millis(500));
+        state.rate_switch_burst = (3, 4);
+        // Same run: the window stays open and the baseline is untouched.
+        track_engine_run(&mut state, Some(HwdepCounters { run_seq: 1, ..HwdepCounters::default() }));
+        assert!(state.rate_switch_until.is_some());
+        assert_eq!(state.transport_baseline, Some(base));
+        // New run (a switch or recovery): the window commits, the cumulative
+        // baseline is kept, and the epoch advances.
+        track_engine_run(&mut state, Some(HwdepCounters { run_seq: 2, ..HwdepCounters::default() }));
+        assert!(state.rate_switch_until.is_none());
+        assert_eq!(state.last_run_seq, Some(2));
+        assert_eq!(state.transport_baseline, Some(base));
+        assert_eq!(state.rate_switch_shorts, (3, 4));
+        // No counters: the epoch is forgotten.
+        track_engine_run(&mut state, None);
+        assert_eq!(state.last_run_seq, None);
     }
 
     #[test]

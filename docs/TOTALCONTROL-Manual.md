@@ -1423,6 +1423,12 @@ fault domain. The tooltips are deliberately short; this section is the full
 reference. **reset** clears the display baseline without changing the device
 or the audio graph.
 
+The cumulative rows count since the driver attached or the last reset. The
+ISO packet detail (in **bad packets** and **feedback**) and the USB error
+gauge (in **usb**) show the current engine run: they reset on a rate or
+quantum switch or a recovery, so a switch starts the new run from zero
+rather than carrying stale detail forward.
+
 | Row | Meaning | What to do |
 |---|---|---|
 | underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). On an underrun the driver sends silence for the dry chunk; a single late write is heard as a brief gap. At stream start and after a rate change a few chunks of silence are allowed while the host fills the ring. If the ring stays dry for two consecutive chunks outside that window the driver stops the playback stream and the audio graph restarts it. A dry ring is never heard as stale audio. An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |

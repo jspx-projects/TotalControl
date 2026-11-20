@@ -18,7 +18,7 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 
-#define FFUC_ABI_VERSION	6
+#define FFUC_ABI_VERSION	7
 
 /* Largest payload in one FFUC_HWDEP_IOCTL_VENDOR request. */
 #define FFUC_HWDEP_MAX_DATA	64
@@ -132,8 +132,11 @@ struct ffuc_hwdep_counters {
 	__u32 in_gaps;
 	__u32 in_shorts;
 	__u32 in_status_errors;
-	/* Error counters surfaced for the transport diagnostics.  Cumulative
-	 * per driver instance; zeroed on reattach. */
+	/* Error counters surfaced for the transport diagnostics.  Two classes:
+	 * cumulative per driver instance (zeroed on reattach), and per-run
+	 * (reset on every engine start).  run_seq increments on every engine
+	 * start so the host can re-base the per-run view.  urb_errors is a
+	 * consecutive-error gauge (reset on a good URB), not a total. */
 	__u32 out_underruns;
 	__u32 in_overruns;
 	__u32 out_capacity_err;
@@ -151,6 +154,7 @@ struct ffuc_hwdep_counters {
 	__u32 out_fb_stale;
 	__u32 hw_ptr_mismatch;
 	__u32 delta_zero;
+	__u32 run_seq;
 };
 
 /* Largest rate table in one FFUC_HWDEP_IOCTL_ENVELOPE reply. */

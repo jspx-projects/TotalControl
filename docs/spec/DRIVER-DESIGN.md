@@ -430,9 +430,9 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 
 | Term | Definition | Used by |
 |---|---|---|
-| position | the stream position modulo 8192 at 1x rates (UC, UCX, Babyface-classic share the header); anchors the feedback timeline | K1.3 lead anchor |
+| position | the stream position modulo the rate-band modulus — 8192 at 1x, 16384 at 2x, 32768 at 4x (UC, UCX, Babyface-classic share the header); anchors the feedback timeline | K1.3 lead anchor |
 | frame count | frames in this packet; carries the clock's add/drop | K1.3 mirrors it (rate lock) |
-| phase | 14-bit field (bits 18–31): a 480 MHz tick accumulator; the value wraps at `tps = 480000000/rate` (ticks per sample: 10000 at 48 kHz, 10884.354 at 44.1 kHz) and advances one microframe per packet mod tps, independent of the frame count | K1.1 records it; the device timestamp and `rate_meas` |
+| phase | the upper header bits above the position field: 14-bit at 1x (bits 18–31), 13-bit at 2x (19–31), 12-bit at 4x (20–31). A 480 MHz tick accumulator; the value wraps at `tps = 480000000/rate` (ticks per sample: 10000 at 48 kHz, 10884.354 at 44.1 kHz) and advances one microframe per packet mod tps, independent of the frame count | K1.1 records it; the device timestamp and `rate_meas` |
 | device timestamp | the pair (unwrapped position, host time) of the device clock, taken per IN packet: the position at a packet end against the host time of the next packet boundary, from the start-frame anchor | the `rate_meas` window, the lead anchor seed, the `CLOCK` ioctl |
 | lead word | the stream position an OUT frame plays at; keeps the device output buffer supplied | K1.3 |
 | `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
@@ -510,7 +510,12 @@ the engine. The host sees an xrun and re-prepares.
 
 ## 5. Control transports and hwdep ABI
 
-The hwdep ABI is versioned (`FFUC_ABI_VERSION`). The host checks it at open.
+The hwdep ABI is versioned (`FFUC_ABI_VERSION`, currently 7). The host checks
+it at open. The `COUNTERS` reply carries two counter classes — cumulative per
+driver instance (zeroed on reattach) and per-run (reset on every engine start)
+— plus `run_seq`, an engine-run epoch that increments on every engine start so
+the host can re-base the per-run view, and `urb_errors`, a consecutive-error
+gauge rather than a total.
 
 U2 carries two transfer modes with opposite characteristics:
 
@@ -534,7 +539,7 @@ a bounded reply wait (§5.2).
 | `INFO` | identity, capabilities, endpoint numbers, rate, firmware |
 | `VENDOR` | one EP0 vendor request (read or write, up to 64 bytes) |
 | `WRITE_WORDS` | up to 63 IF1 register words; the kernel adds odd parity |
-| `COUNTERS` | cumulative transport error counters (host ring, USB, feedback, pointer, events); zeroed on reattach |
+| `COUNTERS` | transport error counters (host ring, USB, feedback, pointer, events): cumulative per instance and per-run classes, the `run_seq` engine-run epoch, and the `urb_errors` gauge; `run_seq` added at ABI 7 |
 | `CLOCK` | the device timestamp: the unwrapped device position at a host time, the raw phase field, the windowed device rate `rate_meas`, and the start-frame anchor (`sof_ns(f) = anchor_ns + f·125000`, one unit per ISO packet); ABI 6 |
 
 `read()`/`poll()` deliver events:
@@ -791,7 +796,7 @@ driver's transports. The owning sections carry the full detail:
 | Status bytes 0 and 1; front-panel events use bytes 2 and 3 | UC PC | a capture correlating bytes 0/1 with a device action |
 | Bulk role of `0x03`/`0x84` at 1x/2x; they are interrupt at 4x | UC PC | a capture of the bulk traffic at 1x/2x |
 | Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
-| AP header rate-band scaling: the position width and modulus at 2x/4x (16384/32768); the 1x layout (13-bit position / 8192, 14-bit phase) is capture-verified | UCX IF0, UC IF0, Babyface | a 2x/4x ISO capture; isolated add/drop events away from the wrap are unattributed |
+| AP header rate-band scaling: the position width and modulus widen to 16384/32768 at 2x/4x and the phase field narrows to 13/12-bit (implemented; the 1x layout is capture-verified). The 2x/4x widening, and the modern-UCX modulus (8192 versus a reported 3072), need device confirmation | UCX IF0, UC IF0, Babyface | a 2x/4x ISO raw-header capture on the device; isolated add/drop events away from the wrap |
 | IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
 | Optional audible characterization of the rate transition: the protocol is bench-verified (cadence follows, lead intact); an analog output capture across the switch measures the audible gap | UCX | a tone-playing round-trip with the output recorded across each switch |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
