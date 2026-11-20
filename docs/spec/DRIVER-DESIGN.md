@@ -18,9 +18,86 @@ Terminology:
 | personality | A device firmware/USB variant: UC PC, UC AP, UCX IF0, UCX IF5, Babyface-classic. |
 | engine | The running URB set for one card. |
 | quirk | A descriptor flag that selects a device-specific transport behaviour. |
+| device clock | The device's master sample clock (its crystal). The host follows it; capture and playback both run on it. |
+| capture stream | The device→host audio stream (IN). Runs whenever the engine runs; its timing reveals the device clock. |
+| playback stream | The host→device audio stream (OUT). |
+| implicit feedback | Recovering the device clock from the capture stream's timing and locking playback to it; no separate sync endpoint. |
+| position counter | The device's free-running sample counter, reported in each capture header; wraps at the rate-band modulus (§4.3). |
+| frame count | The number of samples in a capture packet; varies by ±1 with clock drift (the add/drop). |
+| phase | The fractional clock accumulator in the capture header (sub-sample timing). |
+| lead word | The position label on a playback frame: the stream position the frame plays at. |
+| output buffer | The device buffer the DACs read from; playback frames are placed into it at their lead-word positions. |
+| lead margin | `out_lead`; frames the host labels ahead of the capture position to keep the output buffer fed across jitter. |
 
 Terms follow the USB core and ALSA conventions. Driver-specific terms are
 defined above.
+
+## Overview
+
+### The device clock and implicit feedback
+
+The Fireface is the clock master. Its converters run on the device clock and
+the host follows it. Both audio directions share that one clock: the capture
+stream (device→host) and the playback stream (host→device).
+
+The capture stream runs whenever the engine runs, even when nothing is being
+played back. The reason is clock recovery: the device captures at its own
+rate, so the frame count and the position counter in each capture packet
+reveal the true device clock to the host. This is implicit feedback — the
+capture stream itself carries the clock information, so no separate sync
+endpoint is needed. The host measures the device rate from the capture timing
+and locks playback to it.
+
+Each capture packet begins with a 4-byte header: the frame count (bits 0–4),
+the position counter (bits 5–17 at 1x, widening at 2x/4x), and the phase
+(bits 21–31). The audio samples follow the header.
+
+A playback frame carries a lead word naming the stream position the frame
+plays at. On the UCX each frame is one lead word plus the channel samples; the
+lead word is the only extra word — the frame size is implicit from the
+transfer length and the format. The device places each playback frame into its
+output buffer at the position named by the lead word; the DACs read that buffer
+at the device clock.
+
+The host derives the lead word from the capture position it just learned, plus
+the lead margin that keeps the output buffer stocked ahead of the DAC read
+position and absorbs USB and scheduling jitter. The loop is:
+
+1. The device captures; the capture header reports position + frame count (the
+   device clock).
+2. The host reads it and learns the device position and rate.
+3. The host labels playback frames with lead words = device position + lead
+   margin.
+4. The device places them in the output buffer; the DACs play them at the
+   device clock.
+
+If the lead words run ahead of the real device position, the device is asked to
+play frames it has not reached: the output buffer starves and a gap or
+distortion is heard. The lead must stay locked to the capture position (§4.3).
+
+### From the device clock to Linux: quantum, period, URB, latency
+
+The host delivers playback through the ALSA PCM buffer. The playback chain is:
+application → ALSA ring → in-flight URBs → device output buffer → converters.
+Each stage holds frames; the round-trip latency is the sum of what each stage
+holds at the moment of measurement. Three quantities belong to three layers:
+
+| Quantity | Layer | Meaning |
+|---|---|---|
+| quantum `Q` | host (PipeWire) | the graph cycle in frames; the application callback chunk ("samples" in a driver panel) |
+| period `P` | ALSA / driver | the buffer chunk whose completion raises a period signal; the driver minimum is one URB (the period floor) |
+| URB | USB | one transfer; ISO bundles `iso_packets` microframes (1 ms at the shipped geometry) |
+
+The device lead and the converter delay are fixed device terms. The quantum
+and the period are host/driver choices that set the scheduling margin and the
+latency. The diagram below shows the chain; the full geometry, the achievable
+envelope and the timer/IRQ scheduling rules are in §4.1.1 and §4.1.2.
+
+![USB audio buffering: quantum, period, URB and latency](usb-audio-buffering.svg)
+
+The sections that follow dive into the technical detail: the driver/host
+boundary (§1), descriptors (§2), the control transports (§3) and the streaming
+engine (§4).
 
 ## 1. Boundary
 
@@ -394,6 +471,30 @@ playback clock reference. The loop:
 This is implicit feedback: the device's captured clock schedules
 playback, keeping the two directions aligned.
 
+**Priming.** The OUT stream starts before the feedback ring holds
+entries for it. The first `fb_delay` OUT packets of a run are the
+priming window. A priming packet carries the nominal frame count, so
+the device output buffer stays fed before feedback exists. The lead
+words advance at the nominal cadence through the window. The data is
+silence while the stream is not running or the host ring is dry; an
+anchored, filled stream sends ring data in the priming window like in
+any other packet.
+
+**The lead anchor seed.** The lead counter starts from the device
+timestamp: the unwrapped position rewound by the packets between the
+feedback slot and the fill moment, plus `out_lead`. The seed requires a
+valid device timestamp (at least one real capture header). The rewind
+can reach before the first header of the run; the position counter
+free-runs at the committed rate, so the extrapolated position stays on
+the device timeline. Until the seed anchors the counter, playback
+packets carry silence; ring data waits for the anchor. From the seed,
+the counter advances by the frames sent: nominal frames in the priming
+window, mirrored frames once feedback exists. The nominal cadence is
+the committed rate; the mirrored cadence is the device's captured
+rate. The two agree to within the clock drift over the priming window,
+so the handover carries no cadence step. The lag watermarks record the
+anchored counter only.
+
 **What drives the loop.** Two device fields schedule the OUT stream:
 the position anchors the lead word (K1.3 initializes its lead counter
 from the recorded position plus `out_lead`, then advances it by the
@@ -403,7 +504,7 @@ captures one extra frame in a microframe, the count carries that
 add/drop, and OUT reproduces it. The long-term OUT rate therefore
 equals the device's capture rate, fractional part included.
 
-The phase is recorded in `fb[]` and exposed for diagnostics; the
+The phase is recorded in `fb[]` and exposed for diagnostics.
 The scheduler mirrors the frame count, which already carries the add/drop.
 The driver also consumes the phase for the device timestamp: each IN
 packet pairs the unwrapped device position with the host time of the next
@@ -437,6 +538,8 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | lead word | the stream position an OUT frame plays at; keeps the device output buffer supplied | K1.3 |
 | `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
+| priming window | the first `fb_delay` OUT packets of a run, before feedback exists for them | K1.3 priming |
+| nominal frame count | `rate/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window | K1.3 priming |
 
 Guards:
 

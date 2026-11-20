@@ -376,6 +376,10 @@ struct ffuc {
 	u32 iso_frames_hist[32];
 	unsigned int in_end;
 	unsigned int fb_acc;
+	/* Nominal-cadence accumulator for the OUT priming window: carries
+	 * the fractional frames per packet (rate/8000) so the priming lead
+	 * words advance at the exact nominal rate.  Under fb_lock. */
+	unsigned int out_prime_acc;
 	unsigned int fb_delay;
 	unsigned int out_lead;
 	bool iso_frames_ok;
