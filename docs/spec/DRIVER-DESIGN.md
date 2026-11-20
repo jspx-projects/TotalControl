@@ -540,15 +540,31 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
 | priming window | the first `fb_delay` OUT packets of a run, before feedback exists for them | K1.3 priming |
 | nominal frame count | `rate/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window | K1.3 priming |
+| cadence mean | mean frames per packet × 8000; the device clock the capture packets reveal | K1.4 cadence verdict |
+| convergence window | 80 packets, one add/drop period of the 44.1 kHz family; the span over which the stop verdict averages the cadence mean | K1.4 stop verdict |
 
 Guards:
 
 | Guard | Input | Action |
 |---|---|---|
-| K1.4 cadence (A5) | mean frames/packet × 8000 against `chip->rate` | diagnostic: a sustained disagreement marks a rate mismatch |
+| K1.4 cadence (A5) | cadence mean against `chip->rate` | diagnostic: a sustained disagreement marks a rate mismatch (below) |
 | K1.5 continuity (A8) | URB start-frame sequence | a discontinuity marks the engine broken → K10 |
 | K7 latch watchdog (A6, A7) | D6 status byte 3 bit 7 | a latched output while playback runs, after the grace, marks the engine broken → K10 |
 | URB error burst | completion status | above `FFUC_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
+
+**The cadence verdict.** The cadence mean is the mean frames per packet
+× 8000: the device clock the capture packets reveal. Two judges use it.
+The periodic guard averages the whole run every 8000 packets and marks a
+rate mismatch after two consecutive disagreeing windows. The stop
+verdict averages a convergence window and trusts the mean only once it
+is stationary: two consecutive windows agree within 0.5%. The window is
+80 packets, one add/drop period of the 44.1 kHz family, so its mean
+averages the clock's add/drop exactly; integer-frame rates converge in
+any window. The startup ramp is a moving mean and fails the agreement
+test, so a run stopped inside the ramp renders no verdict. A steady rate
+— right or wrong — converges and is judged against the ±1% band. A run
+too short to converge has no cadence to judge. The convergence is
+dynamic (successive windows agree), not a fixed sample count.
 
 The macOS reference host reads the position and phase to schedule OUT
 packets against the device clock and uses the output-latch status to
