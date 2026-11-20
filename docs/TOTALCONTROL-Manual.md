@@ -353,7 +353,9 @@ only when the clock source is Internal:
   1/2. The engine section names the application and its rate. A reverse-DNS name
   is shortened to the application name, so
   `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing playing
-  it reads `Waiting for playback` and keeps the last rate.
+  it reads `Waiting for playback` and keeps the last rate. If the card does not
+  adopt the followed rate, TotalControl re-applies it and nudges the graph to
+  renegotiate, so a stuck rate heals on its own without changing the mode.
 
 Whatever the authority, the **device rate is the hub**. The authority sets the
 device rate, and the graph rate and the available quantum both derive from it:

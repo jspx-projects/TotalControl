@@ -5631,6 +5631,27 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     enforce_quantum_floor(state, rate);
 }
 
+/// Trigger a graph renegotiation for a stuck rate. A forced quantum change
+/// re-prepares a stuck stream (the verified healing); re-issuing the same
+/// force-rate alone does not. Toggle the forced quantum through another
+/// value and restore the user's setting, so the graph renegotiates without
+/// leaving a changed quantum. Used only on a bounded stuck retry.
+fn nudge_graph_renegotiation(state: &mut TotalControl, rate: u32) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    let q = state.engine_force_quantum;
+    let alt = if q > 0 { 0 } else { quantum_floor(state, rate) };
+    if alt == q {
+        return;
+    }
+    if pw_clock::force_quantum(alt).is_err() {
+        return;
+    }
+    let _ = pw_clock::force_quantum(q);
+    log::info!("rate-follow: nudged quantum to renegotiate a stuck rate");
+}
+
 /// Replace `clock.allowed-rates` with the connected device's list, saving the
 /// value that was there first.  Called on every connect and at startup; the
 /// previous value is restored on disconnect or a clean exit when TotalControl
@@ -12566,10 +12587,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // or a stale seed must not block the owner's rate forever.
             let live_force = pw_clock::read().map(|c| c.force_rate).filter(|r| *r > 0);
             state.rate_follow.reconcile(live_force);
+            // The card's actual rate is the truth the force metadata cannot
+            // give: a force equal to the owner's rate that the card never
+            // adopted must still be re-applied (a stuck renegotiation).
+            let card_rate = state.card_stream.map(|s| s.rate);
             let rate = state
                 .rate_follow
-                .observe(&candidates, &supported, Instant::now());
+                .observe(&candidates, &supported, card_rate, Instant::now());
             if let Some(rate) = rate {
+                // A re-apply of a rate already pending is a stuck retry: nudge
+                // the graph to renegotiate (a forced quantum change re-prepares
+                // a stuck stream), since the force alone did not move it.
+                if state.pending_device_rate.is_some_and(|(r, _)| r == rate) {
+                    nudge_graph_renegotiation(state, rate);
+                }
                 apply_graph_rate(state, rate, false);
             }
         }
@@ -12724,6 +12755,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 enforce_quantum_floor(state, running_rate(state));
                 if let Some((wanted, since)) = state.pending_device_rate {
                     let actual = stream.map(|s| s.rate);
+                    // In Follow mode the follower re-applies a stuck rate a
+                    // bounded number of times (MAX_STUCK_RETRIES x ADOPT_WINDOW);
+                    // give that budget before reporting failure. Other modes
+                    // do not retry, so they report after the short window.
+                    let timeout = if state.engine_rate_mode == EngineRateMode::Follow {
+                        Duration::from_secs(12)
+                    } else {
+                        Duration::from_secs(3)
+                    };
                     if actual == Some(wanted) {
                         if let Some(t0) = state.rate_switch_t0 {
                             log::info!(
@@ -12732,7 +12772,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             );
                         }
                         state.pending_device_rate = None;
-                    } else if since.elapsed() >= Duration::from_secs(3) {
+                    } else if since.elapsed() >= timeout {
                         state.pending_device_rate = None;
                         state.notice = Some((
                             format!(

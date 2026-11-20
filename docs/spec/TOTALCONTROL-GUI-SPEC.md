@@ -1361,6 +1361,16 @@ and a 2 s heartbeat). A divergence — an external metadata write or a stale
 seed — is re-applied once the owner's rate has been stable for 300 ms; an
 external force change is transient, not a new rate authority.
 
+Follow verifies the actual card rate (the open stream's rate), not only the
+force metadata: a force equal to the owner's rate that the card has not
+adopted is a stuck renegotiation, and the force alone does not heal it. After
+a three-second settling window the follower re-applies the rate and nudges
+the graph to renegotiate (a forced quantum change re-prepares a stuck stream),
+up to three retries; the card adopting the rate clears the retry budget. If
+the card still diverges after the budget, the pending confirmation reports
+the rate the device is still at. With no open stream the card rate is unknown
+and the applied rate is kept.
+
 At connect TotalControl replaces PipeWire's `clock.allowed-rates` with the
 connected device's nine rates, keeping the previous value. On disconnect or a
 clean exit it restores that value if the list is still the one it wrote. A
