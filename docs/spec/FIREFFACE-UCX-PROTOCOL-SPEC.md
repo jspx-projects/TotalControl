@@ -1116,25 +1116,29 @@ Open items:
 
 Input packet:
 
-- 4-byte header: bits 0..4 frame count, bits 5..17 position, bits 18..31 phase;
+- 4-byte header: bits 0..4 frame count, bits 5..17 position (1x; widens at
+  2x/4x), bits 21..31 phase;
 - block/planar 32-bit samples;
 - up to 8 ISO packets per URB.
 
-At 1x rates the position is a 13-bit free-running counter wrapping at 8192.
-The phase is a 14-bit accumulator counting 480 MHz ticks (2.0833 ns); the
-value wraps at `tps = 480000000/rate` ticks per sample (10000 at 48 kHz,
-10884.354 at 44.1 kHz) and advances one microframe per packet mod tps,
-independent of the frame count.  The exact position at the packet boundary
-is `pos + phase/tps` (the device is ahead by the owed fraction; the add
-pays it at the wrap).  The position-counter width at 2x and 4x rates is an
-open item (§12.4).
+The position is a free-running counter wrapping at 8192 at 1x (13-bit,
+bits 5..17), 16384 at 2x (14-bit, bits 5..18) and 32768 at 4x (15-bit,
+bits 5..19).  The phase is an 11-bit field (bits 21..31) at every rate
+band, counting 60 MHz ticks (16.667 ns); the value wraps at
+`tps = 60000000/rate` ticks per sample (1250 at 48 kHz, 1360.5 at 44.1 kHz,
+625 at 96 kHz, 312.5 at 192 kHz) and advances one microframe per packet mod
+tps, independent of the frame count.  The exact position at the packet
+boundary is `pos + phase/tps` (the device is ahead by the owed fraction;
+the add pays it at the wrap).  The bits between the position field and bit
+21 are not decoded.  The 2x/4x position widening and the phase field need
+device confirmation (§12.4).
 
 Output packet:
 
 - interleaved `lead_word + nch float32` frames;
 - every lead word is written; it is the stream position the frame plays at,
   modulo the ring;
-- the ring wraps at 8192 at 1x rates.
+- the ring wraps at 8192 at 1x, 16384 at 2x and 32768 at 4x.
 
 ### 12.2 Interrupt interface 5
 
@@ -1220,10 +1224,11 @@ The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
    output lead intact. An analog output capture across a tone-playing
    round-trip measures the audible gap.
 6. ISO position-counter rate-band scaling: the position field width and
-   modulus at 2x (14-bit / 16384) and 4x (15-bit / 32768), the phase field
-   taking the remaining upper bits. The 1x layout (13-bit / 8192) is
-   capture-verified; a 2x/4x ISO capture confirms the wider bands. The
-   driver uses the 1x wrap (8192) at all rates.
+   modulus widen to 14-bit / 16384 at 2x and 15-bit / 32768 at 4x; the
+   phase field is fixed 11-bit (bits 21-31) at every band, a 60 MHz
+   accumulator. The 1x layout (13-bit / 8192) is capture-verified; a 2x/4x
+   ISO capture confirms the wider bands and the phase field. The driver
+   implements the widening and the fixed phase field.
 
 ## 13. Metering
 

@@ -181,11 +181,12 @@ static unsigned int ffuc_urb_frames(struct ffuc *chip, unsigned int rate)
 }
 
 /* AP-mode ISO header layout per rate band (1x/2x/4x).  The position field
- * widens with the band and the phase field is the remaining upper bits.
- * The layout is generic across AP models (UC, UCX, Babyface-classic share
- * it); only the rate band selects it.  The phase VALUE wraps at
- * tps = 480000000/rate (rate-dependent), so the fractional-position law is
- * band-independent; only the extraction width changes with the band. */
+ * widens with the band (bits 5..17/18/19); the phase field is FIXED at
+ * bits 21..31 (11-bit) at every band, above the widened position.  The
+ * layout is generic across AP models (UC, UCX, Babyface-classic share it);
+ * only the rate band selects the position width.  The phase VALUE wraps at
+ * tps = 60000000/rate (a 60 MHz tick), so the fractional-position law
+ * phase/tps is band-independent. */
 struct ffuc_iso_layout {
 	u32 pos_mask;
 	u32 modulus;
@@ -194,9 +195,9 @@ struct ffuc_iso_layout {
 };
 
 static const struct ffuc_iso_layout ffuc_iso_layouts[3] = {
-	{ 0x1fff, 0x2000, 18, 0x3fff },	/* 1x: pos 5..17, phase 18..31 */
-	{ 0x3fff, 0x4000, 19, 0x1fff },	/* 2x: pos 5..18, phase 19..31 */
-	{ 0x7fff, 0x8000, 20, 0x0fff },	/* 4x: pos 5..19, phase 20..31 */
+	{ 0x1fff, 0x2000, 21, 0x7ff },	/* 1x: pos 5..17, phase 21..31 */
+	{ 0x3fff, 0x4000, 21, 0x7ff },	/* 2x: pos 5..18, phase 21..31 */
+	{ 0x7fff, 0x8000, 21, 0x7ff },	/* 4x: pos 5..19, phase 21..31 */
 };
 
 static const struct ffuc_iso_layout *ffuc_iso_layout(struct ffuc *chip)
@@ -1848,10 +1849,10 @@ cadence_skip:
 				u64 ts_ns = chip->ts_anchor_ns +
 					(f_base + i) * 125000ull;
 				/* phase/tps as Q32 frames:
-				 * phase * rate * 2^32 / 480e6. */
+				 * phase * rate * 2^32 / 60e6 (60 MHz tick). */
 				u64 frac = mul_u64_u64_div_u64(
 					phase, (u64)chip->rate << 32,
-					480000000ull);
+					60000000ull);
 				u64 exact_cnt = (cnt_k << 32) + frac;
 				u64 dq, dn;
 
@@ -2657,7 +2658,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->ts_seed_in_end = 0;
 	chip->ts_seed_counter = 0;
 	chip->ts_frac_q32 = 0;
-	chip->ts_tps_q32 = div64_u64(480000000ull << 32, chip->rate);
+	chip->ts_tps_q32 = div64_u64(60000000ull << 32, chip->rate);
 	/* Per-run diagnostics: a stop line describes this stream only. */
 	memset(chip->iso_frames_hist, 0, sizeof(chip->iso_frames_hist));
 	atomic_set(&chip->in_hdr_only, 0);
