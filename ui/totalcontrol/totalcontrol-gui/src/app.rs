@@ -3165,6 +3165,11 @@ pub struct TotalControl {
     pub rate_switch_burst: (u32, u32),
     rate_switch_base: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
     rate_switch_until: Option<Instant>,
+    /// The last engine-run epoch seen in the transport counters.
+    last_run_seq: Option<u32>,
+    /// When the current rate-switch window opened, for the confirmation
+    /// latency log.
+    rate_switch_t0: Option<Instant>,
     /// The Fireface PipeWire sink's volume (percent, dB), polled with the
     /// engine.  It is an attenuation *before* the device, so a sink below
     /// 0 dB makes the playback meters read low even for a full-scale file.
@@ -3747,6 +3752,8 @@ pub fn new_with_device(
         rate_switch_burst: (0, 0),
         rate_switch_base: None,
         rate_switch_until: None,
+        rate_switch_t0: None,
+        last_run_seq: None,
         host_volume: None,
         device_service: None,
         device_updates: None,
@@ -10048,6 +10055,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.rate_switch_until = None;
             }
             state.transport_counters = counters;
+            track_engine_run(state, counters);
             if let Some(until) = state.rate_switch_until {
                 if Instant::now() < until {
                     if state.rate_switch_base.is_none() {
@@ -12494,6 +12502,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 begin_rate_switch_window(state);
             }
             apply_graph_rate(state, rate, true);
+            log::info!("rate-switch: requested {rate}");
             if state.device.rate_follows_sound_server() {
                 state.notice = Some((
                     if rate > 0 {
@@ -12673,18 +12682,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                     state.last_card_rate = Some(rate);
                 }
-                if rate_changed
-                    && state.last_card_rate.is_some()
-                    && !state
-                        .rate_switch_until
-                        .is_some_and(|until| Instant::now() < until)
-                {
-                    // A rate switch produces a short-packet burst in the
-                    // driver.  Attribute it to the switch instead of the
-                    // real-problem short counter.  A user-initiated
-                    // EngineRate already opened this window before the
-                    // switch, so keep that earlier baseline.
-                    begin_rate_switch_window(state);
+                if rate_changed && state.last_card_rate.is_some() {
+                    note_observed_rate_switch(state);
                 }
                 if sink_started || rate_changed {
                     // The UC reloads its stored mixer when a playback stream
@@ -12717,6 +12716,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 if let Some((wanted, since)) = state.pending_device_rate {
                     let actual = stream.map(|s| s.rate);
                     if actual == Some(wanted) {
+                        if let Some(t0) = state.rate_switch_t0 {
+                            log::info!(
+                                "rate-switch: card confirmed {wanted} after {} ms",
+                                t0.elapsed().as_millis()
+                            );
+                        }
                         state.pending_device_rate = None;
                     } else if since.elapsed() >= Duration::from_secs(3) {
                         state.pending_device_rate = None;
@@ -13350,6 +13355,11 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
             Duration::from_secs(3)
         };
         subs.push(iced::time::every(poll).map(|_| Message::EnginePoll));
+        if engine_poll_fast(state) {
+            subs.push(
+                iced::time::every(Duration::from_millis(120)).map(|_| Message::EnginePoll),
+            );
+        }
         if state.engine_rate_mode == EngineRateMode::Follow && !state.device.is_mock() {
             // Poll the graph at 4 Hz; deliver on change and on a 2 s
             // heartbeat, so a static graph still reconciles a diverged
@@ -15815,15 +15825,17 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
-    // Transport diagnostics: cumulative driver error counters, shown
-    // relative to the baseline (driver reattach or the reset button).
-    // Counting runs on every tick, independent of this drawer.  Each row
-    // is one fault domain; the manual explains meaning and mitigation.
+    // Transport diagnostics: cumulative counters shown relative to the
+    // baseline (driver reattach or the reset button); the per-run ISO packet
+    // detail and the USB error gauge show the current engine run, because
+    // they reset on every rate/quantum switch or recovery.  Counting runs on
+    // every tick, independent of this drawer.  Each row is one fault domain;
+    // the manual explains meaning and mitigation.
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
         body = body.push(
             row![
-                strip::hint(caption("Diagnostics"), "Cumulative since reset.", scale),
+                strip::hint(caption("Diagnostics"), "Since reset; packet detail is this run.", scale),
                 iced::widget::Space::new().width(Length::Fill),
                 button(strip::centered_label_auto(
                     "reset",
@@ -15848,20 +15860,22 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .1
             .saturating_add(state.rate_switch_burst.1)
             .min(delta.out_shorts);
-        let short_in = (delta.in_shorts + delta.in_short).saturating_sub(switch_in);
-        let short_out = (delta.out_shorts + delta.out_pkt_len_err).saturating_sub(switch_out);
-        let bad_in = short_in + delta.in_misaligned + delta.in_bad_length;
-        let bad_out = short_out + delta.out_capacity_err + delta.out_bad_length;
+        let short_in = (delta.in_shorts + now.in_short).saturating_sub(switch_in);
+        let short_out = (delta.out_shorts + now.out_pkt_len_err).saturating_sub(switch_out);
+        let bad_in = short_in + now.in_misaligned + delta.in_bad_length;
+        let bad_out = short_out + now.out_capacity_err + delta.out_bad_length;
+        // URB status errors are cumulative; the ISO packet-status detail and
+        // the consecutive-error gauge are this run (they reset on a restart).
         let usb = delta.in_status_errors
             + delta.out_status_errors
-            + delta.in_status_err
-            + delta.out_pkt_status
-            + delta.urb_errors;
-        let feedback = delta.in_pos_gap
-            + delta.in_frames_mismatch
+            + now.in_status_err
+            + now.out_pkt_status
+            + now.urb_errors;
+        let feedback = now.in_pos_gap
+            + now.in_frames_mismatch
             + delta.rate_mismatch
-            + delta.out_fb_ahead
-            + delta.out_fb_stale;
+            + now.out_fb_ahead
+            + now.out_fb_stale;
         let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
         let rows: [(&'static str, String, u32, &'static str); 8] = [
             (
@@ -15964,6 +15978,23 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .into()
 }
 
+/// Track the engine-run epoch.  A new run (rate/quantum switch or recovery)
+/// resets the per-run diagnostics, so close any open rate-switch window;
+/// the cumulative baseline is kept (those counters never reset).
+fn track_engine_run(
+    state: &mut TotalControl,
+    counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
+) {
+    let Some(c) = counters else {
+        state.last_run_seq = None;
+        return;
+    };
+    if state.last_run_seq.is_some_and(|seq| seq != c.run_seq) {
+        commit_rate_switch_window(state);
+    }
+    state.last_run_seq = Some(c.run_seq);
+}
+
 /// Commit the current rate-switch settling window into the cumulative
 /// expected-short total.  The driver's counters are cumulative, so keeping
 /// every window prevents an earlier expected burst from reappearing in the
@@ -15980,6 +16011,7 @@ fn commit_rate_switch_window(state: &mut TotalControl) {
     state.rate_switch_burst = (0, 0);
     state.rate_switch_base = None;
     state.rate_switch_until = None;
+    state.rate_switch_t0 = None;
 }
 
 /// Open a 1.5 s settling window at the current counters.  A previous window
@@ -15991,6 +16023,36 @@ fn begin_rate_switch_window(state: &mut TotalControl) {
     state.rate_switch_burst = (0, 0);
     state.rate_switch_base = state.transport_counters;
     state.rate_switch_until = Some(Instant::now() + Duration::from_millis(1500));
+    state.rate_switch_t0 = Some(Instant::now());
+}
+
+/// True while a rate or quantum change is still being confirmed, so the
+/// engine poll runs fast and the panel settles in about 0.2 s instead of
+/// the 1-3 s idle interval.
+fn engine_poll_fast(state: &TotalControl) -> bool {
+    state.pending_device_rate.is_some()
+        || state
+            .quantum_change_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(10))
+}
+
+/// Attribute an observed card-rate change to the settling window.  A
+/// user-initiated `EngineRate` opened the window at request time; the
+/// switch lands on the card later, so extend the window to cover the
+/// actual burst instead of opening a second one.  With no window open (a
+/// player or PipeWire initiated the switch), open one now.
+fn note_observed_rate_switch(state: &mut TotalControl) {
+    if let Some(t0) = state.rate_switch_t0 {
+        log::info!(
+            "rate-switch: card rate observed after {} ms",
+            t0.elapsed().as_millis()
+        );
+    }
+    if state.rate_switch_until.is_some() {
+        state.rate_switch_until = Some(Instant::now() + Duration::from_millis(1500));
+    } else {
+        begin_rate_switch_window(state);
+    }
 }
 
 /// Per-field difference of two cumulative driver counter readings.
@@ -16031,6 +16093,7 @@ fn transport_delta(
         out_fb_stale: now.out_fb_stale.saturating_sub(base.out_fb_stale),
         hw_ptr_mismatch: now.hw_ptr_mismatch.saturating_sub(base.hw_ptr_mismatch),
         delta_zero: now.delta_zero.saturating_sub(base.delta_zero),
+        run_seq: now.run_seq,
     }
 }
 
@@ -22162,8 +22225,10 @@ mod tests {
         channel_with_parity, choose_startup_kind,
         choose_startup_target, control_room_available, control_room_visual_width,
         control_room_width, converter_frames, frames_ms, fx_reserve, fx_slot, global_feedback,
-        global_feedback_is_typed, global_messages, global_state_commands, host_settings_of,
+        engine_poll_fast, global_feedback_is_typed, global_messages, global_state_commands,
+        host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
+        note_observed_rate_switch, track_engine_run,
         power_sum_output_meters, quantum_pending, rate_choices, rate_selected_label,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
@@ -22582,6 +22647,31 @@ mod tests {
         // A reset/restart baseline can be newer than the reading.
         let back = transport_delta(&base, &now);
         assert_eq!(back.out_gaps, 0);
+    }
+
+    #[test]
+    fn a_new_engine_run_closes_the_switch_window_and_keeps_the_baseline() {
+        use totalcontrol_core::fireface::abi::HwdepCounters;
+        let mut state = new(true, None, None);
+        let base = HwdepCounters { out_urbs: 100, run_seq: 1, ..HwdepCounters::default() };
+        state.transport_baseline = Some(base);
+        state.last_run_seq = Some(1);
+        state.rate_switch_until = Some(Instant::now() + Duration::from_millis(500));
+        state.rate_switch_burst = (3, 4);
+        // Same run: the window stays open and the baseline is untouched.
+        track_engine_run(&mut state, Some(HwdepCounters { run_seq: 1, ..HwdepCounters::default() }));
+        assert!(state.rate_switch_until.is_some());
+        assert_eq!(state.transport_baseline, Some(base));
+        // New run (a switch or recovery): the window commits, the cumulative
+        // baseline is kept, and the epoch advances.
+        track_engine_run(&mut state, Some(HwdepCounters { run_seq: 2, ..HwdepCounters::default() }));
+        assert!(state.rate_switch_until.is_none());
+        assert_eq!(state.last_run_seq, Some(2));
+        assert_eq!(state.transport_baseline, Some(base));
+        assert_eq!(state.rate_switch_shorts, (3, 4));
+        // No counters: the epoch is forgotten.
+        track_engine_run(&mut state, None);
+        assert_eq!(state.last_run_seq, None);
     }
 
     #[test]
@@ -23374,6 +23464,41 @@ mod tests {
 
     /// Every persisted setting must mark its document dirty; the autosave
     /// writes a document only when the matching classifier fired.
+    #[test]
+    fn the_engine_polls_fast_while_a_change_is_pending() {
+        let mut state = new(true, None, None);
+        assert!(!engine_poll_fast(&state));
+        state.pending_device_rate = Some((96_000, Instant::now()));
+        assert!(engine_poll_fast(&state));
+        state.pending_device_rate = None;
+        state.quantum_change_at = Some(Instant::now());
+        assert!(engine_poll_fast(&state));
+        state.quantum_change_at = Some(Instant::now() - Duration::from_secs(11));
+        assert!(!engine_poll_fast(&state));
+    }
+
+    #[test]
+    fn an_observed_rate_change_extends_the_open_switch_window() {
+        use totalcontrol_core::fireface::abi::HwdepCounters;
+        let mut state = new(true, None, None);
+        let base = HwdepCounters::default();
+        state.transport_counters = Some(base);
+        state.rate_switch_base = Some(base);
+        state.rate_switch_t0 = Some(Instant::now() - Duration::from_millis(200));
+        let until = Instant::now() + Duration::from_millis(300);
+        state.rate_switch_until = Some(until);
+        note_observed_rate_switch(&mut state);
+        // The window is extended to a fresh 1.5 s; the baseline is kept.
+        assert!(state.rate_switch_until.unwrap() > until);
+        assert_eq!(state.rate_switch_base, Some(base));
+        // With no window open, an observed change opens one.
+        state.rate_switch_until = None;
+        state.rate_switch_base = None;
+        note_observed_rate_switch(&mut state);
+        assert!(state.rate_switch_until.is_some());
+        assert_eq!(state.rate_switch_base, Some(base));
+    }
+
     #[test]
     fn every_persisted_setting_marks_its_document_dirty() {
         let host = [

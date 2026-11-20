@@ -2120,12 +2120,15 @@ repeat measurement. The PC measurement is a full-duplex electrical loopback
 
 Below it, **Diagnostics** lists the kernel transport error counters:
 `underrun / overrun`, `recover`, `usb`, `gaps`, `bad packets`, `feedback`,
-`pointer` and `events dropped`. They are cumulative since the driver
-attached or the last reset, and counted continuously regardless of the
-drawer. `in` is device→host and `out` is host→device; `underrun / overrun`,
-`gaps` and `bad packets` show both. The expected rate-change short burst is
-excluded from `bad packets`. Tooltips are short; the manual carries the
-meaning and mitigation.
+`pointer` and `events dropped`. The cumulative rows count since the driver
+attached or the last reset. The per-run ISO packet detail in `bad packets`
+and `feedback`, and the USB consecutive-error gauge in `usb`, show the
+current engine run: they reset on every rate/quantum switch or recovery, so
+a switch does not carry stale detail into the new run. Counting runs
+continuously regardless of the drawer. `in` is device→host and `out` is
+host→device; `underrun / overrun`, `gaps` and `bad packets` show both. The
+expected rate-change short burst is excluded from `bad packets`. Tooltips
+are short; the manual carries the meaning and mitigation.
 
 ## 14. State references
 

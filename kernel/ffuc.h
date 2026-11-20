@@ -416,6 +416,9 @@ struct ffuc {
 	unsigned long status_armed_at;
 	struct work_struct recover_work;
 	unsigned int recoveries;
+	/* Engine-run epoch: increments on every engine start.  The per-run
+	 * diagnostics reset with it; the host re-bases its counter view. */
+	u32 run_seq;
 	u8 last_status[FFUC_STATUS_LEN];
 	bool out_latched;
 

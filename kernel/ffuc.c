@@ -180,15 +180,52 @@ static unsigned int ffuc_urb_frames(struct ffuc *chip, unsigned int rate)
 	return chip->base_urb_frames << ffuc_mode_index(rate);
 }
 
+/* AP-mode ISO header layout per rate band (1x/2x/4x).  The position field
+ * widens with the band (bits 5..17/18/19); the phase field is FIXED at
+ * bits 21..31 (11-bit) at every band, above the widened position.  The
+ * layout is generic across AP models (UC, UCX, Babyface-classic share it);
+ * only the rate band selects the position width.  The phase VALUE wraps at
+ * tps = 60000000/rate (a 60 MHz tick), so the fractional-position law
+ * phase/tps is band-independent. */
+struct ffuc_iso_layout {
+	u32 pos_mask;
+	u32 modulus;
+	unsigned int phase_shift;
+	u32 phase_mask;
+};
+
+static const struct ffuc_iso_layout ffuc_iso_layouts[3] = {
+	{ 0x1fff, 0x2000, 21, 0x7ff },	/* 1x: pos 5..17, phase 21..31 */
+	{ 0x3fff, 0x4000, 21, 0x7ff },	/* 2x: pos 5..18, phase 21..31 */
+	{ 0x7fff, 0x8000, 21, 0x7ff },	/* 4x: pos 5..19, phase 21..31 */
+};
+
+static const struct ffuc_iso_layout *ffuc_iso_layout(struct ffuc *chip)
+{
+	return &ffuc_iso_layouts[ffuc_mode_index(chip->rate)];
+}
+
+static u32 ffuc_iso_pos_mask(struct ffuc *chip)
+{
+	return ffuc_iso_layout(chip)->pos_mask;
+}
+
+static unsigned int ffuc_iso_phase_shift(struct ffuc *chip)
+{
+	return ffuc_iso_layout(chip)->phase_shift;
+}
+
+static u32 ffuc_iso_phase_mask(struct ffuc *chip)
+{
+	return ffuc_iso_layout(chip)->phase_mask;
+}
+
 unsigned int ffuc_iso_wrap(struct ffuc *chip)
 {
-	/* The AP-mode position counter wraps at 8192 (13-bit) at 1x rates on
-	 * every model: UC, UCX and Babyface-classic share the same header
-	 * (capture-verified on UCX and UC; Babyface from the reference
-	 * set_format, which converges on the same mask/modulus write).  The
-	 * reference widens the counter to 16384/32768 at 2x/4x; that rate
-	 * scaling is an open item, so the 1x wrap is used at all rates. */
-	return FFUC_ISO_COUNTER_MOD;
+	/* The position counter modulus widens with the rate band: 8192 at
+	 * 1x, 16384 at 2x, 32768 at 4x.  It is a power of two, so the field
+	 * mask and the modulo reduction agree. */
+	return ffuc_iso_layout(chip)->modulus;
 }
 
 unsigned int ffuc_rate_from_index(unsigned int idx)
@@ -1542,9 +1579,10 @@ static void ffuc_fb_put(struct ffuc *chip, unsigned int pos, unsigned int frames
 {
 	u32 e;
 
-	/* One header layout for every AP-mode model: frame count bits 0-4,
-	 * position bits 5-17 (13-bit), phase bits 18-31 (14-bit). */
-	e = ((phase & 0x3fff) << 18) | ((pos & 0x1fff) << 5) | (frames & 0x1f);
+	/* Header layout per rate band: frame count bits 0-4, position bits
+	 * 5..(4+width), phase the remaining upper bits (see ffuc_iso_layouts). */
+	e = ((phase & ffuc_iso_phase_mask(chip)) << ffuc_iso_phase_shift(chip)) |
+	    ((pos & ffuc_iso_pos_mask(chip)) << 5) | (frames & 0x1f);
 	chip->fb[chip->in_pkts++ & (FFUC_FB_SIZE - 1)] = e;
 	chip->in_end = (pos + frames) % ffuc_iso_wrap(chip);
 	/* The unwrapped position advances exactly like the wrap-domain
@@ -1595,8 +1633,8 @@ static bool ffuc_fb_get(struct ffuc *chip, u64 k, unsigned int *pos,
 	    chip->in_pkts - src > FFUC_FB_SIZE)
 		return false;
 	e = chip->fb[src & (FFUC_FB_SIZE - 1)];
-	*pos = (e >> 5) & 0x1fff;
-	*phase = (e >> 18) & 0x3fff;
+	*pos = (e >> 5) & ffuc_iso_pos_mask(chip);
+	*phase = (e >> ffuc_iso_phase_shift(chip)) & ffuc_iso_phase_mask(chip);
 	*frames = min(e & 0x1f, chip->mode->max_frames);
 	return true;
 }
@@ -1774,16 +1812,17 @@ cadence_skip:
 			;
 		}
 		hdr = le32_to_cpup((const __le32 *)pkt);
-		/* One header layout for every AP-mode model: frame count
-		 * bits 0-4, position bits 5-17 (13-bit, wrap 8192), phase
-		 * bits 18-31 (14-bit).  The wrap is a power of two, so the
-		 * field mask and the modulo reduction agree.  A header-only
-		 * packet carries the current position with zero frames; it
-		 * must advance the feedback position, not reset it. */
+		/* Header layout per rate band (ffuc_iso_layouts): frame count
+		 * bits 0-4, position bits 5..(4+width) wrapping at the band
+		 * modulus, phase the remaining upper bits.  The wrap is a power
+		 * of two, so the field mask and the modulo reduction agree.  A
+		 * header-only packet carries the current position with zero
+		 * frames; it must advance the feedback position, not reset it. */
 		{
-			unsigned int pos = (hdr >> 5) & 0x1fff;
+			unsigned int pos = (hdr >> 5) & ffuc_iso_pos_mask(chip);
 			unsigned int hframes = hdr & 0x1f;
-			unsigned int phase = (hdr >> 18) & 0x3fff;
+			unsigned int phase = (hdr >> ffuc_iso_phase_shift(chip)) &
+					     ffuc_iso_phase_mask(chip);
 			unsigned int wrap = ffuc_iso_wrap(chip);
 
 			pos %= wrap;
@@ -1810,10 +1849,10 @@ cadence_skip:
 				u64 ts_ns = chip->ts_anchor_ns +
 					(f_base + i) * 125000ull;
 				/* phase/tps as Q32 frames:
-				 * phase * rate * 2^32 / 480e6. */
+				 * phase * rate * 2^32 / 60e6 (60 MHz tick). */
 				u64 frac = mul_u64_u64_div_u64(
 					phase, (u64)chip->rate << 32,
-					480000000ull);
+					60000000ull);
 				u64 exact_cnt = (cnt_k << 32) + frac;
 				u64 dq, dn;
 
@@ -2619,7 +2658,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->ts_seed_in_end = 0;
 	chip->ts_seed_counter = 0;
 	chip->ts_frac_q32 = 0;
-	chip->ts_tps_q32 = div64_u64(480000000ull << 32, chip->rate);
+	chip->ts_tps_q32 = div64_u64(60000000ull << 32, chip->rate);
 	/* Per-run diagnostics: a stop line describes this stream only. */
 	memset(chip->iso_frames_hist, 0, sizeof(chip->iso_frames_hist));
 	atomic_set(&chip->in_hdr_only, 0);
@@ -2843,6 +2882,9 @@ static int ffuc_engine_start(struct ffuc *chip)
 	chip->last_out_complete = 0;
 	chip->last_in_complete = 0;
 	WRITE_ONCE(chip->engine_broken, false);
+	/* A new engine run: the per-run diagnostics restart and the host
+	 * re-bases its counter view on this epoch. */
+	chip->run_seq++;
 	WRITE_ONCE(chip->engine_running, true);
 	for (i = 0; i < chip->nurbs; i++) {
 		for (e = 0; e < m->neps; e++) {

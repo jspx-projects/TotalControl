@@ -7,7 +7,7 @@
 
 use std::mem::size_of;
 
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 7;
 pub const HWDEP_MAX_DATA: usize = 64;
 pub const HWDEP_MAX_WORDS: usize = 63;
 pub const HWDEP_MAX_RATES: usize = 16;
@@ -132,6 +132,9 @@ pub struct HwdepCounters {
     pub out_fb_stale: u32,
     pub hw_ptr_mismatch: u32,
     pub delta_zero: u32,
+    /// Engine-run epoch; increments on every engine start. Per-run detail
+    /// counters reset with it; cumulative counters do not.
+    pub run_seq: u32,
 }
 
 /// One supported rate and the ALSA geometry the driver accepts at it.
@@ -213,8 +216,8 @@ mod tests {
         // ffuc_hwdep_vendor: 1 + 1 + 2 + 2 + 2 + 2 + 64 = 74, aligned to 2
         assert_eq!(size_of::<HwdepVendor>(), 74);
         assert_eq!(size_of::<HwdepWords>(), 4 + 4 + 63 * 4);
-        // ffuc_hwdep_counters: 31 * 4 = 124
-        assert_eq!(size_of::<HwdepCounters>(), 124);
+        // ffuc_hwdep_counters: 32 * 4 = 128 (31 counters + run_seq)
+        assert_eq!(size_of::<HwdepCounters>(), 128);
         // ffuc_hwdep_rate_env: 3 * 4 = 12; envelope: 4 * 4 + 16 * 12 = 208
         assert_eq!(size_of::<HwdepRateEnv>(), 12);
         assert_eq!(size_of::<HwdepEnvelope>(), 208);

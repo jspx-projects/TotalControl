@@ -338,6 +338,7 @@ static int ffuc_hwdep_counters(struct ffuc *chip,
 	c.out_fb_stale = atomic_read(&chip->out_fb_stale);
 	c.hw_ptr_mismatch = atomic_read(&chip->hw_ptr_mismatch);
 	c.delta_zero = atomic_read(&chip->delta_zero);
+	c.run_seq = chip->run_seq;
 	if (copy_to_user(arg, &c, sizeof(c)))
 		return -EFAULT;
 	return 0;
