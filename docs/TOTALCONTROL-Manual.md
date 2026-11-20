@@ -1424,10 +1424,11 @@ reference. **reset** clears the display baseline without changing the device
 or the audio graph.
 
 The cumulative rows count since the driver attached or the last reset. The
-ISO packet detail (in **bad packets** and **feedback**) and the USB error
-gauge (in **usb**) show the current engine run: they reset on a rate or
-quantum switch or a recovery, so a switch starts the new run from zero
-rather than carrying stale detail forward.
+ISO packet detail (in **bad packets** and **feedback**) and the USB
+packet-status detail (in **usb**) show the current engine run: they reset
+on a rate or quantum switch or a recovery, so a switch starts the new run
+from zero rather than carrying stale detail forward. **reset** clears
+these rows as well, so every row reads zero after a reset.
 
 | Row | Meaning | What to do |
 |---|---|---|

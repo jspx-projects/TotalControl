@@ -3158,6 +3158,11 @@ pub struct TotalControl {
     /// shown relative to (set on connect or by the reset button).
     pub transport_counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
     pub transport_baseline: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
+    /// Per-run display baseline: the per-run ISO detail and USB packet-status
+    /// counters at the last reset or engine-run start. The per-run rows show
+    /// `now - transport_perrun_base`, so `reset` clears them and an engine
+    /// restart re-bases them to the new run.
+    pub transport_perrun_base: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
     /// In/out short packets attributed to completed and current rate-switch
     /// settling windows.  `rate_switch_shorts` is cumulative since reset;
     /// `rate_switch_burst` is the current window not yet committed.
@@ -3748,6 +3753,7 @@ pub fn new_with_device(
         card_stream: None,
         transport_counters: None,
         transport_baseline: None,
+        transport_perrun_base: None,
         rate_switch_shorts: (0, 0),
         rate_switch_burst: (0, 0),
         rate_switch_base: None,
@@ -10041,6 +10047,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if let (Some(c), Some(b)) = (counters, state.transport_baseline) {
                 if c.out_urbs < b.out_urbs {
                     state.transport_baseline = counters;
+                    state.transport_perrun_base = counters;
                     state.rate_switch_shorts = (0, 0);
                     state.rate_switch_burst = (0, 0);
                     state.rate_switch_base = None;
@@ -10049,6 +10056,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             if counters.is_none() {
                 state.transport_baseline = None;
+                state.transport_perrun_base = None;
                 state.rate_switch_shorts = (0, 0);
                 state.rate_switch_burst = (0, 0);
                 state.rate_switch_base = None;
@@ -12486,6 +12494,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::SetShowOriginalNames(on) => state.show_original_names = on,
         Message::ResetTransportErrors => {
             state.transport_baseline = state.transport_counters;
+            state.transport_perrun_base = state.transport_counters;
             state.rate_switch_shorts = (0, 0);
             state.rate_switch_burst = (0, 0);
             state.rate_switch_base = None;
@@ -15833,6 +15842,11 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // the manual explains meaning and mitigation.
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
+        // Per-run detail since the last reset (or engine-run start). The
+        // kernel resets these counters on every engine run; the baseline
+        // makes `reset` clear them too, so no row survives a reset.
+        let perrun_base = state.transport_perrun_base.unwrap_or(now);
+        let perrun = transport_delta(&now, &perrun_base);
         body = body.push(
             row![
                 strip::hint(caption("Diagnostics"), "Since reset; packet detail is this run.", scale),
@@ -15860,22 +15874,23 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .1
             .saturating_add(state.rate_switch_burst.1)
             .min(delta.out_shorts);
-        let short_in = (delta.in_shorts + now.in_short).saturating_sub(switch_in);
-        let short_out = (delta.out_shorts + now.out_pkt_len_err).saturating_sub(switch_out);
-        let bad_in = short_in + now.in_misaligned + delta.in_bad_length;
-        let bad_out = short_out + now.out_capacity_err + delta.out_bad_length;
-        // URB status errors are cumulative; the ISO packet-status detail and
-        // the consecutive-error gauge are this run (they reset on a restart).
+        let short_in = (delta.in_shorts + perrun.in_short).saturating_sub(switch_in);
+        let short_out = (delta.out_shorts + perrun.out_pkt_len_err).saturating_sub(switch_out);
+        let bad_in = short_in + perrun.in_misaligned + delta.in_bad_length;
+        let bad_out = short_out + perrun.out_capacity_err + delta.out_bad_length;
+        // URB status errors are cumulative; the ISO packet-status detail is
+        // per-run. The consecutive-error gauge (urb_errors) is a gauge, not a
+        // count, and overlaps the cumulative status errors, so it is not summed
+        // into this total.
         let usb = delta.in_status_errors
             + delta.out_status_errors
-            + now.in_status_err
-            + now.out_pkt_status
-            + now.urb_errors;
-        let feedback = now.in_pos_gap
-            + now.in_frames_mismatch
+            + perrun.in_status_err
+            + perrun.out_pkt_status;
+        let feedback = perrun.in_pos_gap
+            + perrun.in_frames_mismatch
             + delta.rate_mismatch
-            + now.out_fb_ahead
-            + now.out_fb_stale;
+            + perrun.out_fb_ahead
+            + perrun.out_fb_stale;
         let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
         let rows: [(&'static str, String, u32, &'static str); 8] = [
             (
@@ -15987,10 +16002,16 @@ fn track_engine_run(
 ) {
     let Some(c) = counters else {
         state.last_run_seq = None;
+        state.transport_perrun_base = None;
         return;
     };
-    if state.last_run_seq.is_some_and(|seq| seq != c.run_seq) {
-        commit_rate_switch_window(state);
+    if state.last_run_seq != Some(c.run_seq) {
+        // A new engine run (or first sight): the per-run counters restarted,
+        // so re-base the per-run display baseline to this run's reading.
+        if state.last_run_seq.is_some() {
+            commit_rate_switch_window(state);
+        }
+        state.transport_perrun_base = Some(c);
     }
     state.last_run_seq = Some(c.run_seq);
 }
@@ -22672,6 +22693,71 @@ mod tests {
         // No counters: the epoch is forgotten.
         track_engine_run(&mut state, None);
         assert_eq!(state.last_run_seq, None);
+    }
+
+    #[test]
+    fn reset_clears_cumulative_and_per_run_diagnostics() {
+        use super::transport_delta;
+        use totalcontrol_core::fireface::abi::HwdepCounters;
+        let mut state = new(true, None, None);
+        let base = HwdepCounters { out_urbs: 100, run_seq: 1, ..HwdepCounters::default() };
+        let now = HwdepCounters {
+            out_urbs: 200,
+            run_seq: 1,
+            out_underruns: 5,
+            in_overruns: 2,
+            rate_mismatch: 3,
+            in_status_err: 3,
+            out_pkt_status: 7,
+            urb_errors: 4,
+            in_pos_gap: 1,
+            in_frames_mismatch: 2,
+            out_fb_ahead: 1,
+            out_fb_stale: 1,
+            in_short: 2,
+            in_misaligned: 1,
+            out_pkt_len_err: 1,
+            out_capacity_err: 1,
+            ..HwdepCounters::default()
+        };
+        state.transport_baseline = Some(base);
+        state.transport_perrun_base = Some(base);
+        state.transport_counters = Some(now);
+        // Before reset the per-run detail is non-zero (the regression: reset
+        // used to leave these rows untouched).
+        let pr = transport_delta(&now, &state.transport_perrun_base.unwrap());
+        assert!(pr.in_pos_gap + pr.out_pkt_status + pr.in_status_err > 0);
+
+        let _ = update(&mut state, Message::ResetTransportErrors);
+
+        // Reset rebaselines both the cumulative and the per-run display, so
+        // every row reads zero afterwards.
+        assert_eq!(state.transport_baseline, Some(now));
+        assert_eq!(state.transport_perrun_base, Some(now));
+        let d = transport_delta(&now, &state.transport_baseline.unwrap());
+        assert_eq!(d.out_underruns + d.in_overruns + d.rate_mismatch, 0);
+        let pr = transport_delta(&now, &state.transport_perrun_base.unwrap());
+        assert_eq!(
+            pr.in_pos_gap + pr.in_frames_mismatch + pr.out_fb_ahead + pr.out_fb_stale
+                + pr.out_pkt_status + pr.in_status_err + pr.in_short + pr.in_misaligned
+                + pr.out_pkt_len_err + pr.out_capacity_err,
+            0
+        );
+    }
+
+    #[test]
+    fn a_new_engine_run_rebases_the_per_run_baseline() {
+        use totalcontrol_core::fireface::abi::HwdepCounters;
+        let mut state = new(true, None, None);
+        state.last_run_seq = Some(1);
+        state.transport_perrun_base =
+            Some(HwdepCounters { run_seq: 1, in_pos_gap: 5, ..HwdepCounters::default() });
+        // A new run restarts the per-run counters; the display baseline must
+        // follow so the new run's detail is shown, not the previous run's.
+        let new_run = HwdepCounters { run_seq: 2, ..HwdepCounters::default() };
+        track_engine_run(&mut state, Some(new_run));
+        assert_eq!(state.transport_perrun_base, Some(new_run));
+        assert_eq!(state.last_run_seq, Some(2));
     }
 
     #[test]

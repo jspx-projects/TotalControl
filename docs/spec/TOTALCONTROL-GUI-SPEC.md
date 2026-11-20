@@ -1367,9 +1367,11 @@ clean exit it restores that value if the list is still the one it wrote. A
 clean exit also releases TotalControl's `clock.force-rate` override. No
 persistent PipeWire configuration file is installed.
 
-`Diagnostics` lists the kernel transport error counters, cumulative since
-the driver attached or the last `reset`. Counting runs on every tick,
-independent of whether the drawer is open. The rows are `underrun /
+`Diagnostics` lists the kernel transport error counters. The cumulative
+rows count since the driver attached or the last `reset`; the per-run
+packet detail shows the current engine run (§13). `reset` clears every
+row. Counting runs on every tick, independent of whether the drawer is
+open. The rows are `underrun /
 overrun` (host ring), `recover` (engine restarts), `usb` (status and URB
 errors), `gaps` (missing packets), `bad packets` (short, malformed,
 misaligned or dropped packets, excluding the expected rate-switch burst),
@@ -2122,13 +2124,16 @@ Below it, **Diagnostics** lists the kernel transport error counters:
 `underrun / overrun`, `recover`, `usb`, `gaps`, `bad packets`, `feedback`,
 `pointer` and `events dropped`. The cumulative rows count since the driver
 attached or the last reset. The per-run ISO packet detail in `bad packets`
-and `feedback`, and the USB consecutive-error gauge in `usb`, show the
-current engine run: they reset on every rate/quantum switch or recovery, so
-a switch does not carry stale detail into the new run. Counting runs
-continuously regardless of the drawer. `in` is device→host and `out` is
-host→device; `underrun / overrun`, `gaps` and `bad packets` show both. The
-expected rate-change short burst is excluded from `bad packets`. Tooltips
-are short; the manual carries the meaning and mitigation.
+and `feedback`, and the USB packet-status detail in `usb`, show the
+current engine run: they reset on every rate/quantum switch or recovery,
+so a switch does not carry stale detail into the new run. `reset`
+rebaselines the per-run display too, so every row reads zero after a
+reset. The USB consecutive-error gauge (`urb_errors`) is a gauge, not a
+count, and is not summed into the `usb` total. Counting runs continuously
+regardless of the drawer. `in` is device→host and `out` is host→device;
+`underrun / overrun`, `gaps` and `bad packets` show both. The expected
+rate-change short burst is excluded from `bad packets`. Tooltips are
+short; the manual carries the meaning and mitigation.
 
 ## 14. State references
 
