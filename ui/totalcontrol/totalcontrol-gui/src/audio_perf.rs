@@ -57,6 +57,7 @@ impl Default for Holder {
 
 impl Holder {
     /// A holder on another path, for tests.
+    #[cfg(test)]
     pub fn with_path(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
