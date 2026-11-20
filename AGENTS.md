@@ -126,6 +126,13 @@ Authoritative files:
 All UI layout and interaction rules live in `docs/spec/TOTALCONTROL-GUI-SPEC.md`.
 Do not duplicate them here; when a rule is missing, add it to the spec.
 
+- The GUI carries labels, values and controls. Explanations belong in the user
+  manual. Do not add permanent explanatory paragraphs to dialogs, panels,
+  cards or sections.
+- A control or section may carry a short tooltip of a few words when its effect
+  is not obvious (for example "Better audio performance, increases power
+  usage."). Longer guidance, caveats and host configuration go in the manual.
+
 Required before changing any channel or settings layout:
 
 - A control that is not visible keeps its grid row as a nonvisible filler.

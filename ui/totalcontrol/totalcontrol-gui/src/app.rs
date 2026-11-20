@@ -2112,6 +2112,8 @@ pub enum Message {
     /// Toggle the host audio performance mode (holds a CPU latency
     /// constraint while the card streams).
     SetAudioPerformance(bool),
+    /// Choose the allowed CPU wake latency for the performance mode.
+    SetAudioPerfMaxSleep(i32),
     /// "Start with the session" (an autostart entry, hidden in the tray).
     SetAutostart(bool),
     /// Startup mismatch: use the saved TotalControl scene (already applied).
@@ -2856,6 +2858,9 @@ pub struct TotalControl {
     /// The host audio performance mode: hold a CPU latency constraint while
     /// the card streams (`audio_perf`).
     pub audio_performance: bool,
+    /// Allowed CPU wake latency while the mode is held, in microseconds
+    /// (`crate::audio_perf::LATENCY_CHOICES`).
+    pub audio_perf_us: i32,
     pub audio_perf: crate::audio_perf::Holder,
     pub audio_perf_status: crate::audio_perf::Status,
     /// The window is hidden in the tray right now.
@@ -3597,6 +3602,7 @@ pub fn new_with_device(
         tray_active: false,
         keep_in_tray: true,
         audio_performance: false,
+        audio_perf_us: 0,
         audio_perf: Default::default(),
         audio_perf_status: crate::audio_perf::Status::Released,
         window_hidden: false,
@@ -4016,6 +4022,7 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
     // Only a choice to leave the default is worth writing down.
     settings.keep_in_tray = (!state.keep_in_tray).then_some(false);
     settings.audio_performance = state.audio_performance;
+    settings.audio_perf_max_sleep_us = state.audio_perf_us;
     settings.engine_force_rate = Some(state.engine_force_rate);
     settings.engine_rate_mode = Some(state.engine_rate_mode);
     settings.engine_force_quantum = Some(state.engine_force_quantum);
@@ -4035,6 +4042,13 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
     state.workspace_last_dir = settings.workspace_last_dir.clone();
     state.keep_in_tray = settings.keep_in_tray.unwrap_or(true);
     state.audio_performance = settings.audio_performance;
+    state.audio_perf_us = if crate::audio_perf::LATENCY_CHOICES
+        .contains(&settings.audio_perf_max_sleep_us)
+    {
+        settings.audio_perf_max_sleep_us
+    } else {
+        0
+    };
     state.engine_force_rate = settings.engine_force_rate.unwrap_or(0);
     state.engine_rate_mode = settings
         .engine_rate_mode
@@ -10362,7 +10376,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::SetAudioPerformance(on) => {
             state.audio_performance = on;
             let want = on && state.card_stream.is_some();
-            state.audio_perf_status = state.audio_perf.apply(want);
+            state.audio_perf_status =
+                state.audio_perf.apply(want, state.audio_perf_us);
             if on
                 && matches!(
                     state.audio_perf_status,
@@ -10376,6 +10391,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         .into(),
                     Instant::now(),
                 ));
+            }
+        }
+        Message::SetAudioPerfMaxSleep(us) => {
+            if !crate::audio_perf::LATENCY_CHOICES.contains(&us) {
+                return Task::none();
+            }
+            // The choice only acts while the mode is on; the setting itself
+            // is remembered either way.
+            if state.audio_performance {
+                state.audio_perf_us = us;
+                let want = state.card_stream.is_some();
+                state.audio_perf_status = state.audio_perf.apply(want, us);
+            } else {
+                state.audio_perf_us = us;
             }
         }
         Message::SetAutostart(on) => match crate::tray::set_autostart(on) {
@@ -12542,7 +12571,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             // The performance mode follows the stream in every rate mode.
             let want = state.audio_performance && stream.is_some();
-            state.audio_perf_status = state.audio_perf.apply(want);
+            state.audio_perf_status =
+                state.audio_perf.apply(want, state.audio_perf_us);
             if state.device.rate_follows_sound_server() {
                 let sink_started = sink_running && !state.last_sink_running;
                 let new_rate = stream.map(|s| s.rate);
@@ -14728,14 +14758,11 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         Message::SetAutostart(!state.autostart),
     ));
 
-    let sync_help = help(if state.device.is_uc_model() {
-        "The UC keeps input gain, reference levels, clock and rate. TotalControl writes only \
-         its mixer scene (matrix, faders, mutes, loopback) on connect."
-    } else {
-        "On first connect: read the device where it has readback, compare it with the \
-         saved TotalControl scene, and choose when they differ."
-    });
-    let mut sync = column![section("STARTUP SYNC"), sync_help]
+    let mut sync = column![strip::hint(
+        section("STARTUP SYNC"),
+        "What TotalControl writes to the device on connect.",
+        scale,
+    )]
         .spacing(theme::SPACE_SM * scale)
         .width(Length::Fill);
     if !state.device.is_uc_model() {
@@ -14766,7 +14793,11 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     }
 
     let surround = column![
-        section("SURROUND"),
+        strip::hint(
+            section("SURROUND"),
+            "Virtual 5.1/7.1 outputs while TotalControl runs.",
+            scale,
+        ),
         check(
             "Virtual 5.1 output",
             state.surround_51,
@@ -14777,7 +14808,6 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             state.surround_71,
             Message::SetSurround71(!state.surround_71),
         ),
-        help("Active while TotalControl runs. Select the device in KDE or the player."),
     ]
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);
@@ -14792,7 +14822,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let vu_selected = format!("{} dB/s", state.vu_release_db_s.unwrap_or(device_rate));
     let vu_rates_for_pick = vu_rates.clone();
     let vu = column![
-        section("VU FALLBACK"),
+        section("VU METERS"),
         row![
             text("RMS bar release")
                 .color(theme::text_primary())
@@ -14827,28 +14857,41 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);
 
-    let audio_help = match state.audio_perf_status {
-        crate::audio_perf::Status::Denied => {
-            "No access to /dev/cpu_dma_latency. Install the TotalControl package, \
-             or log in at this machine."
-        }
+    let audio_tip = match state.audio_perf_status {
+        crate::audio_perf::Status::Denied => "No access to /dev/cpu_dma_latency.",
         crate::audio_perf::Status::Unavailable => {
             "This kernel does not expose /dev/cpu_dma_latency."
         }
-        _ => {
-            "Holds a kernel latency constraint so the processor does not sleep \
-             between audio cycles at the smallest buffer sizes. Higher idle power \
-             while a stream runs."
-        }
+        _ => "Better audio performance, increases power usage.",
     };
     let audio = column![
         section("AUDIO PERFORMANCE"),
-        check(
-            "Keep the audio CPUs awake while streaming",
-            state.audio_performance,
-            Message::SetAudioPerformance(!state.audio_performance),
+        strip::hint(
+            check(
+                "Keep the audio CPUs awake while streaming",
+                state.audio_performance,
+                Message::SetAudioPerformance(!state.audio_performance),
+            ),
+            audio_tip,
+            scale,
         ),
-        help(audio_help),
+        row![
+            text("Max sleep time")
+                .color(theme::text_sec())
+                .size(text_size),
+            radio_choice(
+                "10 \u{b5}s",
+                state.audio_perf_us == 10,
+                Message::SetAudioPerfMaxSleep(10),
+            ),
+            radio_choice(
+                "0 \u{b5}s",
+                state.audio_perf_us == 0,
+                Message::SetAudioPerfMaxSleep(0),
+            ),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
     ]
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);

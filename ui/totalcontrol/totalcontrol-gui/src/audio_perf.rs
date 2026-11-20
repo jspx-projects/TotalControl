@@ -19,10 +19,11 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-/// Allowed CPU wake latency in microseconds while the mode is held. `0`
-/// forbids every idle state above C0: the strongest effect, the highest
-/// idle power.
-pub const LATENCY_US: i32 = 0;
+/// The allowed CPU wake latency choices in microseconds, exposed as the
+/// "Max sleep time" setting. `0` forbids every idle state above C0: the
+/// strongest effect, the highest idle power. `10` allows the shallowest
+/// idle states.
+pub const LATENCY_CHOICES: [i32; 2] = [0, 10];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -41,6 +42,7 @@ pub enum Status {
 pub struct Holder {
     path: PathBuf,
     file: Option<File>,
+    held_us: Option<i32>,
 }
 
 impl Default for Holder {
@@ -48,6 +50,7 @@ impl Default for Holder {
         Self {
             path: PathBuf::from("/dev/cpu_dma_latency"),
             file: None,
+            held_us: None,
         }
     }
 }
@@ -58,26 +61,37 @@ impl Holder {
         Self {
             path: path.into(),
             file: None,
+            held_us: None,
         }
     }
 
-    /// Keep the constraint while `want`, release it otherwise.  Idempotent.
-    pub fn apply(&mut self, want: bool) -> Status {
+    /// Keep the constraint at `us` while `want`, release it otherwise.
+    /// Re-applying with another value rewrites the open interface.
+    pub fn apply(&mut self, want: bool, us: i32) -> Status {
         if !want {
             self.file = None;
+            self.held_us = None;
             return Status::Released;
         }
-        if self.file.is_some() {
+        if let Some(file) = self.file.as_mut() {
+            if self.held_us == Some(us) {
+                return Status::Held;
+            }
+            if let Err(error) = file.write_all(&us.to_ne_bytes()) {
+                return failure(error);
+            }
+            self.held_us = Some(us);
             return Status::Held;
         }
         let mut file = match File::options().write(true).open(&self.path) {
             Ok(file) => file,
             Err(error) => return failure(error),
         };
-        if let Err(error) = file.write_all(&LATENCY_US.to_ne_bytes()) {
+        if let Err(error) = file.write_all(&us.to_ne_bytes()) {
             return failure(error);
         }
         self.file = Some(file);
+        self.held_us = Some(us);
         Status::Held
     }
 }
@@ -101,8 +115,8 @@ mod tests {
     #[test]
     fn releases_by_default_and_is_idempotent() {
         let mut holder = Holder::with_path(temp_path("idle"));
-        assert_eq!(holder.apply(false), Status::Released);
-        assert_eq!(holder.apply(false), Status::Released);
+        assert_eq!(holder.apply(false, 0), Status::Released);
+        assert_eq!(holder.apply(false, 0), Status::Released);
     }
 
     #[test]
@@ -110,29 +124,29 @@ mod tests {
         let path = temp_path("held");
         std::fs::write(&path, b"").expect("create");
         let mut holder = Holder::with_path(&path);
-        assert_eq!(holder.apply(true), Status::Held);
-        assert_eq!(holder.apply(true), Status::Held);
+        assert_eq!(holder.apply(true, 0), Status::Held);
+        assert_eq!(holder.apply(true, 0), Status::Held);
         let mut written = Vec::new();
         File::open(&path)
             .expect("the holder created the file")
             .read_to_end(&mut written)
             .expect("read back");
-        assert!(written.starts_with(&LATENCY_US.to_ne_bytes()));
-        assert_eq!(holder.apply(false), Status::Released);
+        assert!(written.starts_with(&0i32.to_ne_bytes()));
+        assert_eq!(holder.apply(false, 0), Status::Released);
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn reports_a_missing_interface() {
         let mut holder = Holder::with_path(temp_path("missing"));
-        assert_eq!(holder.apply(true), Status::Unavailable);
+        assert_eq!(holder.apply(true, 0), Status::Unavailable);
     }
 
     #[test]
     fn reports_a_directory_as_unavailable() {
         let dir = std::env::temp_dir();
         let mut holder = Holder::with_path(&dir);
-        assert_eq!(holder.apply(true), Status::Unavailable);
+        assert_eq!(holder.apply(true, 0), Status::Unavailable);
     }
 
     #[test]
@@ -146,7 +160,7 @@ mod tests {
         // Root ignores the mode; the mapping is asserted for a normal user.
         if File::options().write(true).open(&path).is_err() {
             let mut holder = Holder::with_path(&path);
-            assert_eq!(holder.apply(true), Status::Denied);
+            assert_eq!(holder.apply(true, 0), Status::Denied);
         }
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
         let _ = std::fs::remove_file(&path);
