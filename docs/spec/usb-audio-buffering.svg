@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="820" viewBox="0 0 1160 820" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <title>USB audio buffering: quantum, ALSA period, URB and latency</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+  <rect width="1160" height="820" fill="#ffffff"/>
+
+  <text x="30" y="42" font-size="22" font-weight="700" fill="#111827">USB audio: quantum, ALSA period, URB and latency</text>
+  <text x="30" y="66" font-size="13" fill="#6b7280">Playback chain, left to right. The host graph sets the quantum Q; the host negotiates the ALSA period P; the unit adds its output lead.</text>
+
+  <rect x="24" y="122" width="492" height="180" rx="10" fill="#f5f8ff" stroke="#dbe4ff"/>
+  <rect x="536" y="122" width="246" height="180" rx="10" fill="#f0fdf9" stroke="#c3fae8"/>
+  <rect x="802" y="122" width="334" height="180" rx="10" fill="#f8f9fa" stroke="#e9ecef"/>
+  <text x="36" y="141" font-size="11" font-weight="700" letter-spacing="1" fill="#4263eb">HOST (SOFTWARE)</text>
+  <text x="548" y="141" font-size="11" font-weight="700" letter-spacing="1" fill="#0ca678">USB TRANSPORT</text>
+  <text x="814" y="141" font-size="11" font-weight="700" letter-spacing="1" fill="#868e96">DEVICE (HARDWARE)</text>
+
+  <rect x="36" y="162" width="170" height="118" rx="8" fill="#eef2ff" stroke="#4263eb" stroke-width="1.5"/>
+  <text x="121" y="186" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2937">Graph (server)</text>
+  <text x="121" y="212" text-anchor="middle" font-size="15" font-weight="700" fill="#4263eb">Q = 128 frames</text>
+  <text x="121" y="230" text-anchor="middle" font-size="11.5" fill="#6b7280">2.67 ms at 48 kHz</text>
+  <text x="121" y="252" text-anchor="middle" font-size="11.5" fill="#374151">one processing cycle</text>
+  <text x="121" y="268" text-anchor="middle" font-size="11.5" fill="#374151">the app callback chunk</text>
+
+  <rect x="240" y="162" width="262" height="118" rx="8" fill="#eef2ff" stroke="#4263eb" stroke-width="1.5"/>
+  <text x="371" y="186" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2937">ALSA ring buffer</text>
+  <rect x="252" y="196" width="56" height="30" rx="4" fill="#dbe4ff" stroke="#4263eb"/>
+  <rect x="312" y="196" width="56" height="30" rx="4" fill="#dbe4ff" stroke="#4263eb"/>
+  <rect x="372" y="196" width="56" height="30" rx="4" fill="#dbe4ff" stroke="#4263eb"/>
+  <rect x="432" y="196" width="56" height="30" rx="4" fill="#dbe4ff" stroke="#4263eb"/>
+  <text x="280" y="215" text-anchor="middle" font-size="12" font-weight="700" fill="#364fc7">P</text>
+  <text x="340" y="215" text-anchor="middle" font-size="12" font-weight="700" fill="#364fc7">P</text>
+  <text x="400" y="215" text-anchor="middle" font-size="12" font-weight="700" fill="#364fc7">P</text>
+  <text x="460" y="215" text-anchor="middle" font-size="12" font-weight="700" fill="#364fc7">P</text>
+  <text x="371" y="242" text-anchor="middle" font-size="11" fill="#374151">buffer = periods x P</text>
+  <text x="371" y="258" text-anchor="middle" font-size="11" fill="#374151">hw_ptr advances per completed URB</text>
+  <text x="371" y="274" text-anchor="middle" font-size="11" fill="#6b7280">wake-up at each period boundary</text>
+
+  <rect x="548" y="162" width="222" height="118" rx="8" fill="#e6fcf5" stroke="#0ca678" stroke-width="1.5"/>
+  <text x="659" y="186" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2937">URB queue (in flight)</text>
+  <rect x="558" y="196" width="62" height="30" rx="4" fill="#c3fae8" stroke="#0ca678"/>
+  <rect x="626" y="196" width="62" height="30" rx="4" fill="#c3fae8" stroke="#0ca678"/>
+  <rect x="694" y="196" width="62" height="30" rx="4" fill="#c3fae8" stroke="#0ca678"/>
+  <text x="589" y="215" text-anchor="middle" font-size="11.5" font-weight="700" fill="#087f5b">1 ms</text>
+  <text x="657" y="215" text-anchor="middle" font-size="11.5" font-weight="700" fill="#087f5b">1 ms</text>
+  <text x="725" y="215" text-anchor="middle" font-size="11.5" font-weight="700" fill="#087f5b">1 ms</text>
+  <text x="659" y="242" text-anchor="middle" font-size="11" fill="#374151">1 URB = 1 ms = 48 frames at 48 kHz</text>
+  <text x="659" y="258" text-anchor="middle" font-size="11" fill="#374151">96 at 96 kHz / 192 at 192 kHz</text>
+  <text x="659" y="274" text-anchor="middle" font-size="11" font-weight="700" fill="#087f5b">period floor = 1 URB</text>
+
+  <rect x="814" y="162" width="168" height="118" rx="8" fill="#f1f3f5" stroke="#868e96" stroke-width="1.5"/>
+  <text x="898" y="186" text-anchor="middle" font-size="13.5" font-weight="700" fill="#1f2937">Device output buffer</text>
+  <text x="898" y="208" text-anchor="middle" font-size="11" fill="#374151">frames held in the unit,</text>
+  <text x="898" y="223" text-anchor="middle" font-size="11" fill="#374151">ahead of the converters</text>
+  <rect x="830" y="234" width="136" height="10" rx="5" fill="#dee2e6"/>
+  <rect x="830" y="234" width="88" height="10" rx="5" fill="#868e96"/>
+  <text x="898" y="266" text-anchor="middle" font-size="11" fill="#6b7280">the device lead</text>
+
+  <rect x="1016" y="162" width="108" height="118" rx="8" fill="#f1f3f5" stroke="#868e96" stroke-width="1.5"/>
+  <text x="1070" y="186" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2937">DAC</text>
+  <text x="1070" y="208" text-anchor="middle" font-size="11" fill="#374151">converter</text>
+  <text x="1070" y="223" text-anchor="middle" font-size="11" fill="#374151">group delay</text>
+  <text x="1070" y="248" text-anchor="middle" font-size="11" fill="#6b7280">0.1 to 1 ms</text>
+
+  <line x1="206" y1="221" x2="236" y2="221" stroke="#6b7280" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="221" y="212" text-anchor="middle" font-size="10" fill="#6b7280">write</text>
+  <line x1="502" y1="221" x2="544" y2="221" stroke="#6b7280" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="523" y="212" text-anchor="middle" font-size="10" fill="#6b7280">submit</text>
+  <line x1="770" y1="221" x2="810" y2="221" stroke="#6b7280" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="790" y="212" text-anchor="middle" font-size="10" fill="#6b7280">USB bus</text>
+  <line x1="982" y1="221" x2="1012" y2="221" stroke="#6b7280" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="997" y="212" text-anchor="middle" font-size="10" fill="#6b7280">I2S</text>
+
+  <text x="30" y="332" font-size="15" font-weight="700" fill="#111827">Quantum and period</text>
+  <text x="30" y="354" font-size="12" fill="#374151">The graph quantum Q is the host's callback chunk. The ALSA period P is the driver's signalling granularity.</text>
+  <text x="30" y="372" font-size="12" fill="#374151">In timer scheduling with a batch device the host requests P = Q/2; the driver raises it to the period floor when needed.</text>
+
+  <rect x="30" y="390" width="520" height="150" rx="8" fill="#ffffff" stroke="#e5e7eb"/>
+  <text x="46" y="414" font-size="13" font-weight="700" fill="#111827">Mapping at 48 kHz (measured)</text>
+  <text x="46" y="436" font-size="12" fill="#374151">Q</text><text x="150" y="436" font-size="12" fill="#374151">P</text><text x="250" y="436" font-size="12" fill="#374151">reason</text>
+  <text x="46" y="458" font-size="12" fill="#111827">48</text><text x="150" y="458" font-size="12" fill="#111827">48</text><text x="250" y="458" font-size="12" fill="#374151">Q/2 = 24 below the floor; P clamped</text>
+  <text x="46" y="480" font-size="12" fill="#111827">64</text><text x="150" y="480" font-size="12" fill="#111827">48</text><text x="250" y="480" font-size="12" fill="#374151">Q/2 = 32 below the floor; P clamped</text>
+  <text x="46" y="502" font-size="12" fill="#111827">128</text><text x="150" y="502" font-size="12" fill="#111827">64</text><text x="250" y="502" font-size="12" fill="#374151">Q/2 = 64 at or above the floor</text>
+  <text x="46" y="524" font-size="12" fill="#374151">IRQ scheduling: P = Q.</text>
+
+  <text x="590" y="332" font-size="15" font-weight="700" fill="#111827">The three "buffer" knobs</text>
+  <rect x="590" y="346" width="546" height="194" rx="8" fill="#ffffff" stroke="#e5e7eb"/>
+  <text x="606" y="370" font-size="12" font-weight="700" fill="#111827">Quantum Q</text>
+  <text x="716" y="370" font-size="12" fill="#374151">the graph cycle; the app callback chunk; set by the user via the host policy</text>
+  <text x="606" y="400" font-size="12" font-weight="700" fill="#111827">Period P</text>
+  <text x="716" y="400" font-size="12" fill="#374151">the signalling granularity; negotiated: batch rule plus the driver floor</text>
+  <text x="606" y="430" font-size="12" font-weight="700" fill="#111827">Device lead</text>
+  <text x="716" y="430" font-size="12" fill="#374151">the unit's own buffer ahead of the converters; fixed by the device</text>
+  <text x="606" y="460" font-size="12" fill="#374151">"Samples" in Windows and macOS driver panels mean frames: the callback chunk, Q.</text>
+  <text x="606" y="480" font-size="12" fill="#374151">One frame is one sample per channel; the device contract counts frames, not bytes.</text>
+  <text x="606" y="500" font-size="12" fill="#374151">Every buffer is counted once in the latency; the host ring and the in-flight queue are distinct.</text>
+  <text x="606" y="520" font-size="12" fill="#374151">The ALSA period and the graph quantum are separate quantities and may differ.</text>
+
+  <text x="30" y="590" font-size="15" font-weight="700" fill="#111827">Round-trip latency</text>
+  <rect x="30" y="604" width="1106" height="180" rx="8" fill="#ffffff" stroke="#e5e7eb"/>
+  <text x="46" y="630" font-size="13" font-weight="700" fill="#111827">Live value</text>
+  <text x="46" y="654" font-size="13" fill="#111827">RTL = snd_pcm_delay + device lead + converter delay (+ the mirrored capture chain)</text>
+  <text x="46" y="674" font-size="12" fill="#374151">snd_pcm_delay = the ring occupancy (appl_ptr - hw_ptr) plus the in-flight URB queue (runtime-&gt;delay).</text>
+  <text x="46" y="692" font-size="12" fill="#374151">The graph cycle is already contained in the queued occupancy; it is not an additional term.</text>
+  <text x="46" y="720" font-size="13" font-weight="700" fill="#111827">Model estimate</text>
+  <text x="46" y="744" font-size="13" fill="#111827">RTL = queued target + in-flight queue + device lead + converter delay (+ the capture chain)</text>
+  <text x="46" y="764" font-size="12" fill="#374151">The queued target is about Q plus the headroom (two periods under timer scheduling). Do not add a quantum to a live snd_pcm_delay.</text>
+  <text x="46" y="782" font-size="12" fill="#374151">Device constants come from the loopback calibration, per personality and rate; the model covers the remaining cases.</text>
+</svg>

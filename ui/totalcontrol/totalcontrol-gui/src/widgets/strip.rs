@@ -494,10 +494,22 @@ pub(crate) fn hint<'a>(
     label: impl Into<std::borrow::Cow<'a, str>>,
     scale: f32,
 ) -> Element<'a, Message> {
+    hint_at(content, label, scale, theme::TEXT_DIALOG * scale)
+}
+
+/// A tooltip whose text uses the surrounding text size.  Dialog and panel
+/// tooltips use this so their text matches the dialog text (the GUI spec's
+/// tooltip-size rule).
+pub(crate) fn hint_at<'a>(
+    content: impl Into<Element<'a, Message>>,
+    label: impl Into<std::borrow::Cow<'a, str>>,
+    scale: f32,
+    text_size: f32,
+) -> Element<'a, Message> {
     let label: std::borrow::Cow<'a, str> = label.into();
     tooltip(
         content,
-        container(text(label).size(theme::TEXT_XS * scale).color(theme::text_primary()))
+        container(text(label).size(text_size).color(theme::text_primary()))
             .padding(theme::SPACE_SM * scale)
             .style(theme::panel),
         tooltip::Position::Top,

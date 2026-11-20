@@ -152,11 +152,25 @@ scale 1.0; long Reset Mix labels wrap inside the item.  Settings use standard
 controls: independent switches are checkboxes, mutually exclusive choices are
 radio buttons, and buttons are reserved for actions.
 
+**Display truthfulness.** Displayed information is always correct, or a
+transitory state is marked (orange). A state that is known not to be
+transitory is never shown as pending: the actual value is displayed and a
+notice states the change.
+
 **Settings-dialog behaviour.** Every settings dialog follows one rule:
 changes apply as they are made, the dialog stays open so the effect can be
 tried live, and a single `Close` dismisses it. There is no `OK`, `Cancel`
 or `Apply` in a settings dialog. `Cancel` belongs only to confirmation
 dialogs (below), which are a different kind.
+
+**Dropdown menus and listboxes.** The open direction is decided against the
+parent window, not against the dialog or panel that contains the field: a menu
+opens downward whenever its natural height fits between the field and the
+window bottom, whatever the dialog's own bottom is. It opens upward only when
+the window bottom lacks the room, and it never extends past the window's top
+or bottom edge. Menu backgrounds are always opaque: every row, including the
+first row of an upward-opened menu and the hovered or selected row, paints the
+menu background; transparency is never permitted in a menu or listbox.
 
 A settings section that is not enabled is **grayed out**: every control
 below its enable switch is disabled and rendered muted, and only the
@@ -240,8 +254,12 @@ sidebar popover, and it blocks mouse and keyboard access to the mixer until it
 closes. Every modal dialog is centered horizontally and anchored with its top
 edge just below the top bar. The top edge stays fixed while the content grows
 downward, so expanding a control never shifts the text under the pointer. A
-dialog taller than the space between the top bar and the window bottom scrolls
-its body inside the card. The app settings dialog holds BACKGROUND, STARTUP
+dialog is only as wide as its content requires at the current scale; it does
+not stretch to a fixed width. A dialog taller than the space between the top
+bar and the window bottom scrolls its body inside the card, and the card
+reserves the thin scrollbar's width on the right so an appearing bar neither
+moves the content nor overlays it. Tooltips use the same text size as the
+dialog's text. The app settings dialog holds BACKGROUND, STARTUP
 SYNC, SURROUND, AUDIO PERFORMANCE and VU METERS sections — settings
 specific to TotalControl itself. Remote control has its
 own dialog (§1.4). Independent options are checkboxes, one-of-many options are
@@ -1267,10 +1285,11 @@ rather than shown inert.
 Below the device group, the host engine group shows the PipeWire rate,
 quantum and latency when the sound server owns the rate. `Quantum` is the
 graph quantum: one ALSA period under IRQ scheduling, two periods under
-timer scheduling (a batch device is served two periods per graph cycle); the `Latency` line shows the round-trip
-value (USB queue, device lead, converter and one graph period). The UC PC
-and AP modes use their loopback calibrations with a live queue and graph
-period; the UCX and uncalibrated rates use the model. It also shows the Fireface
+timer scheduling (a batch device is served two periods per graph cycle). The
+`RTL latency` row carries the tooltip "Round Trip Latency", a secondary
+(grey) value `x.x ms`, and below it one line of secondary text with the
+contributions in milliseconds (USB queue, device lead, converter, graph).
+The formula and the calibration basis are in the manual §14. It also shows the Fireface
 sink's host volume in percent and dB, with a `0 dB` action. The host volume is an attenuation before the interface, so it lowers
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
@@ -1301,11 +1320,21 @@ Rate and quantum changes apply asynchronously: PipeWire renegotiates the
 running stream over a few seconds while the player keeps playing (resampled);
 no restart is needed. While a desired value differs from the actual running
 value the panel shows one pending state per value, by colour only: the Graph
-row shows the actual rate in orange, the quantum row shows the actual graph
-quantum in orange, and the device-rate picker compares its readback to the
-selection. There is no separate "applying…" message; the actual value is the
-pending indicator. A bottom-centre toast announces the change at the moment it
-is requested. When the actual matches the desired the value returns to grey. The device rate is verified by reading
+row shows the actual rate in orange, the **selected value inside the quantum
+listbox** is orange while the running graph quantum differs from the request,
+and the device-rate picker compares its readback to the selection. There is no
+separate "applying…" message and no separate actual-value readout; the value
+being confirmed is itself the indicator. A bottom-centre toast announces the
+change at the moment it is requested. When the actual matches the desired the
+value returns to its normal colour.
+
+The quantum confirmation reads the running graph quantum from the server
+(`pw-top`), never the ALSA period: the batch rule and the driver floor let
+several quanta share one period. The picker offers the driver's period floor
+intersected with the host policy bounds (`clock.min-quantum`/`max-quantum`).
+TotalControl is the authority for the quantum: the selection is forced, a
+refused request is forced once more, and a value the host still does not run
+is replaced by the actual value on the next poll with a bottom-centre notice. The device rate is verified by reading
 the unit's state word (`0x11`) and comparing its rate index to the set rate
 (UC spec §9.1, UCX spec §11.7). The readback polls the rate value at 50 ms
 while pending; the rate index matching the selection is the confirmation.
@@ -2064,23 +2093,30 @@ applied to the running device as they change.
 
 ## 13. Latency display
 
-The Audio Configuration panel shows the round-trip latency and its terms.
-The UCX and UC paths without a loopback calibration use the model: USB
-queue, device lead, converter and one graph period; the UC estimate is
-labelled ±1.5 ms and the UCX ±1.2 ms. The buffer-size picker sets the graph
-quantum. The formulas and the device-side model are in
-[`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §10.
+The Audio Configuration panel has one `RTL latency` row: the label carries the
+tooltip "Round Trip Latency", a secondary (grey) value shows `x.x ms` with one
+decimal, and the next line lists the contributions (USB queue, device lead,
+converter, graph) in milliseconds. The formula and the terms are in the manual
+§14. The buffer-size picker sets the graph period.
 
-The UC PC and AP paths use separate loopback calibrations at 32, 44.1, 48,
-96 and 192 kHz and are labelled **measured PC** or **measured AP**. The
-calibrated device total includes the USB queue; the display applies a live
-queue delta and adds the current graph period. Rates outside the calibrated
-set show the model estimate. The calibration is per personality and must be
-repeated after a firmware or device-path change.
+The value is the host round trip: USB queue, device lead, converter delay and
+one graph period (the running graph quantum, two ALSA periods under timer
+scheduling). The UC device side is loopback-measured per personality at five
+rates; the display applies a live queue delta and adds the graph period. The
+measured device values (frames, at the calibration queue) are:
 
-The displayed line is not an acoustic measurement. The PC calibration is a
-full-duplex electrical loopback (output 5 to input 5); the evidence is in
-`docs/work/UC-RTL-LOOPBACK.md`.
+| Rate | UC PC device | queue | UC AP device | queue |
+|---|---|---|---|---|
+| 32 kHz | 215 | 144 | 155 | 96 |
+| 44.1 kHz | 215 | 144 | 179 | 144 |
+| 48 kHz | 215 | 144 | 187 | 144 |
+| 96 kHz | 351 | 288 | 295 | 288 |
+| 192 kHz | 617 | 576 | 505 | 576 |
+
+Rates outside the measured set and the UCX use the model (the same terms).
+The calibration is per personality; a firmware or device-path change needs a
+repeat measurement. The PC measurement is a full-duplex electrical loopback
+(output 5 to input 5), not an acoustic one.
 
 Below it, **Diagnostics** lists the kernel transport error counters:
 `underrun / overrun`, `recover`, `usb`, `gaps`, `bad packets`, `feedback`,

@@ -32,6 +32,10 @@ pub struct PwClock {
     pub force_rate: u32,
     /// `0` = not forced.
     pub force_quantum: u32,
+    /// The host policy's quantum bounds (`clock.min-quantum`/`max-quantum`);
+    /// `0` = not reported.
+    pub min_quantum: u32,
+    pub max_quantum: u32,
 }
 
 impl PwClock {
@@ -77,6 +81,8 @@ pub fn parse(output: &str) -> Option<PwClock> {
         quantum: value_of("clock.quantum")?,
         force_rate: value_of("clock.force-rate").unwrap_or(0),
         force_quantum: value_of("clock.force-quantum").unwrap_or(0),
+        min_quantum: value_of("clock.min-quantum").unwrap_or(0),
+        max_quantum: value_of("clock.max-quantum").unwrap_or(0),
     })
 }
 
@@ -90,6 +96,42 @@ pub fn read() -> Option<PwClock> {
         return None;
     }
     parse(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The graph quantum the server is actually running, read from `pw-top`.
+///
+/// `pw-top` reports the driver node's QUANT; the follower shows 0.  This is
+/// the only truthful source of the graph quantum: the ALSA period is a
+/// different quantity (the host requests P = Q/2 for a batch device and the
+/// driver clamps it to the floor, so several quanta share one period).  Two
+/// samples are taken because the first one can be empty.
+pub fn graph_quantum() -> Option<u32> {
+    let out = Command::new("pw-top")
+        .args(["-b", "-n", "2"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_graph_quantum(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse `pw-top -b` output for the Fireface driver node's quantum.
+pub fn parse_graph_quantum(output: &str) -> Option<u32> {
+    let mut found = None;
+    for line in output.lines() {
+        if !line.contains("Fireface") || !line.contains("pro-") {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let _state = fields.next()?;
+        let _id = fields.next()?;
+        let quantum = fields.next().and_then(|q| q.parse::<u32>().ok());
+        if let Some(quantum) = quantum.filter(|q| *q > 0) {
+            found = Some(quantum);
+        }
+    }
+    found
 }
 
 /// The graph's allowed sample-rate list, from `pw-metadata` output.
@@ -404,7 +446,9 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
                 rate: 48_000,
                 quantum: 64,
                 force_rate: 0,
-                force_quantum: 0
+                force_quantum: 0,
+                min_quantum: 32,
+                max_quantum: 2048,
             }
         );
         // `clock.quantum` must not be confused with `clock.min-quantum`.
@@ -475,6 +519,19 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
             Some(vec![32_000, 44_100, 48_000, 96_000])
         );
         assert_eq!(parse_allowed_rates(""), None);
+    }
+
+    #[test]
+    fn parses_the_graph_quantum_from_pw_top() {
+        let output = "S   ID  QUANT   RATE    WAIT    BUSY\n\
+R  134     64  48000  23.8us   0.7us  alsa_input.usb-RME_Fireface_UCX__x-00.pro-input-0\n\
+R   71      0      0   4.8us   5.7us  + alsa_output.usb-RME_Fireface_UCX__x-00.pro-output-0\n";
+        assert_eq!(parse_graph_quantum(output), Some(64));
+        // No Fireface node: unknown.
+        assert_eq!(parse_graph_quantum("S   ID  QUANT\n"), None);
+        // A zero quantum (idle) is not a reading.
+        let idle = "R  134      0      0   ---  alsa_input.usb-RME_Fireface_UCX__x-00.pro-input-0\n";
+        assert_eq!(parse_graph_quantum(idle), None);
     }
 
     #[test]
