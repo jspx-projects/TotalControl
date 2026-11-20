@@ -1692,6 +1692,8 @@ static u32 ffuc_lead_seed(struct ffuc *chip)
  * Cadence check: the mean frames per packet times 8000 is the device
  * clock the packets reveal.  A disagreement with chip->rate means the
  * rate write did not take effect (or the device was reprogrammed).
+ * This whole-run mean drives the periodic guard; the stop verdict uses
+ * the converged mean (ffuc-cadence.h) instead.
  */
 static unsigned int ffuc_iso_cadence(struct ffuc *chip, int *mismatch)
 {
@@ -1705,9 +1707,7 @@ static unsigned int ffuc_iso_cadence(struct ffuc *chip, int *mismatch)
 	if (!pkts)
 		return 0;
 	mean = (unsigned int)((frames * 8000) / pkts);
-	if (mismatch && chip->rate &&
-	    (mean > chip->rate + chip->rate / 100 ||
-	     (mean + chip->rate / 100 < chip->rate)))
+	if (mismatch && ffuc_cadence_mismatch(chip->rate, mean))
 		*mismatch = 1;
 	return mean;
 }
@@ -1885,6 +1885,14 @@ cadence_skip:
 		}
 	}
 	chip->ts_frames += urb->number_of_packets;
+	{
+		unsigned int urb_frames = 0;
+
+		for (i = 0; i < urb->number_of_packets; i++)
+			urb_frames += frames[i];
+		ffuc_cadence_window(&chip->cad, chip->rate, urb_frames,
+				    urb->number_of_packets);
+	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 
 	if (!subs) {
@@ -2689,6 +2697,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->ts_tps_q32 = div64_u64(60000000ull << 32, chip->rate);
 	/* Per-run diagnostics: a stop line describes this stream only. */
 	memset(chip->iso_frames_hist, 0, sizeof(chip->iso_frames_hist));
+	ffuc_cadence_reset(&chip->cad);
 	atomic_set(&chip->in_hdr_only, 0);
 	atomic_set(&chip->in_short, 0);
 	atomic_set(&chip->in_misaligned, 0);
@@ -3346,14 +3355,17 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		 * that would have announced zero completed periods, the
 		 * published-pointer divergences, and the ring anomalies. */
 		{
-			int mm = 0;
-
-			/* Overflow truncates the histogram: a cadence
-			 * computed from it would be an instrument error,
-			 * not a device rate. */
-			if (!atomic_read(&chip->in_frames_overflow)) {
-				chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
-				if (mm) {
+			/* The stop verdict judges the converged cadence mean
+			 * (§4.3): a run stopped before the mean settled — the
+			 * startup ramp, a short renegotiation fragment — has
+			 * no cadence to judge, so no verdict is rendered.  The
+			 * convergence is dynamic (successive windows agree),
+			 * not a fixed sample count. */
+			if (!atomic_read(&chip->in_frames_overflow) &&
+			    chip->cad.stable_mean) {
+				chip->iso_cadence = chip->cad.stable_mean;
+				if (ffuc_cadence_stop_mismatch(&chip->cad,
+							       chip->rate)) {
 					atomic_inc(&chip->rate_mismatch);
 					dev_warn_ratelimited(&chip->dev->dev,
 							     "ISO cadence %u Hz disagrees with rate %u Hz\n",

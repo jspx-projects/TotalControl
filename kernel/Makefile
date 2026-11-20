@@ -26,9 +26,11 @@ install: all
 test:
 	$(CC) -std=c11 -Wall -Wextra -Werror -o test/meter-pair-test test/meter-pair-test.c
 	./test/meter-pair-test
+	$(CC) -std=c11 -Wall -Wextra -Werror -o test/cadence-test test/cadence-test.c
+	./test/cadence-test
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
-	$(RM) test/meter-pair-test
+	$(RM) test/meter-pair-test test/cadence-test
 
 .PHONY: all install test clean

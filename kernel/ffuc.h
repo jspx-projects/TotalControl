@@ -58,6 +58,7 @@
 #include <sound/rawmidi.h>
 
 #include "ffuc-uapi.h"
+#include "ffuc-cadence.h"
 
 #define FFUC_VENDOR_SMSC	0x0424
 #define FFUC_VENDOR_RME		0x2a39
@@ -374,6 +375,8 @@ struct ffuc {
 	u32 fb[FFUC_FB_SIZE];
 	u64 in_pkts, out_pkts;
 	u32 iso_frames_hist[32];
+	/* Cadence convergence for the stop verdict (ffuc-cadence.h). */
+	struct ffuc_cadence cad;
 	unsigned int in_end;
 	unsigned int fb_acc;
 	/* Nominal-cadence accumulator for the OUT priming window: carries
