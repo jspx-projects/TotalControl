@@ -262,6 +262,35 @@ driver". TotalControl then falls back to the next unit or a simulation;
 updating the driver (or TotalControl) restores the unit. This is why the
 mixer may occasionally show a simulation instead of your hardware.
 
+### Low-latency host tuning
+
+At the smallest quanta the host's power management decides how quickly the
+audio thread wakes. In timer mode the thread sleeps between graph cycles; a
+CPU that enters a deep idle state pays the exit on every wake. On our desk,
+limiting the idle states dropped the audio thread's runnable-wait from about
+43 to about 15 ms/s. Options, in order of effect:
+
+- Limit the idle states of the audio CPUs, persistently:
+  `sudo cpupower idle-set -D 1`, or add the kernel arguments
+  `intel_idle.max_cstate=1 processor.max_cstate=1`.
+- For a critical session, run the performance governor:
+  `sudo cpupower frequency-set -g performance`.
+- Without root (group `realtime`): hold a small latency constraint by writing
+  the value in microseconds to `/dev/cpu_dma_latency` and keeping the file
+  open, for example with a script that opens it, writes `50`, and stays
+  running while you record. This forbids only the deepest states; it helps
+  less than the first two options.
+
+Keep virtual machines, heavy disk IO and file indexers away from the audio
+CPU. The audio thread runs at real-time priority, so ordinary CPU load does
+not displace it; interrupts, deep idle exits and memory-system pressure do.
+These measures are tolerances, not guarantees: at 48 frames and 48 kHz the
+buffer margin is only a few milliseconds. In our measurement, keeping the
+audio CPUs out of deep idle turned a 48 frames/48 kHz session with
+occasional dropouts into fifteen minutes with none. Pinning the audio thread
+to one CPU on its own made no difference; the idle-state limit is the
+effective measure.
+
 ## 1. The mixer window
 
 The mixer shows three rows of channel strips:
@@ -1588,40 +1617,35 @@ channels to a DAW.
 The buffer-size picker in TotalControl sets the graph quantum. The driver adds
 its own USB queue and device lead; the latency display explains the result.
 
-The installer's WirePlumber rule adds a scheduling cushion
-(`api.alsa.headroom = 192` frames). PipeWire normally wakes the audio thread
-when only one period of playback remains in the buffer; at the smallest
-quantum a single late write then leaves the device with nothing to play. The
-cushion wakes the thread earlier, so one late write is absorbed instead of
-starving the device. It costs up to one extra millisecond of queued audio at
-192 kHz and up to about three at the 1x rates, where the buffer clamp limits
-the cushion. The cushion is a tolerance, not a guarantee against sustained
-overload: keep the system load guidance below for the smallest quanta.
+The installer's WirePlumber rule runs the device in timer-based scheduling
+with the 18-channel Pro Audio profile. PipeWire wakes the audio thread on its
+own timer and holds the queued playback delay at a target: the graph quantum
+plus a scheduling cushion (`api.alsa.headroom = 336` frames), plus one period
+that PipeWire adds for a batch device. The target is clamped at half the
+buffer. The card reports its real queue, so the level stays constant against
+the device clock: the device conducts and the host follows. This is what
+keeps the smallest quanta stable.
 
-The quantum is also what keeps capture steady at very low latency. At a
-quantum equal to one millisecond (48 frames at 48 kHz) the graph has no slack
-between the device's period and the reader's deadline, and PipeWire may
-replace a missed period with silence. Use 96 frames or more for low-latency
-recording with the UC; the default of 256 is unaffected.
+Polled scheduling (`api.alsa.disable-tsched = true`) is the alternative for
+specialised low-latency work. PipeWire then wakes on the device's period
+interrupts and has no level loop, so the queued level depends on the wake
+timing and can drift. At a quantum equal to one USB period (48 frames at
+48 kHz) one late write starves the device. Timer mode is the default for
+that reason; use the cushion and a larger quantum with polled scheduling.
 
-At 96 kHz and 192 kHz keep the quantum at two milliseconds or more: 192
-frames at 96 kHz, 384 frames at 192 kHz. A quantum equal to the 1 ms USB
-period at these rates (96 frames at 96 kHz, 192 frames at 192 kHz) is the
-one corner where the driver's period coordination can add a full period of
-wait and PipeWire replaces missed cycles with silence. With two milliseconds
-of quantum the corner disappears; 512 frames is a safe low-latency choice at
-192 kHz.
+At 96 kHz and 192 kHz use at least two milliseconds of quantum for
+low-latency recording: 192 frames at 96 kHz, 384 at 192 kHz.
+
+The unit is the clock master: its converters run on the device's own clock
+(SteadyClock) and the host mirrors the stream rate to it. The computer's
+clock only paces delivery, and the buffer absorbs the small difference.
 
 For the smallest quanta, keep the host quiet. The audio thread runs at
-real-time priority and is not displaced by ordinary CPU load; the realistic
-disturbances are IO bursts and graph renegotiations. A file indexer
-(for example KDE Baloo) scanning the disk can delay the refill wake-ups;
-pause it while recording at the smallest quantum. Keep the device on its own
-USB controller where possible, and avoid heavy disk IO on the audio machine
-during a session. Sustained IO load also erodes the scheduling cushion over
-minutes: the graph's rate lock to the device clock loosens under wake-up
-jitter, and the buffered margin drains until a small disturbance starves the
-device. A quiet host keeps the lock and the margin.
+real-time priority and is not displaced by ordinary CPU load. Deep processor
+idle states, interrupts, virtual machines and file indexers (for example KDE
+Baloo) scanning the disk can still delay its wake-ups; the setup section's
+"Low-latency host tuning" lists the measured measures. Keep the device on its
+own USB controller where possible, and avoid heavy disk IO during a session.
 
 The WirePlumber rule in
 [`ui/totalcontrol/tools/alsa/wireplumber-uc.conf`](../ui/totalcontrol/tools/alsa/wireplumber-uc.conf)
