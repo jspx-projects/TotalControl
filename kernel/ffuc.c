@@ -1649,10 +1649,12 @@ static bool ffuc_fb_get(struct ffuc *chip, u64 k, unsigned int *pos,
  * unwrapped in_total: the position at that slot is in_total rewound by
  * the frames the device captured in the packets between the slot and
  * the fill moment — (in_pkts − out_pkts + fb_delay) packets at the
- * nominal rate, Q32.  The fb_get validity check at the call site still
- * gates the seed: before the ring reaches that slot there is no device
- * anchor for the rewind, and seeding across the stream start would
- * guess the phase against the device's own ring.
+ * nominal rate, Q32.  The call site gates the seed on ts_pos_valid: a
+ * real capture header must have arrived.  During the priming window
+ * the rewind can reach before the first header; the position counter
+ * free-runs at the committed rate, so the extrapolated position is on
+ * the same timeline.  The fraction stays the last header's fraction
+ * (sub-frame error over the rewind).
  *
  * Exact to a frame today (the interpolation over a few ms is
  * sub-frame); sub-sample once the phase convention is captured
@@ -1979,13 +1981,26 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 
 		phase[i] = 0;
 		if (!ffuc_fb_get(chip, k, &pos[i], &frames[i], &phase[i])) {
-			if (k < chip->fb_delay)
+			if (k < chip->fb_delay) {
 				atomic_inc(&chip->out_fb_priming);
-			else if (src >= chip->in_pkts)
-				atomic_inc(&chip->out_fb_ahead);
-			else
-				atomic_inc(&chip->out_fb_stale);
-			frames[i] = 0;
+				/* Priming carries nominal-cadence frames, never
+				 * empty packets: the device output buffer must
+				 * stay fed before feedback exists.  The
+				 * fractional accumulator advances the lead at
+				 * the exact nominal rate (rate/8000 per
+				 * packet), so the handover to the mirrored
+				 * counts carries no cadence step. */
+				chip->out_prime_acc += chip->rate;
+				frames[i] = min(chip->out_prime_acc / 8000,
+						m->max_frames);
+				chip->out_prime_acc %= 8000;
+			} else {
+				if (src >= chip->in_pkts)
+					atomic_inc(&chip->out_fb_ahead);
+				else
+					atomic_inc(&chip->out_fb_stale);
+				frames[i] = 0;
+			}
 		}
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
@@ -2041,7 +2056,11 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 			s->out_start_urbs--;
 		ffuc_ring_trace(chip, subs, s->hw_ptr, appl, own, total);
 	}
-	if (s->running && !s->out_counter_valid) {
+	/* The seed needs a real device timestamp: ts_pos_valid means at
+	 * least one capture header arrived.  Priming frames are nominal, so
+	 * a non-zero frames[] no longer implies feedback; without the
+	 * timestamp the rewind would extrapolate from a zero position. */
+	if (s->running && !s->out_counter_valid && chip->ts_pos_valid) {
 		for (i = 0; i < urb->number_of_packets; i++) {
 			if (frames[i]) {
 				s->out_counter = ffuc_lead_seed(chip);
@@ -2068,7 +2087,8 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 
 		urb->iso_frame_desc[i].offset = off;
 		urb->iso_frame_desc[i].length = len;
-		if (s->running && frames[i] && !starved) {
+		if (s->running && frames[i] && !starved &&
+		    s->out_counter_valid) {
 			if (chip->s32_samples)
 				ffuc_playback_copy_int32(subs->runtime, s->pos[0],
 					   dst + 1, frames[i], nch, 0, fwords);
@@ -2080,7 +2100,10 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		} else {
 			/* Silence, not stale ring content.  The lead words
 			 * below still advance: the device timeline must stay
-			 * fed while the host stream recovers. */
+			 * fed while the host stream recovers.  Before the
+			 * seed anchors the counter the lead words are not
+			 * placed against the device timeline, so ring data
+			 * waits for the anchor. */
 			memset(dst, 0, len);
 		}
 		if (frames[i]) {
@@ -2095,7 +2118,11 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 				dst[0] = cpu_to_le32(base);
 			}
 			s->out_counter += frames[i];
-			{
+			/* The lag watermarks describe the anchored counter
+			 * only: priming packets before the seed carry lead
+			 * words that are not placed against the device
+			 * timeline. */
+			if (s->out_counter_valid) {
 				unsigned int wrap = ffuc_iso_wrap(chip);
 				int lag = (int)((chip->in_end + wrap -
 						 s->out_counter) % wrap);
@@ -2634,6 +2661,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->iso_frames_ok = false;
 	chip->in_end = 0;
 	chip->fb_acc = 0;
+	chip->out_prime_acc = 0;
 	chip->fb_delay = (chip->nurbs + 1) * chip->iso_packets;
 	chip->out_lag_min = 0x7fffffff;
 	chip->out_lag_max = -0x7fffffff;

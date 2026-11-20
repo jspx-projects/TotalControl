@@ -471,6 +471,30 @@ playback clock reference. The loop:
 This is implicit feedback: the device's captured clock schedules
 playback, keeping the two directions aligned.
 
+**Priming.** The OUT stream starts before the feedback ring holds
+entries for it. The first `fb_delay` OUT packets of a run are the
+priming window. A priming packet carries the nominal frame count, so
+the device output buffer stays fed before feedback exists. The lead
+words advance at the nominal cadence through the window. The data is
+silence while the stream is not running or the host ring is dry; an
+anchored, filled stream sends ring data in the priming window like in
+any other packet.
+
+**The lead anchor seed.** The lead counter starts from the device
+timestamp: the unwrapped position rewound by the packets between the
+feedback slot and the fill moment, plus `out_lead`. The seed requires a
+valid device timestamp (at least one real capture header). The rewind
+can reach before the first header of the run; the position counter
+free-runs at the committed rate, so the extrapolated position stays on
+the device timeline. Until the seed anchors the counter, playback
+packets carry silence; ring data waits for the anchor. From the seed,
+the counter advances by the frames sent: nominal frames in the priming
+window, mirrored frames once feedback exists. The nominal cadence is
+the committed rate; the mirrored cadence is the device's captured
+rate. The two agree to within the clock drift over the priming window,
+so the handover carries no cadence step. The lag watermarks record the
+anchored counter only.
+
 **What drives the loop.** Two device fields schedule the OUT stream:
 the position anchors the lead word (K1.3 initializes its lead counter
 from the recorded position plus `out_lead`, then advances it by the
@@ -480,7 +504,7 @@ captures one extra frame in a microframe, the count carries that
 add/drop, and OUT reproduces it. The long-term OUT rate therefore
 equals the device's capture rate, fractional part included.
 
-The phase is recorded in `fb[]` and exposed for diagnostics; the
+The phase is recorded in `fb[]` and exposed for diagnostics.
 The scheduler mirrors the frame count, which already carries the add/drop.
 The driver also consumes the phase for the device timestamp: each IN
 packet pairs the unwrapped device position with the host time of the next
@@ -514,6 +538,8 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | lead word | the stream position an OUT frame plays at; keeps the device output buffer supplied | K1.3 |
 | `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
+| priming window | the first `fb_delay` OUT packets of a run, before feedback exists for them | K1.3 priming |
+| nominal frame count | `rate/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window | K1.3 priming |
 
 Guards:
 
