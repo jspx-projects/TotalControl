@@ -15874,12 +15874,13 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
-    // Transport diagnostics: cumulative counters shown relative to the
-    // baseline (driver reattach or the reset button); the per-run ISO packet
-    // detail and the USB error gauge show the current engine run, because
-    // they reset on every rate/quantum switch or recovery.  Counting runs on
-    // every tick, independent of this drawer.  Each row is one fault domain;
-    // the manual explains meaning and mitigation.
+    // Transport diagnostics in three sections by reset behaviour:
+    //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
+    //  - This stream: per-run transport detail, cleared on stream restart
+    //    (rate/quantum change or recovery), not by player start/stop.
+    //  - Session: cumulative counters, cleared only by reset.
+    // `reset` rebaselines every section. Counting runs on every tick,
+    // independent of this drawer. The manual explains meaning and mitigation.
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
         // Per-run detail since the last reset (or engine-run start). The
@@ -15889,118 +15890,137 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         let perrun = transport_delta(&now, &perrun_base);
         body = body.push(
             row![
-                strip::hint(caption("Diagnostics"), "Since reset; packet detail is this run.", scale),
+                strip::hint(caption("Diagnostics"), "Transport error counters.", scale),
                 iced::widget::Space::new().width(Length::Fill),
-                button(strip::centered_label_auto(
-                    "reset",
-                    theme::TEXT_DIALOG * scale
-                ))
-                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                .style(theme::ghost_button)
-                .on_press(Message::ResetTransportErrors),
+                strip::hint(
+                    button(strip::centered_label_auto(
+                        "reset",
+                        theme::TEXT_DIALOG * scale
+                    ))
+                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                    .style(theme::ghost_button)
+                    .on_press(Message::ResetTransportErrors),
+                    "Clear all counters",
+                    scale,
+                ),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
-        // A rate-switch short burst is expected, not an error; exclude it
-        // from the bad-packet count.
-        let switch_in = state
-            .rate_switch_shorts
-            .0
-            .saturating_add(state.rate_switch_burst.0)
-            .min(delta.in_shorts);
-        let switch_out = state
-            .rate_switch_shorts
-            .1
-            .saturating_add(state.rate_switch_burst.1)
-            .min(delta.out_shorts);
-        let short_in = (delta.in_shorts + perrun.in_short).saturating_sub(switch_in);
-        let short_out = (delta.out_shorts + perrun.out_pkt_len_err).saturating_sub(switch_out);
-        let bad_in = short_in + perrun.in_misaligned + delta.in_bad_length;
-        let bad_out = short_out + perrun.out_capacity_err + delta.out_bad_length;
-        // URB status errors are cumulative; the ISO packet-status detail is
-        // per-run. The consecutive-error gauge (urb_errors) is a gauge, not a
-        // count, and overlaps the cumulative status errors, so it is not summed
-        // into this total.
-        let usb = delta.in_status_errors
-            + delta.out_status_errors
-            + perrun.in_status_err
-            + perrun.out_pkt_status;
-        let feedback = perrun.in_pos_gap
+        // Section 2 values: per-run transport detail (this stream). The
+        // per-run counters reset on stream restart, so the expected startup
+        // and rate-switch packet burst is naturally excluded.
+        let usb_run = perrun.in_status_err + perrun.out_pkt_status;
+        let bad_run_in = perrun.in_short + perrun.in_misaligned;
+        let bad_run_out = perrun.out_pkt_len_err + perrun.out_capacity_err;
+        let feedback_run = perrun.in_pos_gap
             + perrun.in_frames_mismatch
-            + delta.rate_mismatch
             + perrun.out_fb_ahead
             + perrun.out_fb_stale;
+        // Section 3 values: cumulative session counters.
         let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
-        let rows: [(&'static str, String, u32, &'static str); 8] = [
+        let sections: [(
+            &'static str,
+            &'static str,
+            Vec<(&'static str, String, u32, &'static str)>,
+        ); 3] = [
             (
-                "underrun / overrun",
-                format!("{} / {}", delta.out_underruns, delta.in_overruns),
-                delta.out_underruns + delta.in_overruns,
-                "Playback dry, capture overflow.",
+                "Scheduling",
+                "Cumulative, cleared by reset. Host ring underruns (playback) and overruns (capture): the metric for tuning quantum and host load. Never cleared by a stream restart.",
+                vec![(
+                    "underrun / overrun",
+                    format!("{} / {}", delta.out_underruns, delta.in_overruns),
+                    delta.out_underruns + delta.in_overruns,
+                    "Cumulative. Playback ring ran dry / capture ring overflowed.",
+                )],
             ),
             (
-                "recover",
-                delta.recoveries.to_string(),
-                delta.recoveries,
-                "Driver engine restarted.",
+                "This stream",
+                "Cleared when the stream restarts: a rate or quantum change, or a recovery. Not cleared by starting or stopping a player. Packet-level transport detail for the current stream.",
+                vec![
+                    (
+                        "usb",
+                        usb_run.to_string(),
+                        usb_run,
+                        "USB packet status errors this stream.",
+                    ),
+                    (
+                        "bad packets",
+                        format!("{} / {}", bad_run_in, bad_run_out),
+                        bad_run_in + bad_run_out,
+                        "Short, malformed or dropped packets this stream.",
+                    ),
+                    (
+                        "feedback",
+                        feedback_run.to_string(),
+                        feedback_run,
+                        "Clock-tracking packet detail this stream: position gaps, frame-count mismatches, feedback ahead/stale.",
+                    ),
+                ],
             ),
             (
-                "usb",
-                usb.to_string(),
-                usb,
-                "USB link errors.",
-            ),
-            (
-                "gaps",
-                format!("{} / {}", delta.in_gaps, delta.out_gaps),
-                delta.in_gaps + delta.out_gaps,
-                "Missing USB packets.",
-            ),
-            (
-                "bad packets",
-                format!("{} / {}", bad_in, bad_out),
-                bad_in + bad_out,
-                "Malformed or dropped packets.",
-            ),
-            (
-                "feedback",
-                feedback.to_string(),
-                feedback,
-                "Device clock tracking errors.",
-            ),
-            (
-                "pointer",
-                pointer.to_string(),
-                pointer,
-                "Driver pointer divergence.",
-            ),
-            (
-                "events dropped",
-                delta.events_dropped.to_string(),
-                delta.events_dropped,
-                "Control events discarded.",
+                "Session",
+                "Cumulative, cleared by reset. Engine, transport and clock faults accumulated since the last reset.",
+                vec![
+                    (
+                        "recover",
+                        delta.recoveries.to_string(),
+                        delta.recoveries,
+                        "Cumulative. Driver engine restarted after a fault.",
+                    ),
+                    (
+                        "gaps",
+                        format!("{} / {}", delta.in_gaps, delta.out_gaps),
+                        delta.in_gaps + delta.out_gaps,
+                        "Cumulative. Missing USB packets (late or absent completions).",
+                    ),
+                    (
+                        "rate mismatch",
+                        delta.rate_mismatch.to_string(),
+                        delta.rate_mismatch,
+                        "Cumulative. Sustained capture cadence disagrees with the set rate.",
+                    ),
+                    (
+                        "pointer",
+                        pointer.to_string(),
+                        pointer,
+                        "Cumulative. Driver buffer pointer diverged from the ALSA core pointer.",
+                    ),
+                    (
+                        "events dropped",
+                        delta.events_dropped.to_string(),
+                        delta.events_dropped,
+                        "Cumulative. Control events discarded (hwdep queue full).",
+                    ),
+                ],
             ),
         ];
-        for (label, value, bad, tip) in rows {
-            let colour = if bad == 0 {
-                theme::text_sec()
-            } else {
-                Color::from_rgb8(0xe0, 0x5a, 0x5a)
-            };
-            body = body.push(
-                row![
-                    strip::hint(
-                        text(label).size(text_size).color(theme::text_sec()),
-                        tip,
-                        scale
-                    ),
-                    iced::widget::Space::new().width(Length::Fill),
-                    text(value).size(text_size).color(colour),
-                ]
-                .spacing(theme::SPACE_MD * scale)
-                .align_y(iced::Alignment::Center),
-            );
+        for (header, header_tip, rows) in sections {
+            body = body.push(strip::hint(
+                text(header).size(text_size).color(theme::text_sec()),
+                header_tip,
+                scale,
+            ));
+            for (label, value, bad, tip) in rows {
+                let colour = if bad == 0 {
+                    theme::text_sec()
+                } else {
+                    Color::from_rgb8(0xe0, 0x5a, 0x5a)
+                };
+                body = body.push(
+                    row![
+                        strip::hint(
+                            text(label).size(text_size).color(theme::text_sec()),
+                            tip,
+                            scale
+                        ),
+                        iced::widget::Space::new().width(Length::Fill),
+                        text(value).size(text_size).color(colour),
+                    ]
+                    .spacing(theme::SPACE_MD * scale)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
         }
     }
     if let Some((percent, db)) = state.host_volume {

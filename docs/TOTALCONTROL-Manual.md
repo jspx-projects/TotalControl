@@ -1417,36 +1417,73 @@ outside the calibrated set use the model estimate. A different firmware or
 device path needs a new calibration.
 
 Below the latency line, **Diagnostics** lists the kernel transport error
-counters. They are cumulative since the driver attached or the last
-**reset**, and they are counted continuously whether or not this panel is
-open. `in` is device-to-host (capture) and `out` is host-to-device
-(playback); the host is the computer running TotalControl. Each row is one
-fault domain. The tooltips are deliberately short; this section is the full
-reference. **reset** clears the display baseline without changing the device
-or the audio graph.
+counters. They are counted continuously whether or not this panel is open.
+`in` is device-to-host (capture) and `out` is host-to-device (playback);
+the host is the computer running TotalControl. The tooltips are deliberately
+short; this section is the full reference. **reset** (tooltip "Clear all
+counters") clears every row without changing the device or the audio graph.
 
-The cumulative rows count since the driver attached or the last reset. The
-ISO packet detail (in **bad packets** and **feedback**) and the USB
-packet-status detail (in **usb**) show the current engine run: they reset
-on a rate or quantum switch or a recovery, so a switch starts the new run
-from zero rather than carrying stale detail forward. **reset** clears
-these rows as well, so every row reads zero after a reset.
+The counters are grouped into three sections by **when they clear**:
 
-| Row | Meaning | What to do |
-|---|---|---|
-| underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). On an underrun the driver sends silence for the dry chunk; a single late write is heard as a brief gap. At stream start and after a rate change a few chunks of silence are allowed while the host fills the ring. If the ring stays dry for two consecutive chunks outside that window the driver stops the playback stream and the audio graph restarts it. A dry ring is never heard as stale audio. An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
-| recover | The driver restarted the streaming engine after a serious fault. | Check the other rows for the cause; if it repeats, reseat the USB cable or try another port. |
-| usb | USB link errors: status-stage errors and URB submission/completion errors. | Try another USB port or cable; avoid hubs; check for bandwidth contention. |
-| gaps | Missing packets: a completion arrived late or a packet was absent. | Reduce USB bus load; try a dedicated controller or port. |
-| bad packets | Short, malformed, misaligned or dropped packets. The expected rate-switch burst is excluded. | Usually accompanies a USB link problem; see `usb` and `gaps`. |
-| feedback | Implicit-feedback clock errors: a position discontinuity, a header frame-count mismatch, a sustained rate mismatch, or feedback unavailable. | Check the clock source and sample rate; a growing value indicates a device clock or USB timing fault. |
-| pointer | The driver's buffer pointer diverged from the ALSA core pointer. | Rare; if it repeats, restart the stream or reload the driver. |
-| events dropped | The kernel hwdep event queue was full and the application reader fell behind, so an event was discarded. Not a USB fault. | Reduce UI or system load; harmless if occasional. |
+- **Scheduling** — `underrun / overrun`. Cumulative: counts since the driver
+  attached or the last reset. A stream restart never clears it.
+- **This stream** — `usb`, `bad packets`, `feedback`. Per-run: clears when
+  the audio stream restarts (see below).
+- **Session** — `recover`, `gaps`, `rate mismatch`, `pointer`,
+  `events dropped`. Cumulative: counts since the driver attached or the last
+  reset.
 
-A sample-rate change normally produces a burst of short packets; these are
-expected and are excluded from **bad packets**. A non-zero error row that
-keeps growing while audio plays means the transport is dropping or
-mis-timing packets; a row that stays at a fixed value records a past event.
+**reset** clears all three sections, so every row reads zero after a reset.
+
+### What "this stream" means — and what it does not
+
+The per-run counters clear when the **device audio stream** restarts, not
+when you restart an application. The stream restarts on a **sample-rate
+change**, a **quantum (buffer) change**, or a **recovery** after a fault.
+
+It does **not** restart when you start or stop a player. TotalControl keeps
+the device stream running between player sessions (the clock stays locked),
+so restarting DeaDBeeF or your DAW transport does not clear these counters.
+"Per stream" means per device-stream lifecycle, not per player.
+
+This is deliberate. The per-run counters answer "is the *current
+configuration* running clean?" When you change the rate or buffer size to
+tune latency, the count starts fresh so you can judge the new setting
+without stale errors from the old one. The cumulative counters (Scheduling
+and Session) keep the history, so nothing is hidden: a fault that happened
+earlier still shows there even after a stream restart clears the per-run
+detail.
+
+### Which counter to watch
+
+- **Tuning quantum and host load:** watch `underrun / overrun` (Scheduling).
+  It persists while you experiment and clears only when you press reset, so
+  you can try a setting, see whether it underruns, and reset before the next
+  attempt.
+- **Judging a configuration change:** watch the This stream rows right after
+  changing rate or buffer. A clean new setting stays at zero.
+- **Diagnosing a fault:** watch the Session rows for the accumulated history
+  (recoveries, gaps, rate mismatches), and the This stream rows for what the
+  current stream is doing.
+
+### Counter reference
+
+| Section | Row | Meaning | What to do |
+|---|---|---|---|
+| Scheduling | underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). On an underrun the driver sends silence for the dry chunk; a single late write is heard as a brief gap. At stream start and after a rate change a few chunks of silence are allowed while the host fills the ring. If the ring stays dry for two consecutive chunks outside that window the driver stops the playback stream and the audio graph restarts it. A dry ring is never heard as stale audio. An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
+| This stream | usb | USB packet status errors in the current stream. | Try another USB port or cable; avoid hubs; check for bandwidth contention. |
+| This stream | bad packets | Short, malformed, misaligned or dropped packets in the current stream. The startup and rate-switch burst is excluded by the per-run reset. | Usually accompanies a USB link problem; see `usb` and `gaps`. |
+| This stream | feedback | Clock-tracking packet detail in the current stream: a position discontinuity, a header frame-count mismatch, or feedback unavailable. | Check the clock source and sample rate; a growing value indicates a device clock or USB timing fault. |
+| Session | recover | The driver restarted the streaming engine after a serious fault. | Check the other rows for the cause; if it repeats, reseat the USB cable or try another port. |
+| Session | gaps | Missing packets: a completion arrived late or a packet was absent. | Reduce USB bus load; try a dedicated controller or port. |
+| Session | rate mismatch | The capture cadence sustainedly disagrees with the set rate (the rate write did not take effect, or the device was reprogrammed). | Check the clock source and sample rate; if it persists, reload the driver. |
+| Session | pointer | The driver's buffer pointer diverged from the ALSA core pointer. | Rare; if it repeats, restart the stream or reload the driver. |
+| Session | events dropped | The kernel hwdep event queue was full and the application reader fell behind, so an event was discarded. Not a USB fault. | Reduce UI or system load; harmless if occasional. |
+
+A non-zero error row that keeps growing while audio plays means the
+transport is dropping or mis-timing packets; a row that stays at a fixed
+value records a past event. A few short packets at a rate change are
+expected and are not counted against the new stream.
 
 
 ## 15. Where TotalControl keeps its data
