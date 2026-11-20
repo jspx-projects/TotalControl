@@ -285,10 +285,11 @@ Keep virtual machines, heavy disk IO and file indexers away from the audio
 CPU. The audio thread runs at real-time priority, so ordinary CPU load does
 not displace it; interrupts, deep idle exits and memory-system pressure do.
 These measures are tolerances, not guarantees: at 48 frames and 48 kHz the
-buffer margin is only a few milliseconds. In our measurement, pinning the
-audio thread to one CPU and keeping that CPU out of deep idle turned a
-48 frames/48 kHz session with occasional dropouts into five minutes with
-none.
+buffer margin is only a few milliseconds. In our measurement, keeping the
+audio CPUs out of deep idle turned a 48 frames/48 kHz session with
+occasional dropouts into fifteen minutes with none. Pinning the audio thread
+to one CPU on its own made no difference; the idle-state limit is the
+effective measure.
 
 ## 1. The mixer window
 
