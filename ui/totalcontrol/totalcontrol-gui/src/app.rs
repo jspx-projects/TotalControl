@@ -2109,6 +2109,11 @@ pub enum Message {
     Tray(crate::tray::TrayEvent),
     /// "Keep running in the tray when I close the window".
     SetKeepInTray(bool),
+    /// Toggle the host audio performance mode (holds a CPU latency
+    /// constraint while the card streams).
+    SetAudioPerformance(bool),
+    /// Choose the allowed CPU wake latency for the performance mode.
+    SetAudioPerfMaxSleep(i32),
     /// "Start with the session" (an autostart entry, hidden in the tray).
     SetAutostart(bool),
     /// Startup mismatch: use the saved TotalControl scene (already applied).
@@ -2850,6 +2855,14 @@ pub struct TotalControl {
     pub tray_active: bool,
     /// Closing the window hides it instead of quitting (needs `tray_active`).
     pub keep_in_tray: bool,
+    /// The host audio performance mode: hold a CPU latency constraint while
+    /// the card streams (`audio_perf`).
+    pub audio_performance: bool,
+    /// Allowed CPU wake latency while the mode is held, in microseconds
+    /// (`crate::audio_perf::LATENCY_CHOICES`).
+    pub audio_perf_us: i32,
+    pub audio_perf: crate::audio_perf::Holder,
+    pub audio_perf_status: crate::audio_perf::Status,
     /// The window is hidden in the tray right now.
     pub window_hidden: bool,
     /// The last failure worth telling the user about (a device write that
@@ -3588,6 +3601,10 @@ pub fn new_with_device(
         last_card_rate: None,
         tray_active: false,
         keep_in_tray: true,
+        audio_performance: false,
+        audio_perf_us: 0,
+        audio_perf: Default::default(),
+        audio_perf_status: crate::audio_perf::Status::Released,
         window_hidden: false,
         notice: None,
         window_id: None,
@@ -4004,6 +4021,8 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
     settings.workspace_last_dir = state.workspace_last_dir.clone();
     // Only a choice to leave the default is worth writing down.
     settings.keep_in_tray = (!state.keep_in_tray).then_some(false);
+    settings.audio_performance = state.audio_performance;
+    settings.audio_perf_max_sleep_us = state.audio_perf_us;
     settings.engine_force_rate = Some(state.engine_force_rate);
     settings.engine_rate_mode = Some(state.engine_rate_mode);
     settings.engine_force_quantum = Some(state.engine_force_quantum);
@@ -4022,6 +4041,14 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
 pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_settings::HostSettings) {
     state.workspace_last_dir = settings.workspace_last_dir.clone();
     state.keep_in_tray = settings.keep_in_tray.unwrap_or(true);
+    state.audio_performance = settings.audio_performance;
+    state.audio_perf_us = if crate::audio_perf::LATENCY_CHOICES
+        .contains(&settings.audio_perf_max_sleep_us)
+    {
+        settings.audio_perf_max_sleep_us
+    } else {
+        0
+    };
     state.engine_force_rate = settings.engine_force_rate.unwrap_or(0);
     state.engine_rate_mode = settings
         .engine_rate_mode
@@ -5785,6 +5812,7 @@ fn changes_host_settings(message: &Message) -> bool {
     matches!(
         message,
         Message::SetKeepInTray(_)
+            | Message::SetAudioPerformance(_)
             | Message::SetAutostart(_)
             | Message::SetSyncDirection(_)
             | Message::SetAlwaysInitDevice(_)
@@ -9048,6 +9076,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::WindowClosed(_)
             | Message::Tray(_)
             | Message::SetKeepInTray(_)
+            | Message::SetAudioPerformance(_)
             | Message::SetAutostart(_)
             | Message::MismatchUseTotalcontrol
             | Message::MismatchUseDevice
@@ -10344,6 +10373,40 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         },
         Message::SetKeepInTray(on) => state.keep_in_tray = on,
+        Message::SetAudioPerformance(on) => {
+            state.audio_performance = on;
+            let want = on && state.card_stream.is_some();
+            state.audio_perf_status =
+                state.audio_perf.apply(want, state.audio_perf_us);
+            if on
+                && matches!(
+                    state.audio_perf_status,
+                    crate::audio_perf::Status::Denied
+                        | crate::audio_perf::Status::Unavailable
+                )
+            {
+                state.notice = Some((
+                    "Audio performance mode could not take effect: no access to \
+                     /dev/cpu_dma_latency."
+                        .into(),
+                    Instant::now(),
+                ));
+            }
+        }
+        Message::SetAudioPerfMaxSleep(us) => {
+            if !crate::audio_perf::LATENCY_CHOICES.contains(&us) {
+                return Task::none();
+            }
+            // The choice only acts while the mode is on; the setting itself
+            // is remembered either way.
+            if state.audio_performance {
+                state.audio_perf_us = us;
+                let want = state.card_stream.is_some();
+                state.audio_perf_status = state.audio_perf.apply(want, us);
+            } else {
+                state.audio_perf_us = us;
+            }
+        }
         Message::SetAutostart(on) => match crate::tray::set_autostart(on) {
             Ok(()) => state.autostart = crate::tray::autostart_enabled(),
             Err(e) => log::warn!("Could not change the autostart entry: {e}"),
@@ -12506,6 +12569,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if host_volume.is_some() {
                 state.host_volume = host_volume;
             }
+            // The performance mode follows the stream in every rate mode.
+            let want = state.audio_performance && stream.is_some();
+            state.audio_perf_status =
+                state.audio_perf.apply(want, state.audio_perf_us);
             if state.device.rate_follows_sound_server() {
                 let sink_started = sink_running && !state.last_sink_running;
                 let new_rate = stream.map(|s| s.rate);
@@ -14691,14 +14758,11 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         Message::SetAutostart(!state.autostart),
     ));
 
-    let sync_help = help(if state.device.is_uc_model() {
-        "The UC keeps input gain, reference levels, clock and rate. TotalControl writes only \
-         its mixer scene (matrix, faders, mutes, loopback) on connect."
-    } else {
-        "On first connect: read the device where it has readback, compare it with the \
-         saved TotalControl scene, and choose when they differ."
-    });
-    let mut sync = column![section("STARTUP SYNC"), sync_help]
+    let mut sync = column![strip::hint(
+        section("STARTUP SYNC"),
+        "What TotalControl writes to the device on connect.",
+        scale,
+    )]
         .spacing(theme::SPACE_SM * scale)
         .width(Length::Fill);
     if !state.device.is_uc_model() {
@@ -14729,7 +14793,11 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     }
 
     let surround = column![
-        section("SURROUND"),
+        strip::hint(
+            section("SURROUND"),
+            "Virtual 5.1/7.1 outputs while TotalControl runs.",
+            scale,
+        ),
         check(
             "Virtual 5.1 output",
             state.surround_51,
@@ -14740,7 +14808,6 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
             state.surround_71,
             Message::SetSurround71(!state.surround_71),
         ),
-        help("Active while TotalControl runs. Select the device in KDE or the player."),
     ]
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);
@@ -14755,7 +14822,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let vu_selected = format!("{} dB/s", state.vu_release_db_s.unwrap_or(device_rate));
     let vu_rates_for_pick = vu_rates.clone();
     let vu = column![
-        section("VU FALLBACK"),
+        section("VU METERS"),
         row![
             text("RMS bar release")
                 .color(theme::text_primary())
@@ -14790,6 +14857,45 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_SM * scale)
     .width(Length::Fill);
 
+    let audio_tip = match state.audio_perf_status {
+        crate::audio_perf::Status::Denied => "No access to /dev/cpu_dma_latency.",
+        crate::audio_perf::Status::Unavailable => {
+            "This kernel does not expose /dev/cpu_dma_latency."
+        }
+        _ => "Better audio performance, increases power usage.",
+    };
+    let audio = column![
+        section("AUDIO PERFORMANCE"),
+        strip::hint(
+            check(
+                "Keep the audio CPUs awake while streaming",
+                state.audio_performance,
+                Message::SetAudioPerformance(!state.audio_performance),
+            ),
+            audio_tip,
+            scale,
+        ),
+        row![
+            text("Max sleep time")
+                .color(theme::text_sec())
+                .size(text_size),
+            radio_choice(
+                "10 \u{b5}s",
+                state.audio_perf_us == 10,
+                Message::SetAudioPerfMaxSleep(10),
+            ),
+            radio_choice(
+                "0 \u{b5}s",
+                state.audio_perf_us == 0,
+                Message::SetAudioPerfMaxSleep(0),
+            ),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .width(Length::Fill);
+
     let footer = crate::widgets::dialog::footer(
         vec![crate::widgets::dialog::action_button(
             "Close",
@@ -14799,7 +14905,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         scale,
     );
 
-    let body = column![header, background, sync, surround, vu, footer]
+    let body = column![header, background, sync, surround, audio, vu, footer]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
     centered_dialog(state, body.into(), Message::ToggleSettings, 520.0)
@@ -23041,6 +23147,44 @@ mod tests {
         assert!(!state.tray_active && state.keep_in_tray);
         let _ = update(&mut state, Message::CloseRequested);
         assert!(!state.window_hidden);
+    }
+
+    #[test]
+    fn audio_performance_is_opt_in_and_persisted() {
+        let mut state = new(true, None, None);
+        assert!(!state.audio_performance);
+        assert!(!host_settings_of(&state).audio_performance);
+        let _ = update(&mut state, Message::SetAudioPerformance(true));
+        assert!(state.audio_performance);
+        let settings = host_settings_of(&state);
+        assert!(settings.audio_performance);
+        apply_host_settings(&mut state, settings);
+        assert!(state.audio_performance);
+        assert!(!is_undoable(&Message::SetAudioPerformance(true)));
+    }
+
+    #[test]
+    fn audio_performance_releases_without_a_stream() {
+        use crate::audio_perf::Status;
+
+        let mut state = new(true, None, None);
+        state.audio_perf =
+            crate::audio_perf::Holder::with_path("/nonexistent/cpu_dma_latency");
+        state.card_stream = None;
+        let _ = update(&mut state, Message::SetAudioPerformance(true));
+        // Enabled, but no stream: nothing is held and no failure is worth
+        // a notice until a stream starts.
+        assert_eq!(state.audio_perf_status, Status::Released);
+        // With a stream the missing interface is reported, not silently
+        // ignored.
+        let stream = totalcontrol_core::pw_clock::CardStream {
+            rate: 48_000,
+            period: 48,
+            buffer: 768,
+        };
+        state.card_stream = Some(stream);
+        let _ = update(&mut state, Message::EngineRead(None, Some(stream), true, None));
+        assert_eq!(state.audio_perf_status, Status::Unavailable);
     }
 
     #[test]

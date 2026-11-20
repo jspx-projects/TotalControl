@@ -175,6 +175,14 @@ pub struct HostSettings {
     #[serde(default = "ovr_samples")]
     pub ovr_full_scale_samples: u8,
     pub keep_in_tray: Option<bool>,
+    /// Opt-in host audio performance mode: holds a PM-QoS CPU latency
+    /// constraint while the card streams (`audio_perf`).
+    #[serde(default)]
+    pub audio_performance: bool,
+    /// Allowed CPU wake latency for the performance mode, microseconds
+    /// (0 or 10).
+    #[serde(default)]
+    pub audio_perf_max_sleep_us: i32,
     pub workspace_last_dir: Option<PathBuf>,
 }
 
@@ -196,6 +204,8 @@ impl Default for HostSettings {
             engine_force_quantum: None,
             ovr_full_scale_samples: ovr_samples(),
             keep_in_tray: None,
+            audio_performance: false,
+            audio_perf_max_sleep_us: 0,
             workspace_last_dir: None,
         }
     }

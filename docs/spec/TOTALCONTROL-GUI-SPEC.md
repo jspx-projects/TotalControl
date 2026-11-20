@@ -242,8 +242,8 @@ edge just below the top bar. The top edge stays fixed while the content grows
 downward, so expanding a control never shifts the text under the pointer. A
 dialog taller than the space between the top bar and the window bottom scrolls
 its body inside the card. The app settings dialog holds BACKGROUND, STARTUP
-SYNC, SURROUND and VU FALLBACK
-sections — settings specific to TotalControl itself. Remote control has its
+SYNC, SURROUND, AUDIO PERFORMANCE and VU METERS sections — settings
+specific to TotalControl itself. Remote control has its
 own dialog (§1.4). Independent options are checkboxes, one-of-many options are
 radio buttons, and the only footer action is `Close`.
 
@@ -253,7 +253,25 @@ when the application exits. The setting is persisted. The sinks follow the
 selected Fireface/MR18 Pro Audio device and bridge to the first six or eight
 SW playback channels.
 
-VU FALLBACK has an `RMS bar release` dropdown (10, 15, 20, 25, 30, 40 dB/s
+AUDIO PERFORMANCE has the `Keep the audio CPUs awake while streaming`
+checkbox and, below it, an always-visible `Max sleep time` row with the
+`10 µs` and `0 µs` choices. The checkbox holds a kernel latency constraint
+(`/dev/cpu_dma_latency`) at the chosen value while the card streams and
+releases it when the stream stops or the application exits; the choices act
+only while the checkbox is checked and the chosen value is remembered.
+The checkbox carries a tooltip of a few words ("Better audio performance,
+increases power usage."); when the node cannot be written the tooltip
+states the reason. The section has no permanent explanatory text: the
+manual's Setup section owns the guidance. The setting is host state,
+persisted, and opt-in (default off).
+
+Section headers that would otherwise need a paragraph carry a short
+tooltip instead: STARTUP SYNC ("What TotalControl writes to the device on
+connect.") and SURROUND ("Virtual 5.1/7.1 outputs while TotalControl
+runs."). Permanent explanatory text belongs in the manual, never in the
+dialog.
+
+VU METERS has an `RMS bar release` dropdown (10, 15, 20, 25, 30, 40 dB/s
 plus the unit's measured rate if different) and a `Default` button. The
 choice sets the RMS bar release rate; the `Default` button selects the
 unit's measured rate (2.7.1) in the dropdown, so the user sees what the

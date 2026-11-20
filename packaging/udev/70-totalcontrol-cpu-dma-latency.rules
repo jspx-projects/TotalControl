@@ -1,0 +1,12 @@
+# Let the locally logged-in user hold a PM-QoS CPU latency constraint.
+#
+# TotalControl's "Audio performance mode" writes an allowed wake latency to
+# /dev/cpu_dma_latency while the card streams, so the audio CPUs do not enter
+# deep idle states between graph cycles.  This is the same uaccess grant the
+# sound devices use: the seated desktop user gets read/write access through an
+# ACL, with no group membership and no re-login.
+#
+# The audio-group line covers non-seat sessions (SSH, services), where uaccess
+# cannot apply.
+SUBSYSTEM=="misc", KERNEL=="cpu_dma_latency", TAG+="uaccess"
+SUBSYSTEM=="misc", KERNEL=="cpu_dma_latency", GROUP="audio", MODE="0660"
