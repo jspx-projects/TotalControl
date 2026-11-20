@@ -22,6 +22,13 @@ use std::time::{Duration, Instant};
 pub const HANDOVER: Duration = Duration::from_secs(2);
 /// How long a candidate rate must stay unchanged before it is forced.
 pub const STABLE: Duration = Duration::from_millis(300);
+/// How long the card is given to adopt a forced rate before the follower
+/// treats the divergence as stuck and re-applies. Matches the GUI's
+/// rate-confirmation window.
+pub const ADOPT_WINDOW: Duration = Duration::from_secs(3);
+/// How many times the follower re-applies a stuck rate before giving up
+/// (the GUI then shows the failure notice).
+pub const MAX_STUCK_RETRIES: u32 = 3;
 
 /// A node in a captured PipeWire graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +167,11 @@ pub struct RateFollower {
     handover: Option<Handover>,
     pending: Option<Pending>,
     last_applied_rate: Option<u32>,
+    /// When the current rate was last applied, to give the card a settling
+    /// window before a divergence is treated as stuck.
+    applied_at: Option<Instant>,
+    /// Re-applies of a stuck rate (forced but not adopted by the card).
+    stuck_retries: u32,
 }
 
 impl RateFollower {
@@ -175,6 +187,8 @@ impl RateFollower {
         self.handover = None;
         self.pending = None;
         self.last_applied_rate = None;
+        self.applied_at = None;
+        self.stuck_retries = 0;
     }
 
     /// Release the owner without forgetting which rate TotalControl last
@@ -183,6 +197,7 @@ impl RateFollower {
         self.owner = None;
         self.handover = None;
         self.pending = None;
+        self.stuck_retries = 0;
     }
 
     pub fn owner(&self) -> Option<&Owner> {
@@ -217,6 +232,7 @@ impl RateFollower {
         &mut self,
         candidates: &[RateCandidate],
         supported: &[u32],
+        card_rate: Option<u32>,
         now: Instant,
     ) -> Option<u32> {
         // A live owner is kept, but a same-client replacement (a track change
@@ -286,18 +302,53 @@ impl RateFollower {
             return None;
         }
         if self.last_applied_rate == Some(owner.rate) {
-            self.pending = None;
-            return None;
+            // The force matches the owner. The card is the truth: if it
+            // adopted the rate, there is nothing to do.
+            match card_rate {
+                Some(r) if r == owner.rate => {
+                    self.pending = None;
+                    self.stuck_retries = 0;
+                    return None;
+                }
+                None => {
+                    // No open stream to read the card rate from: nothing to
+                    // verify against, so keep the applied rate.
+                    self.pending = None;
+                    return None;
+                }
+                Some(_) => {
+                    // The card has not adopted the forced rate (a stale seed
+                    // equal to the owner, or a renegotiation that did not
+                    // land). Give the graph a settling window after the last
+                    // apply; if it still diverges, re-apply to renegotiate,
+                    // up to a bounded number of retries. Without this the
+                    // dedup would never retry a rate the force did not move.
+                    let settling = self
+                        .applied_at
+                        .is_some_and(|at| now.duration_since(at) < ADOPT_WINDOW);
+                    if settling || self.stuck_retries >= MAX_STUCK_RETRIES {
+                        self.pending = None;
+                        return None;
+                    }
+                    self.stuck_retries += 1;
+                    self.applied_at = Some(now);
+                    self.pending = None;
+                    return Some(owner.rate);
+                }
+            }
         }
         match self.pending {
             Some(pending) if pending.rate == owner.rate => {
                 if now.duration_since(pending.since) >= STABLE {
                     self.last_applied_rate = Some(owner.rate);
+                    self.applied_at = Some(now);
+                    self.stuck_retries = 0;
                     self.pending = None;
                     return Some(owner.rate);
                 }
             }
             _ => {
+                self.stuck_retries = 0;
                 self.pending = Some(Pending {
                     rate: owner.rate,
                     since: now,
@@ -626,12 +677,120 @@ mod tests {
         let mut follower = RateFollower::new();
         let now = Instant::now();
         let stream = candidate(1, 10, 7, "Player", 96_000);
-        assert_eq!(follower.observe(&[stream.clone()], &RATES, now), None);
+        assert_eq!(follower.observe(&[stream.clone()], &RATES, None, now), None);
         assert_eq!(
-            follower.observe(&[stream], &RATES, now + STABLE),
+            follower.observe(&[stream], &RATES, None, now + STABLE),
             Some(96_000)
         );
         assert_eq!(follower.owner().unwrap().application_name, "Player");
+    }
+
+    #[test]
+    fn a_stale_seed_equal_to_the_owner_is_healed_when_the_card_diverges() {
+        // The reported bug: a leftover force seeds last_applied equal to the
+        // owner's rate while the card runs at another rate. The follower must
+        // re-apply, not dedup forever.
+        let mut follower = RateFollower::new();
+        follower.seed_applied_rate(Some(96_000));
+        let now = Instant::now();
+        let owner = candidate(1, 10, 7, "Player", 96_000);
+        assert_eq!(
+            follower.observe(&[owner], &RATES, Some(48_000), now),
+            Some(96_000)
+        );
+    }
+
+    #[test]
+    fn an_adopted_rate_is_not_re_applied() {
+        let mut follower = RateFollower::new();
+        let now = Instant::now();
+        let owner = candidate(1, 10, 7, "Player", 96_000);
+        follower.observe(&[owner.clone()], &RATES, Some(48_000), now);
+        assert_eq!(
+            follower.observe(&[owner.clone()], &RATES, Some(48_000), now + STABLE),
+            Some(96_000)
+        );
+        // The card adopted the rate: nothing more to force.
+        assert_eq!(
+            follower.observe(&[owner], &RATES, Some(96_000), now + STABLE * 2),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unknown_card_rate_keeps_the_applied_rate() {
+        // No open stream to read the card rate from: no verification, so the
+        // applied rate is kept (the pre-fix behaviour).
+        let mut follower = RateFollower::new();
+        let now = Instant::now();
+        let owner = candidate(1, 10, 7, "Player", 96_000);
+        follower.observe(&[owner.clone()], &RATES, None, now);
+        follower.observe(&[owner.clone()], &RATES, None, now + STABLE);
+        assert_eq!(
+            follower.observe(&[owner], &RATES, None, now + ADOPT_WINDOW * 4),
+            None
+        );
+    }
+
+    #[test]
+    fn a_stuck_rate_retries_up_to_the_budget_then_stops() {
+        let mut follower = RateFollower::new();
+        let now = Instant::now();
+        let owner = candidate(1, 10, 7, "Player", 96_000);
+        follower.observe(&[owner.clone()], &RATES, Some(48_000), now);
+        let t0 = now + STABLE;
+        assert_eq!(
+            follower.observe(&[owner.clone()], &RATES, Some(48_000), t0),
+            Some(96_000)
+        );
+        // The card never adopts: one re-apply per settling window, bounded.
+        for i in 1..=MAX_STUCK_RETRIES {
+            assert_eq!(
+                follower.observe(
+                    &[owner.clone()],
+                    &RATES,
+                    Some(48_000),
+                    t0 + ADOPT_WINDOW * i
+                ),
+                Some(96_000),
+                "retry {i}"
+            );
+        }
+        assert_eq!(
+            follower.observe(
+                &[owner],
+                &RATES,
+                Some(48_000),
+                t0 + ADOPT_WINDOW * (MAX_STUCK_RETRIES + 1)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn adoption_resets_the_retry_budget() {
+        let mut follower = RateFollower::new();
+        let now = Instant::now();
+        let owner = candidate(1, 10, 7, "Player", 96_000);
+        follower.observe(&[owner.clone()], &RATES, Some(48_000), now);
+        let t0 = now + STABLE;
+        follower.observe(&[owner.clone()], &RATES, Some(48_000), t0);
+        follower.observe(&[owner.clone()], &RATES, Some(48_000), t0 + ADOPT_WINDOW);
+        // The card finally adopts: the budget clears.
+        assert_eq!(
+            follower.observe(
+                &[owner.clone()],
+                &RATES,
+                Some(96_000),
+                t0 + ADOPT_WINDOW * 2
+            ),
+            None
+        );
+        // A later stuck episode gets a fresh budget.
+        assert_eq!(
+            follower.observe(&[owner], &RATES, Some(48_000), t0 + ADOPT_WINDOW * 3),
+            Some(96_000)
+        );
     }
 
     #[test]
@@ -639,11 +798,11 @@ mod tests {
         let mut follower = RateFollower::new();
         let now = Instant::now();
         let owner = candidate(1, 10, 7, "Player", 96_000);
-        follower.observe(&[owner.clone()], &RATES, now);
-        follower.observe(&[owner.clone()], &RATES, now + STABLE);
+        follower.observe(&[owner.clone()], &RATES, None, now);
+        follower.observe(&[owner.clone()], &RATES, None, now + STABLE);
         let other = candidate(2, 20, 8, "Browser", 48_000);
         assert_eq!(
-            follower.observe(&[owner, other], &RATES, now + STABLE * 2),
+            follower.observe(&[owner, other], &RATES, None, now + STABLE * 2),
             None
         );
         assert_eq!(follower.owner().unwrap().application_name, "Player");
@@ -654,16 +813,16 @@ mod tests {
         let mut follower = RateFollower::new();
         let now = Instant::now();
         let old = candidate(1, 10, 7, "Player", 192_000);
-        follower.observe(&[old.clone()], &RATES, now);
-        follower.observe(&[old], &RATES, now + STABLE);
+        follower.observe(&[old.clone()], &RATES, None, now);
+        follower.observe(&[old], &RATES, None, now + STABLE);
         let replacement = candidate(2, 20, 7, "Player", 44_100);
         assert_eq!(
-            follower.observe(&[replacement.clone()], &RATES, now + STABLE * 2),
+            follower.observe(&[replacement.clone()], &RATES, None, now + STABLE * 2),
             None
         );
         assert_eq!(follower.owner().unwrap().node_id, 2);
         assert_eq!(
-            follower.observe(&[replacement], &RATES, now + STABLE * 3),
+            follower.observe(&[replacement], &RATES, None, now + STABLE * 3),
             Some(44_100)
         );
     }
@@ -673,19 +832,24 @@ mod tests {
         let mut follower = RateFollower::new();
         let now = Instant::now();
         let owner = candidate(1, 10, 7, "Player", 96_000);
-        follower.observe(&[owner.clone()], &RATES, now);
-        follower.observe(&[owner], &RATES, now + STABLE);
+        follower.observe(&[owner.clone()], &RATES, None, now);
+        follower.observe(&[owner], &RATES, None, now + STABLE);
         // The owner disappears.  A different client must wait out the window.
         let other = candidate(2, 20, 8, "Browser", 44_100);
         let mut newer = candidate(3, 30, 9, "Editor", 48_000);
         newer.rate = Some(48_000);
         assert_eq!(
-            follower.observe(&[other.clone(), newer.clone()], &RATES, now + STABLE * 2),
+            follower.observe(
+                &[other.clone(), newer.clone()],
+                &RATES,
+                None,
+                now + STABLE * 2
+            ),
             None
         );
         assert!(follower.owner().is_none());
         assert_eq!(
-            follower.observe(&[other, newer], &RATES, now + HANDOVER + STABLE * 2),
+            follower.observe(&[other, newer], &RATES, None, now + HANDOVER + STABLE * 2),
             None
         );
         assert_eq!(follower.owner().unwrap().node_id, 3);
@@ -694,6 +858,7 @@ mod tests {
             follower.observe(
                 &[candidate(3, 30, 9, "Editor", 48_000)],
                 &RATES,
+                None,
                 after + STABLE
             ),
             Some(48_000)
@@ -705,19 +870,22 @@ mod tests {
         let mut follower = RateFollower::new();
         let now = Instant::now();
         let owner = candidate(1, 10, 7, "Player", 96_000);
-        follower.observe(&[owner.clone()], &RATES, now);
-        follower.observe(&[owner], &RATES, now + STABLE);
+        follower.observe(&[owner.clone()], &RATES, None, now);
+        follower.observe(&[owner], &RATES, None, now + STABLE);
         let mut odd = candidate(1, 10, 7, "Player", 50_000);
         odd.rate = Some(50_000);
-        assert_eq!(follower.observe(&[odd], &RATES, now + STABLE * 2), None);
+        assert_eq!(
+            follower.observe(&[odd], &RATES, None, now + STABLE * 2),
+            None
+        );
         assert_eq!(follower.owner().unwrap().rate, 50_000);
         let supported = candidate(1, 10, 7, "Player", 44_100);
         assert_eq!(
-            follower.observe(&[supported.clone()], &RATES, now + STABLE * 3),
+            follower.observe(&[supported.clone()], &RATES, None, now + STABLE * 3),
             None
         );
         assert_eq!(
-            follower.observe(&[supported], &RATES, now + STABLE * 4),
+            follower.observe(&[supported], &RATES, None, now + STABLE * 4),
             Some(44_100)
         );
     }
@@ -729,9 +897,12 @@ mod tests {
         for (i, rate) in [192_000, 96_000, 44_100].into_iter().enumerate() {
             let stream = candidate(1, 10, 7, "Player", rate);
             let base = now + STABLE * (i as u32 * 2);
-            assert_eq!(follower.observe(&[stream.clone()], &RATES, base), None);
             assert_eq!(
-                follower.observe(&[stream], &RATES, base + STABLE),
+                follower.observe(&[stream.clone()], &RATES, None, base),
+                None
+            );
+            assert_eq!(
+                follower.observe(&[stream], &RATES, None, base + STABLE),
                 Some(rate)
             );
         }
@@ -742,19 +913,19 @@ mod tests {
         let mut follower = RateFollower::new();
         let now = Instant::now();
         let owner = candidate(1, 10, 7, "Player", 96_000);
-        follower.observe(&[owner.clone()], &RATES, now);
+        follower.observe(&[owner.clone()], &RATES, None, now);
         assert_eq!(
-            follower.observe(&[owner.clone()], &RATES, now + STABLE),
+            follower.observe(&[owner.clone()], &RATES, None, now + STABLE),
             Some(96_000)
         );
         // Another tool rewrote the force while the owner kept playing.
         follower.reconcile(Some(192_000));
         assert_eq!(
-            follower.observe(&[owner.clone()], &RATES, now + STABLE * 2),
+            follower.observe(&[owner.clone()], &RATES, None, now + STABLE * 2),
             None
         );
         assert_eq!(
-            follower.observe(&[owner], &RATES, now + STABLE * 3),
+            follower.observe(&[owner], &RATES, None, now + STABLE * 3),
             Some(96_000)
         );
     }
@@ -764,11 +935,11 @@ mod tests {
         let mut follower = RateFollower::new();
         let now = Instant::now();
         let owner = candidate(1, 10, 7, "Player", 96_000);
-        follower.observe(&[owner.clone()], &RATES, now);
-        follower.observe(&[owner.clone()], &RATES, now + STABLE);
+        follower.observe(&[owner.clone()], &RATES, None, now);
+        follower.observe(&[owner.clone()], &RATES, None, now + STABLE);
         follower.reconcile(Some(96_000));
         assert_eq!(
-            follower.observe(&[owner], &RATES, now + STABLE * 2),
+            follower.observe(&[owner], &RATES, None, now + STABLE * 2),
             None
         );
     }
@@ -782,9 +953,9 @@ mod tests {
         follower.seed_applied_rate(Some(96_000));
         let owner = candidate(1, 10, 7, "Player", 96_000);
         follower.reconcile(Some(192_000));
-        assert_eq!(follower.observe(&[owner.clone()], &RATES, now), None);
+        assert_eq!(follower.observe(&[owner.clone()], &RATES, None, now), None);
         assert_eq!(
-            follower.observe(&[owner], &RATES, now + STABLE),
+            follower.observe(&[owner], &RATES, None, now + STABLE),
             Some(96_000)
         );
     }

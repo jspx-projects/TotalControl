@@ -1361,25 +1361,46 @@ and a 2 s heartbeat). A divergence — an external metadata write or a stale
 seed — is re-applied once the owner's rate has been stable for 300 ms; an
 external force change is transient, not a new rate authority.
 
+Follow verifies the actual card rate (the open stream's rate), not only the
+force metadata: a force equal to the owner's rate that the card has not
+adopted is a stuck renegotiation, and the force alone does not heal it. After
+a three-second settling window the follower re-applies the rate and nudges
+the graph to renegotiate (a forced quantum change re-prepares a stuck stream),
+up to three retries; the card adopting the rate clears the retry budget. If
+the card still diverges after the budget, the pending confirmation reports
+the rate the device is still at. With no open stream the card rate is unknown
+and the applied rate is kept.
+
 At connect TotalControl replaces PipeWire's `clock.allowed-rates` with the
 connected device's nine rates, keeping the previous value. On disconnect or a
 clean exit it restores that value if the list is still the one it wrote. A
 clean exit also releases TotalControl's `clock.force-rate` override. No
 persistent PipeWire configuration file is installed.
 
-`Diagnostics` lists the kernel transport error counters, cumulative since
-the driver attached or the last `reset`. Counting runs on every tick,
-independent of whether the drawer is open. The rows are `underrun /
-overrun` (host ring), `recover` (engine restarts), `usb` (status and URB
-errors), `gaps` (missing packets), `bad packets` (short, malformed,
-misaligned or dropped packets, excluding the expected rate-switch burst),
-`feedback` (implicit-feedback clock errors), `pointer` (driver/core pointer
-divergence) and `events dropped` (hwdep event overflow). `underrun /
-overrun`, `gaps` and `bad packets` show `in / out`; the rest are totals.
-`in` is device-to-host (capture), `out` is host-to-device (playback); the
-host is the computer. A non-zero row is red. Each row carries a short
-tooltip; the manual carries the meaning and mitigation. The section is
-absent when the backend does not expose counters.
+`Diagnostics` lists the kernel transport error counters in three sections
+by reset behaviour, each with a header whose tooltip states that behaviour.
+`reset` (tooltip "Clear all counters") clears every section. Counting runs
+on every tick, independent of whether the drawer is open.
+
+- **Scheduling** — `underrun / overrun` (host ring). Cumulative, cleared
+  only by `reset`; never cleared by a stream restart. The metric for tuning
+  quantum and host load.
+- **This stream** — `usb` (packet status errors), `bad packets` (short,
+  malformed, misaligned or dropped) and `feedback` (clock-tracking packet
+  detail). Per-run: cleared when the stream restarts (a rate or quantum
+  change, or a recovery), not by player start/stop (§13). The startup and
+  rate-switch packet burst is excluded by the per-run reset.
+- **Session** — `recover` (engine restarts), `gaps` (missing packets),
+  `rate mismatch` (sustained cadence disagreement), `pointer` (driver/core
+  pointer divergence) and `events dropped` (hwdep event overflow).
+  Cumulative, cleared only by `reset`.
+
+`underrun / overrun`, `gaps` and `bad packets` show `in / out`; the rest
+are totals. `in` is device-to-host (capture), `out` is host-to-device
+(playback); the host is the computer. A non-zero row is red. Row labels
+are plain; each row and header carries a tooltip with its meaning and
+reset class. The manual carries the full meaning and mitigation. The
+section is absent when the backend does not expose counters.
 
 ## 5. Equalizer panel
 
@@ -2118,17 +2139,25 @@ The calibration is per personality; a firmware or device-path change needs a
 repeat measurement. The PC measurement is a full-duplex electrical loopback
 (output 5 to input 5), not an acoustic one.
 
-Below it, **Diagnostics** lists the kernel transport error counters:
-`underrun / overrun`, `recover`, `usb`, `gaps`, `bad packets`, `feedback`,
-`pointer` and `events dropped`. The cumulative rows count since the driver
-attached or the last reset. The per-run ISO packet detail in `bad packets`
-and `feedback`, and the USB consecutive-error gauge in `usb`, show the
-current engine run: they reset on every rate/quantum switch or recovery, so
-a switch does not carry stale detail into the new run. Counting runs
-continuously regardless of the drawer. `in` is device→host and `out` is
-host→device; `underrun / overrun`, `gaps` and `bad packets` show both. The
-expected rate-change short burst is excluded from `bad packets`. Tooltips
-are short; the manual carries the meaning and mitigation.
+Below it, **Diagnostics** lists the kernel transport error counters in
+three sections by reset behaviour (§4): **Scheduling** (`underrun /
+overrun`), **This stream** (`usb`, `bad packets`, `feedback`) and
+**Session** (`recover`, `gaps`, `rate mismatch`, `pointer`, `events
+dropped`). The Scheduling and Session sections are cumulative: they count
+since the driver attached or the last reset, and `reset` clears them. The
+This stream section is per-run: its counters reset when the stream
+restarts — a rate or quantum change, or a recovery — so a switch does not
+carry stale detail into the new run, and the startup/rate-switch packet
+burst is excluded. A stream restart is not a player start/stop: the Pro
+Audio node stays running between player sessions, so restarting a player
+does not clear the per-run counters. `reset` rebaselines the per-run
+display too, so every row reads zero after a reset. The USB
+consecutive-error gauge (`urb_errors`) is a gauge, not a count, and is not
+displayed as a total. Counting runs continuously regardless of the drawer.
+`in` is device→host and `out` is host→device; `underrun / overrun`, `gaps`
+and `bad packets` show both. Row labels are plain; tooltips carry the
+meaning and reset class; the manual carries the full meaning and
+mitigation.
 
 ## 14. State references
 

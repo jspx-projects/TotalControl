@@ -3158,6 +3158,11 @@ pub struct TotalControl {
     /// shown relative to (set on connect or by the reset button).
     pub transport_counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
     pub transport_baseline: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
+    /// Per-run display baseline: the per-run ISO detail and USB packet-status
+    /// counters at the last reset or engine-run start. The per-run rows show
+    /// `now - transport_perrun_base`, so `reset` clears them and an engine
+    /// restart re-bases them to the new run.
+    pub transport_perrun_base: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
     /// In/out short packets attributed to completed and current rate-switch
     /// settling windows.  `rate_switch_shorts` is cumulative since reset;
     /// `rate_switch_burst` is the current window not yet committed.
@@ -3748,6 +3753,7 @@ pub fn new_with_device(
         card_stream: None,
         transport_counters: None,
         transport_baseline: None,
+        transport_perrun_base: None,
         rate_switch_shorts: (0, 0),
         rate_switch_burst: (0, 0),
         rate_switch_base: None,
@@ -5623,6 +5629,27 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     // The new rate may carry a higher period floor; keep the forced quantum
     // achievable so a Follow switch never leaves an impossible setting.
     enforce_quantum_floor(state, rate);
+}
+
+/// Trigger a graph renegotiation for a stuck rate. A forced quantum change
+/// re-prepares a stuck stream (the verified healing); re-issuing the same
+/// force-rate alone does not. Toggle the forced quantum through another
+/// value and restore the user's setting, so the graph renegotiates without
+/// leaving a changed quantum. Used only on a bounded stuck retry.
+fn nudge_graph_renegotiation(state: &mut TotalControl, rate: u32) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    let q = state.engine_force_quantum;
+    let alt = if q > 0 { 0 } else { quantum_floor(state, rate) };
+    if alt == q {
+        return;
+    }
+    if pw_clock::force_quantum(alt).is_err() {
+        return;
+    }
+    let _ = pw_clock::force_quantum(q);
+    log::info!("rate-follow: nudged quantum to renegotiate a stuck rate");
 }
 
 /// Replace `clock.allowed-rates` with the connected device's list, saving the
@@ -10041,6 +10068,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if let (Some(c), Some(b)) = (counters, state.transport_baseline) {
                 if c.out_urbs < b.out_urbs {
                     state.transport_baseline = counters;
+                    state.transport_perrun_base = counters;
                     state.rate_switch_shorts = (0, 0);
                     state.rate_switch_burst = (0, 0);
                     state.rate_switch_base = None;
@@ -10049,6 +10077,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             if counters.is_none() {
                 state.transport_baseline = None;
+                state.transport_perrun_base = None;
                 state.rate_switch_shorts = (0, 0);
                 state.rate_switch_burst = (0, 0);
                 state.rate_switch_base = None;
@@ -12486,6 +12515,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::SetShowOriginalNames(on) => state.show_original_names = on,
         Message::ResetTransportErrors => {
             state.transport_baseline = state.transport_counters;
+            state.transport_perrun_base = state.transport_counters;
             state.rate_switch_shorts = (0, 0);
             state.rate_switch_burst = (0, 0);
             state.rate_switch_base = None;
@@ -12557,10 +12587,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // or a stale seed must not block the owner's rate forever.
             let live_force = pw_clock::read().map(|c| c.force_rate).filter(|r| *r > 0);
             state.rate_follow.reconcile(live_force);
+            // The card's actual rate is the truth the force metadata cannot
+            // give: a force equal to the owner's rate that the card never
+            // adopted must still be re-applied (a stuck renegotiation).
+            let card_rate = state.card_stream.map(|s| s.rate);
             let rate = state
                 .rate_follow
-                .observe(&candidates, &supported, Instant::now());
+                .observe(&candidates, &supported, card_rate, Instant::now());
             if let Some(rate) = rate {
+                // A re-apply of a rate already pending is a stuck retry: nudge
+                // the graph to renegotiate (a forced quantum change re-prepares
+                // a stuck stream), since the force alone did not move it.
+                if state.pending_device_rate.is_some_and(|(r, _)| r == rate) {
+                    nudge_graph_renegotiation(state, rate);
+                }
                 apply_graph_rate(state, rate, false);
             }
         }
@@ -12715,6 +12755,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 enforce_quantum_floor(state, running_rate(state));
                 if let Some((wanted, since)) = state.pending_device_rate {
                     let actual = stream.map(|s| s.rate);
+                    // In Follow mode the follower re-applies a stuck rate a
+                    // bounded number of times (MAX_STUCK_RETRIES x ADOPT_WINDOW);
+                    // give that budget before reporting failure. Other modes
+                    // do not retry, so they report after the short window.
+                    let timeout = if state.engine_rate_mode == EngineRateMode::Follow {
+                        Duration::from_secs(12)
+                    } else {
+                        Duration::from_secs(3)
+                    };
                     if actual == Some(wanted) {
                         if let Some(t0) = state.rate_switch_t0 {
                             log::info!(
@@ -12723,7 +12772,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             );
                         }
                         state.pending_device_rate = None;
-                    } else if since.elapsed() >= Duration::from_secs(3) {
+                    } else if since.elapsed() >= timeout {
                         state.pending_device_rate = None;
                         state.notice = Some((
                             format!(
@@ -15825,127 +15874,153 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
-    // Transport diagnostics: cumulative counters shown relative to the
-    // baseline (driver reattach or the reset button); the per-run ISO packet
-    // detail and the USB error gauge show the current engine run, because
-    // they reset on every rate/quantum switch or recovery.  Counting runs on
-    // every tick, independent of this drawer.  Each row is one fault domain;
-    // the manual explains meaning and mitigation.
+    // Transport diagnostics in three sections by reset behaviour:
+    //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
+    //  - This stream: per-run transport detail, cleared on stream restart
+    //    (rate/quantum change or recovery), not by player start/stop.
+    //  - Session: cumulative counters, cleared only by reset.
+    // `reset` rebaselines every section. Counting runs on every tick,
+    // independent of this drawer. The manual explains meaning and mitigation.
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
+        // Per-run detail since the last reset (or engine-run start). The
+        // kernel resets these counters on every engine run; the baseline
+        // makes `reset` clear them too, so no row survives a reset.
+        let perrun_base = state.transport_perrun_base.unwrap_or(now);
+        let perrun = transport_delta(&now, &perrun_base);
         body = body.push(
             row![
-                strip::hint(caption("Diagnostics"), "Since reset; packet detail is this run.", scale),
+                strip::hint(caption("Diagnostics"), "Transport error counters.", scale),
                 iced::widget::Space::new().width(Length::Fill),
-                button(strip::centered_label_auto(
-                    "reset",
-                    theme::TEXT_DIALOG * scale
-                ))
-                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                .style(theme::ghost_button)
-                .on_press(Message::ResetTransportErrors),
+                strip::hint(
+                    button(strip::centered_label_auto(
+                        "reset",
+                        theme::TEXT_DIALOG * scale
+                    ))
+                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                    .style(theme::ghost_button)
+                    .on_press(Message::ResetTransportErrors),
+                    "Clear all counters",
+                    scale,
+                ),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
-        // A rate-switch short burst is expected, not an error; exclude it
-        // from the bad-packet count.
-        let switch_in = state
-            .rate_switch_shorts
-            .0
-            .saturating_add(state.rate_switch_burst.0)
-            .min(delta.in_shorts);
-        let switch_out = state
-            .rate_switch_shorts
-            .1
-            .saturating_add(state.rate_switch_burst.1)
-            .min(delta.out_shorts);
-        let short_in = (delta.in_shorts + now.in_short).saturating_sub(switch_in);
-        let short_out = (delta.out_shorts + now.out_pkt_len_err).saturating_sub(switch_out);
-        let bad_in = short_in + now.in_misaligned + delta.in_bad_length;
-        let bad_out = short_out + now.out_capacity_err + delta.out_bad_length;
-        // URB status errors are cumulative; the ISO packet-status detail and
-        // the consecutive-error gauge are this run (they reset on a restart).
-        let usb = delta.in_status_errors
-            + delta.out_status_errors
-            + now.in_status_err
-            + now.out_pkt_status
-            + now.urb_errors;
-        let feedback = now.in_pos_gap
-            + now.in_frames_mismatch
-            + delta.rate_mismatch
-            + now.out_fb_ahead
-            + now.out_fb_stale;
+        // Section 2 values: per-run transport detail (this stream). The
+        // per-run counters reset on stream restart, so the expected startup
+        // and rate-switch packet burst is naturally excluded.
+        let usb_run = perrun.in_status_err + perrun.out_pkt_status;
+        let bad_run_in = perrun.in_short + perrun.in_misaligned;
+        let bad_run_out = perrun.out_pkt_len_err + perrun.out_capacity_err;
+        let feedback_run = perrun.in_pos_gap
+            + perrun.in_frames_mismatch
+            + perrun.out_fb_ahead
+            + perrun.out_fb_stale;
+        // Section 3 values: cumulative session counters.
         let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
-        let rows: [(&'static str, String, u32, &'static str); 8] = [
+        let sections: [(
+            &'static str,
+            &'static str,
+            Vec<(&'static str, String, u32, &'static str)>,
+        ); 3] = [
             (
-                "underrun / overrun",
-                format!("{} / {}", delta.out_underruns, delta.in_overruns),
-                delta.out_underruns + delta.in_overruns,
-                "Playback dry, capture overflow.",
+                "Scheduling",
+                "Cumulative, cleared by reset. Host ring underruns (playback) and overruns (capture): the metric for tuning quantum and host load. Never cleared by a stream restart.",
+                vec![(
+                    "underrun / overrun",
+                    format!("{} / {}", delta.out_underruns, delta.in_overruns),
+                    delta.out_underruns + delta.in_overruns,
+                    "Cumulative. Playback ring ran dry / capture ring overflowed.",
+                )],
             ),
             (
-                "recover",
-                delta.recoveries.to_string(),
-                delta.recoveries,
-                "Driver engine restarted.",
+                "This stream",
+                "Cleared when the stream restarts: a rate or quantum change, or a recovery. Not cleared by starting or stopping a player. Packet-level transport detail for the current stream.",
+                vec![
+                    (
+                        "usb",
+                        usb_run.to_string(),
+                        usb_run,
+                        "USB packet status errors this stream.",
+                    ),
+                    (
+                        "bad packets",
+                        format!("{} / {}", bad_run_in, bad_run_out),
+                        bad_run_in + bad_run_out,
+                        "Short, malformed or dropped packets this stream.",
+                    ),
+                    (
+                        "feedback",
+                        feedback_run.to_string(),
+                        feedback_run,
+                        "Clock-tracking packet detail this stream: position gaps, frame-count mismatches, feedback ahead/stale.",
+                    ),
+                ],
             ),
             (
-                "usb",
-                usb.to_string(),
-                usb,
-                "USB link errors.",
-            ),
-            (
-                "gaps",
-                format!("{} / {}", delta.in_gaps, delta.out_gaps),
-                delta.in_gaps + delta.out_gaps,
-                "Missing USB packets.",
-            ),
-            (
-                "bad packets",
-                format!("{} / {}", bad_in, bad_out),
-                bad_in + bad_out,
-                "Malformed or dropped packets.",
-            ),
-            (
-                "feedback",
-                feedback.to_string(),
-                feedback,
-                "Device clock tracking errors.",
-            ),
-            (
-                "pointer",
-                pointer.to_string(),
-                pointer,
-                "Driver pointer divergence.",
-            ),
-            (
-                "events dropped",
-                delta.events_dropped.to_string(),
-                delta.events_dropped,
-                "Control events discarded.",
+                "Session",
+                "Cumulative, cleared by reset. Engine, transport and clock faults accumulated since the last reset.",
+                vec![
+                    (
+                        "recover",
+                        delta.recoveries.to_string(),
+                        delta.recoveries,
+                        "Cumulative. Driver engine restarted after a fault.",
+                    ),
+                    (
+                        "gaps",
+                        format!("{} / {}", delta.in_gaps, delta.out_gaps),
+                        delta.in_gaps + delta.out_gaps,
+                        "Cumulative. Missing USB packets (late or absent completions).",
+                    ),
+                    (
+                        "rate mismatch",
+                        delta.rate_mismatch.to_string(),
+                        delta.rate_mismatch,
+                        "Cumulative. Sustained capture cadence disagrees with the set rate.",
+                    ),
+                    (
+                        "pointer",
+                        pointer.to_string(),
+                        pointer,
+                        "Cumulative. Driver buffer pointer diverged from the ALSA core pointer.",
+                    ),
+                    (
+                        "events dropped",
+                        delta.events_dropped.to_string(),
+                        delta.events_dropped,
+                        "Cumulative. Control events discarded (hwdep queue full).",
+                    ),
+                ],
             ),
         ];
-        for (label, value, bad, tip) in rows {
-            let colour = if bad == 0 {
-                theme::text_sec()
-            } else {
-                Color::from_rgb8(0xe0, 0x5a, 0x5a)
-            };
-            body = body.push(
-                row![
-                    strip::hint(
-                        text(label).size(text_size).color(theme::text_sec()),
-                        tip,
-                        scale
-                    ),
-                    iced::widget::Space::new().width(Length::Fill),
-                    text(value).size(text_size).color(colour),
-                ]
-                .spacing(theme::SPACE_MD * scale)
-                .align_y(iced::Alignment::Center),
-            );
+        for (header, header_tip, rows) in sections {
+            body = body.push(strip::hint(
+                text(header).size(text_size).color(theme::text_sec()),
+                header_tip,
+                scale,
+            ));
+            for (label, value, bad, tip) in rows {
+                let colour = if bad == 0 {
+                    theme::text_sec()
+                } else {
+                    Color::from_rgb8(0xe0, 0x5a, 0x5a)
+                };
+                body = body.push(
+                    row![
+                        strip::hint(
+                            text(label).size(text_size).color(theme::text_sec()),
+                            tip,
+                            scale
+                        ),
+                        iced::widget::Space::new().width(Length::Fill),
+                        text(value).size(text_size).color(colour),
+                    ]
+                    .spacing(theme::SPACE_MD * scale)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
         }
     }
     if let Some((percent, db)) = state.host_volume {
@@ -15987,10 +16062,16 @@ fn track_engine_run(
 ) {
     let Some(c) = counters else {
         state.last_run_seq = None;
+        state.transport_perrun_base = None;
         return;
     };
-    if state.last_run_seq.is_some_and(|seq| seq != c.run_seq) {
-        commit_rate_switch_window(state);
+    if state.last_run_seq != Some(c.run_seq) {
+        // A new engine run (or first sight): the per-run counters restarted,
+        // so re-base the per-run display baseline to this run's reading.
+        if state.last_run_seq.is_some() {
+            commit_rate_switch_window(state);
+        }
+        state.transport_perrun_base = Some(c);
     }
     state.last_run_seq = Some(c.run_seq);
 }
@@ -22672,6 +22753,71 @@ mod tests {
         // No counters: the epoch is forgotten.
         track_engine_run(&mut state, None);
         assert_eq!(state.last_run_seq, None);
+    }
+
+    #[test]
+    fn reset_clears_cumulative_and_per_run_diagnostics() {
+        use super::transport_delta;
+        use totalcontrol_core::fireface::abi::HwdepCounters;
+        let mut state = new(true, None, None);
+        let base = HwdepCounters { out_urbs: 100, run_seq: 1, ..HwdepCounters::default() };
+        let now = HwdepCounters {
+            out_urbs: 200,
+            run_seq: 1,
+            out_underruns: 5,
+            in_overruns: 2,
+            rate_mismatch: 3,
+            in_status_err: 3,
+            out_pkt_status: 7,
+            urb_errors: 4,
+            in_pos_gap: 1,
+            in_frames_mismatch: 2,
+            out_fb_ahead: 1,
+            out_fb_stale: 1,
+            in_short: 2,
+            in_misaligned: 1,
+            out_pkt_len_err: 1,
+            out_capacity_err: 1,
+            ..HwdepCounters::default()
+        };
+        state.transport_baseline = Some(base);
+        state.transport_perrun_base = Some(base);
+        state.transport_counters = Some(now);
+        // Before reset the per-run detail is non-zero (the regression: reset
+        // used to leave these rows untouched).
+        let pr = transport_delta(&now, &state.transport_perrun_base.unwrap());
+        assert!(pr.in_pos_gap + pr.out_pkt_status + pr.in_status_err > 0);
+
+        let _ = update(&mut state, Message::ResetTransportErrors);
+
+        // Reset rebaselines both the cumulative and the per-run display, so
+        // every row reads zero afterwards.
+        assert_eq!(state.transport_baseline, Some(now));
+        assert_eq!(state.transport_perrun_base, Some(now));
+        let d = transport_delta(&now, &state.transport_baseline.unwrap());
+        assert_eq!(d.out_underruns + d.in_overruns + d.rate_mismatch, 0);
+        let pr = transport_delta(&now, &state.transport_perrun_base.unwrap());
+        assert_eq!(
+            pr.in_pos_gap + pr.in_frames_mismatch + pr.out_fb_ahead + pr.out_fb_stale
+                + pr.out_pkt_status + pr.in_status_err + pr.in_short + pr.in_misaligned
+                + pr.out_pkt_len_err + pr.out_capacity_err,
+            0
+        );
+    }
+
+    #[test]
+    fn a_new_engine_run_rebases_the_per_run_baseline() {
+        use totalcontrol_core::fireface::abi::HwdepCounters;
+        let mut state = new(true, None, None);
+        state.last_run_seq = Some(1);
+        state.transport_perrun_base =
+            Some(HwdepCounters { run_seq: 1, in_pos_gap: 5, ..HwdepCounters::default() });
+        // A new run restarts the per-run counters; the display baseline must
+        // follow so the new run's detail is shown, not the previous run's.
+        let new_run = HwdepCounters { run_seq: 2, ..HwdepCounters::default() };
+        track_engine_run(&mut state, Some(new_run));
+        assert_eq!(state.transport_perrun_base, Some(new_run));
+        assert_eq!(state.last_run_seq, Some(2));
     }
 
     #[test]
