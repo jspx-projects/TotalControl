@@ -1493,12 +1493,16 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 /* Startup prefill gate, evaluated under the stream lock at each playback
  * fill.  Returns true when the gate just cleared: the caller queues
  * prefill_work after unlocking (the mute op is a sleeping USB transfer).
- * A starved or unanchored URB resets the stable count; the bound guarantees
- * the mute cannot stick if the host never delivers.  With the parameter
- * off, an armed gate clears at the next fill. */
+ * The gate holds for the minimum window, then until enough consecutive
+ * non-starved anchored URBs; a starved or unanchored URB resets the stable
+ * count.  The bound guarantees the mute cannot stick if the host never
+ * delivers.  With the parameter off, an armed gate clears at the next
+ * fill. */
 static bool ffuc_prefill_gate(struct ffuc *chip, struct ffuc_stream *s,
 			      bool starved, bool anchored)
 {
+	unsigned int age;
+
 	if (!s->out_prefill_pending)
 		return false;
 	if (!prefill) {
@@ -1509,12 +1513,15 @@ static bool ffuc_prefill_gate(struct ffuc *chip, struct ffuc_stream *s,
 		s->out_prefill_stable++;
 	else
 		s->out_prefill_stable = 0;
-	if (s->out_prefill_stable >= FFUC_PREFILL_STABLE_URBS) {
+	s->out_prefill_bound--;
+	age = s->out_prefill_max - s->out_prefill_bound;
+	if (age >= s->out_prefill_min &&
+	    s->out_prefill_stable >= s->out_prefill_need) {
 		s->out_prefill_pending = false;
 		atomic_inc(&chip->out_prefills);
 		return true;
 	}
-	if (--s->out_prefill_bound == 0) {
+	if (s->out_prefill_bound == 0) {
 		s->out_prefill_pending = false;
 		atomic_inc(&chip->out_prefill_timeouts);
 		return true;
@@ -3451,9 +3458,19 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->running = true;
 		if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK && prefill &&
 		    chip->desc->ops->hw_mute) {
+			unsigned int urb_ms =
+				max(1u, chip->urb_frames * 1000 / chip->rate);
+
 			s->out_prefill_pending = true;
 			s->out_prefill_stable = 0;
-			s->out_prefill_bound = FFUC_PREFILL_MAX_URBS;
+			s->out_prefill_need =
+				max(1u, FFUC_PREFILL_STABLE_MS / urb_ms);
+			s->out_prefill_min =
+				max(1u, FFUC_PREFILL_MIN_MS / urb_ms);
+			s->out_prefill_max =
+				max(s->out_prefill_min + 1,
+				    FFUC_PREFILL_MAX_MS / urb_ms);
+			s->out_prefill_bound = s->out_prefill_max;
 			queue_work(system_unbound_wq, &chip->prefill_work);
 		}
 		/* q48 diagnostics: log the negotiated geometry once per
@@ -3492,9 +3509,19 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->running = true;
 		if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK && prefill &&
 		    chip->desc->ops->hw_mute) {
+			unsigned int urb_ms =
+				max(1u, chip->urb_frames * 1000 / chip->rate);
+
 			s->out_prefill_pending = true;
 			s->out_prefill_stable = 0;
-			s->out_prefill_bound = FFUC_PREFILL_MAX_URBS;
+			s->out_prefill_need =
+				max(1u, FFUC_PREFILL_STABLE_MS / urb_ms);
+			s->out_prefill_min =
+				max(1u, FFUC_PREFILL_MIN_MS / urb_ms);
+			s->out_prefill_max =
+				max(s->out_prefill_min + 1,
+				    FFUC_PREFILL_MAX_MS / urb_ms);
+			s->out_prefill_bound = s->out_prefill_max;
 			queue_work(system_unbound_wq, &chip->prefill_work);
 		}
 		return 0;

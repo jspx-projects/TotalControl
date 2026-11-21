@@ -86,13 +86,19 @@
 #define FFUC_MAX_URB_ERRORS	16
 #define FFUC_MIN_QUEUE_FRAMES	64
 #define FFUC_START_GRACE_URBS	4	/* starved URBs tolerated after start */
-/* Startup prefill gate: the playback outputs stay muted from trigger until
- * this many consecutive non-starved URBs carry anchored ring data, or the
- * bound expires.  PipeWire's startup prefill is silence written into the
- * ring, so a fill-level threshold cannot gate real audio; delivery
- * stability can. */
-#define FFUC_PREFILL_STABLE_URBS	4
-#define FFUC_PREFILL_MAX_URBS		16	/* bound on the muted startup */
+/* Startup prefill gate: the playback outputs stay muted from trigger for a
+ * minimum window, then until delivery is stable, with a hard bound.
+ * PipeWire's startup prefill is silence written into the ring, so a
+ * fill-level threshold cannot gate real audio; delivery stability can.
+ * Trace evidence (desk UCX, sd0): starvation clusters span 0-12 ms in
+ * timer mode and 0-30 ms in IRQ mode, with gaps between clusters — a
+ * stability-only gate clears between clusters.  The minimum window covers
+ * the whole transient (2x the worst observed); the bound keeps a dead
+ * host from sticking muted.  Milliseconds, not URBs: an interrupt URB is
+ * ~21 ms at 48 kHz, an ISO URB is 1 ms at every rate. */
+#define FFUC_PREFILL_MIN_MS	64
+#define FFUC_PREFILL_MAX_MS	256
+#define FFUC_PREFILL_STABLE_MS	4
 #define FFUC_MIDI_IN_URBS	2	/* bulk IN URBs kept queued */
 #define FFUC_MIDI_PORTS		2	/* logical ports on the endpoint pair */
 #define FFUC_CTL_TIMEOUT	1000	/* ms */
@@ -254,13 +260,17 @@ struct ffuc_stream {
 	 * (rate transition, renegotiation) recovers without an XRUN. */
 	unsigned int out_start_urbs;
 	/* Startup prefill gate (playback): armed at trigger, the outputs
-	 * stay muted until FFUC_PREFILL_STABLE_URBS consecutive non-starved
-	 * anchored URBs, or FFUC_PREFILL_MAX_URBS total.  While armed,
-	 * starvation sends silence without counting an underrun or arming
-	 * the XRUN stop: the muted transient is intended startup behaviour.
-	 * The mute write runs in prefill_work (sleeping USB transfer). */
+	 * stay muted for out_prefill_min URBs, then until
+	 * out_prefill_need consecutive non-starved anchored URBs, bounded
+	 * by out_prefill_max.  While armed, starvation sends silence
+	 * without counting an underrun or arming the XRUN stop: the muted
+	 * transient is intended startup behaviour.  The mute write runs in
+	 * prefill_work (sleeping USB transfer). */
 	bool out_prefill_pending;
 	unsigned int out_prefill_stable;
+	unsigned int out_prefill_need;
+	unsigned int out_prefill_min;
+	unsigned int out_prefill_max;
 	unsigned int out_prefill_bound;
 	/* Playback frames handed to USB but not yet completed: the real
 	 * in-flight queue behind hw_ptr.  Reported as runtime->delay in
