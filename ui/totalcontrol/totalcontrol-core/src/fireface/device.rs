@@ -2060,6 +2060,28 @@ impl Fireface {
         Ok(())
     }
 
+    /// Reconcile the Control Room monitor state with the assignment.
+    ///
+    /// The active monitor is a function of `(main_out, main_b_out,
+    /// speaker_b)`, as in TotalMix's `GetActiveMainChannel`: Speaker B needs
+    /// both a Main and a Speaker B assignment, and the inactive pair is
+    /// monitor-muted. This enforces that invariant and applies the monitor
+    /// mutes idempotently. It is called after any assignment or scene change
+    /// so a flag restored against a not-yet-assigned pair cannot leave the
+    /// monitor in an inconsistent state.
+    fn reconcile_control_room(&mut self) {
+        if self.settings.main_out.is_none() || self.settings.main_b_out.is_none() {
+            self.settings.speaker_b = false;
+        }
+        if let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) {
+            if main != b {
+                let spk = self.settings.speaker_b;
+                let _ = self.control_room_set_monitor_muted(main, spk);
+                let _ = self.control_room_set_monitor_muted(b, !spk);
+            }
+        }
+    }
+
     fn uc_set_mono(&mut self, on: bool) -> Result<(), Error> {
         let Some(monitor) = self.control_room_active_monitor_pair() else {
             return Err(Error::InvalidChannel(
@@ -6150,60 +6172,64 @@ impl RmeDevice for Fireface {
                 return Err(Error::InvalidChannel(format!("output pair {pair}")));
             }
         }
-        if self.is_uc() {
-            if self.settings.main_out == pair {
-                return Ok(());
-            }
-            // Release live monitor actions before their target moves.  The
-            // saved matrix/levels belong to the old pair.
-            if self.talkback_active {
-                let config = self.talkback_config;
-                self.uc_set_talkback_with(false, &config)?;
-            }
-            if self.cue_state.is_some() {
-                self.uc_release_cue()?;
-            }
-            if self.settings.mono {
-                self.set_mono(false)?;
-            }
-            if self.settings.external_input {
-                self.set_external_input(false, None, 0.0)?;
-            }
-            if self.settings.dim {
-                self.set_dim(false)?;
-            }
-            if self.settings.speaker_b {
-                self.set_speaker_b(false)?;
-            }
-            self.settings.main_out = pair;
-            return Ok(());
-        }
         let previous = self.settings.main_out;
         if previous == pair {
             return Ok(());
         }
+        if self.is_uc() {
+            // Release live monitor actions before their target moves, but only
+            // when there is an old assignment to release them from. While the
+            // assignment is being established (previous None) there is no old
+            // monitor state to undo; the flags are restored afterwards.
+            if previous.is_some() {
+                if self.talkback_active {
+                    let config = self.talkback_config;
+                    self.uc_set_talkback_with(false, &config)?;
+                }
+                if self.cue_state.is_some() {
+                    self.uc_release_cue()?;
+                }
+                if self.settings.mono {
+                    self.set_mono(false)?;
+                }
+                if self.settings.external_input {
+                    self.set_external_input(false, None, 0.0)?;
+                }
+                if self.settings.dim {
+                    self.set_dim(false)?;
+                }
+                if self.settings.speaker_b {
+                    self.set_speaker_b(false)?;
+                }
+            }
+            self.settings.main_out = pair;
+            self.reconcile_control_room();
+            return Ok(());
+        }
         // Mute FX and External Input saved the old target levels; restore
-        // them before the assignment moves.
-        if self.settings.mute_fx {
-            self.set_mute_fx(false)?;
-        }
-        if self.settings.external_input {
-            self.release_external_input()?;
-        }
-        // Dim saved the levels of the old Main and Speaker B pairs.
-        // Release it before moving or clearing the assignment, so those
-        // pairs return to their saved levels.
-        if self.settings.speaker_b {
-            self.set_speaker_b(false)?;
-        }
-        if self.settings.dim {
-            self.set_dim(false)?;
+        // them before the assignment moves. Dim saved the levels of the old
+        // Main and Speaker B pairs. Release these only for a real old
+        // assignment; establishing the first assignment skips the release.
+        if previous.is_some() {
+            if self.settings.mute_fx {
+                self.set_mute_fx(false)?;
+            }
+            if self.settings.external_input {
+                self.release_external_input()?;
+            }
+            if self.settings.speaker_b {
+                self.set_speaker_b(false)?;
+            }
+            if self.settings.dim {
+                self.set_dim(false)?;
+            }
         }
         self.settings.main_out = pair;
         // Assigning Main is host-side monitor bookkeeping on the UCX.  The
         // physical output keeps its normal submix; writing the output mode
         // word here would set bit 1 and mute the newly selected pair.
         self.write_word(0x3f9e, self.monitor_flags())?;
+        self.reconcile_control_room();
         Ok(())
     }
 
@@ -6216,56 +6242,51 @@ impl RmeDevice for Fireface {
                 return Err(Error::InvalidChannel(format!("output pair {pair}")));
             }
         }
-        if self.is_uc() {
-            if self.settings.main_b_out == pair {
-                return Ok(());
-            }
-            if self.settings.speaker_b {
-                self.set_speaker_b(false)?;
-            }
-            if let Some(old) = self.settings.main_b_out {
-                self.control_room_set_monitor_muted(old, false)?;
-            }
-            self.settings.main_b_out = pair;
-            if let Some(b) = pair {
-                if !self.settings.speaker_b {
-                    self.control_room_set_monitor_muted(b, true)?;
-                }
-            }
-            if pair.is_none() {
-                self.settings.speaker_b = false;
-            }
-            return Ok(());
-        }
         let previous = self.settings.main_b_out;
         if previous == pair {
             return Ok(());
         }
-        if self.settings.mute_fx {
-            self.set_mute_fx(false)?;
+        if self.is_uc() {
+            // Release the old Speaker B monitor state only when there is an
+            // old assignment; establishing the first assignment skips it.
+            if previous.is_some() {
+                if self.settings.speaker_b {
+                    self.set_speaker_b(false)?;
+                }
+                if let Some(old) = previous {
+                    self.control_room_set_monitor_muted(old, false)?;
+                }
+            }
+            self.settings.main_b_out = pair;
+            if pair.is_none() {
+                self.settings.speaker_b = false;
+            }
+            self.reconcile_control_room();
+            return Ok(());
         }
-        if self.settings.external_input {
-            self.release_external_input()?;
-        }
-        if self.settings.speaker_b {
-            self.set_speaker_b(false)?;
-        }
-        if self.settings.dim {
-            self.set_dim(false)?;
-        }
-        if let Some(old) = previous {
-            self.control_room_set_monitor_muted(old, false)?;
-        }
-        self.settings.main_b_out = pair;
-        if let Some(b) = pair {
-            if !self.settings.speaker_b {
-                self.control_room_set_monitor_muted(b, true)?;
+        if previous.is_some() {
+            if self.settings.mute_fx {
+                self.set_mute_fx(false)?;
+            }
+            if self.settings.external_input {
+                self.release_external_input()?;
+            }
+            if self.settings.speaker_b {
+                self.set_speaker_b(false)?;
+            }
+            if self.settings.dim {
+                self.set_dim(false)?;
+            }
+            if let Some(old) = previous {
+                self.control_room_set_monitor_muted(old, false)?;
             }
         }
+        self.settings.main_b_out = pair;
         if pair.is_none() {
             self.settings.speaker_b = false;
         }
         self.write_word(0x3d00, if self.settings.speaker_b { 1 } else { 0 })?;
+        self.reconcile_control_room();
         Ok(())
     }
 
@@ -6437,23 +6458,26 @@ impl RmeDevice for Fireface {
     }
 
     fn set_speaker_b(&mut self, on: bool) -> Result<(), Error> {
-        let Some(main) = self.settings.main_out else {
-            return Err(Error::InvalidChannel(
-                "Speaker B needs an assigned Main Out".into(),
-            ));
-        };
-        let Some(b) = self.settings.main_b_out else {
-            return Err(Error::InvalidChannel(
-                "Speaker B needs an assigned output".into(),
-            ));
-        };
-        if on == self.settings.speaker_b {
-            // An inactive assignment can be left unmuted by a scene restore
-            // or an older session.  Enforce the inactive monitor pair.
-            if !on && main != b {
-                self.control_room_set_monitor_muted(main, false)?;
-                self.control_room_set_monitor_muted(b, true)?;
+        // Turning Speaker B on needs a Main and a Speaker B assignment to
+        // switch between. Turning it off only clears the flag, so it tolerates
+        // a missing assignment (e.g. while the assignment is being established
+        // at startup, before the monitor flags are restored).
+        if on {
+            if self.settings.main_out.is_none() {
+                return Err(Error::InvalidChannel(
+                    "Speaker B needs an assigned Main Out".into(),
+                ));
             }
+            if self.settings.main_b_out.is_none() {
+                return Err(Error::InvalidChannel(
+                    "Speaker B needs an assigned output".into(),
+                ));
+            }
+        }
+        if on == self.settings.speaker_b {
+            // Enforce the monitor mutes for the current state: a scene restore
+            // or an older session can leave the inactive pair unmuted.
+            self.reconcile_control_room();
             return Ok(());
         }
         // Mono belongs to the active monitor output.  Release it from the
@@ -6462,11 +6486,10 @@ impl RmeDevice for Fireface {
         if mono_active {
             self.set_mono(false)?;
         }
-        if main != b {
-            self.control_room_set_monitor_muted(main, on)?;
-            self.control_room_set_monitor_muted(b, !on)?;
-        }
         self.settings.speaker_b = on;
+        // Reference order: write the monitor-mute bits first, then the
+        // Speaker B active word.
+        self.reconcile_control_room();
         self.control_room_write_speaker_b_state(on)?;
         if mono_active {
             self.set_mono(true)?;
@@ -7744,6 +7767,14 @@ impl RmeDevice for Fireface {
             // Pitch is a host setting and is always written to the device.
             let pitch = self.settings.pitch_percent;
             self.set_pitch(pitch)?;
+        }
+        if result.is_ok() {
+            // Reconcile the Control Room monitor state with the live
+            // assignment: a flag loaded against a not-yet-assigned pair is
+            // cleared, and the monitor mutes follow the active assignment and
+            // Speaker B state. The workspace restore re-applies the saved
+            // flags afterwards, once the assignment is established.
+            self.reconcile_control_room();
         }
         if result.is_ok() {
             if self.dry_run {
@@ -9152,6 +9183,87 @@ mod tests {
         let words = written_words(&writes);
         assert!(words.contains(&(0x1402, 1)));
         assert!(words.contains(&(0x1502, 1)));
+    }
+
+    #[test]
+    fn ucx_assignment_establishes_with_speaker_b_active_from_a_scene() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        // The startup inconsistency this fixes: a scene loaded Speaker B
+        // active while the live assignment is still unset. Establishing the
+        // assignment must not abort on the active flag (the old code released
+        // Speaker B first, which errored on the missing Main Out).
+        dev.settings.speaker_b = true;
+        dev.settings.main_out = None;
+        dev.settings.main_b_out = None;
+        dev.set_main_out(Some(1)).unwrap();
+        assert_eq!(dev.settings.main_out, Some(1));
+        dev.set_main_out_b(Some(0)).unwrap();
+        assert_eq!(dev.settings.main_b_out, Some(0));
+        // With the assignment established, the saved Speaker B state restores
+        // and toggles freely.
+        dev.set_speaker_b(true).unwrap();
+        assert!(dev.settings.speaker_b);
+        dev.set_speaker_b(false).unwrap();
+        assert!(!dev.settings.speaker_b);
+        dev.set_speaker_b(true).unwrap();
+        assert!(dev.settings.speaker_b);
+    }
+
+    #[test]
+    fn uc_assignment_establishes_with_speaker_b_active_from_a_scene() {
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.settings.speaker_b = true;
+        dev.settings.main_out = None;
+        dev.settings.main_b_out = None;
+        dev.set_main_out(Some(1)).unwrap();
+        assert_eq!(dev.settings.main_out, Some(1));
+        dev.set_main_out_b(Some(0)).unwrap();
+        assert_eq!(dev.settings.main_b_out, Some(0));
+        dev.set_speaker_b(true).unwrap();
+        assert!(dev.settings.speaker_b);
+        dev.set_speaker_b(false).unwrap();
+        assert!(!dev.settings.speaker_b);
+    }
+
+    #[test]
+    fn speaker_b_off_tolerates_a_missing_assignment() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.settings.speaker_b = true;
+        dev.settings.main_out = None;
+        dev.settings.main_b_out = None;
+        // Turning Speaker B off clears the flag without an assignment; turning
+        // it on still requires one.
+        dev.set_speaker_b(false).unwrap();
+        assert!(!dev.settings.speaker_b);
+        assert!(dev.set_speaker_b(true).is_err());
+    }
+
+    #[test]
+    fn ucx_scene_apply_restores_speaker_b_against_an_established_assignment() {
+        // The startup sequence: establish the assignment first, then apply the
+        // saved scene. Speaker B active must restore, not be cleared.
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(0)).unwrap();
+        let mut scene = dev.capture_scene();
+        scene.settings.speaker_b = true;
+        scene.settings.dim = false;
+        dev.settings.speaker_b = false;
+        dev.apply_scene(&scene).unwrap();
+        assert!(dev.settings().speaker_b);
+    }
+
+    #[test]
+    fn uc_scene_apply_restores_speaker_b_against_an_established_assignment() {
+        let (mut dev, _writes) = open(Model::Uc);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(0)).unwrap();
+        let mut scene = dev.capture_scene();
+        scene.settings.speaker_b = true;
+        scene.settings.dim = false;
+        dev.settings.speaker_b = false;
+        dev.apply_scene(&scene).unwrap();
+        assert!(dev.settings().speaker_b);
     }
 
     #[test]
