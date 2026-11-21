@@ -338,30 +338,34 @@ the device group, `Clock source` picks one of the unit's own clock options
 (Internal, SPDIF coax., Optical, Word clock). `Sample rate` shows the device
 rate: an editable picker of the device-supported rates when the clock is
 Internal and `Rate follows` is Device, and a read-only readout of the rate the
-unit reports when `Rate follows` is PipeWire or SW playback 1/2, or the clock
-source is external.
+unit reports when `Rate follows` is PipeWire, or the clock source is external.
 
-The engine `Rate follows` control chooses who determines the rate. It is usable
-only when the clock source is Internal:
+The engine `Rate follows` control chooses who determines the rate. It is a pair
+of radio buttons, usable only when the clock source is Internal:
 
-- **Device** (the default) uses the rate you set in the device group's Sample
-  rate picker; the graph follows it.
-- **PipeWire** lets the sound server's graph conduct; the device follows whatever
-  rate the graph runs at. Useful when a DAW or another application drives the
-  graph rate.
-- **SW playback 1/2** makes the rate follow the player feeding software playback
-  1/2. The engine section names the application and its rate. A reverse-DNS name
-  is shortened to the application name, so
-  `io.github.celluloid_player.Celluloid` reads `Celluloid`. With nothing playing
-  it reads `Waiting for playback` and keeps the last rate. If the card does not
-  adopt the followed rate, TotalControl re-applies it and nudges the graph to
-  renegotiate, so a stuck rate heals on its own without changing the mode.
+- **PipeWire** (the default) lets the sound server's graph conduct; the device
+  follows whatever rate the graph runs at. When nothing is playing, the graph
+  switches to the rate of the next stream that starts, so a DVD plays at 48 kHz
+  and a CD started afterwards plays at 44.1 kHz, each at its native rate. A DAW
+  that sets its own rate conducts the graph in this mode.
+- **Device** uses the rate you set in the device group's Sample rate picker and
+  holds it; the graph follows it. Use it for a fixed rate, or when the device is
+  slaved to an external clock (see below). TotalControl re-asserts the rate if
+  PipeWire restarts or another application changes it.
+
+The device has one clock, so the graph has one rate. While a stream is already
+playing, a new stream at a different rate is resampled to the graph rate — two
+applications cannot play at different native rates at the same time. PipeWire
+switches the graph rate when the device is idle (between tracks); it does not
+interrupt a live stream to change rate. If a browser or another application
+holds a live stream at one rate, a new track at another rate is resampled until
+that stream stops.
 
 Whatever the authority, the **device rate is the hub**. The authority sets the
 device rate, and the graph rate and the available quantum both derive from it:
 
 ```text
-authority (Device / PipeWire / SW playback 1/2) -> device rate -> graph rate + quantum
+authority (Device / PipeWire) -> device rate -> graph rate + quantum
 ```
 
 The device rate always wins; a stale graph request never overrides it. The
@@ -381,12 +385,14 @@ and two periods under timer scheduling, so a request of 128 is confirmed when
 the card runs 64-frame periods.
 
 When the device is slaved to an external clock, the rate is determined by the
-device and `Rate follows` reads `Device` (read-only).
+device and `Rate follows` reads `Device` (read-only). TotalControl follows the
+rate the unit reports at the selected clock input and forces the graph to it,
+so a DAW and every application run at the external clock's rate.
 
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
-A followed rate change is a runtime change, so it does not add an undo step or
-mark the workspace dirty. The chosen mode is remembered in the application
-preferences, not in a workspace.
+A rate change in PipeWire mode is a runtime change, so it does not add an undo
+step or mark the workspace dirty. The chosen mode is remembered in the
+application preferences, not in a workspace.
 
 The `Pitch` slider changes the speed and pitch of the whole interface from
 -5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Hold Shift for 0.01 % steps.

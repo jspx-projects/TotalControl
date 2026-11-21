@@ -131,7 +131,9 @@ application settings dialog. `MIDI and OSC` opens the remote-control
 dialog (§1.4). `Control Room` opens the Control Room settings
 panel above the Control Room when the active backend has a mapped Control Room
 path; it is currently present for the UCX and omitted for the UC and
-Babyface-classic until their monitoring writes are mapped. `Reset Mix` is a submenu; choosing an entry closes the menu, rewrites
+Babyface-classic until their monitoring writes are mapped. Opening it switches
+to the mixer tab first (the Control Room is a mixer feature), even when invoked
+from the Matrix tab. `Reset Mix` is a submenu; choosing an entry closes the menu, rewrites
 the whole mixer and pushes it in a single scene apply:
 
 | Entry | Effect |
@@ -1214,7 +1216,9 @@ range.
 
 The device card at the top of the sidebar (or the gear on the folded rail)
 opens the Audio Configuration panel, anchored immediately left of the CONTROLS sidebar.
-Its title is `Audio Configuration settings`. It is a scrollable inspector, not
+Its title is `Audio Config`, matching the Options menu item. The device card's
+tooltip is `Audio Config` while a device is connected and `Audio Config (only
+while a device is connected)` otherwise. The panel is a scrollable inspector, not
 a modal and not dimmed; a click outside or `Escape` closes it. It starts with
 the group the unit itself owns. Where
 the unit has no readback, the saved scene value is written at connect and the
@@ -1252,12 +1256,12 @@ The `Clock source` row is a picker of the unit's own clock options only; it
 never lists host engine modes. The `Sample rate` row reports the device rate.
 When the clock source is Internal and `Rate follows` is Device, it is an
 editable picker of the device-supported rates; selecting a rate drives the card
-through the engine-rate path. When `Rate follows` is PipeWire or SW playback
-1/2, or the clock source is external, the row is a read-only readout of the rate
-the unit reports (state word `0x11`), with a hint that it is device-reported. The
-rate authority lives in the host engine group, not here. Read-only reports (the
-device rate, Graph, Source and the latency readout) use the secondary text
-colour; editable controls use the primary colour.
+through the engine-rate path. When `Rate follows` is PipeWire, or the clock
+source is external, the row is a read-only readout of the rate the unit reports
+(state word `0x11`), with a hint that it is device-reported. The rate authority
+lives in the host engine group, not here. Read-only reports (the device rate,
+Graph and the latency readout) use the secondary text colour; editable controls
+use the primary colour.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
 wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
@@ -1295,20 +1299,14 @@ the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
 
 The engine `Rate follows` control selects who determines the graph (and thus
-device) rate: `Device` (the default) forces the device-set rate; `PipeWire` lets
-the sound server's graph conduct and the device follows it; `SW playback 1/2`
-follows the player feeding SW playback 1/2. The rate value itself is set in the
-DEVICE group's Sample rate picker (Device mode); the control offers no rate
-list. It is usable only when the device clock source is Internal. Slaved to an
-external clock, the rate is determined by the device and `Rate follows` is a
-read-only `Device` label. The engine group always shows `Graph`,
-the rate PipeWire is currently running at, in every mode. With `SW playback 1/2`
-and an Internal clock it also shows `Source`; `Source` reads
-`<application> · <rate>` for the stream setting the graph, and reads `Waiting
-for playback` with the last graph rate when no stream feeds SW playback 1/2. A
-reverse-DNS PipeWire application name is reduced to its final component, so
-`io.github.celluloid_player.Celluloid` reads `Celluloid`. The source is always
-SW playback 1/2, never the focused strip.
+device) rate. It is a pair of radio buttons: `PipeWire` (the default) lets the
+sound server's graph conduct and the device follows it; `Device` forces the
+device-set rate. The rate value itself is set in the DEVICE group's Sample rate
+picker (Device mode); the control offers no rate list. It is usable only when
+the device clock source is Internal. Slaved to an external clock, the rate is
+determined by the device and `Rate follows` is a read-only `Device` label. The
+engine group always shows `Graph`, the rate PipeWire is currently running at,
+in every mode.
 
 The device rate is the hub: the selected authority sets the device rate, and the
 graph rate and the available quantum both derive from the device rate
@@ -1342,43 +1340,43 @@ The selected rate stays the desired value until the user selects another.
 If the device does not reach the selected rate within three seconds while a
 stream is open, a toast reports the rate the device is still at.
 
-Follow uses the stream linked to `playback_AUX0`/`playback_AUX1`, including a
-player feeding a TotalControl 5.1/7.1 sink through the sink's input stream, not
-the loopback output. A live owner keeps the rate while its node exists; another
-client does not take it, a same-client replacement does, and after two seconds
-without one the most recent remaining candidate takes over. Owner continuation
-matches the PipeWire client identity (`client.id` and the application name),
-not the node ID. The owner's native rate is the stream's first `Format.rate`;
-without a format rate, the `node.rate` denominator is used. A new rate is
-forced after it has been stable for 300 ms. Unsupported rates stay visible but
-are not forced. A followed rate is runtime state: it does not create an undo
-step, mark the workspace dirty, or replace the fixed-rate preference. The
-mixer reapply after a followed rate change carries the followed rate, not the
-stored fixed-rate preference. A paused
-owner that keeps its stream open holds the rate. Follow reconciles the live
-`clock.force-rate` against the owner's rate on every evaluation (graph changes
-and a 2 s heartbeat). A divergence — an external metadata write or a stale
-seed — is re-applied once the owner's rate has been stable for 300 ms; an
-external force change is transient, not a new rate authority.
+PipeWire mode clears `clock.force-rate` and lets the graph choose. With the
+device idle, PipeWire switches the graph to the rate a starting stream requests
+when that rate is in `clock.allowed-rates`, so a player opens at its native rate
+without resampling. While a stream is already live, the graph keeps its current
+rate and a new stream at another rate is resampled into it: the device has one
+clock, so simultaneous streams at different rates cannot all run at their native
+rate. A DAW that forces a node rate conducts the graph in this mode.
 
-Follow verifies the actual card rate (the open stream's rate), not only the
-force metadata: a force equal to the owner's rate that the card has not
-adopted is a stuck renegotiation, and the force alone does not heal it. After
-a three-second settling window the follower re-applies the rate and nudges
-the graph to renegotiate (a forced quantum change re-prepares a stuck stream),
-up to three retries; the card adopting the rate clears the retry budget. If
-the card still diverges after the budget, the pending confirmation reports
-the rate the device is still at. With no open stream the card rate is unknown
-and the applied rate is kept.
+Device mode forces the device-set rate and holds it. The force is runtime
+metadata: a PipeWire restart clears it and another client can overwrite it, so
+Device mode re-asserts the force whenever the live `clock.force-rate` diverges
+from the device authority rate, bounded to one re-assert per settling window. A
+user selection in flight owns its confirmation window and is not re-asserted.
+Slaved to an external clock, the device's reported rate is the authority:
+TotalControl reads the active-source rate index from the state word (`0x11`,
+UC spec §9.1, UCX spec §11.7) and forces the graph to it, tracking the external
+rate as it changes. Selecting an external clock source switches the mode to
+Device. The external-source field decode follows the spec layout and is not yet
+hardware-verified (UC spec §9.1 open item).
 
-At connect TotalControl replaces PipeWire's `clock.allowed-rates` with the
-connected device's nine rates, keeping the previous value. On disconnect or a
-clean exit it restores that value if the list is still the one it wrote. A
-clean exit also releases TotalControl's `clock.force-rate` override. No
-persistent PipeWire configuration file is installed.
+The installer's PipeWire clock policy (`99-fireface.conf`) sets
+`clock.allowed-rates` to the nine rates every supported device runs (32–192
+kHz); the driver rejects any rate above the device's cap, so the graph never
+selects a rate the device cannot run. At connect TotalControl applies the
+connected device's envelope to `clock.allowed-rates`, keeping the previous
+value; with the installed policy this is already correct, so a PipeWire restart
+keeps the right list. On disconnect or a clean exit it restores the previous
+value if the list is still the one it wrote. A clean exit also releases
+TotalControl's `clock.force-rate` override.
 
 `Diagnostics` lists the kernel transport error counters in three sections
 by reset behaviour, each with a header whose tooltip states that behaviour.
+Headers grow quieter as their level deepens and use the secondary label colour
+(white is reserved for user-editable values): `Diagnostics` is a level-2 header
+in small caps like the level-1 `DEVICE` / `AUDIO ENGINE` headers but at normal
+text size and without a rule; `Scheduling`, `This stream` and `Session` are
+level-3 headers in italic, without underline.
 `reset` (tooltip "Clear all counters") clears every section. Counting runs
 on every tick, independent of whether the drawer is open.
 

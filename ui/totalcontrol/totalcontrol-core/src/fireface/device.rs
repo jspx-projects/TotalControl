@@ -1156,19 +1156,41 @@ impl Fireface {
         self.transport.lock().ok().and_then(|t| t.counters())
     }
 
-    /// The rate the unit reports it is set to, read from its status register
-    /// (EP0 IN request `0x11`; byte 3 is the rate index). This is the device's
-    /// own clock setting, distinct from the host graph rate.
+    /// The rate the unit reports for its active clock source, read from the
+    /// state word (EP0 IN request `0x11`). On internal clock this is the
+    /// device's own clock setting; slaved to an external source it is the
+    /// rate detected at that input. Distinct from the host graph rate.
     pub fn device_rate(&self) -> Option<u32> {
+        let d = self.vendor_in(protocol::req::STATUS, 0, 0, 4).ok()?;
+        Self::decode_state_word_rate(&d)
+    }
+
+    /// Decode the active-source rate from the four-byte `0x11` state word
+    /// (UC spec §9.1, UCX spec §11.7). The clock source sits in bits 9–11;
+    /// each source carries its own rate-index field, all indexing the same
+    /// nine-rate table. The internal-clock top-byte decode is hardware
+    /// verified. The external-source field decode follows the spec layout
+    /// and is not yet hardware verified (spec open item "External-clock rate
+    /// decode"). The word-clock single-speed nuance (options bit 6 forces
+    /// the internal-style decode) is unverified; the field decode is used
+    /// as-is.
+    fn decode_state_word_rate(d: &[u8]) -> Option<u32> {
         const MAP: [u32; 12] = [
             32000, 44100, 48000, 48000, 64000, 88200, 96000, 96000, 128000, 176400,
             192000, 192000,
         ];
-        let d = self.vendor_in(protocol::req::STATUS, 0, 0, 4).ok()?;
         if d.len() < 4 {
             return None;
         }
-        MAP.get(d[3] as usize).copied()
+        let word = u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
+        let internal = || MAP.get(d[3] as usize).copied();
+        let index = match (word >> 9) & 7 {
+            1 => (word >> 12) & 0xF, // SPDIF coax clock
+            2 => (word >> 16) & 0xF, // optical clock
+            3 => (word >> 20) & 0xF, // word clock
+            _ => return internal(),  // internal (7) or unknown source
+        };
+        MAP.get(index as usize).copied().or_else(internal)
     }
 
     fn from_transport_async(
@@ -12136,5 +12158,55 @@ mod tests {
         bank.apply(&p);
         assert!(bank.playback(0) > 0.0);
         assert_eq!(bank.output(0, false), 0.0);
+    }
+
+    // State-word rate decode (UC spec §9.1 / UCX spec §11.7). The bytes are
+    // the little-endian `0x11` state word; clock source is bits 9–11 and each
+    // source has its own rate-index field into the shared nine-rate table.
+    fn state_word(word: u32) -> [u8; 4] {
+        word.to_le_bytes()
+    }
+
+    #[test]
+    fn state_word_internal_clock_decodes_the_top_byte() {
+        // clock source 7 (internal); top byte is the rate index.
+        for (index, rate) in [(1u32, 44_100u32), (2, 48_000), (6, 96_000), (10, 192_000)] {
+            let w = (7 << 9) | (index << 24);
+            assert_eq!(Fireface::decode_state_word_rate(&state_word(w)), Some(rate));
+        }
+    }
+
+    #[test]
+    fn state_word_internal_ignores_the_external_fields() {
+        // Internal top byte 2 (48 kHz) with arbitrary external-source fields.
+        let w = (7 << 9) | (2 << 24) | (5 << 12) | (6 << 16) | (1 << 20);
+        assert_eq!(Fireface::decode_state_word_rate(&state_word(w)), Some(48_000));
+    }
+
+    #[test]
+    fn state_word_external_sources_decode_their_own_field() {
+        // SPDIF coax (source 1), index 5 -> 88.2 kHz in bits 12–15.
+        let w = (1 << 9) | (5 << 12);
+        assert_eq!(Fireface::decode_state_word_rate(&state_word(w)), Some(88_200));
+        // Optical (source 2), index 6 -> 96 kHz in bits 16–19.
+        let w = (2 << 9) | (6 << 16);
+        assert_eq!(Fireface::decode_state_word_rate(&state_word(w)), Some(96_000));
+        // Word clock (source 3), index 1 -> 44.1 kHz in bits 20–23.
+        let w = (3 << 9) | (1 << 20);
+        assert_eq!(Fireface::decode_state_word_rate(&state_word(w)), Some(44_100));
+    }
+
+    #[test]
+    fn state_word_short_read_is_none() {
+        assert_eq!(Fireface::decode_state_word_rate(&[0, 0, 0]), None);
+        assert_eq!(Fireface::decode_state_word_rate(&[]), None);
+    }
+
+    #[test]
+    fn state_word_out_of_range_external_index_falls_back_to_internal() {
+        // SPDIF coax source with an out-of-table index (15); the internal top
+        // byte (1 -> 44.1 kHz) is the defensive fallback.
+        let w = (1 << 9) | (15 << 12) | (1 << 24);
+        assert_eq!(Fireface::decode_state_word_rate(&state_word(w)), Some(44_100));
     }
 }

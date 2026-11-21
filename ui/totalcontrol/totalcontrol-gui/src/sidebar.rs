@@ -534,7 +534,11 @@ fn device_chip(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         // A narrow sidebar clips a long model name instead of letting it
         // run past the card's border.
         .clip(true),
-        "Settings (only while a device is connected)",
+        if state.connected {
+            "Audio Config"
+        } else {
+            "Audio Config (only while a device is connected)"
+        },
         scale,
     )
 }
