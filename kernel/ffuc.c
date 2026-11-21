@@ -1831,8 +1831,19 @@ cadence_skip:
 			if (hframes != frames[i])
 				atomic_inc(&chip->in_frames_mismatch);
 			if (chip->in_pkts &&
-			    pos != chip->in_end % wrap)
-				atomic_inc(&chip->in_pos_gap);
+			    pos != chip->in_end % wrap) {
+				/* The device emits a start ramp at every engine
+				 * start: header-only and sub-cadence packets at
+				 * position 0, then the position field joins the
+				 * free-running timeline.  The first discontinuity
+				 * of a run is that start resync; it re-seeds the
+				 * expectation (fb_put below) and is not an error.
+				 * Later discontinuities count. */
+				if (chip->in_start_resync)
+					atomic_inc(&chip->in_pos_gap);
+				else
+					chip->in_start_resync = true;
+			}
 
 			/* Device timestamp: this header's (position, phase)
 			 * describe one boundary, the packet's own.  The
@@ -2670,6 +2681,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	chip->streams[SNDRV_PCM_STREAM_PLAYBACK].out_counter_valid = false;
 	chip->iso_frames_ok = false;
 	chip->in_end = 0;
+	chip->in_start_resync = false;
 	chip->fb_acc = 0;
 	chip->out_prime_acc = 0;
 	chip->fb_delay = (chip->nurbs + 1) * chip->iso_packets;

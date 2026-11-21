@@ -378,6 +378,10 @@ struct ffuc {
 	/* Cadence convergence for the stop verdict (ffuc-cadence.h). */
 	struct ffuc_cadence cad;
 	unsigned int in_end;
+	/* The device start ramp's position resync was seen this run: the
+	 * first position discontinuity re-seeds the expectation instead of
+	 * counting (ffuc_iso_capture_urb).  Reset at engine setup. */
+	bool in_start_resync;
 	unsigned int fb_acc;
 	/* Nominal-cadence accumulator for the OUT priming window: carries
 	 * the fractional frames per packet (rate/8000) so the priming lead
