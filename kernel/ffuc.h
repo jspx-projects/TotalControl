@@ -248,8 +248,12 @@ struct ffuc_stream {
 	unsigned int out_start_urbs;
 	/* Playback frames handed to USB but not yet completed: the real
 	 * in-flight queue behind hw_ptr.  Reported as runtime->delay in
-	 * .pointer (R4).  Atomic: submits and completions run in different
-	 * contexts. */
+	 * .pointer (R4).  Engine-scoped: added at every playback submit
+	 * (including the engine-start submits), subtracted at every
+	 * completion, rebased only after the synchronous kill in
+	 * engine_stop.  PCM prepare/trigger do not reset it: the URB queue
+	 * survives stream stops while the engine runs.  Atomic: submits and
+	 * completions run in different contexts. */
 	atomic_t inflight;
 };
 
