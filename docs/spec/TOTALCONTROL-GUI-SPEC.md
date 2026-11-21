@@ -1897,6 +1897,13 @@ assignment also clears Speaker B. Without both assignments the Speaker B
 button stays visible but disabled, and in the Assign menu the Speaker B row
 stays visible but grayed and inert; assigning Speaker B needs a Main first.
 
+Every Control Room state change reconciles the monitor state with the
+assignment: a monitor control that needs an assigned pair is cleared when the
+pair is missing, and the inactive monitor pair is muted. The assignment is
+established before the saved monitor state is restored, so a workspace or
+scene saved with Speaker B or Dim active comes back active, and establishing
+an assignment never fails because a monitor control is still active.
+
 LINK replaces CUE on the Speaker B strip and gangs the Speaker B channel to
 Main as a fader group. Moving either fader moves the other by the same dB
 amount, preserving the relative offset between them. The FX-return fader is

@@ -4556,13 +4556,14 @@ fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
 /// second pass is what makes Dim and Speaker B follow the assignments saved
 /// in the workspace.
 fn apply_workspace_monitor_state(state: &mut TotalControl, scene: &Scene) -> Result<(), String> {
-    if !state.device.is_ucx_model() {
+    if !state.device.is_uc_family() {
         return Ok(());
     }
     // The device service applies commands in order but its mirror snapshot
     // can still show the previous assignments here.  Use the workspace's
     // assignment map for the capability checks; set_main_out was queued
-    // before these writes.
+    // before these writes. The assignment is established first, so the saved
+    // Speaker B / Dim flags restore against a valid pair.
     let main = state.assign.first().copied().flatten();
     let main_b = state.assign.get(1).copied().flatten();
     if main.is_some() && main_b.is_some() {
@@ -4584,6 +4585,13 @@ fn apply_workspace_monitor_state(state: &mut TotalControl, scene: &Scene) -> Res
             .set_dim_with(false, scene.settings.dim_amount_db)
             .map_err(|e| e.to_string())?;
     }
+    log::info!(
+        "Control Room monitor state restored: Main {:?}, Speaker B {:?}, Speaker B active {}, Dim {}",
+        main,
+        main_b,
+        scene.settings.speaker_b,
+        scene.settings.dim
+    );
     Ok(())
 }
 
@@ -5501,6 +5509,14 @@ fn schedule_startup_full_reapply(state: &mut TotalControl) {
 }
 
 fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
+    // Correctness: establish the Control Room assignment before the scene
+    // write, so the scene's monitor flags (Speaker B, Dim) restore against a
+    // valid pair on the real backend — before the startup reapply capture and
+    // the service mirror exist. reconcile then keeps the flags instead of
+    // clearing them against a not-yet-assigned pair.
+    if let Err(e) = apply_control_room_assignments(state) {
+        log::warn!("startup Control Room assignments not restored: {e}");
+    }
     match state.device.apply_scene_at_connect(scene) {
         Ok(()) => {
             enforce_control_room_stereo(state);
@@ -5509,6 +5525,12 @@ fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
         Err(e) => log::warn!("startup scene apply failed: {e:?}"),
     }
     finish_startup_setup(state);
+    // Re-apply the saved monitor flags against the established assignment;
+    // Dim in particular needs its attenuation re-applied after the scene
+    // rewrite. Speaker B is already restored by the scene apply.
+    if let Err(e) = apply_workspace_monitor_state(state, scene) {
+        log::warn!("startup Control Room monitor state not restored: {e}");
+    }
 }
 
 /// Finish the deferred UCX startup comparison after the asynchronous
