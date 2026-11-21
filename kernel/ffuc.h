@@ -91,6 +91,16 @@
 #define FFUC_CTL_TIMEOUT	1000	/* ms */
 
 /* ISO ("Mac"/IF0) transport. */
+/* After the host stops polling, the device resets its capture stream
+ * counter.  Polling before the reset completes catches the previous
+ * timeline's tail mixed with the reset: position-0 placeholder packets,
+ * a position jump, and an occasional error microframe.  The start margin
+ * places the first URB after the reset, so the run starts on a clean
+ * zero-based timeline.  Trace-bounded on UCX firmware 49: 2 ms is too
+ * short, 20 ms is clean across the rate families.  Linux xHCI schedules
+ * a new isochronous stream at the current frame index and ignores a
+ * requested future start frame, so the margin is a submission delay. */
+#define FFUC_ISO_START_MARGIN_MS	20
 #define FFUC_MAX_ISO_PACKETS	8	/* per URB, one per 125 us microframe */
 #define FFUC_ISO_IN_HEADER	4
 #define FFUC_ISO_COUNTER_MOD	0x2000

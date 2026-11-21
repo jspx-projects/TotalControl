@@ -2942,6 +2942,13 @@ static int ffuc_engine_start(struct ffuc *chip)
 	else
 		ffuc_int_setup_urbs(chip, bytes);
 
+	/* The device resets its capture stream counter after the host stops
+	 * polling.  Let the reset complete before the first URB so the run
+	 * starts on a clean zero-based timeline, not the reset's position-0
+	 * placeholders and error microframe (DRIVER-DESIGN §4.3, §7). */
+	if (chip->iso)
+		msleep(FFUC_ISO_START_MARGIN_MS);
+
 	atomic_set(&chip->urb_errors, 0);
 	chip->last_out_complete = 0;
 	chip->last_in_complete = 0;

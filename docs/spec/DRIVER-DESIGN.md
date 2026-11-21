@@ -525,12 +525,16 @@ fractional term is capture-pinned (Stage 1 gate 3): the exact position is
 `pos + phase/tps` (the device is ahead of its delivered count by the owed
 fraction; the add pays it at the wrap), and the phase advances one
 microframe per packet mod tps regardless of the frame count.  The
-timestamp position follows the device's own field. The device emits a
-start ramp at every engine start. The first position discontinuity of a
-run is the ramp's resync into the free-running timeline. It re-seeds the
-continuity expectation and is not counted. Later discontinuities count
-as `in_pos_gap`. The unwrapped field model carries the resync; rate_meas
-uses the continuous count model.
+timestamp position follows the device's own field. The device resets
+its capture stream counter when the host restarts polling after a stop.
+The ISO start margin (§7) lets the reset complete before the first URB,
+so the run starts on a clean zero-based timeline. A reset caught
+mid-flight emits the start ramp: position-0 placeholder packets and a
+position jump into the reset timeline. The first position discontinuity
+of a run is that ramp resync. It re-seeds the continuity expectation and
+is not counted. Later discontinuities count as `in_pos_gap`. The
+unwrapped field model carries the resync; rate_meas uses the continuous
+count model.
 Whether the macOS reference host additionally consumes phase for
 fractional prediction is an open item (§12).
 
@@ -549,7 +553,7 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | lead word | the stream position an OUT frame plays at; keeps the device output buffer supplied | K1.3 |
 | `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
-| start ramp | the device's packet sequence at engine start: header-only and sub-cadence packets at position 0, before the position field joins the free-running timeline | K1.1 continuity expectation |
+| start ramp | the device's packet sequence when a stream-counter reset is caught mid-flight: header-only and sub-cadence packets at position 0, then a jump into the reset timeline. The start margin (§7) prevents its reception | K1.1 continuity expectation |
 | priming window | the first `fb_delay` OUT packets of a run, before feedback exists for them | K1.3 priming |
 | nominal frame count | `rate/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window | K1.3 priming |
 | cadence mean | mean frames per packet × 8000; the device clock the capture packets reveal | K1.4 cadence verdict |
@@ -747,7 +751,8 @@ carries the active family's divisor; the band multiplier follows the
 streaming alternate setting.
 
 Engine start selects the alternate setting, commits the rate, sends the
-session-open words where required, sets up URBs, submits them, and unmutes.
+session-open words where required, and sets up URBs. The ISO path waits
+the start margin before it submits the URBs, then unmutes.
 
 The UC Windows-personality path uses three timed gaps:
 
@@ -763,6 +768,16 @@ condition instead of sleeping; the gaps in the USBPcap captures are the
 device's actual ready time. The exact UC session-readiness condition is
 undecoded (UC spec §9.1); the fixed gaps stay until it is pinned. The AP
 personality sends the session words back-to-back.
+
+The ISO path waits the start margin (20 ms) between URB setup and the
+first submission. The device resets its capture stream counter after the
+host stops polling; the margin lets the reset complete, so the run's
+first packets carry a clean zero-based timeline instead of the start
+ramp (§4.3). The margin is trace-bounded: 2 ms catches the reset
+mid-flight, 20 ms is clean across the rate families. Linux xHCI
+schedules a new isochronous stream at the current frame index and
+ignores a requested future start frame, so the margin is a submission
+delay.
 
 Design principle: prefer a deterministic readiness condition over a timed
 guess. Where the device exposes a status that can be polled (rate index,
@@ -868,6 +883,10 @@ flow control could decide the next step.
 - The session gaps (§7) are capture-derived approximations of the
   reference host's readiness polling, implemented as fixed sleeps.
   **[`WIN_SESSION`]**
+- The **ISO start margin** (§7) is a 20 ms submission delay that lets the
+  device's stream-counter reset complete before the first URB. The device
+  exposes no reset-complete acknowledgement; a stream-ready status
+  condition would replace the delay. **[ISO]**
 - The **meter pump** (§5.1) resubmits pages from a 4 ms delayed work and
   retries a paused pump after 10 ms. The pair-boundary pause is UC-specific;
   the pump itself serves every personality. **[all]**
@@ -885,6 +904,7 @@ Scope labels are defined in §10.
 | Item | Scope |
 |---|---|
 | Replace fixed session gaps with a bounded poll of a device-visible readiness condition where one exists; keep documented quirks where the device has no acknowledgement | `WIN_SESSION` |
+| Identify a device-visible stream-ready condition and replace the ISO start margin delay with a bounded poll | ISO |
 | Poll the rate status word (`0x19`, UCX spec §11.6) after the rate commit: ready when bits 0–1 clear and the family/band field matches the requested rate, bounded with a timeout fallback. The rate-field match catches a write that did not land. Replace the fixed post-commit gap where the poll acknowledges | UCX |
 | Identify the UC session-readiness condition before replacing the `WIN_SESSION` gaps: `0x19` is not a rate word on the UC and its bits 0–1 never assert (UC spec §9.1). A state-word (`0x11`) rate-index effectiveness poll is the proposed enhancement; it is not reference behavior | UC |
 | Move ISO continuity logging to per-endpoint state | ISO |
