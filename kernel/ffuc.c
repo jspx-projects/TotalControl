@@ -2611,8 +2611,6 @@ static void ffuc_engine_stop(struct ffuc *chip)
 	for (i = 0; i < 2; i++)
 		for (j = 0; j < FFUC_MAX_EPS; j++)
 			chip->eps[i][j].last_start = -1;
-	atomic_set(&chip->streams[SNDRV_PCM_STREAM_PLAYBACK].inflight, 0);
-	atomic_set(&chip->streams[SNDRV_PCM_STREAM_CAPTURE].inflight, 0);
 	dev_dbg(&chip->dev->dev,
 		"engine stop: rate=%u session=%d\n",
 		chip->rate, chip->session_reopen);
@@ -2629,6 +2627,11 @@ static void ffuc_engine_stop(struct ffuc *chip)
 	}
 	WRITE_ONCE(chip->engine_running, false);
 	ffuc_kill_urbs(chip, chip->ucx || chip->iso);
+	/* The kill is synchronous: every in-flight frame has been
+	 * subtracted by its completion.  Rebase the counter for the next
+	 * engine run. */
+	atomic_set(&chip->streams[SNDRV_PCM_STREAM_PLAYBACK].inflight, 0);
+	atomic_set(&chip->streams[SNDRV_PCM_STREAM_CAPTURE].inflight, 0);
 	chip->engine_stopped_at = jiffies ?: 1;
 	dev_dbg(&chip->dev->dev, "engine stopped\n");
 }
@@ -2665,8 +2668,13 @@ static void ffuc_int_setup_urbs(struct ffuc *chip, unsigned int bytes)
 						 len, ffuc_urb_complete, u, 1);
 				u->urb->transfer_dma = u->dma;
 				u->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
-				if (dir == SNDRV_PCM_STREAM_PLAYBACK)
+				if (dir == SNDRV_PCM_STREAM_PLAYBACK) {
 					memset(u->buf, 0, len);
+					/* An interrupt OUT URB always carries
+					 * urb_frames frames; the in-flight
+					 * accounting uses that constant. */
+					u->frames = chip->urb_frames;
+				}
 			}
 		}
 	}
@@ -2969,6 +2977,22 @@ static int ffuc_engine_start(struct ffuc *chip)
 				GFP_KERNEL);
 			if (ret < 0)
 				goto error;
+			/* The initial submits join the in-flight accounting
+			 * (R4): every submitted playback frame is added here
+			 * or at the completion-path resubmit, and subtracted
+			 * at completion.  Without this add the first URBs'
+			 * completions subtract frames that were never
+			 * counted, and the steady-state delay reads near
+			 * zero. */
+			{
+				struct ffuc_urb *u =
+					chip->eps[SNDRV_PCM_STREAM_PLAYBACK][e]
+						.urbs[i].urb->context;
+
+				if (u->frames)
+					atomic_add(u->frames,
+						   &chip->streams[SNDRV_PCM_STREAM_PLAYBACK].inflight);
+			}
 		}
 	}
 
@@ -3306,7 +3330,6 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	s->deferrals = 0;
 	s->out_starve_streak = 0;
 	s->out_start_urbs = 0;
-	atomic_set(&s->inflight, 0);
 	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		s->out_counter_valid = false;
 	/* Preparation never zeroed the ring; inherit the last session's
@@ -3344,7 +3367,6 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->out_starve_streak = 0;
 		s->out_start_urbs = FFUC_START_GRACE_URBS;
 		s->out_counter_valid = false;
-		atomic_set(&s->inflight, 0);
 		s->running = true;
 		/* q48 diagnostics: log the negotiated geometry once per
 		 * start so a capture session can be matched to it. */
@@ -3379,7 +3401,6 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->out_starve_streak = 0;
 		s->out_start_urbs = FFUC_START_GRACE_URBS;
 		s->out_counter_valid = false;
-		atomic_set(&s->inflight, 0);
 		s->running = true;
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:
@@ -3467,9 +3488,9 @@ static snd_pcm_uframes_t ffuc_pcm_pointer(struct snd_pcm_substream *subs)
 
 	/* The pointer is the driver's read/write position.  runtime->delay
 	 * is the queue between it and the device: for playback, the frames
-	 * handed to USB but not yet completed; the capture in-flight queue
-	 * is the same quantity in the other direction.  ALSA adds
-	 * hw_avail to it, so snd_pcm_delay()/htimestamp see the real
+	 * handed to USB but not yet completed.  Capture in-flight frames are
+	 * not accounted yet, so the capture delay is the ring fill.  ALSA
+	 * adds hw_avail to it, so snd_pcm_delay()/htimestamp see the real
 	 * queue (audit R4). */
 	subs->runtime->delay = atomic_read(&chip->streams[subs->stream].inflight);
 
