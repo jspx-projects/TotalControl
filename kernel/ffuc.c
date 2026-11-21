@@ -1969,7 +1969,9 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	bool stop = false;
 	int i;
 
-	/* Per-packet delivery check from the previous submission. */
+	/* Per-packet delivery check from this URB's previous submission in
+	 * the same engine run.  Engine setup clears the descriptors of the
+	 * reused URBs, so the first fill of a run judges nothing. */
 	for (i = 0; i < urb->number_of_packets; i++) {
 		const struct usb_iso_packet_descriptor *d =
 			&urb->iso_frame_desc[i];
@@ -2750,6 +2752,19 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 			urb->complete = ffuc_urb_complete;
 			urb->context = &ep->urbs[i];
 			if (dir == SNDRV_PCM_STREAM_PLAYBACK) {
+				/* The fill's delivery check judges this URB's
+				 * previous submission.  The URBs are reused across
+				 * engine runs: a URB killed at the previous stop
+				 * still carries that run's descriptors, and a
+				 * cancelled delivery is not a transport error.
+				 * Clear them so the first fill of this run counts
+				 * only this run's deliveries. */
+				for (p = 0; p < chip->iso_packets; p++) {
+					urb->iso_frame_desc[p].offset = 0;
+					urb->iso_frame_desc[p].length = 0;
+					urb->iso_frame_desc[p].actual_length = 0;
+					urb->iso_frame_desc[p].status = 0;
+				}
 				ffuc_iso_playback_fill(ep, urb);
 				continue;
 			}

@@ -505,7 +505,10 @@ struct ffuc {
 	atomic_t out_fb_nominal;
 	atomic_t fb_only_urbs;
 	atomic_t in_hdr_only;      /* status 0, header-only packet (0 frames) */
-	atomic_t out_pkt_status;   /* per-packet completion with non-zero status */
+	atomic_t out_pkt_status;   /* this run's per-packet completions with
+				    * non-zero status; setup clears the reused
+				    * URB descriptors so a previous run's
+				    * cancelled deliveries never count here */
 	int out_lag_min, out_lag_max;   /* (in_end - out_counter) mod wrap */
 	atomic_t out_resync;
 	atomic_t rate_mismatch;   /* cadence disagrees with chip->rate */
