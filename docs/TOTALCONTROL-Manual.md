@@ -1395,7 +1395,10 @@ The Audio Configuration panel shows the round-trip latency in the `RTL
 latency` row (hover for "Round Trip Latency"): the value as `x.x ms`, and on
 the next line its contributions in milliseconds — USB queue, device lead,
 converter and graph. The **Quantum** picker sets the PipeWire graph period in
-samples.
+samples. **Auto** lets PipeWire choose the quantum itself — a safe default for
+the device and rate. Choose a specific value from the list to set it yourself;
+the list offers only quanta at or above the current rate's period floor, plus
+the exact floor for the lowest achievable latency.
 
 The value is the host round trip:
 
