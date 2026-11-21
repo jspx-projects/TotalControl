@@ -264,42 +264,42 @@ mixer may occasionally show a simulation instead of your hardware.
 
 ### Low-latency host tuning
 
-TotalControl can hold the latency constraint for you: enable `Keep the audio
-CPUs awake while streaming` in `Options > TotalControl`, and choose the `Max
-sleep time`: `0 µs` forbids every sleep state (the strongest protection, the
-highest idle power), `10 µs` allows the shallowest sleep states (most of the
-protection, less power). The setting is off by default, takes effect while the
-card streams, and costs idle power only during a session. The installed package grants the logged-in user access to
+The default host policy keeps the lowest quantum stable under load. PipeWire
+buffers a startup prefill into the ring before playback begins, and the ring
+capacity absorbs late host writes. A rate or quantum switch therefore starts
+with a filled ring, and a host stall drains the reserve rather than the device.
+In measurement the period-floor quantum stayed clean under heavy load —
+sixteen CPU busy-loops plus disk IO — at 48 kHz across the full load range, and
+at 64, 88.2 and 96 kHz at the highest load. This holds with the audio
+performance mode both off and on.
+
+The audio performance mode is therefore optional for steady playback. Enable
+`Keep the audio CPUs awake while streaming` in `Options > TotalControl` and
+choose the `Max sleep time`: `0 µs` forbids every sleep state (the strongest
+effect, the highest idle power), `10 µs` allows the shallowest sleep states.
+The setting is off by default, takes effect while the card streams, and costs
+idle power only during a session. It limits the CPU idle states so the audio
+thread wakes sooner. That reduces scheduling jitter, but the ring buffer
+already absorbs the jitter, so the mode does not change whether playback
+underruns under load. Use it for the most demanding low-latency sessions where
+the smallest wake latency matters; it is not required for stability.
+
+The installed package grants the logged-in user access to
 `/dev/cpu_dma_latency` the same way it grants the sound devices; for sessions
-without a seat (remote or headless) the `audio` group is the fallback. The
-manual commands below do the same without the application.
+without a seat (remote or headless) the `audio` group is the fallback.
 
-At the smallest quanta the host's power management decides how quickly the
-audio thread wakes. In timer mode the thread sleeps between graph cycles; a
-CPU that enters a deep idle state pays the exit on every wake. On our desk,
-limiting the idle states dropped the audio thread's runnable-wait from about
-43 to about 15 ms/s. Options, in order of effect:
+For a critical session you can also limit idle states system-wide:
 
-- Limit the idle states of the audio CPUs, persistently:
+- Limit the idle states of the audio CPUs persistently:
   `sudo cpupower idle-set -D 1`, or add the kernel arguments
   `intel_idle.max_cstate=1 processor.max_cstate=1`.
-- For a critical session, run the performance governor:
-  `sudo cpupower frequency-set -g performance`.
-- Without root (group `realtime`): hold a small latency constraint by writing
-  the value in microseconds to `/dev/cpu_dma_latency` and keeping the file
-  open, for example with a script that opens it, writes `50`, and stays
-  running while you record. This forbids only the deepest states; it helps
-  less than the first two options.
+- Run the performance governor: `sudo cpupower frequency-set -g performance`.
 
 Keep virtual machines, heavy disk IO and file indexers away from the audio
 CPU. The audio thread runs at real-time priority, so ordinary CPU load does
 not displace it; interrupts, deep idle exits and memory-system pressure do.
-These measures are tolerances, not guarantees: at 48 frames and 48 kHz the
-buffer margin is only a few milliseconds. In our measurement, keeping the
-audio CPUs out of deep idle turned a 48 frames/48 kHz session with
-occasional dropouts into fifteen minutes with none. Pinning the audio thread
-to one CPU on its own made no difference; the idle-state limit is the
-effective measure.
+The ring buffer absorbs these up to its reserve. If a workload stalls the host
+longer than the reserve, raise the quantum or reduce the load.
 
 ## 1. The mixer window
 
