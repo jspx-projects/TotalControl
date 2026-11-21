@@ -350,6 +350,18 @@ requested period and adds one period of headroom above
 the largest URB across the supported rates) so the delay target stays above
 the quantum at every rate.
 
+The installer buffers the startup prefill (`api.alsa.start-delay`). PipeWire
+writes `start-delay + period + headroom` frames of silence priming into the
+ring before trigger, clamped to the ring capacity. A rate or quantum switch
+therefore starts with a filled ring. Without the prefill the ring starts
+nearly empty and the device outruns the host at every switch. The prefill is
+startup-only and adds no steady latency.
+
+The ring capacity (`period-num × period`) is the stall headroom. It absorbs
+late host writes and holds the prefill. It is mostly empty in steady state,
+so a large capacity adds no steady latency; the steady latency is the ring
+fill (`period + headroom`), not the capacity.
+
 IRQ-mode scheduling (`api.alsa.disable-tsched`) is available for
 low-latency use. Its wake thresholds are
 `avail_min = buffer − (period + headroom)` (playback) and
@@ -708,7 +720,12 @@ The host:
 - keeps the F3 drain independent of F2 pacing: control writes queue on
   the control-I/O worker, and the drain thread performs model work only;
 - keeps one meter reader;
-- chooses a buffer/quantum that covers the URB queue plus margin;
+- chooses a ring capacity that covers the URB queue plus margin and absorbs
+  host write stalls; the capacity is mostly empty in steady state, so a large
+  capacity costs no steady latency (§4.1.1);
+- buffers the startup prefill (`api.alsa.start-delay`) so a rate or quantum
+  switch starts with a filled ring rather than a dry one; the prefill is
+  startup-only and adds no steady latency (§4.1.1);
 - runs timer-based scheduling against the declared BATCH pointer, so the
   host DLL holds the playback delay at its target (§4.1.1);
 - sets the refill wake cushion (`api.alsa.headroom`) for the scheduling
