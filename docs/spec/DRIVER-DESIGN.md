@@ -525,9 +525,12 @@ fractional term is capture-pinned (Stage 1 gate 3): the exact position is
 `pos + phase/tps` (the device is ahead of its delivered count by the owed
 fraction; the add pays it at the wrap), and the phase advances one
 microframe per packet mod tps regardless of the frame count.  The
-timestamp position follows the device's own field, whose occasional
-resync (~one per stream, recorded as `pos_gap`) is carried in the
-unwrapped field model; rate_meas uses the continuous count model.
+timestamp position follows the device's own field. The device emits a
+start ramp at every engine start. The first position discontinuity of a
+run is the ramp's resync into the free-running timeline. It re-seeds the
+continuity expectation and is not counted. Later discontinuities count
+as `in_pos_gap`. The unwrapped field model carries the resync; rate_meas
+uses the continuous count model.
 Whether the macOS reference host additionally consumes phase for
 fractional prediction is an open item (§12).
 
@@ -546,6 +549,7 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | lead word | the stream position an OUT frame plays at; keeps the device output buffer supplied | K1.3 |
 | `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
+| start ramp | the device's packet sequence at engine start: header-only and sub-cadence packets at position 0, before the position field joins the free-running timeline | K1.1 continuity expectation |
 | priming window | the first `fb_delay` OUT packets of a run, before feedback exists for them | K1.3 priming |
 | nominal frame count | `rate/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window | K1.3 priming |
 | cadence mean | mean frames per packet × 8000; the device clock the capture packets reveal | K1.4 cadence verdict |
