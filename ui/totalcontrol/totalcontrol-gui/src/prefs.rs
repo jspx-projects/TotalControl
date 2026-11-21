@@ -223,7 +223,7 @@ mod tests {
             labels: vec![(ChannelId::Input(0), "Vocal".into())],
             show_original_names: true,
             engine_force_rate: Some(96_000),
-            engine_rate_mode: Some(crate::app::EngineRateMode::Follow),
+            engine_rate_mode: Some(crate::app::EngineRateMode::Auto),
             window_size: Some((1600.0, 900.0)),
             keep_in_tray: Some(false),
             engine_force_quantum: Some(128),

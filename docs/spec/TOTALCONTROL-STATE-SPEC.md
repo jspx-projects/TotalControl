@@ -137,7 +137,7 @@ that unit. Device-specific host settings follow the incoming unit.
 Loading an explicit workspace saves the outgoing current workspace, applies
 the explicit scene, replaces the GUI state and writes the loaded state to the
 current workspace. A workspace stores the current graph rate. Loading applies
-the stored rate only in fixed-rate mode; `Auto` and `Follow` keep their mode.
+the stored rate only in fixed-rate mode; `Auto` keeps its mode.
 
 Save writes the current workspace to the chosen `.tcws` file and to the
 current workspace file.
@@ -212,7 +212,7 @@ mixer scene, labels, groups, snapshots, layouts or window layout.
 | Active unit | Last selected unit key |
 | OSC | Enabled, dialect, ports and feedback destination address |
 | MIDI controllers | Enabled, debug log, per-device input/output enable and protocol, option values per protocol, key assignments per protocol |
-| Engine | Forced rate, quantum and rate mode |
+| Engine | Forced rate, quantum and rate mode (`Auto` is the default; `Device` forces the set rate; a retired `Follow` preference loads as `Auto`) |
 | Meters | OVR full-scale sample count (global, 1–15, default 3) |
 | Startup | Session autostart (starts hidden in the tray) and keep in tray |
 | Files | Last workspace folder |
