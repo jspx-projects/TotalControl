@@ -1372,9 +1372,11 @@ TotalControl's `clock.force-rate` override.
 
 `Diagnostics` lists the kernel transport error counters in three sections
 by reset behaviour, each with a header whose tooltip states that behaviour.
-`Diagnostics` and the three section headers are level-2 headers: a small accent
-tick and the label in the primary colour, quieter than the level-1 `DEVICE` and
-`AUDIO ENGINE` rules and brighter than the secondary body rows.
+Headers grow quieter as their level deepens and use the secondary label colour
+(white is reserved for user-editable values): `Diagnostics` is a level-2 header
+in small caps like the level-1 `DEVICE` / `AUDIO ENGINE` headers but at normal
+text size and without a rule; `Scheduling`, `This stream` and `Session` are
+level-3 headers in italic, without underline.
 `reset` (tooltip "Clear all counters") clears every section. Counting runs
 on every tick, independent of whether the drawer is open.
 

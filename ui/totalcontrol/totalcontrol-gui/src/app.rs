@@ -2,7 +2,7 @@ use iced::futures::channel::mpsc;
 use iced::keyboard::{self, Key};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, opaque, pick_list, progress_bar, radio,
-    responsive, row, scrollable, slider, stack, text, text_input,
+    responsive, rich_text, row, scrollable, slider, span, stack, text, text_input,
 };
 use iced::{window, Background, Color, Element, Length, Subscription, Task};
 use rfd::FileDialog;
@@ -15825,7 +15825,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         let perrun = transport_delta(&now, &perrun_base);
         body = body.push(
             row![
-                strip::hint(subsection_header("Diagnostics", scale), "Transport error counters.", scale),
+                strip::hint(header2("Diagnostics", scale), "Transport error counters.", scale),
                 iced::widget::Space::new().width(Length::Fill),
                 strip::hint(
                     button(strip::centered_label_auto(
@@ -15932,7 +15932,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         ];
         for (header, header_tip, rows) in sections {
             body = body.push(strip::hint(
-                subsection_header(header, scale),
+                header3(header, scale),
                 header_tip,
                 scale,
             ));
@@ -16550,25 +16550,28 @@ fn section_header(label: &str, scale: f32) -> Element<'_, Message> {
     .into()
 }
 
-/// A level-2 header inside the Audio Config panel (Diagnostics and its
-/// Scheduling / This stream / Session sections). A single small accent tick
-/// and the label in the primary colour mark a sub-section: quieter than the
-/// level-1 DEVICE / AUDIO ENGINE rules, brighter than the secondary body rows.
-fn subsection_header(label: &str, scale: f32) -> Element<'static, Message> {
-    let tick = container(
-        iced::widget::Space::new()
-            .width(2.5 * scale)
-            .height(11.0 * scale),
-    )
-    .style(theme::accent_bar);
-    row![
-        tick,
-        text(label.to_string())
-            .color(theme::text_primary())
-            .size(theme::TEXT_DIALOG * scale),
-    ]
-    .spacing(theme::SPACE_SM * scale)
-    .align_y(iced::Alignment::Center)
+/// A level-2 header inside the Audio Config panel (Diagnostics): small caps
+/// like the level-1 DEVICE / AUDIO ENGINE headers, at normal text size and in
+/// the label colour, with no rule. White is reserved for user-editable values;
+/// headers grow quieter as their level deepens.
+fn header2(label: &str, scale: f32) -> Element<'static, Message> {
+    text(label.to_uppercase())
+        .color(theme::text_sec())
+        .size(theme::TEXT_DIALOG * scale)
+        .into()
+}
+
+/// A level-3 header (Scheduling / This stream / Session): italic, no
+/// underline, in the label colour — quieter than the level-2 small caps.
+fn header3(label: &str, scale: f32) -> Element<'static, Message> {
+    let italic = iced::Font {
+        style: iced::font::Style::Italic,
+        ..iced::Font::DEFAULT
+    };
+    rich_text([span::<(), iced::Font>(label.to_string())
+        .font(italic)
+        .color(theme::text_sec())
+        .size(theme::TEXT_DIALOG * scale)])
     .into()
 }
 

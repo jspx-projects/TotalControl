@@ -49,6 +49,7 @@ use iced::{Font, Size};
 /// the single biggest thing separating this from a "finished" app, for very
 /// little effort.
 const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+const INTER_ITALIC: &[u8] = include_bytes!("../assets/fonts/Inter-Italic.ttf");
 
 /// The application id, matching the basename of `totalcontrol.desktop`, so the
 /// desktop environment associates the window with the app entry (icon
@@ -296,6 +297,7 @@ fn main() -> iced::Result {
     .subscription(app::subscription)
     .theme(|_state: &app::TotalControl, _id: window::Id| iced::Theme::Dark)
     .font(INTER_REGULAR)
+    .font(INTER_ITALIC)
     .default_font(Font::with_name("Inter"))
     .run()
 }
