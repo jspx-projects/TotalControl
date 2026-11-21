@@ -56,7 +56,7 @@ start_load() {  # $1=hogs $2=io(0/1) $3=guard(0/1) $4=secs ; sets LOAD_PIDS
         LOAD_PIDS+=($!)
     fi
 }
-stop_load() { local p; for p in "${LOAD_PIDS[@]:-}"; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; }
+stop_load() { local p; for p in "${LOAD_PIDS[@]:-}"; do kill "$p" 2>/dev/null; done; for p in "${LOAD_PIDS[@]:-}"; do wait "$p" 2>/dev/null; done; }
 
 start_tone() {  # $1=sink ; sets TONE_PID
     ( while :; do pw-play --target "$1" "$TONE" >/dev/null 2>&1; done ) &
