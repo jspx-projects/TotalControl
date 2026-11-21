@@ -504,6 +504,14 @@ captures one extra frame in a microframe, the count carries that
 add/drop, and OUT reproduces it. The long-term OUT rate therefore
 equals the device's capture rate, fractional part included.
 
+**Run-scoped delivery accounting.** The OUT fill checks each packet's
+delivery against the URB's previous submission in the same engine run.
+A non-zero completion status counts as `out_pkt_status`; a short delivery
+with status zero counts as `out_pkt_len_err`. Engine setup clears the OUT
+packet descriptors of the reused URBs before the first fill. A delivery
+cancelled at the previous run's stop is a cancellation, not a transport
+error, and never counts against the new run.
+
 The phase is recorded in `fb[]` and exposed for diagnostics.
 The scheduler mirrors the frame count, which already carries the add/drop.
 The driver also consumes the phase for the device timestamp: each IN
