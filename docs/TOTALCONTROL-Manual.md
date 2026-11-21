@@ -1425,6 +1425,37 @@ adjusted by the queue difference without another cable measurement. Rates
 outside the calibrated set use the model estimate. A different firmware or
 device path needs a new calibration.
 
+### Scheduling mode
+
+PipeWire can drive the audio graph from a host timer (**timer mode**, the
+desktop default) or from the device's period interrupts (**IRQ mode**, PipeWire's
+Pro Audio scheduling, `api.alsa.disable-tsched`). For low-latency work on a
+Fireface, choose IRQ mode. In IRQ mode the driver's fill lock holds the playback
+ring at a small, deterministic level (about 1.7 URBs, ≈1.7 ms) with no server
+delay-locked loop on the device stream, so reliability does not cost extra
+latency margin. Timer mode needs a larger `start-delay` (about three URBs,
+scaled with rate) to avoid late dropouts at 96/192 kHz, which adds latency.
+
+Timer mode remains the convenient default for mixed-rate desktop graphs and
+heavy processing at large quanta, where its node resampler and independent
+graph quantum help. The startup mute window below applies in both modes.
+
+### The startup mute window
+
+When playback starts or the sample rate changes, the driver keeps the device
+outputs muted for a short window (about 50–100 ms) and unmutes once the ring
+delivery is stable. This replaces the scattered crackle that a low-latency
+configuration would otherwise produce at every rate switch with one clean,
+brief silence. It is normal and intended: you hear one short gap at the switch,
+then continuous audio. The window is bounded (256 ms) so a stalled application
+cannot leave the output muted. Steady-state latency is unaffected — the window
+occurs only at startup.
+
+The driver counts these gated startups (`out_prefills`) and any that hit the
+bound (`out_prefill_timeouts`) in the debugfs statistics; a clean session shows
+clears with no timeouts. The `prefill` module parameter (default on) disables
+the gate for comparison.
+
 Below the latency line, **Diagnostics** lists the kernel transport error
 counters. They are counted continuously whether or not this panel is open.
 `in` is device-to-host (capture) and `out` is host-to-device (playback);
@@ -1479,7 +1510,7 @@ detail.
 
 | Section | Row | Meaning | What to do |
 |---|---|---|---|
-| Scheduling | underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). On an underrun the driver sends silence for the dry chunk; a single late write is heard as a brief gap. At stream start and after a rate change a few chunks of silence are allowed while the host fills the ring. If the ring stays dry for two consecutive chunks outside that window the driver stops the playback stream and the audio graph restarts it. A dry ring is never heard as stale audio. An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
+| Scheduling | underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). On an underrun the driver sends silence for the dry chunk; a single late write is heard as a brief gap. At stream start and after a rate change the startup mute window (see above) holds the output muted while the host fills the ring; starvation inside that window is intended and is not counted here. If the ring stays dry for two consecutive chunks outside that window the driver stops the playback stream and the audio graph restarts it. A dry ring is never heard as stale audio. An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
 | This stream | usb | USB packet status errors in the current stream. | Try another USB port or cable; avoid hubs; check for bandwidth contention. |
 | This stream | bad packets | Short, malformed, misaligned or dropped packets in the current stream. The startup and rate-switch burst is excluded by the per-run reset. | Usually accompanies a USB link problem; see `usb` and `gaps`. |
 | This stream | feedback | Clock-tracking packet detail in the current stream: a position discontinuity, a header frame-count mismatch, or feedback unavailable. The device's one-time start resync at a stream start is expected and is not counted. | Check the clock source and sample rate; a growing value indicates a device clock or USB timing fault. |
