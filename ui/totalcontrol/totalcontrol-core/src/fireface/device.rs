@@ -5929,9 +5929,17 @@ impl RmeDevice for Fireface {
     }
 
     fn set_pitch(&mut self, pitch_percent: f32) -> Result<(), Error> {
+        let pitch = pitch_percent.clamp(-5.0, 5.0);
+        self.write_pitch_clock(pitch)?;
+        self.settings.pitch_percent = pitch;
+        Ok(())
+    }
+
+    fn write_pitch_clock(&mut self, pitch_percent: f32) -> Result<(), Error> {
         // UC and UCX share the four-word clock quad.  The UC pitch capture
         // shows four `0x1b` writes per step, one per base family, with
-        // DDS = 0x5f5e10000000 / (base * (1 + pitch / 100)).
+        // DDS = 0x5f5e10000000 / (base * (1 + pitch / 100)).  This writes the
+        // clock only; the stored host setting is left to `set_pitch`.
         let pitch = pitch_percent.clamp(-5.0, 5.0);
         let bases = [32_000u32, 44_100, 48_000, 50_000];
         for (family, base) in bases.iter().enumerate() {
@@ -5943,7 +5951,6 @@ impl RmeDevice for Fireface {
                 ((dds & 0xff00) as u16) | family as u16,
             )?;
         }
-        self.settings.pitch_percent = pitch;
         Ok(())
     }
 
@@ -10322,6 +10329,21 @@ mod tests {
         // The 44.1 kHz word from the verified pitch capture.
         assert!(w.contains(&Write::Vendor(protocol::req::DDS, 0x86f9, 0x8101)));
         assert_eq!(dev.settings().pitch_percent, 5.0);
+    }
+
+    #[test]
+    fn write_pitch_clock_moves_the_clock_without_the_saved_setting() {
+        let (mut dev, writes) = open(Model::Uc);
+        dev.set_pitch(1.5).unwrap();
+        assert_eq!(dev.settings().pitch_percent, 1.5);
+        writes.lock().unwrap().clear();
+        // The convenience path forces the nominal clock; the saved pro pitch
+        // is preserved so it returns on the Device path.
+        dev.write_pitch_clock(0.0).unwrap();
+        let w = writes.lock().unwrap();
+        assert!(w.contains(&Write::Vendor(protocol::req::DDS, 0xc350, 0x0000)));
+        assert!(w.contains(&Write::Vendor(protocol::req::DDS, 0x8235, 0x5502)));
+        assert_eq!(dev.settings().pitch_percent, 1.5);
     }
 
     #[test]

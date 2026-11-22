@@ -802,8 +802,17 @@ pub trait RmeDevice {
 
     /// Set the sample clock pitch/varispeed in percent (-5..+5, 0 = nominal).
     /// The 0x1B DDS quad shifts the device clock dynamically (the
-    /// actual sample rate moves with the pitch).
+    /// actual sample rate moves with the pitch). Stores the value as the
+    /// host pitch setting.
     fn set_pitch(&mut self, pitch_percent: f32) -> Result<(), Error>;
+
+    /// Write the clock pitch to the device without changing the stored host
+    /// setting. The convenience path forces the nominal clock (0 %) while
+    /// preserving the saved pro pitch, which returns on the Device path.
+    /// Defaults to `set_pitch` for backends that do not distinguish the two.
+    fn write_pitch_clock(&mut self, pitch_percent: f32) -> Result<(), Error> {
+        self.set_pitch(pitch_percent)
+    }
 
     /// Set the active sample rate in Hz. The proprietary USB backend
     /// does a mid-session `SET_INTERFACE` + stream restart; the ALSA

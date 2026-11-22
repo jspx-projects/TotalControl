@@ -344,24 +344,41 @@ parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
 `allowed-rates` are host policy and must permit the envelope; the installer
 owns that policy.
 
-The shipped host policy uses IRQ scheduling (`api.alsa.disable-tsched =
-true`, PipeWire's Pro Audio mode) with `api.alsa.headroom = 0` and
-`api.alsa.start-delay = 0`. The graph wakes on the device's period
-interrupts and the driver's fill lock holds the playback ring at a small,
-deterministic level (≈1.7 URBs across rates, measured). There is no server
-level loop on the device stream, so reliability at this fill costs no extra
-latency margin. The startup prefill gate (§4.1.3) mutes the outputs from
-trigger until delivery is stable, so the smallest fill starts clean.
+The host scheduling policy has three paths, selected by the rate authority
+("Rate follows"). The startup prefill gate (§4.1.3) mutes the outputs from
+trigger until delivery is stable in every path.
 
-Timer scheduling (`api.alsa.disable-tsched = false`) is the
-desktop-convenience alternative. The graph wakes on the host timer and the
-host's DLL holds the queued playback delay at its target. The PCM declares
-`SNDRV_PCM_INFO_BATCH`: its pointer advances once per period, so in timer
-mode the host halves the requested period and adds one period of headroom
-above `api.alsa.headroom`. The timer path needs a rate-scaled
+**Device (pro path).** IRQ scheduling (`api.alsa.disable-tsched = true`);
+the graph wakes on the device's period interrupts. TotalControl holds a
+period-aligned scheduling cushion, the playback headroom `H = 2·P`, on both
+Pro Audio nodes. The IRQ wake threshold `P + H` is a whole multiple of the
+period. At fractional rates the URB cadence does not divide the period; a
+non-aligned threshold lands mid-period, doubles the write-skip rate and
+collapses the ring fill. The aligned cushion holds the fill clean at every
+supported rate under load. TotalControl sets the cushion before it forces
+rate or quantum, so the value is in place when the re-prepare reads it —
+the reference pattern (the host sets rate and margin together, then
+restarts). The cushion is the host half of the reference margin pair; the
+device lead bias (§4.1.2) is the device half.
+
+**PipeWire (convenience path, the default).** Timer scheduling
+(`api.alsa.disable-tsched = false`); the graph wakes on the host timer and
+the DLL holds the queued playback delay at its target. A fixed generous
+headroom is safe at every rate here: the DLL servos the fill, so the IRQ
+wake-threshold alignment law does not apply. The graph conducts the rate
+(the device follows each stream); no per-rate cushion tracking is needed.
+The PCM declares `SNDRV_PCM_INFO_BATCH`: its pointer advances once per
+period, so the host halves the requested period and adds one period of
+headroom above `api.alsa.headroom`. The path uses a rate-scaled
 `api.alsa.start-delay` of about three URBs to keep the post-switch decay
-minima above the demand at 2x/4x rates; a fixed cushion is over-margined at
-1x and under-margined at 4x.
+minima above the demand at 2x/4x rates. The packaged node default is this
+convenience policy (timer, headroom 336); it is also the fallback when
+TotalControl is not running.
+
+**JACK.** Opens the PCM directly and fills the ring just-in-time; neither
+the cushion nor the PipeWire policy applies. It is the lowest-latency path.
+
+The steady ring fill carries the margin and is the host's queued latency.
 
 The ring capacity (`period-num × period`) is the stall headroom. It absorbs
 late host writes. It is mostly empty in steady state, so a large capacity

@@ -802,6 +802,13 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
+    fn write_pitch_clock(&mut self, pitch_percent: f32) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.write_pitch_clock(pitch_percent);
+        });
+        Ok(())
+    }
+
     // The remaining controls have no required trait body; forward the ones
     // the mixer uses.  Each one becomes a `Run` command on the device
     // thread, so the model snapshot is the single source of truth.

@@ -422,6 +422,129 @@ pub fn card_stream(card_id: &str) -> Option<CardStream> {
     None
 }
 
+/// The PipeWire node ids of the RME Pro Audio playback and capture nodes,
+/// from `pw-dump`. `None` when PipeWire is absent or does not own the
+/// device (a JACK client holding the PCM leaves no Pro Audio nodes).
+pub fn fireface_pro_node_ids() -> Option<(u32, u32)> {
+    let out = Command::new("pw-dump")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_pro_node_ids(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Pure parser for [`fireface_pro_node_ids`]: the `pw-dump` JSON array.
+pub fn parse_pro_node_ids(json: &str) -> Option<(u32, u32)> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut output = None;
+    let mut input = None;
+    for obj in value.as_array()? {
+        let name = obj["info"]["props"]["node.name"].as_str().unwrap_or("");
+        if name.contains(".monitor") {
+            continue;
+        }
+        let id = obj["id"].as_u64()? as u32;
+        if name.contains("pro-output-0") {
+            output = Some(id);
+        } else if name.contains("pro-input-0") {
+            input = Some(id);
+        }
+    }
+    Some((output?, input?))
+}
+
+/// The node's `api.alsa.headroom` as its Props parameter reports it.
+pub fn read_headroom(node: u32) -> Option<u32> {
+    let out = Command::new("pw-cli")
+        .args(["enum-params", &node.to_string(), "Props"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_headroom(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Pure parser for [`read_headroom`]: the `pw-cli enum-params … Props`
+/// text, where the value line follows the `api.alsa.headroom` key line.
+pub fn parse_headroom(text: &str) -> Option<u32> {
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        if line.contains("\"api.alsa.headroom\"") {
+            let value = lines.next()?.trim();
+            return value.strip_prefix("Int ").and_then(|v| v.trim().parse().ok());
+        }
+    }
+    None
+}
+
+/// Set the node's `api.alsa.headroom`. The SPA plugin applies the value at
+/// the next PCM re-prepare (rate/quantum change, recovery, suspend/resume),
+/// not to the running stream. The `params` property takes the array form
+/// `[key, value]` (desk-verified on PipeWire 1.6.11; the object form builds
+/// an empty pod in `pw-cli`).
+pub fn set_headroom(node: u32, frames: u32) -> Result<(), String> {
+    let pod = format!("{{ \"params\": [ \"api.alsa.headroom\", {frames} ] }}");
+    let status = Command::new("pw-cli")
+        .args(["set-param", &node.to_string(), "Props", &pod])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("pw-cli: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("pw-cli set-param headroom {frames} failed ({status})"))
+    }
+}
+
+/// The scheduling policy for a Pro Audio node (C1 three-tier model):
+/// IRQ + per-rate cushion on the Device-authority pro path, timer + a fixed
+/// generous margin on the PipeWire convenience path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchedPolicy {
+    /// `true` = IRQ (period-interrupt) scheduling; `false` = timer + DLL.
+    pub disable_tsched: bool,
+    pub headroom: u32,
+    pub start_delay: u32,
+    pub period_num: u32,
+}
+
+/// The `params` Props pod for a scheduling policy. The multi-key array form
+/// `[key, value, …]` is desk-verified on PipeWire 1.6.11 (the object form
+/// builds an empty pod in `pw-cli`). Pure, for tests.
+pub fn sched_policy_pod(p: &SchedPolicy) -> String {
+    format!(
+        "{{ \"params\": [ \"api.alsa.disable-tsched\", {}, \"api.alsa.headroom\", {}, \
+         \"api.alsa.start-delay\", {}, \"api.alsa.period-num\", {} ] }}",
+        p.disable_tsched, p.headroom, p.start_delay, p.period_num
+    )
+}
+
+/// Set the scheduling policy on a node. The value lands at the next PCM
+/// re-prepare; the caller triggers one (a rate/quantum force, or a quantum
+/// toggle on a mode switch — a same-value force does not re-prepare).
+pub fn set_sched_policy(node: u32, p: &SchedPolicy) -> Result<(), String> {
+    let pod = sched_policy_pod(p);
+    let status = Command::new("pw-cli")
+        .args(["set-param", &node.to_string(), "Props", &pod])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("pw-cli: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("pw-cli set-param sched policy failed ({status})"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,5 +661,47 @@ R   71      0      0   4.8us   5.7us  + alsa_output.usb-RME_Fireface_UCX__x-00.p
     fn no_pipewire_settings_is_none() {
         assert_eq!(parse(""), None);
         assert_eq!(parse("Found \"settings\" metadata 31\n"), None);
+    }
+
+    #[test]
+    fn parses_the_pro_node_ids_from_pw_dump() {
+        let json = r#"[
+          { "id": 32, "type": "PipeWire:Interface:Device", "info": { "props": { "node.name": "alsa_card.usb-RME_Fireface_UCX-00" } } },
+          { "id": 73, "info": { "props": { "node.name": "alsa_output.usb-RME_Fireface_UCX-00.pro-output-0" } } },
+          { "id": 55, "info": { "props": { "node.name": "alsa_input.usb-RME_Fireface_UCX-00.pro-input-0" } } },
+          { "id": 90, "info": { "props": { "node.name": "alsa_output.usb-RME_Fireface_UCX-00.pro-output-0.monitor" } } }
+        ]"#;
+        assert_eq!(parse_pro_node_ids(json), Some((73, 55)));
+        // No Pro Audio nodes (JACK owns the PCM, or another card).
+        assert_eq!(parse_pro_node_ids("[]"), None);
+        assert_eq!(parse_pro_node_ids("not json"), None);
+    }
+
+    #[test]
+    fn parses_the_headroom_from_enum_params() {
+        let text = "Object: size 1512, type Spa:Pod:Object:Param:Props (262146)\n\
+    Prop: key Spa:Pod:Object:Param:Props:params (524289), flags 00000000\n\
+        String \"api.alsa.period-num\"\n\
+        Int 32\n\
+        String \"api.alsa.headroom\"\n\
+        Int 96\n\
+        String \"api.alsa.start-delay\"\n\
+        Int 0\n";
+        assert_eq!(parse_headroom(text), Some(96));
+        assert_eq!(parse_headroom("String \"api.alsa.headroom\"\n"), None);
+        assert_eq!(parse_headroom(""), None);
+    }
+
+    #[test]
+    fn builds_the_sched_policy_pod() {
+        let irq = SchedPolicy { disable_tsched: true, headroom: 96, start_delay: 0, period_num: 32 };
+        assert_eq!(
+            sched_policy_pod(&irq),
+            "{ \"params\": [ \"api.alsa.disable-tsched\", true, \"api.alsa.headroom\", 96, \
+             \"api.alsa.start-delay\", 0, \"api.alsa.period-num\", 32 ] }"
+        );
+        let timer = SchedPolicy { disable_tsched: false, headroom: 336, start_delay: 144, period_num: 16 };
+        assert!(sched_policy_pod(&timer).contains("\"api.alsa.disable-tsched\", false"));
+        assert!(sched_policy_pod(&timer).contains("\"api.alsa.start-delay\", 144"));
     }
 }
