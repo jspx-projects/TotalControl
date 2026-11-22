@@ -252,16 +252,23 @@ unsigned int ffuc_rate_from_index(unsigned int idx)
 
 /* -- vendor requests ------------------------------------------------- */
 
+static void ffuc_track_clock(struct ffuc *chip, u16 val, u16 idx);
+
 int ffuc_vendor_send(struct ffuc *chip, u8 req, u16 val, u16 idx,
 		     const void *data, u16 len)
 {
+	int ret;
+
 	if (READ_ONCE(chip->disconnected))
 		return -ENODEV;
-	return usb_control_msg_send(chip->dev, 0, req,
-				    USB_DIR_OUT | USB_TYPE_VENDOR |
-				    USB_RECIP_DEVICE, val, idx,
-				    (void *)data, len, FFUC_CTL_TIMEOUT,
-				    GFP_KERNEL);
+	ret = usb_control_msg_send(chip->dev, 0, req,
+				   USB_DIR_OUT | USB_TYPE_VENDOR |
+				   USB_RECIP_DEVICE, val, idx,
+				   (void *)data, len, FFUC_CTL_TIMEOUT,
+				   GFP_KERNEL);
+	if (ret >= 0 && req == FFUC_REQ_DDS)
+		ffuc_track_clock(chip, val, idx);
+	return ret;
 }
 
 int ffuc_vendor_recv(struct ffuc *chip, u8 req, u16 val, u16 idx,
@@ -435,6 +442,22 @@ static unsigned int ffuc_rate_family(unsigned int rate)
 	default:
 		return 2;
 	}
+}
+
+/* The host shifts the device clock with the DDS divisor (varispeed). The
+ * active family's divisor encodes base/(1 + pitch/100); the band multiplier
+ * follows the streaming rate. Recover the programmed clock so the cadence
+ * judge compares the measured clock against the actual clock, not the
+ * nominal rate. The full-rate division keeps the truncation under 1 Hz,
+ * far inside the judge's ±1% band. Only the active family's word moves the
+ * current clock; the other three families are stored for later rates. */
+static void ffuc_track_clock(struct ffuc *chip, u16 val, u16 idx)
+{
+	if (!chip->rate)
+		return;
+	if ((idx & 0x03) != ffuc_rate_family(chip->rate))
+		return;
+	WRITE_ONCE(chip->clock_rate, ffuc_dds_clock(val, idx, chip->rate));
 }
 
 static int ffuc_set_rate_family(struct ffuc *chip, unsigned int rate)
@@ -1765,6 +1788,16 @@ static u32 ffuc_lead_seed(struct ffuc *chip)
  * and stop verdict alike) uses the converged mean (ffuc-cadence.h), so a
  * rate-settling transient is not counted as a fault.
  */
+/* The cadence judge's reference: the programmed clock (nominal rate scaled
+ * by the pitch written through the DDS divisor). Falls back to the nominal
+ * rate before any DDS word has been tracked. */
+static unsigned int ffuc_programmed_clock(const struct ffuc *chip)
+{
+	unsigned int c = READ_ONCE(chip->clock_rate);
+
+	return c ? c : chip->rate;
+}
+
 static unsigned int ffuc_iso_cadence(struct ffuc *chip, int *mismatch)
 {
 	u64 frames = 0, pkts = 0;
@@ -1777,7 +1810,7 @@ static unsigned int ffuc_iso_cadence(struct ffuc *chip, int *mismatch)
 	if (!pkts)
 		return 0;
 	mean = (unsigned int)((frames * 8000) / pkts);
-	if (mismatch && ffuc_cadence_mismatch(chip->rate, mean))
+	if (mismatch && ffuc_cadence_mismatch(ffuc_programmed_clock(chip), mean))
 		*mismatch = 1;
 	return mean;
 }
@@ -1871,13 +1904,14 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 			if (atomic_read(&chip->in_frames_overflow))
 				goto cadence_skip;
 			chip->iso_cadence = ffuc_iso_cadence(chip, NULL);
-			if (ffuc_cadence_stop_mismatch(&chip->cad, chip->rate)) {
+			if (ffuc_cadence_stop_mismatch(&chip->cad,
+						       ffuc_programmed_clock(chip))) {
 				if (++chip->rate_mismatch_windows >= 2) {
 					atomic_inc(&chip->rate_mismatch);
 					dev_warn_ratelimited(&chip->dev->dev,
-							     "ISO cadence %u Hz vs rate %u Hz\n",
+							     "ISO cadence %u Hz vs clock %u Hz\n",
 							     chip->cad.stable_mean,
-							     chip->rate);
+							     ffuc_programmed_clock(chip));
 					chip->rate_mismatch_windows = 0;
 				}
 			} else {
@@ -1974,8 +2008,8 @@ cadence_skip:
 
 		for (i = 0; i < urb->number_of_packets; i++)
 			urb_frames += frames[i];
-		ffuc_cadence_window(&chip->cad, chip->rate, urb_frames,
-				    urb->number_of_packets);
+		ffuc_cadence_window(&chip->cad, ffuc_programmed_clock(chip),
+				    urb_frames, urb->number_of_packets);
 	}
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 
@@ -2434,6 +2468,7 @@ static int ffuc_clock_show(struct seq_file *m, void *v)
 		   (unsigned long long)ns, (unsigned long long)pos, phase,
 		   (unsigned long long)chip->ts_frac_q32);
 	seq_printf(m, "rate_meas %u\n", rate);
+	seq_printf(m, "clock_rate %u\n", ffuc_programmed_clock(chip));
 	seq_printf(m, "win_ns %llu\nwin_pos %llu\n",
 		   (unsigned long long)win_ns, (unsigned long long)win_pos);
 	seq_printf(m, "anchor_ns %llu\nts_frames %llu\n",
@@ -2811,6 +2846,7 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	/* Per-run diagnostics: a stop line describes this stream only. */
 	memset(chip->iso_frames_hist, 0, sizeof(chip->iso_frames_hist));
 	ffuc_cadence_reset(&chip->cad);
+	chip->clock_rate = chip->rate;
 	atomic_set(&chip->in_hdr_only, 0);
 	atomic_set(&chip->in_short, 0);
 	atomic_set(&chip->in_misaligned, 0);
@@ -3397,6 +3433,7 @@ static int ffuc_pcm_hw_params(struct snd_pcm_substream *subs,
 		}
 		chip->prepared_mask &= ~self;
 		chip->rate = rate;
+		chip->clock_rate = rate;
 		chip->mode = &chip->modes[ffuc_mode_index(rate)];
 	}
 	chip->hw_params_mask |= self;
@@ -3571,11 +3608,12 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			    chip->cad.stable_mean) {
 				chip->iso_cadence = chip->cad.stable_mean;
 				if (ffuc_cadence_stop_mismatch(&chip->cad,
-							       chip->rate)) {
+							       ffuc_programmed_clock(chip))) {
 					atomic_inc(&chip->rate_mismatch);
 					dev_warn_ratelimited(&chip->dev->dev,
-							     "ISO cadence %u Hz disagrees with rate %u Hz\n",
-							     chip->iso_cadence, chip->rate);
+							     "ISO cadence %u Hz disagrees with clock %u Hz\n",
+							     chip->iso_cadence,
+							     ffuc_programmed_clock(chip));
 				}
 			}
 		}
@@ -3971,6 +4009,7 @@ static int ffuc_probe(struct usb_interface *intf,
 	    chip->urb_bytes_max < 73728)
 		chip->urb_bytes_max = 73728;
 	chip->rate = 48000;
+	chip->clock_rate = 48000;
 	chip->mode = &chip->modes[0];
 	dev_idx = -1;		/* released by ffuc_card_free() from now on */
 

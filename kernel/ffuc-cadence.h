@@ -46,10 +46,24 @@ static inline void ffuc_cadence_reset(struct ffuc_cadence *c)
 	c->agree = 0;
 }
 
-/* The ±1% band: a mean outside it disagrees with the committed rate. */
+/* The ±1% band: a mean outside it disagrees with the committed clock. */
 static inline bool ffuc_cadence_mismatch(u32 rate, u32 mean)
 {
 	return rate && (mean > rate + rate / 100 || mean + rate / 100 < rate);
+}
+
+/* Decode the programmed clock (Hz) from a DDS divisor word. The active
+ * family's divisor encodes base/(1 + pitch/100); the band multiplier follows
+ * the streaming rate. The full-rate division keeps truncation under 1 Hz,
+ * far inside the ±1% judge band, so varispeed is not a rate mismatch. */
+static inline u32 ffuc_dds_clock(u32 val, u32 idx, unsigned int rate)
+{
+	u64 p1 = ((u64)val << 16) | (idx & 0xff00);
+	unsigned int band = rate > 114000 ? 4 : rate > 57000 ? 2 : 1;
+
+	if (!p1)
+		return 0;
+	return (u32)((0x5f5e10000000ULL * band) / p1);
 }
 
 /* Accumulate one capture URB's frames and track stationarity of the

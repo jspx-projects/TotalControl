@@ -200,6 +200,43 @@ static void test_needs_three_windows(void)
 	CHECK(c.stable_mean == 48000, "three windows stable %u", c.stable_mean);
 }
 
+/* The DDS decode recovers the programmed clock within 1 Hz across every
+ * rate and the full ±5% varispeed range, and the judge does not flag a
+ * legitimate pitch as a mismatch (the rounding stays far inside ±1%). */
+static void test_dds_clock_decode(void)
+{
+	const unsigned int rates[] = {
+		32000, 44100, 48000, 64000, 88200, 96000, 128000, 176400, 192000
+	};
+	const double pitches[] = { -5.0, -3.0, -1.0, 0.0, 1.0, 3.0, 5.0 };
+	unsigned int r, p;
+
+	for (r = 0; r < sizeof(rates) / sizeof(rates[0]); r++) {
+		unsigned int rate = rates[r];
+		unsigned int band = rate > 114000 ? 4 : rate > 57000 ? 2 : 1;
+		unsigned int base = rate / band;
+
+		for (p = 0; p < sizeof(pitches) / sizeof(pitches[0]); p++) {
+			double scale = 1.0 + pitches[p] / 100.0;
+			u64 denom = (u64)(base * scale + 0.5);
+			u64 p1 = (u64)(0x5f5e10000000ULL / (double)denom + 0.5);
+			u32 val = (u32)(p1 >> 16);
+			u32 idx = (u32)(p1 & 0xff00);
+			u32 decoded = ffuc_dds_clock(val, idx, rate);
+			u32 measured = (u32)(rate * scale + 0.5);
+			int diff = (int)decoded - (int)measured;
+
+			if (diff < 0)
+				diff = -diff;
+			CHECK(diff <= 1, "rate %u pitch %.1f%%: decoded %u vs %u",
+			      rate, pitches[p], decoded, measured);
+			CHECK(!ffuc_cadence_mismatch(decoded, measured),
+			      "rate %u pitch %.1f%%: false mismatch (clock %u meas %u)",
+			      rate, pitches[p], decoded, measured);
+		}
+	}
+}
+
 int main(void)
 {
 	test_steady_correct();
@@ -210,6 +247,7 @@ int main(void)
 	test_rate_change();
 	test_rate_settling_no_verdict();
 	test_needs_three_windows();
+	test_dds_clock_decode();
 	if (failures) {
 		fprintf(stderr, "cadence-test: %d failure(s)\n", failures);
 		return 1;

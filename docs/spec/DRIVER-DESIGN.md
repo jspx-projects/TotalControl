@@ -659,13 +659,14 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | priming window | the first `fb_delay` OUT packets of a run, before feedback exists for them | K1.3 priming |
 | nominal frame count | `rate/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window | K1.3 priming |
 | cadence mean | mean frames per packet × 8000; the device clock the capture packets reveal | K1.4 cadence verdict |
+| programmed clock | the nominal rate scaled by the pitch the host writes through the DDS divisor; the cadence judge's reference | K1.4 cadence verdict |
 | convergence window | 80 packets, one add/drop period of the 44.1 kHz family; the span over which the stop verdict averages the cadence mean | K1.4 stop verdict |
 
 Guards:
 
 | Guard | Input | Action |
 |---|---|---|
-| K1.4 cadence (A5) | cadence mean against `chip->rate` | diagnostic: a sustained disagreement marks a rate mismatch (below) |
+| K1.4 cadence (A5) | cadence mean against the programmed clock | diagnostic: a sustained disagreement marks a rate mismatch (below) |
 | K1.5 continuity (A8) | URB start-frame sequence | a discontinuity marks the engine broken → K10 |
 | K7 latch watchdog (A6, A7) | D6 status byte 3 bit 7 | a latched output while playback runs, after the grace, marks the engine broken → K10 |
 | URB error burst | completion status | above `FFUC_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
@@ -687,6 +688,13 @@ rate — right or wrong — converges and is judged against the ±1% band. A
 run too short to converge has no cadence to judge. The whole-run mean is
 kept for display only; it never drives the mismatch verdict, so a normal
 rate change does not increment `rate_mismatch`.
+
+The judge's reference is the programmed clock, not the nominal rate. The
+driver decodes the active family's DDS divisor word to the clock the host
+programmed: nominal rate × (1 + pitch/100). The full-rate division keeps the
+truncation under 1 Hz, far inside the ±1% band. A legitimate varispeed offset
+therefore converges inside the band and is not a mismatch. The reference
+resets to the nominal rate on a rate commit and at engine start.
 
 The macOS reference host reads the position and phase to schedule OUT
 packets against the device clock and uses the output-latch status to
