@@ -45,6 +45,10 @@ static bool prefill = true;
 module_param(prefill, bool, 0644);
 MODULE_PARM_DESC(prefill, "Mute the playback outputs from trigger until the startup ring delivery is stable (default on).");
 
+static bool debug;
+module_param(debug, bool, 0644);
+MODULE_PARM_DESC(debug, "Log ring-pressure events (underrun/overrun) at info level for local diagnosis (default off).");
+
 module_param(ffuc_poison, bool, 0644);
 MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
 
@@ -1078,11 +1082,18 @@ static void ffuc_ring_event(struct ffuc *chip, struct snd_pcm_substream *subs,
 			    unsigned long appl, unsigned long own)
 {
 	atomic_inc(counter);
-	dev_dbg_ratelimited(&chip->dev->dev,
-			    "%s: %s #%d appl %lu hw %lu (buffer %lu)\n",
-			    subs->stream ? "capture" : "playback", what,
-			    atomic_read(counter), appl, own,
-			    subs->runtime->buffer_size);
+	if (debug)
+		dev_info_ratelimited(&chip->dev->dev,
+				     "%s: %s #%d appl %lu hw %lu (buffer %lu)\n",
+				     subs->stream ? "capture" : "playback", what,
+				     atomic_read(counter), appl, own,
+				     subs->runtime->buffer_size);
+	else
+		dev_dbg_ratelimited(&chip->dev->dev,
+				    "%s: %s #%d appl %lu hw %lu (buffer %lu)\n",
+				    subs->stream ? "capture" : "playback", what,
+				    atomic_read(counter), appl, own,
+				    subs->runtime->buffer_size);
 }
 
 /* Ring-fill model trace: sample the ring at a playback URB completion,
@@ -3087,9 +3098,16 @@ static int ffuc_engine_start(struct ffuc *chip)
 		dev_warn_ratelimited(&chip->dev->dev,
 				     "cannot watch the status endpoint: %d\n", ret);
 
-	ret = chip->desc->ops->hw_mute(chip, false);
-	if (ret < 0)
-		goto error;
+	/* The startup gate owns the playback mute. With it active, mute here
+	 * and let the gate unmute once delivery is stable: unmuting now would
+	 * open an audible window between engine start and the gate's mute at
+	 * trigger (the stream-start DAC-open sequence unmutes too). Without the
+	 * gate, unmute now so the engine plays. */
+	if (chip->desc->ops->hw_mute) {
+		ret = chip->desc->ops->hw_mute(chip, prefill);
+		if (ret < 0)
+			goto error;
+	}
 
 	dev_dbg(&chip->dev->dev,
 		"engine started: %u Hz, alt %u, %u frames x %u URBs\n",
