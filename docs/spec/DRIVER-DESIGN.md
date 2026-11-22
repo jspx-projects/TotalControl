@@ -638,18 +638,22 @@ Guards:
 | URB error burst | completion status | above `FFUC_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
 
 **The cadence verdict.** The cadence mean is the mean frames per packet
-× 8000: the device clock the capture packets reveal. Two judges use it.
-The periodic guard averages the whole run every 8000 packets and marks a
-rate mismatch after two consecutive disagreeing windows. The stop
-verdict averages a convergence window and trusts the mean only once it
-is stationary: two consecutive windows agree within 0.5%. The window is
-80 packets, one add/drop period of the 44.1 kHz family, so its mean
-averages the clock's add/drop exactly; integer-frame rates converge in
-any window. The startup ramp is a moving mean and fails the agreement
-test, so a run stopped inside the ramp renders no verdict. A steady rate
-— right or wrong — converges and is judged against the ±1% band. A run
-too short to converge has no cadence to judge. The convergence is
-dynamic (successive windows agree), not a fixed sample count.
+× 8000: the device clock the capture packets reveal. A convergence window
+trusts the mean only once it is stationary: two consecutive windows agree
+within 0.5%. The window is 80 packets, one add/drop period of the
+44.1 kHz family, so its mean averages the clock's add/drop exactly;
+integer-frame rates converge in any window. The convergence is dynamic
+(successive windows agree), not a fixed sample count.
+
+Both judges use the converged mean. The periodic guard evaluates every
+8000 packets and marks a rate mismatch after two consecutive disagreeing
+evaluations; the stop verdict evaluates the converged mean at stop. A
+startup ramp or a rate-settling transient is a moving mean that fails the
+agreement test, so it renders no verdict and is not counted. A steady
+rate — right or wrong — converges and is judged against the ±1% band. A
+run too short to converge has no cadence to judge. The whole-run mean is
+kept for display only; it never drives the mismatch verdict, so a normal
+rate change does not increment `rate_mismatch`.
 
 The macOS reference host reads the position and phase to schedule OUT
 packets against the device clock and uses the output-latch status to

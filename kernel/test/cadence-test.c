@@ -161,6 +161,31 @@ static void test_rate_change(void)
 	CHECK(!ffuc_cadence_stop_mismatch(&c, 96000), "false verdict at new rate");
 }
 
+/* A normal rate change must not count as a mismatch: the engine run
+ * resets convergence, the cadence settles through a moving mean that
+ * renders no verdict against either rate, and only the new steady rate
+ * converges. This is the periodic-guard verdict the fix relies on. */
+static void test_rate_settling_no_verdict(void)
+{
+	struct ffuc_cadence c;
+	unsigned int ramp[16] = { 6, 6, 6, 6, 7, 7, 8, 8,
+				  9, 9, 10, 10, 11, 11, 12, 12 };
+
+	ffuc_cadence_reset(&c);
+	feed_steady(&c, 48000, 8 * 40);
+	CHECK(c.stable_mean == 48000, "pre-settle stable %u", c.stable_mean);
+	/* A rate change starts a fresh engine run: convergence resets. */
+	ffuc_cadence_reset(&c);
+	feed(&c, 96000, ramp, 16);	/* settling ramp 48k -> 96k */
+	CHECK(!ffuc_cadence_stop_mismatch(&c, 96000),
+	      "settling counted vs new rate (stable %u)", c.stable_mean);
+	CHECK(!ffuc_cadence_stop_mismatch(&c, 48000),
+	      "settling counted vs old rate (stable %u)", c.stable_mean);
+	feed_steady(&c, 96000, 8 * 40);
+	CHECK(c.stable_mean == 96000, "post-settle stable %u", c.stable_mean);
+	CHECK(!ffuc_cadence_stop_mismatch(&c, 96000), "post-settle verdict");
+}
+
 /* Convergence needs three windows, not one: a single window is unknown. */
 static void test_needs_three_windows(void)
 {
@@ -183,6 +208,7 @@ int main(void)
 	test_wrong_rate_flagged();
 	test_short_wrong_run();
 	test_rate_change();
+	test_rate_settling_no_verdict();
 	test_needs_three_windows();
 	if (failures) {
 		fprintf(stderr, "cadence-test: %d failure(s)\n", failures);
