@@ -447,16 +447,15 @@ Three quantities are distinct and must not be conflated:
 `out_lead` = `fb_delay·rate/8000 + lead bias`. The first term compensates
 the feedback read offset: the OUT mirrors an IN position `fb_delay` packets
 old, so the term brings it back onto the current device timeline. The lead
-bias is `2·max_frames−2` (12/24/48 at 1x/2x/4x) on the UC and 60 on the UCX.
-The bias is added to every lead word and is set at engine start, not
-adjusted while streaming.
+bias is `2·max_frames−2` (12/24/48 at 1x/2x/4x), the same on the UC, UCX and
+Babyface-classic. The bias is added to every lead word and is set at engine
+start, not adjusted while streaming. A bias below it underruns. The
+`lead_margin` module parameter overrides the bias for measurement.
 
-The lead bias also sets the IRQ ring reserve: a larger bias holds a higher
-fill lock, and a bias below `2·max_frames−2` underruns on both devices. The
-UCX carries the larger bias because the minimal host fill (`start-delay` 0)
-provides no write-ahead of its own; the reference host pairs its bias with
-a host safety offset. The `lead_margin` module parameter overrides the bias
-for measurement.
+The lead bias is the device half of the reference margin pair; the host
+half is the scheduling cushion the host policy holds (§4.1). The device
+lead is a scheduling horizon, not held audio: the device plays largely on
+arrival, so the measured playback path is smaller than `out_lead`.
 
 The graph quantum and the ALSA period are separate quantities. In IRQ
 scheduling the host uses `P = Q`. In timer scheduling with a BATCH device the

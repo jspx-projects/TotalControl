@@ -51,7 +51,7 @@ MODULE_PARM_DESC(debug, "Log ring-pressure events (underrun/overrun) at info lev
 
 static int lead_margin = -1;
 module_param(lead_margin, int, 0644);
-MODULE_PARM_DESC(lead_margin, "OUT lead bias override in frames; -1 = per-model default (UCX 60, UC 2*max_frames-2). The reference lead bias is 2*max_frames-2 (12/24/48 by band); the UCX carries 60 for ring reserve with the minimal host fill. Override to A/B the lead depth.");
+MODULE_PARM_DESC(lead_margin, "OUT lead bias override in frames; -1 = the reference bias 2*max_frames-2 (12/24/48 by band), the same on UC, UCX and Babyface-classic. Override to A/B the lead depth.");
 
 module_param(ffuc_poison, bool, 0644);
 MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
@@ -2835,16 +2835,11 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	atomic_set(&chip->signal_overdue, 0);
 	/* OUT data is placed this many frames after the IN position it
 	 * mirrors.  The reference host's OUT ring lead bias is
-	 * 2 * max_frames - 2 (12/24/48 at 1x/2x/4x), added to every lead word;
-	 * the UC uses it.  The UCX carries 60: with the minimal host fill
-	 * (sd0) the larger bias raises the IRQ ring reserve (measured
-	 * min_filled 49 vs 19) and is clean where the reference bias
-	 * occasionally underruns; the reference pairs its bias with a host
-	 * safety offset we do not add.  A bias below the reference underruns
-	 * on both devices.  The lead_margin parameter overrides for A/B.
-	 * Reduce modulo the wrap (8192 at 1x). */
-	margin = lead_margin >= 0 ? lead_margin :
-		 (chip->ucx ? 60 : 2 * m->max_frames - 2);
+	 * 2 * max_frames - 2 (12/24/48 at 1x/2x/4x), added to every lead word
+	 * and set at engine start; it is the same for UC, UCX and
+	 * Babyface-classic.  A bias below it underruns.  The lead_margin
+	 * parameter overrides for A/B.  Reduce modulo the wrap (8192 at 1x). */
+	margin = lead_margin >= 0 ? lead_margin : (2 * m->max_frames - 2);
 	chip->out_lead = (DIV_ROUND_CLOSEST(chip->fb_delay * chip->rate,
 					    8000) + margin) %
 			 ffuc_iso_wrap(chip);
@@ -3267,10 +3262,11 @@ static unsigned int ffuc_buffer_min(struct ffuc *chip, unsigned int rate)
 {
 	/*
 	 * The ALSA ring must cover the USB URBs already in flight plus two
-	 * more URBs of margin.  It must also cover the UCX output lead: at
-	 * 96 frames the old 192-frame ring was smaller than the 204-frame
-	 * lead, which is the 96-and-below crackle threshold.  Add two URBs
-	 * of margin beyond the lead and keep the result URB-aligned.
+	 * more URBs of margin.  On the UCX transport it must also cover the
+	 * output lead horizon.  The capacity floor uses a conservative
+	 * 60-frame lead margin, independent of the lead_bias default, plus
+	 * two URBs beyond it, kept URB-aligned.  This is a minimum capacity,
+	 * not the steady fill; the host normally requests a larger ring.
 	 */
 	unsigned int urb = ffuc_urb_frames(chip, rate);
 	unsigned int min = (chip->nurbs + 2) * urb;
