@@ -1734,21 +1734,23 @@ channels to a DAW.
 The buffer-size picker in TotalControl sets the graph quantum. The driver adds
 its own USB queue and device lead; the latency display explains the result.
 
-The installer's WirePlumber rule runs the device in timer-based scheduling
-with the 18-channel Pro Audio profile. PipeWire wakes the audio thread on its
-own timer and holds the queued playback delay at a target: the graph quantum
-plus a scheduling cushion (`api.alsa.headroom = 336` frames), plus one period
-that PipeWire adds for a batch device. The target is clamped at half the
-buffer. The card reports its real queue, so the level stays constant against
-the device clock: the device conducts and the host follows. This is what
-keeps the smallest quanta stable.
+The installer's WirePlumber rule runs the device in interrupt (IRQ)
+scheduling with the 18-channel Pro Audio profile (`api.alsa.disable-tsched =
+true`). PipeWire wakes the audio thread on the device's period interrupts,
+and the driver's fill lock holds the playback ring at a small, deterministic
+level (about 1.7 URBs, ≈1.7 ms) with no server level loop on the device
+stream. The device conducts and the host follows; reliability at this small
+fill costs no extra latency margin. The driver's startup prefill gate mutes
+the outputs from trigger until delivery is stable, so the smallest fill
+starts clean (see [section 14](#14-latency)).
 
-Polled scheduling (`api.alsa.disable-tsched = true`) is the alternative for
-specialised low-latency work. PipeWire then wakes on the device's period
-interrupts and has no level loop, so the queued level depends on the wake
-timing and can drift. At a quantum equal to one USB period (48 frames at
-48 kHz) one late write starves the device. Timer mode is the default for
-that reason; use the cushion and a larger quantum with polled scheduling.
+Timer scheduling (`api.alsa.disable-tsched = false`) is the desktop-convenience
+alternative. PipeWire then wakes on its own timer and a delay-locked loop
+holds the queued level at a target. Its node resampler absorbs mixed-rate
+graphs and its graph quantum is independent of the device period, which
+helps heavy processing at large quanta. To avoid late dropouts at 96/192 kHz
+it needs a rate-scaled `api.alsa.start-delay` of about three URBs, which adds
+steady latency; IRQ mode is preferred for low-latency work.
 
 At 96 kHz and 192 kHz use at least two milliseconds of quantum for
 low-latency recording: 192 frames at 96 kHz, 384 at 192 kHz.

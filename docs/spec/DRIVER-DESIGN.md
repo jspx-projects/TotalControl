@@ -340,38 +340,38 @@ parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
 `allowed-rates` are host policy and must permit the envelope; the installer
 owns that policy.
 
-The shipped host policy uses timer-based scheduling (PipeWire's default).
-The graph wakes on the host timer and the host's DLL holds the queued
-playback delay at its target; that servo keeps the ALSA ring level constant
-against the device clock. The PCM declares `SNDRV_PCM_INFO_BATCH`: its
-pointer advances once per period, so in timer mode the host halves the
-requested period and adds one period of headroom above
-`api.alsa.headroom`. The installer sets `api.alsa.headroom` (336 frames,
-the largest URB across the supported rates) so the delay target stays above
-the quantum at every rate.
+The shipped host policy uses IRQ scheduling (`api.alsa.disable-tsched =
+true`, PipeWire's Pro Audio mode) with `api.alsa.headroom = 0` and
+`api.alsa.start-delay = 0`. The graph wakes on the device's period
+interrupts and the driver's fill lock holds the playback ring at a small,
+deterministic level (≈1.7 URBs across rates, measured). There is no server
+level loop on the device stream, so reliability at this fill costs no extra
+latency margin. The startup prefill gate (§4.1.3) mutes the outputs from
+trigger until delivery is stable, so the smallest fill starts clean.
 
-The installer buffers the startup prefill (`api.alsa.start-delay`). PipeWire
-writes `start-delay + period + headroom` frames of silence priming into the
-ring before trigger, clamped to the ring capacity. A rate or quantum switch
-therefore starts with a filled ring. Without the prefill the ring starts
-nearly empty and the device outruns the host at every switch. The prefill is
-startup-only and adds no steady latency.
+Timer scheduling (`api.alsa.disable-tsched = false`) is the
+desktop-convenience alternative. The graph wakes on the host timer and the
+host's DLL holds the queued playback delay at its target. The PCM declares
+`SNDRV_PCM_INFO_BATCH`: its pointer advances once per period, so in timer
+mode the host halves the requested period and adds one period of headroom
+above `api.alsa.headroom`. The timer path needs a rate-scaled
+`api.alsa.start-delay` of about three URBs to keep the post-switch decay
+minima above the demand at 2x/4x rates; a fixed cushion is over-margined at
+1x and under-margined at 4x.
 
 The ring capacity (`period-num × period`) is the stall headroom. It absorbs
-late host writes and holds the prefill. It is mostly empty in steady state,
-so a large capacity adds no steady latency; the steady latency is the ring
-fill (`period + headroom`), not the capacity.
+late host writes. It is mostly empty in steady state, so a large capacity
+adds no steady latency; the steady latency is the ring fill, not the
+capacity.
 
-IRQ-mode scheduling (`api.alsa.disable-tsched`) is available for
-low-latency use. Its wake thresholds are
+The IRQ-mode wake thresholds are
 `avail_min = buffer − (period + headroom)` (playback) and
 `avail_min = min(period + headroom, buffer)` (capture); both degenerate
 when `headroom ≥ buffer − period`, so the shipped period count keeps
 `buffer > period + headroom` down to the 32-frame period floor. The larger
 buffer is latency-neutral: the delay target is `period + headroom` and the
 start prefill is `start-delay + period + headroom`; neither depends on the
-buffer size. The cushion adds up to one URB of queued latency at the
-highest rate.
+buffer size.
 
 Lower `urb_frames` shortens the URB and lowers the period floor (lower
 latency). Raising `nurbs` enlarges the buffer (more margin); the period floor
