@@ -1,9 +1,10 @@
-# Documents the device owner provides
+# Digiface USB — documents the device owner provides
 
-Working note. What a contributor with the hardware supplies so that a device
-or a controller is specified positively and verified.
+Working note. What a contributor with the hardware supplies so that the
+Digiface USB is specified positively and verified. The general contributor
+rules below apply to every device; the Digiface capture list is specific.
 
-## 1. For the Digiface USB
+## Captures
 
 | Document | Content | Where it lands |
 |---|---|---|
@@ -20,16 +21,7 @@ or a controller is specified positively and verified.
 The contributor runs the capture script and reports what differs from the
 specification.
 
-## 2. For the ARC USB
-
-| Document | Content | Where it lands |
-|---|---|---|
-| Encoder push capture | The byte stream of one knob push, if the knob moves | `RME_ARC_USB_MIDI.md` §4 and §11 |
-| SysEx mode capture | A firmware 7 unit in SysEx mode, pressing keys and writing LEDs | `RME_ARC_USB_MIDI.md` §2 and §11, only if note mode is insufficient |
-| Blink check | One LED set to velocity `01` on a unit | `RME_ARC_USB_MIDI.md` §5 |
-| Live test log | The steps of `TESTING.md` §4 with their results | The pull request description |
-
-## 3. What the contributor supplies
+## What the contributor supplies
 
 | Item | Reason |
 |---|---|
@@ -37,14 +29,14 @@ specification.
 | The capture files | Kept outside the repository, by policy |
 | The hardware test results | The pull request description |
 
-## 4. What no commit carries
+## What no commit carries
 
 | Item | Reason |
 |---|---|
 | Serial numbers, USB IDs, host names, home paths | Personal identifying information |
 | Captured device state | Outside the repository, by policy |
 
-## 5. Sequence
+## Sequence
 
 1. The contributor reads the drafted specification in their own tree.
 2. They run the captures and report the differences.
