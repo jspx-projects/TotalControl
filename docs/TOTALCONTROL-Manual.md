@@ -863,12 +863,18 @@ The monitor actions apply as follows:
 | Mute FX | Yes | No | No |
 | Cue/PFL | Target only | Target only | Target only |
 
-Speaker B is a second playback path. When Speaker B is active, Main Out is
-muted and Speaker B is audible. The Speaker B strip's LINK button gangs its
-fader to Main: moving either fader moves the other by the same amount and
-keeps the relative offset between them. Dim and Recall move both by the same
-amount. With the link off, Speaker B keeps its own level and Dim and Recall
-act on Main Out only.
+Speaker B is a second monitor path. Exactly one of the two monitor outputs
+is audible at a time: with Speaker B off, Main Out is audible and Speaker B
+is muted; with Speaker B on, Speaker B is audible and Main Out is muted. The
+inactive monitor output is silent — it is monitor-muted, so audio routed to
+it is not heard. This holds while the scene is applied and re-applied (at
+startup, playback start and rate changes), not only after a separate mute
+step: a monitor controller must not leak audio through the inactive output.
+
+The Speaker B strip's LINK button gangs its fader to Main: moving either
+fader moves the other by the same amount and keeps the relative offset
+between them. Dim and Recall move both by the same amount. With the link
+off, Speaker B keeps its own level and Dim and Recall act on Main Out only.
 
 Speaker B needs an assigned Main and an assigned Speaker B output. Until both
 are assigned, the `speaker B` button stays visible but does nothing, and the
@@ -957,7 +963,9 @@ keeping its offset; unlinked, it keeps its own level.
 **Speaker B** is a latching button that switches monitoring from Main to the
 output assigned to Speaker B. Both the Main Out and Speaker B must be
 assigned first. The button lights while Speaker B is the active monitor
-path.
+path. The other monitor output is muted while inactive: with Speaker B off
+the Speaker B output is silent, and with it on Main Out is silent (see
+[Control Room behaviour](#control-room-behaviour)).
 
 Speaker B is part of the current mix and is stored in a snapshot or
 workspace. Loading a workspace restores the saved monitor path after the
