@@ -49,6 +49,10 @@ static bool debug;
 module_param(debug, bool, 0644);
 MODULE_PARM_DESC(debug, "Log ring-pressure events (underrun/overrun) at info level for local diagnosis (default off).");
 
+static int lead_margin = -1;
+module_param(lead_margin, int, 0644);
+MODULE_PARM_DESC(lead_margin, "OUT lead bias override in frames; -1 = per-model default (UCX 60, UC 2*max_frames-2). The reference lead bias is 2*max_frames-2 (12/24/48 by band); the UCX carries 60 for ring reserve with the minimal host fill. Override to A/B the lead depth.");
+
 module_param(ffuc_poison, bool, 0644);
 MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
 
@@ -2446,6 +2450,8 @@ static int ffuc_clock_show(struct seq_file *m, void *v)
 		   (unsigned long long)chip->ts_seed_in,
 		   (unsigned long long)chip->ts_seed_out,
 		   chip->ts_seed_in_end, chip->ts_seed_counter);
+	seq_printf(m, "fb_delay %u out_lead %u lead_margin %d\n",
+		   chip->fb_delay, chip->out_lead, lead_margin);
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(ffuc_clock);
@@ -2768,7 +2774,7 @@ static void ffuc_int_setup_urbs(struct ffuc *chip, unsigned int bytes)
 static void ffuc_iso_setup_urbs(struct ffuc *chip)
 {
 	const struct ffuc_mode *m = chip->mode;
-	int dir, i, p;
+	int dir, i, p, margin;
 
 	chip->in_pkts = chip->out_pkts = 0;
 	chip->streams[SNDRV_PCM_STREAM_PLAYBACK].out_counter_valid = false;
@@ -2828,12 +2834,19 @@ static void ffuc_iso_setup_urbs(struct ffuc *chip)
 	atomic_set(&chip->signal_deferred, 0);
 	atomic_set(&chip->signal_overdue, 0);
 	/* OUT data is placed this many frames after the IN position it
-	 * mirrors.  The UCX needs OUT_LEAD (60) frames of margin at the
-	 * unit; the UC path used the vendor's 2 * max_frames - 2 margin.
+	 * mirrors.  The reference host's OUT ring lead bias is
+	 * 2 * max_frames - 2 (12/24/48 at 1x/2x/4x), added to every lead word;
+	 * the UC uses it.  The UCX carries 60: with the minimal host fill
+	 * (sd0) the larger bias raises the IRQ ring reserve (measured
+	 * min_filled 49 vs 19) and is clean where the reference bias
+	 * occasionally underruns; the reference pairs its bias with a host
+	 * safety offset we do not add.  A bias below the reference underruns
+	 * on both devices.  The lead_margin parameter overrides for A/B.
 	 * Reduce modulo the wrap (8192 at 1x). */
+	margin = lead_margin >= 0 ? lead_margin :
+		 (chip->ucx ? 60 : 2 * m->max_frames - 2);
 	chip->out_lead = (DIV_ROUND_CLOSEST(chip->fb_delay * chip->rate,
-					    8000) +
-			  (chip->ucx ? 60 : 2 * m->max_frames - 2)) %
+					    8000) + margin) %
 			 ffuc_iso_wrap(chip);
 
 	for (dir = 0; dir < 2; dir++) {

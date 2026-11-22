@@ -88,10 +88,14 @@ holds at the moment of measurement. Three quantities belong to three layers:
 | period `P` | ALSA / driver | the buffer chunk whose completion raises a period signal; the driver minimum is one URB (the period floor) |
 | URB | USB | one transfer; ISO bundles `iso_packets` microframes (1 ms at the shipped geometry) |
 
-The device lead and the converter delay are fixed device terms. The quantum
-and the period are host/driver choices that set the scheduling margin and the
-latency. The diagram below shows the chain; the full geometry, the achievable
-envelope and the timer/IRQ scheduling rules are in §4.1.1 and §4.1.2.
+The device output buffer and the converter delay are fixed device terms. The
+quantum and the period are host/driver choices that set the scheduling margin
+and the latency. The ring fill is the queued reserve and equals the steady
+ring latency; `out_lead` is the driver's scheduling horizon (§4.1.2), a
+margin that keeps the device output buffer fed — not held audio, since the
+device plays largely on arrival. The diagram below shows the chain; the full
+geometry, the achievable envelope and the timer/IRQ scheduling rules are in
+§4.1.1 and §4.1.2.
 
 ![USB audio buffering: quantum, period, URB and latency](usb-audio-buffering.svg)
 
@@ -411,19 +415,48 @@ choice.
 ![USB audio buffering: quantum, period, URB and latency](usb-audio-buffering.svg)
 
 The playback chain is: application → ALSA ring → in-flight URBs → device
-output buffer → converters. Each stage holds frames; the latency is the sum of
-what each stage holds at the moment of measurement.
+output buffer → converters. The latency is the sum of the frames held ahead
+of consumption at the moment of measurement.
+
+Three quantities are distinct and must not be conflated:
+
+- **Ring fill** (`appl_ptr − hw_ptr`): the data queued in the ALSA ring. It
+  is both the stall reserve and the steady ring latency — the host
+  write-ahead. This is the quantity the host scheduling policy holds.
+- **In-flight queue**: frames handed to USB and not yet completed.
+- **`out_lead`** (lead margin): the scheduling horizon — how far ahead of the
+  mirrored device position the OUT lead word is placed. It is a scheduling
+  safety margin that keeps the device output buffer fed across jitter, not
+  the ring fill and not held audio. The lead word is a horizon: the device
+  plays largely on arrival, so the measured playback path (bus delivery +
+  converter) is smaller than `out_lead`.
 
 | Term | Layer | Definition |
 |---|---|---|
 | graph quantum `Q` | host | the frames one graph cycle processes; the application callback chunk |
 | ALSA period `P` | driver/host | the frames per period: the chunk whose completion raises a period signal and advances the pointer |
 | ALSA ring | driver | `P × periods` frames between the application and the driver |
+| ring fill | driver/host | `appl_ptr − hw_ptr`; the queued reserve, equal to the steady ring latency |
 | URB | USB | one transfer of `iso_packets` microframes; 1 ms at the shipped geometry |
 | period floor | driver | the smallest accepted period: one URB |
 | in-flight queue | driver | frames handed to USB and not yet completed (`nurbs` URBs) |
-| device lead | device | frames the unit holds ahead of its converters |
+| `out_lead` | driver | the scheduling horizon added to the mirrored position; a scheduling margin, not held audio |
+| device output buffer | device | the frames the unit holds between arrival and conversion; small, since the device plays on arrival |
 | converter delay | device | the AD/DA group delay |
+
+`out_lead` = `fb_delay·rate/8000 + lead bias`. The first term compensates
+the feedback read offset: the OUT mirrors an IN position `fb_delay` packets
+old, so the term brings it back onto the current device timeline. The lead
+bias is `2·max_frames−2` (12/24/48 at 1x/2x/4x) on the UC and 60 on the UCX.
+The bias is added to every lead word and is set at engine start, not
+adjusted while streaming.
+
+The lead bias also sets the IRQ ring reserve: a larger bias holds a higher
+fill lock, and a bias below `2·max_frames−2` underruns on both devices. The
+UCX carries the larger bias because the minimal host fill (`start-delay` 0)
+provides no write-ahead of its own; the reference host pairs its bias with
+a host safety offset. The `lead_margin` module parameter overrides the bias
+for measurement.
 
 The graph quantum and the ALSA period are separate quantities. In IRQ
 scheduling the host uses `P = Q`. In timer scheduling with a BATCH device the
@@ -438,7 +471,8 @@ Three "buffer" knobs belong to three layers:
 |---|---|---|
 | quantum `Q` ("samples" in an application's buffer setting) | the graph cycle, the application callback chunk | the user, through the host policy |
 | period `P` | the signalling granularity | the host, negotiated with the driver floor |
-| device lead | the unit's internal buffer | the device |
+| ring fill | the queued reserve = steady ring latency | the host scheduling policy (`start-delay`/`headroom`) |
+| `out_lead` | the device scheduling margin (horizon, not held audio) | the driver (`lead_margin` parameter) |
 
 "Samples" in a Windows or macOS driver panel mean frames: the callback chunk,
 which is the quantum here.
