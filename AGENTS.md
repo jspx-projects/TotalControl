@@ -69,6 +69,11 @@ documents for the current implementation, not as a work log.
   local by default; only explicitly shared notes are committed. The
   sharing rule lives in `docs/work/AGENTS.md`. Committed documents must
   not reference local-only notes.
+- The consolidated, prioritized open-work list is `docs/work/TODO.md`,
+  grounded in the governing principles; it is the single source of truth
+  for what to work on next. Individual work notes keep their evidence and
+  carry an open/closed status; closed notes move to `docs/work/closed/`.
+  When an item is resolved, update its status and the TODO together.
 - The specification describes the shipped model and its device writes. When
   evidence is incomplete, state the implemented mapping positively and keep
   the open question in `docs/work/`.
