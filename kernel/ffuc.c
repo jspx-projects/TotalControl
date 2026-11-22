@@ -1756,11 +1756,10 @@ static u32 ffuc_lead_seed(struct ffuc *chip)
 }
 
 /*
- * Cadence check: the mean frames per packet times 8000 is the device
- * clock the packets reveal.  A disagreement with chip->rate means the
- * rate write did not take effect (or the device was reprogrammed).
- * This whole-run mean drives the periodic guard; the stop verdict uses
- * the converged mean (ffuc-cadence.h) instead.
+ * Whole-run mean frames per packet times 8000: the device clock the
+ * packets reveal, kept for display.  The mismatch verdict (periodic guard
+ * and stop verdict alike) uses the converged mean (ffuc-cadence.h), so a
+ * rate-settling transient is not counted as a fault.
  */
 static unsigned int ffuc_iso_cadence(struct ffuc *chip, int *mismatch)
 {
@@ -1858,19 +1857,22 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		}
 		/* Periodic cadence guard: the packets reveal the device
 		 * clock; a mismatch means the rate write did not take
-		 * effect or the device was reprogrammed externally. */
+		 * effect or the device was reprogrammed externally. The
+		 * verdict uses the converged (stationary) mean, like the
+		 * stop verdict: a rate-settling transient is a moving mean
+		 * that has not converged, so it is not counted. The counter
+		 * flags only a steady cadence that disagrees with the
+		 * committed rate, never a normal rate change. */
 		if ((chip->in_pkts % 8000) == 0) {
-			int mm = 0;
-
 			if (atomic_read(&chip->in_frames_overflow))
 				goto cadence_skip;
-			chip->iso_cadence = ffuc_iso_cadence(chip, &mm);
-			if (mm) {
+			chip->iso_cadence = ffuc_iso_cadence(chip, NULL);
+			if (ffuc_cadence_stop_mismatch(&chip->cad, chip->rate)) {
 				if (++chip->rate_mismatch_windows >= 2) {
 					atomic_inc(&chip->rate_mismatch);
 					dev_warn_ratelimited(&chip->dev->dev,
 							     "ISO cadence %u Hz vs rate %u Hz\n",
-							     chip->iso_cadence,
+							     chip->cad.stable_mean,
 							     chip->rate);
 					chip->rate_mismatch_windows = 0;
 				}
