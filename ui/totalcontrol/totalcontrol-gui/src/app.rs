@@ -3885,7 +3885,8 @@ fn rebuild_controller_workers(state: &mut TotalControl) {
     use crate::controllers::discover::MidiDevice;
     // The desired instances, in device-list order.
     let mut wanted: Vec<(String, MidiDevice, String, bool)> = Vec::new();
-    if state.controller_settings.enabled {
+    // "None" selected: no controller device, so no active surface instance.
+    if state.controller_settings.enabled && state.controller_selected_device != usize::MAX {
         for device in &state.controller_devices {
             let key = controller_device_key(state, device);
             let choice = state.controller_settings.device(&key);
@@ -3996,6 +3997,8 @@ fn preselect_protocol(state: &TotalControl, device: &crate::controllers::discove
 /// the remaining USB MIDI devices. Nothing is hidden; an unknown controller
 /// stays selectable.
 fn refresh_controller_devices(state: &mut TotalControl) {
+    // usize::MAX is the "None" selection: no controller device.
+    let none_selected = state.controller_selected_device == usize::MAX;
     let selected_key = state
         .controller_devices
         .get(state.controller_selected_device)
@@ -4037,14 +4040,18 @@ fn refresh_controller_devices(state: &mut TotalControl) {
         }
     };
     state.controller_devices.sort_by_key(rank);
-    state.controller_selected_device = selected_key
-        .and_then(|key| {
-            state
-                .controller_devices
-                .iter()
-                .position(|d| controller_device_key(state, d) == key)
-        })
-        .unwrap_or(0);
+    state.controller_selected_device = if none_selected {
+        usize::MAX
+    } else {
+        selected_key
+            .and_then(|key| {
+                state
+                    .controller_devices
+                    .iter()
+                    .position(|d| controller_device_key(state, d) == key)
+            })
+            .unwrap_or(0)
+    };
 }
 
 /// The host settings document for the live state.  Workspace fields,
@@ -12063,8 +12070,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             rebuild_controller_workers(state);
         }
         Message::SelectControllerDevice(index) => {
-            if index < state.controller_devices.len() {
+            // usize::MAX is "None": no controller device.
+            if index < state.controller_devices.len() || index == usize::MAX {
                 state.controller_selected_device = index;
+                rebuild_controller_workers(state);
             }
         }
         Message::SetControllerIn(index, on) => {
@@ -14459,24 +14468,38 @@ fn midi_controller_part(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_MD * scale)
     .width(Length::Fill);
 
-    // The controller listbox: one entry per USB MIDI port and unit port.
+    // The controller listbox: "None" plus one entry per USB MIDI port and
+    // unit port. "None" selects no controller; the device-specific rows below
+    // are then omitted entirely (their height is not predictable, so they are
+    // gone rather than replaced by placeholders).
     let devices = &state.controller_devices;
-    if devices.is_empty() {
-        part = part.push(dialog::help("No MIDI ports found.", scale));
-        return part.into();
-    }
-    let dev_idx = state.controller_selected_device.min(devices.len() - 1);
-    let device = &devices[dev_idx];
-    let device_options: Vec<String> = devices.iter().map(|d| d.display()).collect();
+    let none_selected = state.controller_selected_device == usize::MAX;
+    let mut device_options: Vec<String> = vec!["None".to_string()];
+    device_options.extend(devices.iter().map(|d| d.display()));
+    let selected_display = if none_selected {
+        "None".to_string()
+    } else {
+        let idx = state
+            .controller_selected_device
+            .min(devices.len().saturating_sub(1));
+        devices
+            .get(idx)
+            .map(|d| d.display())
+            .unwrap_or_else(|| "None".to_string())
+    };
     let device_pick = pick_list(
         device_options,
-        Some(device.display()),
+        Some(selected_display),
         move |display: String| {
-            let index = devices
-                .iter()
-                .position(|d| d.display() == display)
-                .unwrap_or(0);
-            Message::SelectControllerDevice(index)
+            if display == "None" {
+                Message::SelectControllerDevice(usize::MAX)
+            } else {
+                let index = devices
+                    .iter()
+                    .position(|d| d.display() == display)
+                    .unwrap_or(0);
+                Message::SelectControllerDevice(index)
+            }
         },
     )
     .style(theme::pick_list)
@@ -14486,6 +14509,15 @@ fn midi_controller_part(state: &TotalControl) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
+    if none_selected {
+        return part.into();
+    }
+    if devices.is_empty() {
+        part = part.push(dialog::help("No MIDI ports found.", scale));
+        return part.into();
+    }
+    let dev_idx = state.controller_selected_device.min(devices.len() - 1);
+    let device = &devices[dev_idx];
 
     // The selected device's input and output enable.
     let key = controller_device_key(state, device);
