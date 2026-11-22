@@ -2,6 +2,30 @@
 
 Read this file before starting work in this repository.
 
+## Governing principles
+
+Every decision follows three principles in strict priority order:
+**correctness (P1) > stability (P2) > performance (P3)**. A lower priority
+never overrides a higher one.
+
+- **Correctness.** Every corner case behaves correctly: all rates and
+  cross-family transitions, every personality, startup, stop, recovery and
+  the diagnostics. Wrong output data or a wrong counter is a defect
+  regardless of load. A muted destination is silent; a routed signal
+  arrives exactly; a counter means what it says. Never trade correctness
+  for latency or convenience.
+- **Stability.** Robust under real load and over time: no underruns or
+  recoveries in normal use, honest diagnostics, clean recovery. A stability
+  margin that costs latency is accepted and documented, not hidden.
+- **Performance.** Latency, throughput, CPU use. Pursue only after
+  correctness and stability are secured.
+
+When goals conflict, the higher priority wins. Reject a performance change
+that risks correctness. Minimise latency within the correctness and
+stability constraints. Evidence decides: verify a claim by capture or test
+before it becomes a design rule. The full rationale and examples are in
+`docs/TOTALCONTROL-ARCHITECTURE.md` ("Governing principles").
+
 ## Required reading before changes
 
 Before changing code, tests, tooling or documentation, read the documents

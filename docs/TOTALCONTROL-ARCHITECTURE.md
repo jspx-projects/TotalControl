@@ -5,6 +5,44 @@ layers, the device model, the control-surface boundary and the driver path.
 The other specifications extend it with device-specific or user-facing
 detail.
 
+## Governing principles
+
+Three principles govern every design decision, in strict priority order. A
+lower-priority goal never overrides a higher one. They apply to the whole
+project — driver, host, model and UI — not only to the audio path.
+
+1. **Correctness (P1).** Every corner case behaves correctly: all rate bands
+   and cross-family transitions, every device personality, startup, stop,
+   recovery, and the diagnostics. Wrong output data or a wrong counter is a
+   correctness defect regardless of load. TotalControl is a monitor
+   controller and must earn the same trust as a physical switch: a muted
+   destination is silent, a routed signal arrives exactly, and a counter
+   means what it says. Correctness is never traded for latency or
+   convenience. *Example:* the inactive monitor output carries its
+   monitor-mute in every output-mode write, so applying a scene never
+   transiently unmutes it.
+
+2. **Stability (P2).** Robust under load and over time: no underruns or
+   recoveries in normal use, honest diagnostics, clean recovery. The audio
+   path must hold up under real system load — CPU pressure, disk IO, deep
+   idle states — not only on a quiet bench. Where a stability margin costs
+   latency, the trade-off is made explicitly and documented rather than
+   hidden. *Example:* IRQ scheduling locks the ring fill deterministically,
+   so reliability at the smallest fill needs no extra latency margin.
+
+3. **Performance (P3).** Latency, throughput, CPU use and cosmetic cleanup.
+   Pursued only once correctness and stability are secured. Low latency is a
+   goal, but never at the cost of a wrong sample or a dropout. *Example:* the
+   startup prefill gate decouples startup from steady state, so the steady
+   fill can be minimal without startup gaps.
+
+When the goals conflict, the higher priority wins. A performance change that
+risks correctness is rejected. A stability margin that adds latency is
+accepted and stated. The remaining latency is then minimised within the
+correctness and stability constraints. Evidence decides: a claim is verified
+by capture or test before it becomes a design rule, and a measurement that
+contradicts a rule revises the rule.
+
 ## Contents
 
 1. [Document map](#1-document-map)
