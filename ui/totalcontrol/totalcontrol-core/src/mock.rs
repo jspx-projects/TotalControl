@@ -60,12 +60,21 @@ pub struct MockDevice {
     /// Per-cell gains written through `set_matrix_cell`, for the split-output
     /// matrix model. The pair volumes remain the defaults.
     matrix_overrides: std::collections::HashMap<(ChannelId, usize), f32>,
+    /// The actual clock pitch, distinct from the stored host setting
+    /// (`settings.pitch_percent`). `write_pitch_clock` moves this without
+    /// touching the saved setting, mirroring the Fireface backend.
+    clock_pitch: f32,
 }
 
 impl MockDevice {
     /// Whether this in-memory device is the UCX rather than the UC.
     pub fn is_ucx(&self) -> bool {
         std::ptr::eq(self.profile, &UCX_PROFILE)
+    }
+
+    /// The actual clock pitch (test accessor), distinct from the saved setting.
+    pub fn clock_pitch(&self) -> f32 {
+        self.clock_pitch
     }
 
     /// Whether this in-memory device is the Fireface UC.
@@ -217,6 +226,7 @@ impl MockDevice {
             // anything.
             connected: std::env::var_os("TOTALCONTROL_MOCK_DISCONNECT").is_none(),
             matrix_overrides: std::collections::HashMap::new(),
+            clock_pitch: 0.0,
         })
     }
     /// Point this mock at the class-compliant personality's feature set, or
@@ -690,6 +700,12 @@ impl RmeDevice for MockDevice {
 
     fn set_pitch(&mut self, pitch_percent: f32) -> Result<(), Error> {
         self.settings.pitch_percent = pitch_percent.clamp(-5.0, 5.0);
+        self.clock_pitch = self.settings.pitch_percent;
+        Ok(())
+    }
+
+    fn write_pitch_clock(&mut self, pitch_percent: f32) -> Result<(), Error> {
+        self.clock_pitch = pitch_percent.clamp(-5.0, 5.0);
         Ok(())
     }
 

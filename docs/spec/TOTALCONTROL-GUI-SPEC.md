@@ -1265,7 +1265,11 @@ use the primary colour.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
 wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
-Every change is written immediately to the device.
+Every change is written immediately to the device. Pitch is a Device-path
+control: the slider is shown when `Rate follows` is Device. When `Rate
+follows` is PipeWire the row is a nonvisible filler of the same height (§4)
+and the device clock runs nominal (0 %). The saved pitch is preserved in the
+scene and returns to the clock when Device is selected again.
 
 The panel is 360 px wide at scale 1 and its caption column is 110 px. The
 width reserves the thin scrollbar's width so an appearing scrollbar does not
@@ -1290,10 +1294,13 @@ Below the device group, the host engine group shows the PipeWire rate,
 quantum and latency when the sound server owns the rate. `Quantum` is the
 graph quantum: one ALSA period under IRQ scheduling, two periods under
 timer scheduling (a batch device is served two periods per graph cycle). The
-`RTL latency` row carries the tooltip "Round Trip Latency", a secondary
-(grey) value `x.x ms`, and below it one line of secondary text with the
-contributions in milliseconds (USB queue, device lead, converter, graph).
-The formula and the calibration basis are in the manual §14. It also shows the Fireface
+`RTL` row carries the tooltip "Round Trip Latency". It is a four-line block:
+a secondary (grey) value `x.x ms` on the first line, then three lines of
+secondary text with the contributions in milliseconds (USB queue, device
+lead, converter, graph). The formula and the calibration basis are in the
+manual §14. The RTL block is a Device-path report: when `Rate follows` is
+PipeWire the four lines stay as a blank filler of the same height (§4). The
+graph term assumes the DAW runs through PipeWire. It also shows the Fireface
 sink's host volume in percent and dB, with a `0 dB` action. The host volume is an attenuation before the interface, so it lowers
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
@@ -1308,11 +1315,19 @@ determined by the device and `Rate follows` is a read-only `Device` label. The
 engine group always shows `Graph`, the rate PipeWire is currently running at,
 in every mode.
 
+Selecting a `Rate follows` mode takes effect immediately. The scheduling
+policy is applied and the Pro Audio nodes are forced to re-prepare, which
+briefly restarts the stream. The shown mode is the live mode.
+
 The device rate is the hub: the selected authority sets the device rate, and the
 graph rate and the available quantum both derive from the device rate
 (`authority -> device rate -> graph rate + quantum`). The device rate always
 wins over a stale graph request. The quantum picker offers only quanta at or
-above the device rate's period floor (one URB), plus the exact floor.
+above the device rate's period floor (one URB), plus the exact floor. When
+`Rate follows` is PipeWire the picker also holds the convenience minimum —
+the highest period floor across the device's supported rates — and offers no
+Auto. The convenience quantum is forced at or above that minimum, so it is
+achievable at every graph rate.
 
 Rate and quantum changes apply asynchronously: PipeWire renegotiates the
 running stream over a few seconds while the player keeps playing (resampled);
@@ -2119,11 +2134,14 @@ applied to the running device as they change.
 
 ## 13. Latency display
 
-The Audio Configuration panel has one `RTL latency` row: the label carries the
-tooltip "Round Trip Latency", a secondary (grey) value shows `x.x ms` with one
-decimal, and the next line lists the contributions (USB queue, device lead,
-converter, graph) in milliseconds. The formula and the terms are in the manual
-§14. The buffer-size picker sets the graph period.
+The Audio Configuration panel has one `RTL` row: the label carries the
+tooltip "Round Trip Latency". It is a four-line block — a secondary (grey)
+value `x.x ms` with one decimal on the first line, then three lines listing
+the contributions (USB queue, device lead, converter, graph) in milliseconds.
+The formula and the terms are in the manual §14. The block is a Device-path
+report: when `Rate follows` is PipeWire the four lines stay as a blank filler
+of the same height (§4), so the panel does not resize between modes. The
+buffer-size picker sets the graph period.
 
 The value is the host round trip: USB queue, device lead, converter delay and
 one graph period (the running graph quantum, two ALSA periods under timer

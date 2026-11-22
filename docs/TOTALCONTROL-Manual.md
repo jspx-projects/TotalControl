@@ -353,6 +353,10 @@ of radio buttons, usable only when the clock source is Internal:
   slaved to an external clock (see below). TotalControl re-asserts the rate if
   PipeWire restarts or another application changes it.
 
+Switching `Rate follows` takes effect immediately and briefly restarts the
+stream, so the player may stop. This guarantees the mode shown is the mode the
+device is actually running.
+
 **Which mode to use.** `PipeWire` is a convenience for casual desktop listening:
 the graph follows each stream's native rate automatically. For DAW work, choose
 `Device` and set the rate there. The device is then the clock authority, the
@@ -379,8 +383,11 @@ authority (Device / PipeWire) -> device rate -> graph rate + quantum
 
 The device rate always wins; a stale graph request never overrides it. The
 quantum picker offers only quanta at or above the device rate's period floor
-(one URB), so an impossible quantum cannot be selected. The `Sample rate` row
-shows the device rate, and the `Graph` row shows the graph rate that follows it.
+(one URB), so an impossible quantum cannot be selected. In PipeWire mode the
+picker also holds a convenience minimum — the highest period floor across the
+device's rates — and offers no Auto: the quantum is forced at or above that
+minimum so it stays achievable when the graph changes rate. The `Sample rate`
+row shows the device rate, and the `Graph` row shows the graph rate that follows it.
 
 Rate and quantum changes apply over a few seconds while playback continues (the
 player is never stopped). Until a change takes effect, the affected value is
@@ -407,6 +414,12 @@ The `Pitch` slider changes the speed and pitch of the whole interface from
 -5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Hold Shift for 0.01 % steps.
 Double-click the slider to return to 0.0 %. Pitch is written to the device
 as soon as it changes.
+
+Pitch is a Device-mode control. It is shown when `Rate follows` is Device.
+When `Rate follows` is PipeWire the slider is hidden (its row keeps its space)
+and the interface runs at its nominal clock. A pitched clock cannot be tracked
+by the convenience timer scheduling, so pitch is not available there. Your
+saved pitch is kept and returns when you select Device again.
 
 ### About dialog
 
@@ -1408,14 +1421,18 @@ groups with the stored ones.
 
 ## 14. Latency
 
-The Audio Configuration panel shows the round-trip latency in the `RTL
-latency` row (hover for "Round Trip Latency"): the value as `x.x ms`, and on
-the next line its contributions in milliseconds — USB queue, device lead,
-converter and graph. The **Quantum** picker sets the PipeWire graph period in
-samples. **Auto** lets PipeWire choose the quantum itself — a safe default for
-the device and rate. Choose a specific value from the list to set it yourself;
-the list offers only quanta at or above the current rate's period floor, plus
-the exact floor for the lowest achievable latency.
+The Audio Configuration panel shows the round-trip latency in the `RTL` row
+(hover for "Round Trip Latency"): the value as `x.x ms` on the first line, and
+on the next three lines its contributions in milliseconds — USB queue, device
+lead, converter and graph. The RTL block is a Device-mode report; in PipeWire
+mode its four lines stay empty and the panel keeps the same height. The
+**Quantum** picker sets the PipeWire graph period in samples. In Device mode
+**Auto** lets PipeWire choose the quantum itself — a safe default for the device
+and rate. In PipeWire mode the quantum is forced at or above the convenience
+minimum (the highest period floor across the device's rates), so it stays
+achievable when the graph changes rate. Choose a specific value from the list to
+set it yourself; the list offers only quanta at or above the current rate's
+period floor, plus the exact floor for the lowest achievable latency.
 
 The value is the host round trip:
 
@@ -1471,7 +1488,10 @@ margin that the server's delay-locked loop holds steady — safe at every rate,
 with no per-rate adjustment. It costs a few milliseconds of latency, which does
 not matter for listening or video. It is a convenience for casual playback, not
 the pro-audio path: a track or application at another rate can move the clock, so
-for serious work set the rate on the device instead.
+for serious work set the rate on the device instead. In this mode the RTL block
+is empty (latency is not a concern for listening), the Pitch slider is hidden and
+the clock runs nominal, and the quantum is held at or above the convenience
+minimum so a graph rate change never leaves an impossible quantum.
 
 **Lowest latency (JACK).** For the lowest latency use JACK rather than PipeWire.
 JACK opens the device directly and fills the ring just-in-time; it is not part of
