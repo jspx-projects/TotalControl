@@ -86,6 +86,19 @@
 #define FFUC_MAX_URB_ERRORS	16
 #define FFUC_MIN_QUEUE_FRAMES	64
 #define FFUC_START_GRACE_URBS	4	/* starved URBs tolerated after start */
+/* Startup prefill gate: the playback outputs stay muted from trigger for a
+ * minimum window, then until delivery is stable, with a hard bound.
+ * PipeWire's startup prefill is silence written into the ring, so a
+ * fill-level threshold cannot gate real audio; delivery stability can.
+ * Trace evidence (desk UCX, sd0): starvation clusters span 0-12 ms in
+ * timer mode and 0-30 ms in IRQ mode, with gaps between clusters — a
+ * stability-only gate clears between clusters.  The minimum window covers
+ * the whole transient (2x the worst observed); the bound keeps a dead
+ * host from sticking muted.  Milliseconds, not URBs: an interrupt URB is
+ * ~21 ms at 48 kHz, an ISO URB is 1 ms at every rate. */
+#define FFUC_PREFILL_MIN_MS	64
+#define FFUC_PREFILL_MAX_MS	256
+#define FFUC_PREFILL_STABLE_MS	4
 #define FFUC_MIDI_IN_URBS	2	/* bulk IN URBs kept queued */
 #define FFUC_MIDI_PORTS		2	/* logical ports on the endpoint pair */
 #define FFUC_CTL_TIMEOUT	1000	/* ms */
@@ -246,6 +259,19 @@ struct ffuc_stream {
 	 * starvation without stopping, so a stream-start prefill shortfall
 	 * (rate transition, renegotiation) recovers without an XRUN. */
 	unsigned int out_start_urbs;
+	/* Startup prefill gate (playback): armed at trigger, the outputs
+	 * stay muted for out_prefill_min URBs, then until
+	 * out_prefill_need consecutive non-starved anchored URBs, bounded
+	 * by out_prefill_max.  While armed, starvation sends silence
+	 * without counting an underrun or arming the XRUN stop: the muted
+	 * transient is intended startup behaviour.  The mute write runs in
+	 * prefill_work (sleeping USB transfer). */
+	bool out_prefill_pending;
+	unsigned int out_prefill_stable;
+	unsigned int out_prefill_need;
+	unsigned int out_prefill_min;
+	unsigned int out_prefill_max;
+	unsigned int out_prefill_bound;
 	/* Playback frames handed to USB but not yet completed: the real
 	 * in-flight queue behind hw_ptr.  Reported as runtime->delay in
 	 * .pointer (R4).  Engine-scoped: added at every playback submit
@@ -441,6 +467,9 @@ struct ffuc {
 	unsigned long status_armed_at;
 	struct work_struct recover_work;
 	unsigned int recoveries;
+	struct work_struct prefill_work;
+	atomic_t out_prefills;		/* gated startups that unmuted stable */
+	atomic_t out_prefill_timeouts;	/* gated startups hit the bound */
 	/* Engine-run epoch: increments on every engine start.  The per-run
 	 * diagnostics reset with it; the host re-bases its counter view. */
 	u32 run_seq;

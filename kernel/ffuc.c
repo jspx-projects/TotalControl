@@ -41,6 +41,10 @@ static unsigned long devices_used;
 
 static struct usb_driver ffuc_driver;
 
+static bool prefill = true;
+module_param(prefill, bool, 0644);
+MODULE_PARM_DESC(prefill, "Mute the playback outputs from trigger until the startup ring delivery is stable (default on).");
+
 module_param(ffuc_poison, bool, 0644);
 MODULE_PARM_DESC(ffuc_poison, "Poison-fill the PCM rings with 0x00005A5A at prepare (diagnostics).");
 
@@ -1486,6 +1490,45 @@ static void ffuc_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		ffuc_period_elapsed(chip, SNDRV_PCM_STREAM_CAPTURE);
 }
 
+/* Startup prefill gate, evaluated under the stream lock at each playback
+ * fill.  Returns true when the gate just cleared: the caller queues
+ * prefill_work after unlocking (the mute op is a sleeping USB transfer).
+ * The gate holds for the minimum window, then until enough consecutive
+ * non-starved anchored URBs; a starved or unanchored URB resets the stable
+ * count.  The bound guarantees the mute cannot stick if the host never
+ * delivers.  With the parameter off, an armed gate clears at the next
+ * fill. */
+static bool ffuc_prefill_gate(struct ffuc *chip, struct ffuc_stream *s,
+			      bool starved, bool anchored)
+{
+	unsigned int age;
+
+	if (!s->out_prefill_pending)
+		return false;
+	if (!prefill) {
+		s->out_prefill_pending = false;
+		return true;
+	}
+	if (!starved && anchored)
+		s->out_prefill_stable++;
+	else
+		s->out_prefill_stable = 0;
+	s->out_prefill_bound--;
+	age = s->out_prefill_max - s->out_prefill_bound;
+	if (age >= s->out_prefill_min &&
+	    s->out_prefill_stable >= s->out_prefill_need) {
+		s->out_prefill_pending = false;
+		atomic_inc(&chip->out_prefills);
+		return true;
+	}
+	if (s->out_prefill_bound == 0) {
+		s->out_prefill_pending = false;
+		atomic_inc(&chip->out_prefill_timeouts);
+		return true;
+	}
+	return false;
+}
+
 static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 {
 	struct ffuc *chip = ep->chip;
@@ -1498,6 +1541,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	bool bad = false;
 	bool starved = false;
 	bool stop = false;
+	bool unmute = false;
 
 	/* The engine submitted this OUT URB with urb_frames frames, so the
 	 * nominal case equals it.  Copy exactly what left the wire, and
@@ -1533,14 +1577,24 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 
 		if (frames > filled) {
 			starved = true;
-			if (!s->out_starve_streak)
-				ffuc_ring_event(chip, subs, &chip->out_underruns,
-						"playback underrun", appl, own);
-			s->out_starve_streak++;
-			stop = s->out_starve_streak >= 2 && !s->out_start_urbs;
+			/* The muted startup transient is intended: starvation
+			 * while the gate is armed sends silence without counting
+			 * an underrun or arming the XRUN stop. */
+			if (!s->out_prefill_pending) {
+				if (!s->out_starve_streak)
+					ffuc_ring_event(chip, subs,
+							&chip->out_underruns,
+							"playback underrun",
+							appl, own);
+				s->out_starve_streak++;
+				stop = s->out_starve_streak >= 2 &&
+				       !s->out_start_urbs;
+			}
 		} else {
 			s->out_starve_streak = 0;
 		}
+		if (ffuc_prefill_gate(chip, s, starved, true))
+			unmute = true;
 		if (s->out_start_urbs)
 			s->out_start_urbs--;
 		ffuc_ring_trace(chip, subs, s->pos[ep->index], appl, own,
@@ -1566,6 +1620,8 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 		memset(urb->transfer_buffer, 0, urb->transfer_buffer_length);
 	}
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	if (unmute)
+		queue_work(system_unbound_wq, &chip->prefill_work);
 	if (stop)
 		snd_pcm_stop_xrun(subs);
 	if (elapsed)
@@ -1978,6 +2034,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	bool elapsed = false;
 	bool starved = false;
 	bool stop = false;
+	bool unmute = false;
 	int i;
 
 	/* Per-packet delivery check from this URB's previous submission in
@@ -2065,14 +2122,24 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		filled = (appl + rt->boundary - own) % rt->boundary;
 		if (total > filled) {
 			starved = true;
-			if (!s->out_starve_streak)
-				ffuc_ring_event(chip, subs, &chip->out_underruns,
-						"playback underrun", appl, own);
-			s->out_starve_streak++;
-			stop = s->out_starve_streak >= 2 && !s->out_start_urbs;
+			/* The muted startup transient is intended: starvation
+			 * while the gate is armed sends silence without counting
+			 * an underrun or arming the XRUN stop. */
+			if (!s->out_prefill_pending) {
+				if (!s->out_starve_streak)
+					ffuc_ring_event(chip, subs,
+							&chip->out_underruns,
+							"playback underrun",
+							appl, own);
+				s->out_starve_streak++;
+				stop = s->out_starve_streak >= 2 &&
+				       !s->out_start_urbs;
+			}
 		} else {
 			s->out_starve_streak = 0;
 		}
+		if (ffuc_prefill_gate(chip, s, starved, s->out_counter_valid))
+			unmute = true;
 		if (s->out_start_urbs)
 			s->out_start_urbs--;
 		ffuc_ring_trace(chip, subs, s->hw_ptr, appl, own, total);
@@ -2168,6 +2235,8 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	}
 	urb->transfer_buffer_length = off;
 	snd_pcm_stream_unlock_irqrestore(subs, flags);
+	if (unmute)
+		queue_work(system_unbound_wq, &chip->prefill_work);
 	/* Report the XRUN to ALSA so the application recovers through the
 	 * normal prepare/start path.  The engine keeps running and feeds the
 	 * device silence; only the host PCM stream stops.  Called outside the
@@ -2298,6 +2367,9 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 		   atomic_read(&chip->delta_zero));
 	seq_printf(m, "urb_errors %d\n", atomic_read(&chip->urb_errors));
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
+	seq_printf(m, "out_prefills %d\nout_prefill_timeouts %d\n",
+		   atomic_read(&chip->out_prefills),
+		   atomic_read(&chip->out_prefill_timeouts));
 	seq_printf(m, "events_dropped %d\n", atomic_read(&chip->events_dropped));
 	seq_printf(m, "meter_urbs %d\n", atomic_read(&chip->meter_urbs));
 	seq_printf(m, "meter_paused %u\nmeter_pairs %u\nmeter_realigns %u\n",
@@ -3031,6 +3103,21 @@ error:
 	return ret;
 }
 
+/* Startup prefill gate: apply the playback mute state.  The mute op is a
+ * sleeping USB transfer; trigger and fill run in atomic context and only
+ * queue this work.  State-driven and idempotent: the latest gate state
+ * wins, and a stopped engine is left alone (engine_stop owns the mute). */
+static void ffuc_prefill_work(struct work_struct *work)
+{
+	struct ffuc *chip = container_of(work, struct ffuc, prefill_work);
+
+	mutex_lock(&chip->mutex);
+	if (READ_ONCE(chip->engine_running) && chip->desc->ops->hw_mute)
+		chip->desc->ops->hw_mute(chip,
+			chip->streams[SNDRV_PCM_STREAM_PLAYBACK].out_prefill_pending);
+	mutex_unlock(&chip->mutex);
+}
+
 static void ffuc_recover_work(struct work_struct *work)
 {
 	struct ffuc *chip = container_of(work, struct ffuc, recover_work);
@@ -3330,6 +3417,7 @@ static int ffuc_pcm_prepare(struct snd_pcm_substream *subs)
 	s->deferrals = 0;
 	s->out_starve_streak = 0;
 	s->out_start_urbs = 0;
+	s->out_prefill_pending = false;
 	if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		s->out_counter_valid = false;
 	/* Preparation never zeroed the ring; inherit the last session's
@@ -3368,6 +3456,23 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->out_start_urbs = FFUC_START_GRACE_URBS;
 		s->out_counter_valid = false;
 		s->running = true;
+		if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK && prefill &&
+		    chip->desc->ops->hw_mute) {
+			unsigned int urb_ms =
+				max(1u, chip->urb_frames * 1000 / chip->rate);
+
+			s->out_prefill_pending = true;
+			s->out_prefill_stable = 0;
+			s->out_prefill_need =
+				max(1u, FFUC_PREFILL_STABLE_MS / urb_ms);
+			s->out_prefill_min =
+				max(1u, FFUC_PREFILL_MIN_MS / urb_ms);
+			s->out_prefill_max =
+				max(s->out_prefill_min + 1,
+				    FFUC_PREFILL_MAX_MS / urb_ms);
+			s->out_prefill_bound = s->out_prefill_max;
+			queue_work(system_unbound_wq, &chip->prefill_work);
+		}
 		/* q48 diagnostics: log the negotiated geometry once per
 		 * start so a capture session can be matched to it. */
 		dev_dbg(&chip->dev->dev,
@@ -3402,6 +3507,23 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->out_start_urbs = FFUC_START_GRACE_URBS;
 		s->out_counter_valid = false;
 		s->running = true;
+		if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK && prefill &&
+		    chip->desc->ops->hw_mute) {
+			unsigned int urb_ms =
+				max(1u, chip->urb_frames * 1000 / chip->rate);
+
+			s->out_prefill_pending = true;
+			s->out_prefill_stable = 0;
+			s->out_prefill_need =
+				max(1u, FFUC_PREFILL_STABLE_MS / urb_ms);
+			s->out_prefill_min =
+				max(1u, FFUC_PREFILL_MIN_MS / urb_ms);
+			s->out_prefill_max =
+				max(s->out_prefill_min + 1,
+				    FFUC_PREFILL_MAX_MS / urb_ms);
+			s->out_prefill_bound = s->out_prefill_max;
+			queue_work(system_unbound_wq, &chip->prefill_work);
+		}
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -3628,6 +3750,7 @@ static void ffuc_card_free(struct snd_card *card)
 	struct ffuc *chip = card->private_data;
 
 	cancel_work_sync(&chip->recover_work);
+	cancel_work_sync(&chip->prefill_work);
 	ffuc_hwdep_cleanup(chip);
 	ffuc_midi_cleanup(chip);
 	if (chip->status_intf) {
@@ -3746,6 +3869,7 @@ static int ffuc_probe(struct usb_interface *intf,
 	spin_lock_init(&chip->fb_lock);
 	spin_lock_init(&chip->gate_lock);
 	INIT_WORK(&chip->recover_work, ffuc_recover_work);
+	INIT_WORK(&chip->prefill_work, ffuc_prefill_work);
 	init_waitqueue_head(&chip->event_wait);
 	spin_lock_init(&chip->event_lock);
 	atomic_set(&chip->event_seq, 0);
@@ -3924,6 +4048,7 @@ static void ffuc_disconnect(struct usb_interface *intf)
 	ffuc_kill_urbs(chip, true);
 	mutex_unlock(&chip->mutex);
 	cancel_work_sync(&chip->recover_work);
+	cancel_work_sync(&chip->prefill_work);
 	ffuc_hwdep_quiesce(chip);
 	ffuc_midi_cleanup(chip);
 	if (chip->status_intf) {
@@ -3966,6 +4091,7 @@ static int ffuc_suspend(struct usb_interface *intf, pm_message_t message)
 			"suspend: driver-managed (prepared=0x%x running=0x%x)\n",
 			chip->prepared_mask, chip->resume_mask);
 	cancel_work_sync(&chip->recover_work);
+	cancel_work_sync(&chip->prefill_work);
 	mutex_lock(&chip->mutex);
 	ffuc_engine_stop(chip);
 	mutex_unlock(&chip->mutex);

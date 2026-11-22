@@ -443,6 +443,57 @@ Three "buffer" knobs belong to three layers:
 "Samples" in a Windows or macOS driver panel mean frames: the callback chunk,
 which is the quantum here.
 
+#### 4.1.3 Startup prefill gate
+
+The playback outputs stay muted from the playback trigger until the ring
+delivery is stable. The gate covers the startup transient, when the host
+graph ramps and the ring fill dips below the per-URB demand. It is a
+startup mechanism: steady-state delivery and latency are unchanged.
+
+| Term | Shape | Definition |
+|---|---|---|
+| prefill gate | per playback stream | the mute-until-stable state armed at trigger START/RESUME |
+| minimum window | `FFUC_PREFILL_MIN_MS` = 64 ms | the shortest muted hold, sized at 2× the worst measured startup dip (30 ms) |
+| stability run | `FFUC_PREFILL_STABLE_MS` = 4 ms | consecutive non-starved, anchored completions required to clear |
+| hard bound | `FFUC_PREFILL_MAX_MS` = 256 ms | the longest muted hold; clears even if the host never delivers |
+| `prefill` | module param, bool, default on | enables the gate; off clears an armed gate at the next fill |
+
+The constants are milliseconds. At arm time they scale to completion
+counts by the URB duration (`urb_frames * 1000 / rate`, minimum 1 ms): an
+ISO URB is 1 ms at every rate, an interrupt URB is rate-dependent. The
+minimum window is at least one completion; the bound exceeds the minimum.
+
+The gate arms in the common playback trigger and is evaluated at each
+playback fill in both transports (ISO and interrupt). A completion that is
+non-starved and anchored advances the stability run; a starved or
+unanchored completion resets it. The gate clears when the age reaches the
+minimum window and the stability run reaches its target, or when the bound
+expires. Clearing queues the unmute on a workqueue: the mute op is a
+sleeping USB transfer, while the trigger and fill run in atomic context.
+The device writes stay the per-model `hw_mute` op (UCX/Babyface playback
+mask, UC mute word).
+
+While the gate is armed, a starved completion sends silence without
+counting `out_underruns` and without arming the XRUN stop: the muted
+transient is intended startup. The existing priming keeps feeding the
+device timeline while muted; ring data flow and `hw_ptr` accounting are
+unchanged. After the gate clears, normal underrun accounting resumes.
+
+A fill-level threshold cannot gate real audio: the host startup prefill is
+silence written into the ring, so `appl_ptr − hw_ptr` reaches any fill
+threshold before real audio exists. Delivery stability is the gate
+condition.
+
+Counters: `out_prefills` (gated startups that unmuted stable),
+`out_prefill_timeouts` (gated startups that hit the bound), in debugfs
+stats.
+
+The measured startup dip spans 0–30 ms after trigger (IRQ mode, sd0); the
+64 ms minimum window covers it with margin and the stability run confirms
+recovery. The audible result is one clean muted window of ≈50–100 ms per
+start or rate switch, then continuous audio. See §7 for the device start
+margin that precedes the first URB at an engine restart.
+
 ### 4.2 Period signalling gate
 
 A period signal announces one completed period. A direction is signalled
@@ -795,6 +846,11 @@ mid-flight, 20 ms is clean across the rate families. Linux xHCI
 schedules a new isochronous stream at the current frame index and
 ignores a requested future start frame, so the margin is a submission
 delay.
+
+The start margin precedes the first URB of an engine run. The playback
+prefill gate (§4.1.3) then holds the outputs muted from the playback
+trigger until the ring delivery is stable, so a rate switch's total muted
+window is the start margin plus the gate window (≈64–100 ms).
 
 Design principle: prefer a deterministic readiness condition over a timed
 guess. Where the device exposes a status that can be polled (rate index,
