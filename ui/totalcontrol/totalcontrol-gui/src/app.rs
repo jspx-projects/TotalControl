@@ -15713,23 +15713,36 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         } else {
             "Reported by the device \u{2014} follows the PipeWire graph."
         };
+        // The sample-rate row keeps one vertical slot whether it is a picker
+        // (Device) or a read-only readout (PipeWire / external clock), so the
+        // card does not resize between modes (GUI spec §4).
         body = body.push(
-            row![
-                caption("Sample rate"),
-                strip::hint(
-                    text(rate_text)
-                        .color(theme::text_sec())
-                        .size(text_size)
-                        .width(Length::Fill),
-                    hint,
-                    scale,
-                ),
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
+            container(
+                row![
+                    caption("Sample rate"),
+                    strip::hint(
+                        text(rate_text)
+                            .color(theme::text_sec())
+                            .size(text_size)
+                            .width(Length::Fill),
+                        hint,
+                        scale,
+                    ),
+                ]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
+            )
+            .height(Length::Fixed(30.0 * scale))
+            .align_y(iced::Alignment::Center)
+            .width(Length::Fill),
         );
     } else {
-        body = body.push(device_rate_row);
+        body = body.push(
+            container(device_rate_row)
+                .height(Length::Fixed(30.0 * scale))
+                .align_y(iced::Alignment::Center)
+                .width(Length::Fill),
+        );
     }
     if state.device.capabilities().pitch {
         if state.engine_rate_mode == EngineRateMode::Fixed {
@@ -16051,19 +16064,25 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     );
-    body = body.push(
-        row![
-            strip::hint_at(
-                caption("RTL"),
-                "Round Trip Latency",
-                scale,
-                theme::TEXT_DIALOG * scale,
-            ),
-            latency_readout(state, clock),
-        ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
-    );
+    if state.engine_rate_mode == EngineRateMode::Fixed {
+        body = body.push(
+            row![
+                strip::hint_at(
+                    caption("RTL"),
+                    "Round Trip Latency",
+                    scale,
+                    theme::TEXT_DIALOG * scale,
+                ),
+                latency_readout(state, clock),
+            ]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
+        );
+    } else {
+        // Convenience: no latency figure and no label. The four lines keep
+        // their space as a blank filler of the same height (GUI spec §4).
+        body = body.push(rtl_blank(scale));
+    }
     // Transport diagnostics in three sections by reset behaviour:
     //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
     //  - This stream: per-run transport detail, cleared on stream restart

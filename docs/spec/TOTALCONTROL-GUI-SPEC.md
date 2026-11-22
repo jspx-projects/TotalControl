@@ -1258,8 +1258,9 @@ When the clock source is Internal and `Rate follows` is Device, it is an
 editable picker of the device-supported rates; selecting a rate drives the card
 through the engine-rate path. When `Rate follows` is PipeWire, or the clock
 source is external, the row is a read-only readout of the rate the unit reports
-(state word `0x11`), with a hint that it is device-reported. The rate authority
-lives in the host engine group, not here. Read-only reports (the device rate,
+(state word `0x11`), with a hint that it is device-reported. The row keeps one
+vertical slot whether it is a picker or a readout, so the card does not resize
+between modes (§4). The rate authority lives in the host engine group, not here. Read-only reports (the device rate,
 Graph and the latency readout) use the secondary text colour; editable controls
 use the primary colour.
 
@@ -1299,8 +1300,8 @@ a secondary (grey) value `x.x ms` on the first line, then three lines of
 secondary text with the contributions in milliseconds (USB queue, device
 lead, converter, graph). The formula and the calibration basis are in the
 manual §14. The RTL block is a Device-path report: when `Rate follows` is
-PipeWire the four lines stay as a blank filler of the same height (§4). The
-graph term assumes the DAW runs through PipeWire. It also shows the Fireface
+PipeWire the whole row (label and four lines) stays as a blank filler of the
+same height (§4). The graph term assumes the DAW runs through PipeWire. It also shows the Fireface
 sink's host volume in percent and dB, with a `0 dB` action. The host volume is an attenuation before the interface, so it lowers
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
@@ -2139,9 +2140,9 @@ tooltip "Round Trip Latency". It is a four-line block — a secondary (grey)
 value `x.x ms` with one decimal on the first line, then three lines listing
 the contributions (USB queue, device lead, converter, graph) in milliseconds.
 The formula and the terms are in the manual §14. The block is a Device-path
-report: when `Rate follows` is PipeWire the four lines stay as a blank filler
-of the same height (§4), so the panel does not resize between modes. The
-buffer-size picker sets the graph period.
+report: when `Rate follows` is PipeWire the whole row (label and four lines)
+stays as a blank filler of the same height (§4), so the panel does not resize
+between modes. The buffer-size picker sets the graph period.
 
 The value is the host round trip: USB queue, device lead, converter delay and
 one graph period (the running graph quantum, two ALSA periods under timer
