@@ -353,6 +353,15 @@ of radio buttons, usable only when the clock source is Internal:
   slaved to an external clock (see below). TotalControl re-asserts the rate if
   PipeWire restarts or another application changes it.
 
+**Which mode to use.** `PipeWire` is a convenience for casual desktop listening:
+the graph follows each stream's native rate automatically. For DAW work, choose
+`Device` and set the rate there. The device is then the clock authority, the
+scheduling cushion is held for you (see [Latency](#14-latency)), and another
+track or application cannot move the clock mid-session. For the lowest latency
+use JACK rather than PipeWire — JACK opens the device directly and is not part of
+this graph, so `Rate follows` and the PipeWire cushion do not apply to it (see
+[Latency](#14-latency)).
+
 The device has one clock, so the graph has one rate. While a stream is already
 playing, a new stream at a different rate is resampled to the graph rate — two
 applications cannot play at different native rates at the same time. PipeWire
@@ -1433,20 +1442,42 @@ adjusted by the queue difference without another cable measurement. Rates
 outside the calibrated set use the model estimate. A different firmware or
 device path needs a new calibration.
 
-### Scheduling mode
+### Scheduling mode — the three paths
 
-PipeWire can drive the audio graph from a host timer (**timer mode**, the
-desktop default) or from the device's period interrupts (**IRQ mode**, PipeWire's
-Pro Audio scheduling, `api.alsa.disable-tsched`). For low-latency work on a
-Fireface, choose IRQ mode. In IRQ mode the driver's fill lock holds the playback
-ring at a small, deterministic level (about 1.7 URBs, ≈1.7 ms) with no server
-delay-locked loop on the device stream, so reliability does not cost extra
-latency margin. Timer mode needs a larger `start-delay` (about three URBs,
-scaled with rate) to avoid late dropouts at 96/192 kHz, which adds latency.
+TotalControl offers three audio paths. Pick the one that matches the job;
+the `Rate follows` control selects between the first two.
 
-Timer mode remains the convenient default for mixed-rate desktop graphs and
-heavy processing at large quanta, where its node resampler and independent
-graph quantum help. The startup mute window below applies in both modes.
+| Path | `Rate follows` | Scheduling | Margin | Use it for |
+|---|---|---|---|---|
+| **Pro audio** | Device | IRQ + cushion | two periods, aligned to the rate | DAW work, perfect predictable low latency |
+| **Convenience** | PipeWire | timer + fixed margin | generous, DLL-held | listening, video — the rate follows each stream |
+| **Lowest latency** | — (JACK) | direct | just-in-time | the latency floor; JACK opens the device directly |
+
+**Pro audio (`Rate follows` = Device).** You set the rate on the device and
+TotalControl holds it. The graph runs on the device's period interrupts (IRQ
+mode) and TotalControl holds a **scheduling cushion** of two periods, aligned to
+the rate. The cushion keeps the playback ring fed across the write rhythm at the
+fractional rates (44.1/88.2/176.4 kHz), where a smaller or misaligned cushion
+drops out under load. It costs up to about two quanta of extra round-trip latency
+(about 2 ms at the 48-frame floor). It is placed *before* each rate/quantum
+change, so it is always in step with the device — the same reason the reference
+driver has no "follow" mode. **For DAW work, use this path and set the rate on the
+device.**
+
+**Convenience (`Rate follows` = PipeWire, the default).** The graph conducts:
+the device follows each stream's native rate, so a DVD plays at 48 kHz and a CD
+at 44.1 kHz automatically. This path uses **timer mode** with a fixed generous
+margin that the server's delay-locked loop holds steady — safe at every rate,
+with no per-rate adjustment. It costs a few milliseconds of latency, which does
+not matter for listening or video. It is a convenience for casual playback, not
+the pro-audio path: a track or application at another rate can move the clock, so
+for serious work set the rate on the device instead.
+
+**Lowest latency (JACK).** For the lowest latency use JACK rather than PipeWire.
+JACK opens the device directly and fills the ring just-in-time; it is not part of
+the PipeWire graph, so `Rate follows` and the cushion do not apply to it.
+
+The startup mute window below applies in every path.
 
 ### The startup mute window
 

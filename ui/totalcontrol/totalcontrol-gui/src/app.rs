@@ -5633,6 +5633,9 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     if !state.device.rate_follows_sound_server() {
         return;
     }
+    // The cushion for the new rate lands before the force; the rate change
+    // re-prepares the PCM and picks it up (C1).
+    apply_engine_policy(state, rate);
     if let Err(e) = pw_clock::force_rate(rate) {
         log::warn!("Setting the PipeWire rate failed: {e}");
     }
@@ -5680,6 +5683,7 @@ fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
         return;
     };
     state.rate_authority_reforce = Some(Instant::now());
+    apply_engine_policy(state, desired);
     if let Err(e) = pw_clock::force_rate(desired) {
         log::warn!("Re-asserting the device rate failed: {e}");
         return;
@@ -5779,6 +5783,18 @@ pub fn release_engine(state: &mut TotalControl) {
     if let Err(e) = pw_clock::force_quantum(0) {
         log::warn!("Releasing the PipeWire buffer override failed: {e}");
     }
+    // Give the packaged convenience default back (timer + fixed margin),
+    // like the forces above. The next launch re-applies the chosen policy.
+    if let Some((out, inp)) = pw_clock::fireface_pro_node_ids() {
+        let convenience = pw_clock::SchedPolicy {
+            disable_tsched: false,
+            headroom: 336,
+            start_delay: 0,
+            period_num: 16,
+        };
+        let _ = pw_clock::set_sched_policy(out, &convenience);
+        let _ = pw_clock::set_sched_policy(inp, &convenience);
+    }
     restore_allowed_rates(state);
 }
 
@@ -5858,6 +5874,10 @@ pub fn restore_engine(state: &mut TotalControl) {
     // period floor; the GUI presents exactly what it reports.
     state.device_envelope = pw_clock::card_number(&state.device.card_id())
         .and_then(totalcontrol_core::fireface::hwdep::query_rate_envelope);
+    // Apply the scheduling policy once the envelope is known, so the
+    // convenience start-delay uses the real rate floor. The nodes may not
+    // exist yet (a fresh PipeWire); the props apply when they are configured.
+    apply_engine_policy(state, running_rate(state));
     // A remembered quantum may sit below the floor of the rate the graph opens
     // at; raise it to the floor instead of forcing an impossible value.
     enforce_quantum_floor(state, running_rate(state));
@@ -12599,6 +12619,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.engine_rate_mode = EngineRateMode::Auto;
                     state.rate_authority_reforce = None;
                     apply_graph_rate(state, 0, false);
+                    // Convenience path: timer + fixed margin. The rate force is
+                    // released, so the policy lands at the next stream transition.
+                    apply_engine_policy(state, running_rate(state));
                 }
                 EngineRateMode::Fixed => {
                     state.engine_rate_mode = EngineRateMode::Fixed;
@@ -12623,6 +12646,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     e.force_quantum = quantum;
                 }
             } else if state.device.rate_follows_sound_server() {
+                apply_engine_policy(state, running_rate(state));
                 if let Err(e) = pw_clock::force_quantum(quantum) {
                     log::warn!("Setting the PipeWire buffer size failed: {e}");
                 }
@@ -15280,6 +15304,76 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
         if let Err(e) = pw_clock::force_quantum(floor) {
             log::warn!("Raising the PipeWire quantum to the rate floor failed: {e}");
         }
+        apply_engine_policy(state, rate);
+    }
+}
+
+/// The scheduling cushion (C1): `H = 2·P`, a whole multiple of the ALSA
+/// period. PipeWire's IRQ-mode wake threshold must stay period-aligned:
+/// at fractional rates a non-aligned target doubles the write-skip rate
+/// and collapses the ring fill (work note LEAD-BIAS-AND-CUSHION, Test 1;
+/// onset = target phase, margin-vs-phase cells). Two periods give a
+/// comfortable startup margin (Test 2, verified on UC and UCX at the
+/// reference lead bias). This is the PipeWire equivalent of the reference
+/// host's safety offset; JACK never sees it (it opens the PCM directly).
+fn cushion_headroom(period: u32) -> u32 {
+    period.saturating_mul(2)
+}
+
+/// The period the cushion aligns to: the live ALSA period while a stream
+/// is open, else the forced (or graph) quantum raised to the rate's floor.
+fn cushion_period(state: &TotalControl, rate: u32, stream: Option<CardStream>) -> u32 {
+    if let Some(s) = stream {
+        return s.period.max(1);
+    }
+    let quantum = if state.engine_force_quantum > 0 {
+        state.engine_force_quantum
+    } else {
+        state.engine.map(|e| e.effective_quantum()).unwrap_or(0)
+    };
+    quantum.max(quantum_floor(state, rate)).max(1)
+}
+
+/// The scheduling policy for the current rate authority (C1 three-tier
+/// model). Device (Fixed) is the pro path: IRQ scheduling + a period-aligned
+/// cushion `H = 2·P`, placed before each deliberate rate/quantum change.
+/// PipeWire (Auto) is the convenience path: timer scheduling + a fixed
+/// generous margin the DLL servos — safe at every rate without tracking the
+/// graph-conducted rate. JACK opens the PCM directly and uses neither.
+fn engine_sched_policy(state: &TotalControl, rate: u32) -> pw_clock::SchedPolicy {
+    if state.engine_rate_mode == EngineRateMode::Fixed {
+        pw_clock::SchedPolicy {
+            disable_tsched: true,
+            headroom: cushion_headroom(cushion_period(state, rate, None)),
+            start_delay: 0,
+            period_num: 32,
+        }
+    } else {
+        pw_clock::SchedPolicy {
+            disable_tsched: false,
+            headroom: 336,
+            start_delay: 3 * quantum_floor(state, rate),
+            period_num: 16,
+        }
+    }
+}
+
+/// Apply the scheduling policy to both Pro Audio nodes. Best-effort: no
+/// nodes (JACK owns the device, PipeWire absent) is a no-op. The props land
+/// at the next re-prepare — the rate/quantum force the caller issues right
+/// after (Device), or the next natural stream transition (PipeWire). No
+/// reaction to observed graph changes: the value is set before the
+/// transition, the reference pattern.
+fn apply_engine_policy(state: &mut TotalControl, rate: u32) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() || rate == 0 {
+        return;
+    }
+    let Some((out, inp)) = pw_clock::fireface_pro_node_ids() else {
+        return;
+    };
+    let policy = engine_sched_policy(state, rate);
+    if pw_clock::set_sched_policy(out, &policy).is_ok() {
+        let _ = pw_clock::set_sched_policy(inp, &policy);
     }
 }
 
@@ -22287,7 +22381,8 @@ mod tests {
         changes_host_settings, changes_workspace, channel_parity, channel_trim,
         channel_with_parity, choose_startup_kind,
         choose_startup_target, control_room_available, control_room_visual_width,
-        control_room_width, converter_frames, frames_ms, fx_reserve, fx_slot, global_feedback,
+        control_room_width, converter_frames, cushion_headroom, cushion_period,
+        engine_sched_policy, frames_ms, fx_reserve, fx_slot, global_feedback,
         engine_poll_fast, global_feedback_is_typed, global_messages, global_state_commands,
         host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
@@ -22297,7 +22392,7 @@ mod tests {
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
         temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
         uc_measured_rtl, uc_min_buffer_frames, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames,
-        ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
+        ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, CardStream, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         PwClock, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
         TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,
@@ -27212,6 +27307,78 @@ mod tests {
         state.rate_authority_reforce = None;
         state.engine_rate_mode = EngineRateMode::Auto;
         assert_eq!(rate_authority_target(&state, Some(cleared)), None);
+    }
+
+    #[test]
+    fn the_cushion_is_two_aligned_periods() {
+        let mut state = new(true, None, None);
+        state.driver_floor = Some(48);
+        assert_eq!(cushion_headroom(48), 96);
+        assert_eq!(cushion_headroom(184), 368);
+        // The live negotiated period is the truth while a stream is open.
+        let stream = CardStream { rate: 44_100, period: 48, buffer: 1536 };
+        assert_eq!(cushion_period(&state, 44_100, Some(stream)), 48);
+        // No stream: the forced quantum, raised to the rate's floor.
+        state.engine_force_quantum = 32;
+        assert_eq!(cushion_period(&state, 44_100, None), 48);
+        state.engine_force_quantum = 96;
+        assert_eq!(cushion_period(&state, 44_100, None), 96);
+        // Auto quantum falls back to the graph quantum.
+        state.engine_force_quantum = 0;
+        state.engine = Some(PwClock {
+            rate: 48_000,
+            quantum: 64,
+            force_rate: 0,
+            force_quantum: 0,
+            min_quantum: 32,
+            max_quantum: 2048,
+        });
+        assert_eq!(cushion_period(&state, 48_000, None), 64);
+        // The envelope floor wins over the module parameter.
+        state.device_envelope = Some(totalcontrol_core::fireface::hwdep::RateEnvelope {
+            urb_frames: 48,
+            nurbs: 2,
+            iso: true,
+            rates: vec![totalcontrol_core::fireface::hwdep::RateEnv {
+                rate: 176_400,
+                period_floor: 184,
+                buffer_min: 5888,
+            }],
+        });
+        state.engine = None;
+        assert_eq!(cushion_period(&state, 176_400, None), 184);
+        assert_eq!(cushion_headroom(cushion_period(&state, 176_400, None)), 368);
+    }
+
+    #[test]
+    fn the_sched_policy_follows_the_rate_authority() {
+        let mut state = new(true, None, None);
+        state.driver_floor = Some(48);
+        state.device_envelope = Some(totalcontrol_core::fireface::hwdep::RateEnvelope {
+            urb_frames: 48,
+            nurbs: 2,
+            iso: true,
+            rates: vec![
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336 },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 176_400, period_floor: 184, buffer_min: 5888 },
+            ],
+        });
+        // Device (Fixed): IRQ + per-rate aligned cushion, no start-delay.
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.engine_force_quantum = 48;
+        let p = engine_sched_policy(&state, 48_000);
+        assert!(p.disable_tsched);
+        assert_eq!(p.headroom, 96);
+        assert_eq!(p.start_delay, 0);
+        state.engine_force_quantum = 184;
+        assert_eq!(engine_sched_policy(&state, 176_400).headroom, 368);
+        // PipeWire (Auto): timer + fixed generous margin, rate-scaled start-delay.
+        state.engine_rate_mode = EngineRateMode::Auto;
+        let p = engine_sched_policy(&state, 48_000);
+        assert!(!p.disable_tsched);
+        assert_eq!(p.headroom, 336);
+        assert_eq!(p.start_delay, 144);
+        assert_eq!(engine_sched_policy(&state, 176_400).start_delay, 552);
     }
 
     #[test]
