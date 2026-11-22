@@ -2069,15 +2069,40 @@ impl Fireface {
     /// mutes idempotently. It is called after any assignment or scene change
     /// so a flag restored against a not-yet-assigned pair cannot leave the
     /// monitor in an inconsistent state.
+    /// Whether a monitor pair is monitor-muted under the live assignment.
+    ///
+    /// With a distinct Main and Speaker B assigned, the inactive monitor is
+    /// silent: Main is monitor-muted while Speaker B is active, and Speaker B
+    /// is monitor-muted while it is inactive. This is the single invariant
+    /// behind both `reconcile_control_room` and every output-mode write, so no
+    /// write transiently unmutes an inactive monitor (a monitor controller
+    /// must never leak audio through a muted destination, even mid-scene).
+    fn control_room_monitor_muted(&self, pair: usize) -> bool {
+        let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) else {
+            return false;
+        };
+        if main == b {
+            return false;
+        }
+        if pair == main {
+            self.settings.speaker_b
+        } else if pair == b {
+            !self.settings.speaker_b
+        } else {
+            false
+        }
+    }
+
     fn reconcile_control_room(&mut self) {
         if self.settings.main_out.is_none() || self.settings.main_b_out.is_none() {
             self.settings.speaker_b = false;
         }
         if let (Some(main), Some(b)) = (self.settings.main_out, self.settings.main_b_out) {
             if main != b {
-                let spk = self.settings.speaker_b;
-                let _ = self.control_room_set_monitor_muted(main, spk);
-                let _ = self.control_room_set_monitor_muted(b, !spk);
+                let main_muted = self.control_room_monitor_muted(main);
+                let b_muted = self.control_room_monitor_muted(b);
+                let _ = self.control_room_set_monitor_muted(main, main_muted);
+                let _ = self.control_room_set_monitor_muted(b, b_muted);
             }
         }
     }
@@ -2914,13 +2939,14 @@ impl Fireface {
 
     /// The output mode word: bit 0 = mute, bit 1 = monitor-muted.
     ///
-    /// Bit 1 is not an assignment marker.  Only the Main pair is
-    /// monitor-muted, and only while Speaker B is active.  An assigned
-    /// Speaker B pair stays at its normal mode while Speaker B is off;
-    /// writing bit 1 merely because the pair was assigned mutes it.
+    /// Bit 1 follows the Control Room monitor invariant
+    /// (`control_room_monitor_muted`): the inactive monitor of a distinct
+    /// Main/Speaker B pair is muted. Every output-mode write carries the
+    /// correct bit, so a scene apply never transiently unmutes the inactive
+    /// monitor before a later reconcile pass.
     fn ucx_write_output_mode(&self, idx: usize, mute: bool) -> Result<(), Error> {
         let pair = idx / 2;
-        let monitor_muted = self.settings.speaker_b && self.settings.main_out == Some(pair);
+        let monitor_muted = self.control_room_monitor_muted(pair);
         self.ucx_write_output_mode_value(idx, (mute as u16) | ((monitor_muted as u16) << 1))
     }
 
@@ -9183,6 +9209,49 @@ mod tests {
         let words = written_words(&writes);
         assert!(words.contains(&(0x1402, 1)));
         assert!(words.contains(&(0x1502, 1)));
+    }
+
+    #[test]
+    fn ucx_output_mode_write_never_unmutes_the_inactive_monitor() {
+        // A monitor controller must never leak audio through the inactive
+        // monitor, even mid-scene: every output-mode write carries the correct
+        // monitor-mute bit, not just a later reconcile pass. A scene apply
+        // writes every output mode before it reconciles, so an inactive pair
+        // must already be muted in that write.
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+
+        // Speaker B off: pair 2 (B) is inactive and must stay monitor-muted.
+        dev.set_speaker_b(false).unwrap();
+        writes.lock().unwrap().clear();
+        dev.ucx_write_output_mode(4, false).unwrap();
+        dev.ucx_write_output_mode(5, false).unwrap();
+        let w = written_words(&writes);
+        assert!(w.contains(&(0x1402, 2)), "inactive B left stays monitor-muted");
+        assert!(w.contains(&(0x1502, 2)), "inactive B right stays monitor-muted");
+        // The active Main pair is not monitor-muted while Speaker B is off.
+        writes.lock().unwrap().clear();
+        dev.ucx_write_output_mode(2, false).unwrap();
+        assert!(
+            written_words(&writes).contains(&(0x1202, 0)),
+            "active Main not monitor-muted"
+        );
+
+        // Speaker B on: pair 1 (Main) becomes inactive and must stay muted.
+        dev.set_speaker_b(true).unwrap();
+        writes.lock().unwrap().clear();
+        dev.ucx_write_output_mode(2, false).unwrap();
+        dev.ucx_write_output_mode(3, false).unwrap();
+        let w = written_words(&writes);
+        assert!(w.contains(&(0x1202, 2)), "inactive Main left stays monitor-muted");
+        assert!(w.contains(&(0x1302, 2)), "inactive Main right stays monitor-muted");
+        writes.lock().unwrap().clear();
+        dev.ucx_write_output_mode(4, false).unwrap();
+        assert!(
+            written_words(&writes).contains(&(0x1402, 0)),
+            "active B not monitor-muted"
+        );
     }
 
     #[test]
