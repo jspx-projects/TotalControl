@@ -3152,6 +3152,11 @@ pub struct TotalControl {
     /// forces the nominal clock; the Device path restores the saved pitch.
     pub pitch_clock_applied: Option<f32>,
     pub pitch_clock_dirty: bool,
+    /// The user's pro pitch intent, owned by the GUI. A scene reapply clones
+    /// the device settings and can clobber `settings.pitch_percent`, so the
+    /// slider, the Device-path clock and persistence use this instead. Set by
+    /// the pitch slider and workspace load; never by a stream-restart reapply.
+    pub pro_pitch: f32,
     /// Last time Fixed mode re-asserted its rate after the live force
     /// diverged (a PipeWire restart or an external write). Bounds the retry.
     pub rate_authority_reforce: Option<Instant>,
@@ -3759,6 +3764,7 @@ pub fn new_with_device(
         engine_rate_mode: EngineRateMode::Auto,
         pitch_clock_applied: None,
         pitch_clock_dirty: true,
+        pro_pitch: 0.0,
         rate_authority_reforce: None,
         allowed_rates_saved: None,
         allowed_rates_written: None,
@@ -4171,7 +4177,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
     } else {
         current_graph_rate(state)
     };
-    scene.settings.pitch_percent = state.device.settings().pitch_percent;
+    scene.settings.pitch_percent = state.pro_pitch;
     scene.settings.dim_amount_db = state.control_room.main_dim_db;
     // The Control Room assignment is the source of truth for Main and
     // Speaker B.  Keep the saved scene in step so a restore has both.
@@ -4439,6 +4445,7 @@ fn apply_workspace_state(
     apply_workspace_sample_rate(state, &scene);
     apply_workspace_monitor_state(state, &scene)?;
     if state.device.capabilities().pitch {
+        state.pro_pitch = scene.settings.pitch_percent;
         state
             .device
             .set_pitch(scene.settings.pitch_percent)
@@ -5521,6 +5528,10 @@ fn schedule_startup_full_reapply(state: &mut TotalControl) {
 }
 
 fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
+    // The startup scene carries the saved pro pitch intent.
+    if state.device.capabilities().pitch {
+        state.pro_pitch = scene.settings.pitch_percent;
+    }
     // Correctness: establish the Control Room assignment before the scene
     // write, so the scene's monitor flags (Speaker B, Dim) restore against a
     // valid pair on the real backend — before the startup reapply capture and
@@ -9992,6 +10003,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.device.apply_scene_at_connect(&scene)
                 };
                 state.startup_scene_full_rewrite = false;
+                // The scene write applied a pitch to the device clock; the
+                // mode reconcile must re-assert it (nominal in convenience).
+                state.pitch_clock_dirty = true;
                 if let Err(e) = result {
                     log::warn!("scene reapply failed: {e:?}");
                 } else {
@@ -11572,6 +11586,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // nominal. Ignore pitch moves outside Device mode (the slider is
             // hidden there, but OSC/controllers may still send them).
             if state.engine_rate_mode == EngineRateMode::Fixed {
+                state.pro_pitch = v;
                 if let Err(e) = state.device.set_pitch(v) {
                     fail(state, "set_pitch", &e);
                 }
@@ -15409,8 +15424,9 @@ fn reconcile_device_pitch(state: &mut TotalControl) {
     if !state.device.capabilities().pitch {
         return;
     }
+    let saved = state.pro_pitch;
     let desired = if state.engine_rate_mode == EngineRateMode::Fixed {
-        state.device.settings().pitch_percent
+        saved
     } else {
         0.0
     };
@@ -15682,19 +15698,29 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
 
-    let mut body = column![
-        section("DEVICE"),
-        row![
-            caption("Clock source"),
-            field(pick_list(
-                settings.clock_sources.clone(),
-                Some(settings.clock_source.clone()),
-                Message::ClockSourceSelected,
-            )),
-        ]
-        .spacing(theme::SPACE_MD * scale)
-        .align_y(iced::Alignment::Center),
-    ];
+    let mut body = column![section("DEVICE")];
+    // Clock source is a Device-path control. In convenience the row keeps its
+    // space as a nonvisible filler, like Pitch (GUI spec §4).
+    if state.engine_rate_mode == EngineRateMode::Fixed {
+        body = body.push(
+            row![
+                caption("Clock source"),
+                field(pick_list(
+                    settings.clock_sources.clone(),
+                    Some(settings.clock_source.clone()),
+                    Message::ClockSourceSelected,
+                )),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    } else {
+        body = body.push(
+            iced::widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fixed(30.0 * scale)),
+        );
+    }
     // The device rate is a device fact. In Auto mode, or when the device is
     // slaved to an external clock, it is a read-only readout of the rate the
     // unit reports; otherwise it is an editable picker. The mode that drives
@@ -15746,14 +15772,12 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     }
     if state.device.capabilities().pitch {
         if state.engine_rate_mode == EngineRateMode::Fixed {
-            let value = settings.pitch_percent;
-            let modifiers = state.modifiers;
+            let value = state.pro_pitch;
             body = body.push(
                 row![
                     caption("Pitch"),
                     crate::widgets::pitch_slider::pitch_slider(
                         value,
-                        modifiers,
                         scale,
                         Message::PitchChanged,
                         || Message::PitchChanged(0.0),
@@ -15807,12 +15831,22 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         // Both options words carry the output format and word-clock input
         // termination (UC bit 0, UCX 0x008).  The UCX adds EQ+D for Record
         // (H67/H68/H75, H71/H101).
-        body = body
-            .push(check_row(
+        // Single-speed word clock is a clock-sync control: a Device-path
+        // option, kept as a same-height filler in convenience (GUI spec §4).
+        if state.engine_rate_mode == EngineRateMode::Fixed {
+            body = body.push(check_row(
                 "Single speed word clock",
                 settings.word_clock_single_speed,
                 Message::WordClockSingleSpeedChanged(!settings.word_clock_single_speed),
-            ))
+            ));
+        } else {
+            body = body.push(
+                iced::widget::Space::new()
+                    .width(Length::Fill)
+                    .height(Length::Fixed(SETTINGS_CONTROL_H * scale)),
+            );
+        }
+        body = body
             .push(choice_row(
                 "Optical",
                 ["ADAT", "SPDIF"],
@@ -15837,11 +15871,21 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // sets termination with a rear mechanical switch and reports no software
     // control, so the row is hidden there.
     if state.device.capabilities().word_clock_termination {
-        body = body.push(check_row(
-            "Word clock in",
-            settings.word_clock_termination,
-            Message::WordClockTerminationChanged(!settings.word_clock_termination),
-        ));
+        // Word-clock input termination is a clock-sync control: a Device-path
+        // option, kept as a same-height filler in convenience (GUI spec §4).
+        if state.engine_rate_mode == EngineRateMode::Fixed {
+            body = body.push(check_row(
+                "Word clock in",
+                settings.word_clock_termination,
+                Message::WordClockTerminationChanged(!settings.word_clock_termination),
+            ));
+        } else {
+            body = body.push(
+                iced::widget::Space::new()
+                    .width(Length::Fill)
+                    .height(Length::Fixed(SETTINGS_CONTROL_H * scale)),
+            );
+        }
     }
     if state.device.firmware().is_some() {
         body = body.push(
@@ -16064,25 +16108,14 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     );
-    if state.engine_rate_mode == EngineRateMode::Fixed {
-        body = body.push(
-            row![
-                strip::hint_at(
-                    caption("RTL"),
-                    "Round Trip Latency",
-                    scale,
-                    theme::TEXT_DIALOG * scale,
-                ),
-                latency_readout(state, clock),
-            ]
-                .spacing(theme::SPACE_MD * scale)
-                .align_y(iced::Alignment::Center),
-        );
+    // The RTL field carries its own label on row 1 (`RTL x.x ms`) with the
+    // formula wrapping below; convenience shows the same four-row slot blank.
+    let rtl_content = if state.engine_rate_mode == EngineRateMode::Fixed {
+        latency_readout(state, clock)
     } else {
-        // Convenience: no latency figure and no label. The four lines keep
-        // their space as a blank filler of the same height (GUI spec §4).
-        body = body.push(rtl_blank(scale));
-    }
+        rtl_blank(scale)
+    };
+    body = body.push(strip::hint(rtl_content, "Round Trip Latency", scale));
     // Transport diagnostics in three sections by reset behaviour:
     //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
     //  - This stream: per-run transport detail, cleared on stream restart
@@ -16391,33 +16424,41 @@ fn transport_delta(
 /// rate-follow modes reserve the same four lines so the settings card never
 /// resizes (GUI spec §4). `value_color` carries the pending colour for the
 /// ring fallback; the formula lines use the secondary colour.
-fn rtl_block(
-    value: String,
-    formula: [String; 3],
+/// The RTL field is a fixed four-row slot: row 1 carries the label and the
+/// total (`RTL x.x ms`), and the formula wraps naturally in the three rows
+/// below. Both rate-follow modes reserve the same slot, so the card never
+/// resizes (GUI spec §4).
+fn rtl_field(
+    first_line: String,
+    formula: String,
     value_color: Color,
     scale: f32,
 ) -> Element<'static, Message> {
     let line = |s: String, c: Color| text(s).color(c).size(theme::TEXT_DIALOG * scale);
+    let row_h = theme::TEXT_DIALOG * scale * 1.3;
     column![
-        line(value, value_color),
-        line(formula[0].clone(), theme::text_sec()),
-        line(formula[1].clone(), theme::text_sec()),
-        line(formula[2].clone(), theme::text_sec()),
+        line(first_line, value_color),
+        container(line(formula, theme::text_sec()).width(Length::Fill))
+            .height(Length::Fixed(3.0 * row_h))
+            .width(Length::Fill),
     ]
     .spacing(theme::SPACE_TIGHT * scale)
+    .width(Length::Fill)
     .into()
 }
 
-/// Four blank lines of the same height as `rtl_block`: the convenience-path
-/// filler. A space reserves the full line height, so the block matches the
-/// Device-path readout exactly.
+fn rtl_block(
+    value: String,
+    formula: String,
+    value_color: Color,
+    scale: f32,
+) -> Element<'static, Message> {
+    rtl_field(format!("RTL {value}"), formula, value_color, scale)
+}
+
+/// The convenience-path filler: the same four-row slot, blank.
 fn rtl_blank(scale: f32) -> Element<'static, Message> {
-    rtl_block(
-        " ".to_string(),
-        [" ".to_string(), " ".to_string(), " ".to_string()],
-        theme::text_sec(),
-        scale,
-    )
+    rtl_field(" ".to_string(), " ".to_string(), theme::text_sec(), scale)
 }
 
 /// The latency readout. While the card plays, it uses the card's actual
@@ -16429,7 +16470,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
     if state.engine_rate_mode == EngineRateMode::Auto {
         return rtl_blank(scale);
     }
-    let blank3 = || [" ".to_string(), " ".to_string(), " ".to_string()];
+    let blank3 = || " ".to_string();
     match state.card_stream {
         Some(card) => {
             let ring_color = if quantum_pending(state) {
@@ -16598,18 +16639,16 @@ impl RtlEstimate {
         format!("{:.1} ms", frames_ms(self.total(), self.rate))
     }
 
-    /// The three formula lines under the value, milliseconds. The graph term
-    /// assumes the DAW runs through PipeWire (see the manual caveat).
-    fn breakdown(&self) -> [String; 3] {
-        [
-            format!(
-                "{:.1} ms USB + {:.1} ms device lead",
-                frames_ms(self.usb, self.rate),
-                frames_ms(self.lead, self.rate)
-            ),
-            format!("+ {:.1} ms converter", frames_ms(self.converter, self.rate)),
-            format!("+ {:.1} ms graph", frames_ms(self.graph, self.rate)),
-        ]
+    /// The formula under the value, one wrapping line, milliseconds. The
+    /// graph term assumes the DAW runs through PipeWire (see the manual).
+    fn breakdown(&self) -> String {
+        format!(
+            "{:.1} ms USB + {:.1} ms device lead + {:.1} ms converter + {:.1} ms graph",
+            frames_ms(self.usb, self.rate),
+            frames_ms(self.lead, self.rate),
+            frames_ms(self.converter, self.rate),
+            frames_ms(self.graph, self.rate)
+        )
     }
 }
 
@@ -16701,14 +16740,15 @@ impl MeasuredRtl {
         format!("{:.1} ms", frames_ms(self.total(), self.rate))
     }
 
-    /// The three formula lines under the value, milliseconds. The measured
-    /// device total includes the live USB queue.
-    fn breakdown(&self) -> [String; 3] {
-        [
-            format!("{:.1} ms device", frames_ms(self.device, self.rate)),
-            format!("(incl. {:.1} ms queue)", frames_ms(self.live_queue, self.rate)),
-            format!("+ {:.1} ms graph", frames_ms(self.graph, self.rate)),
-        ]
+    /// The formula under the value, one wrapping line, milliseconds. The
+    /// measured device total includes the live USB queue.
+    fn breakdown(&self) -> String {
+        format!(
+            "{:.1} ms device (incl. {:.1} ms queue) + {:.1} ms graph",
+            frames_ms(self.device, self.rate),
+            frames_ms(self.live_queue, self.rate),
+            frames_ms(self.graph, self.rate)
+        )
     }
 }
 
@@ -27351,6 +27391,7 @@ mod tests {
         state.engine_rate_mode = EngineRateMode::Fixed;
         state.device.settings_mut().sample_rate = 44_100;
         state.device.settings_mut().pitch_percent = 1.5;
+        state.pro_pitch = 1.5;
         state.device.settings_mut().dim = true;
         state.control_room.main_dim_db = -12.0;
         state.talkback_on = true;
@@ -27704,6 +27745,7 @@ mod tests {
         source.engine_rate_mode = EngineRateMode::Fixed;
         source.device.settings_mut().sample_rate = 44_100;
         source.device.settings_mut().pitch_percent = 1.5;
+        source.pro_pitch = 1.5;
         let workspace = capture_workspace(&source);
 
         let mut target = new(true, None, None);

@@ -1253,7 +1253,13 @@ sources, including LTC; the UCX offers four: Internal, SPDIF coax., Optical
 and Word.
 
 The `Clock source` row is a picker of the unit's own clock options only; it
-never lists host engine modes. The `Sample rate` row reports the device rate.
+never lists host engine modes. It is a Device-path control: shown when `Rate
+follows` is Device, a nonvisible filler of the same height when `Rate follows`
+is PipeWire (§4). The `Single speed word clock` and `Word clock in`
+(termination) rows are Device-path clock-sync controls likewise: shown in
+Device, same-height fillers in PipeWire. The signal-path settings (Optical and
+SPDIF format, the UC reference levels, EQ for Record) and the Firmware/Serial
+readouts stay in both modes. The `Sample rate` row reports the device rate.
 When the clock source is Internal and `Rate follows` is Device, it is an
 editable picker of the device-supported rates; selecting a rate drives the card
 through the engine-rate path. When `Rate follows` is PipeWire, or the clock
@@ -1264,13 +1270,14 @@ between modes (§4). The rate authority lives in the host engine group, not here
 Graph and the latency readout) use the secondary text colour; editable controls
 use the primary colour.
 
-Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Normal drag and
-wheel steps are 0.1 %; Shift gives 0.01 %. Double-click resets to 0.0 %.
-Every change is written immediately to the device. Pitch is a Device-path
-control: the slider is shown when `Rate follows` is Device. When `Rate
-follows` is PipeWire the row is a nonvisible filler of the same height (§4)
-and the device clock runs nominal (0 %). The saved pitch is preserved in the
-scene and returns to the clock when Device is selected again.
+Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
+move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
+fine enough). Double-click resets to 0.0 %. Every change is written immediately
+to the device. Pitch is a Device-path control: the slider is shown when `Rate
+follows` is Device. When `Rate follows` is PipeWire the row is a nonvisible
+filler of the same height (§4) and the device clock runs nominal (0 %). The
+saved pitch is preserved in the scene and returns to the clock when Device is
+selected again.
 
 The panel is 360 px wide at scale 1 and its caption column is 110 px. The
 width reserves the thin scrollbar's width so an appearing scrollbar does not
@@ -1295,13 +1302,13 @@ Below the device group, the host engine group shows the PipeWire rate,
 quantum and latency when the sound server owns the rate. `Quantum` is the
 graph quantum: one ALSA period under IRQ scheduling, two periods under
 timer scheduling (a batch device is served two periods per graph cycle). The
-`RTL` row carries the tooltip "Round Trip Latency". It is a four-line block:
-a secondary (grey) value `x.x ms` on the first line, then three lines of
-secondary text with the contributions in milliseconds (USB queue, device
-lead, converter, graph). The formula and the calibration basis are in the
-manual §14. The RTL block is a Device-path report: when `Rate follows` is
-PipeWire the whole row (label and four lines) stays as a blank filler of the
-same height (§4). The graph term assumes the DAW runs through PipeWire. It also shows the Fireface
+`RTL` field carries the tooltip "Round Trip Latency". It is a fixed four-row
+slot: row 1 is the label and total together (`RTL x.x ms`, secondary grey),
+and the formula (USB queue, device lead, converter, graph, in milliseconds)
+wraps naturally in the rows below. The formula and the calibration basis are
+in the manual §14. The RTL field is a Device-path report: when `Rate follows`
+is PipeWire the whole four-row slot stays blank (§4). The graph term assumes
+the DAW runs through PipeWire. It also shows the Fireface
 sink's host volume in percent and dB, with a `0 dB` action. The host volume is an attenuation before the interface, so it lowers
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.
@@ -2135,14 +2142,14 @@ applied to the running device as they change.
 
 ## 13. Latency display
 
-The Audio Configuration panel has one `RTL` row: the label carries the
-tooltip "Round Trip Latency". It is a four-line block — a secondary (grey)
-value `x.x ms` with one decimal on the first line, then three lines listing
-the contributions (USB queue, device lead, converter, graph) in milliseconds.
-The formula and the terms are in the manual §14. The block is a Device-path
-report: when `Rate follows` is PipeWire the whole row (label and four lines)
-stays as a blank filler of the same height (§4), so the panel does not resize
-between modes. The buffer-size picker sets the graph period.
+The Audio Configuration panel has one `RTL` field with the tooltip "Round
+Trip Latency". It is a fixed four-row slot: row 1 carries the label and total
+together (`RTL x.x ms`, one decimal, secondary grey), and the formula (USB
+queue, device lead, converter, graph, in milliseconds) wraps naturally in the
+rows below. The formula and the terms are in the manual §14. The field is a
+Device-path report: when `Rate follows` is PipeWire the whole four-row slot
+stays blank (§4), so the panel does not resize between modes. The buffer-size
+picker sets the graph period.
 
 The value is the host round trip: USB queue, device lead, converter delay and
 one graph period (the running graph quantum, two ALSA periods under timer

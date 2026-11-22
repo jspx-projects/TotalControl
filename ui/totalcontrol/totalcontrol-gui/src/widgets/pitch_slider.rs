@@ -4,7 +4,6 @@
 //! finer), double-click to reset. The interaction matches the rotary knobs
 //! and faders; only the drawing is a horizontal track.
 
-use iced::keyboard::Modifiers;
 use iced::widget::canvas::{self, Canvas, Geometry, Path, Stroke};
 use iced::{mouse, Color, Element, Length, Point, Rectangle, Size};
 use std::time::Instant;
@@ -27,7 +26,6 @@ pub struct PitchSlider<Message> {
     pub value: f32,
     pub range: (f32, f32),
     pub step: f32,
-    pub modifiers: Modifiers,
     pub scale: f32,
     pub on_change: Box<dyn Fn(f32) -> Message>,
     pub on_reset: Box<dyn Fn() -> Message>,
@@ -60,11 +58,9 @@ impl<Message> canvas::Program<Message> for PitchSlider<Message> {
         let track_left = bounds.x + HANDLE_R * self.scale;
         let track_w = (bounds.width - 2.0 * HANDLE_R * self.scale).max(1.0);
         let locate = |x: f32| t_to_value((x - track_left) / track_w, self.range);
-        let step = if self.modifiers.shift() {
-            self.step * 0.1
-        } else {
-            self.step
-        };
+        // The pitch slider has no Shift fine mode: 0.1 % steps are already
+        // fine enough, and a finer step makes the wheel unusably slow.
+        let step = self.step;
 
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
@@ -176,7 +172,6 @@ impl<Message> canvas::Program<Message> for PitchSlider<Message> {
 
 pub fn pitch_slider(
     value: f32,
-    modifiers: Modifiers,
     scale: f32,
     on_change: impl Fn(f32) -> crate::app::Message + 'static,
     on_reset: impl Fn() -> crate::app::Message + 'static,
@@ -185,7 +180,6 @@ pub fn pitch_slider(
         value,
         range: (-5.0, 5.0),
         step: 0.1,
-        modifiers,
         scale,
         on_change: Box::new(on_change),
         on_reset: Box::new(on_reset),
