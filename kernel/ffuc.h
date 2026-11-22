@@ -402,6 +402,11 @@ struct ffuc {
 	/* Directions that were running when the system suspended. */
 	unsigned int resume_mask;
 	unsigned int rate;
+	/* The programmed clock reference (Hz): the nominal rate scaled by the
+	 * pitch the host writes through the DDS divisor. The cadence judge
+	 * compares the measured clock against this, so a legitimate varispeed
+	 * offset is not a rate mismatch. */
+	unsigned int clock_rate;
 	const struct ffuc_mode *mode;
 	unsigned int urb_frames;
 	unsigned int base_urb_frames;

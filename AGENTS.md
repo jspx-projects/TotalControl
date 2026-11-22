@@ -119,6 +119,16 @@ the protocol or behaviour from the section alone.
   kind, field, block) without capture evidence and a user-approved name;
   if evidence extends or contradicts an earlier claim, first establish the
   naming impact and get that confirmed before code changes.
+- A conclusion requires **complete** evidence, not merely present evidence.
+  A partial decode, a single sample, or the first matching term is not the
+  whole picture. Before stating a value, formula, or behaviour as final,
+  enumerate every contributor — every write to a field, every term in a
+  computation, every case in a dispatch — and search exhaustively rather
+  than stopping at the first hit. "I found no other" is not "there is no
+  other" until the search is exhaustive. State the scope of what was
+  checked alongside the conclusion and keep anything unexamined explicitly
+  open. A confident wrong conclusion is worse than an open question;
+  re-derive from the full evidence before reversing or asserting a claim.
 - When a concept is renamed, retire the old name everywhere in the same
   change: specification, code and comments, work notes, tests and the
   manual. Renames go through the user before the code lands.
