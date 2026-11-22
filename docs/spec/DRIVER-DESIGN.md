@@ -473,6 +473,12 @@ sleeping USB transfer, while the trigger and fill run in atomic context.
 The device writes stay the per-model `hw_mute` op (UCX/Babyface playback
 mask, UC mute word).
 
+Engine start holds the playback outputs muted while the gate is active, so
+the output stays muted from engine start through the trigger until the gate
+unmutes. The gate is the sole owner of the startup unmute; engine start
+does not unmute ahead of it (the stream-start DAC-open sequence unmutes,
+and engine start re-mutes after it).
+
 While the gate is armed, a starved completion sends silence without
 counting `out_underruns` and without arming the XRUN stop: the muted
 transient is intended startup. The existing priming keeps feeding the
@@ -820,7 +826,10 @@ streaming alternate setting.
 
 Engine start selects the alternate setting, commits the rate, sends the
 session-open words where required, and sets up URBs. The ISO path waits
-the start margin before it submits the URBs, then unmutes.
+the start margin before it submits the URBs. Engine start leaves the
+playback outputs muted when the startup gate (§4.1.3) is active; the gate
+unmutes once delivery is stable. With the gate disabled, engine start
+unmutes directly.
 
 The UC Windows-personality path uses three timed gaps:
 

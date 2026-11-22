@@ -3098,9 +3098,16 @@ static int ffuc_engine_start(struct ffuc *chip)
 		dev_warn_ratelimited(&chip->dev->dev,
 				     "cannot watch the status endpoint: %d\n", ret);
 
-	ret = chip->desc->ops->hw_mute(chip, false);
-	if (ret < 0)
-		goto error;
+	/* The startup gate owns the playback mute. With it active, mute here
+	 * and let the gate unmute once delivery is stable: unmuting now would
+	 * open an audible window between engine start and the gate's mute at
+	 * trigger (the stream-start DAC-open sequence unmutes too). Without the
+	 * gate, unmute now so the engine plays. */
+	if (chip->desc->ops->hw_mute) {
+		ret = chip->desc->ops->hw_mute(chip, prefill);
+		if (ret < 0)
+			goto error;
+	}
 
 	dev_dbg(&chip->dev->dev,
 		"engine started: %u Hz, alt %u, %u frames x %u URBs\n",
