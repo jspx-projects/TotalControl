@@ -16133,10 +16133,33 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .width(Length::Fill);
 
     let internal = state.device.settings().clock_source == "Internal";
+    let external_owner = detected_path(state).is_external();
     let mut body = column![heading];
-    // The mode is ours to set only when the device runs on its internal clock.
-    // Slaved to an external clock, the rate is determined by the device.
-    if internal {
+    // The mode is ours to set only when the device runs on its internal clock
+    // and no external process owns the PCM. Slaved to an external clock, the
+    // rate is determined by the device; under JACK or a direct-ALSA DAW, the
+    // owner determines it and TotalControl only reports it.
+    if external_owner {
+        let owner_label = match state.pcm_owner {
+            audio_path::PcmOwner::Jack => "JACK",
+            _ => "ALSA",
+        };
+        body = body.push(
+            row![
+                caption("Rate follows"),
+                strip::hint(
+                    text(owner_label)
+                        .color(theme::text_sec())
+                        .size(text_size)
+                        .width(Length::Fill),
+                    "Another process owns the device clock.",
+                    scale,
+                ),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    } else if internal {
         body = body.push(
             row![
                 caption("Rate follows"),
