@@ -3824,9 +3824,25 @@ fn engine_intent(state: &TotalControl, intent: crate::audio_path_service::Intent
         .is_some_and(|svc| svc.send(intent))
 }
 
+/// The detected audio path, from the kernel PCM owner and TotalControl's rate
+/// mode. The owner is a kernel fact (the engine snapshot), never a setting.
+fn detected_path(state: &TotalControl) -> audio_path::AudioPath {
+    audio_path::classify(state.pcm_owner, state.engine_rate_mode, None)
+}
+
+/// Whether TotalControl may write the PipeWire graph: only when PipeWire owns
+/// the PCM or nobody does. Under an external owner (JACK or a direct-ALSA DAW)
+/// the clock is read-only and TotalControl steps aside.
+fn graph_writable(state: &TotalControl) -> bool {
+    !detected_path(state).is_external()
+}
+
 /// Force the graph rate off the UI thread. The engine poll confirms the actual
 /// graph; the caller reflects the force optimistically until then.
 fn write_force_rate(state: &TotalControl, rate: u32) {
+    if !graph_writable(state) {
+        return;
+    }
     if !engine_intent(state, crate::audio_path_service::Intent::ForceRate(rate)) {
         if let Err(e) = pw_clock::force_rate(rate) {
             log::warn!("Setting the PipeWire rate failed: {e}");
@@ -3836,6 +3852,9 @@ fn write_force_rate(state: &TotalControl, rate: u32) {
 
 /// Force the graph quantum off the UI thread.
 fn write_force_quantum(state: &TotalControl, quantum: u32) {
+    if !graph_writable(state) {
+        return;
+    }
     if !engine_intent(state, crate::audio_path_service::Intent::ForceQuantum(quantum)) {
         let _ = pw_clock::force_quantum(quantum);
     }
@@ -5743,6 +5762,7 @@ fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
     if state.device.is_mock()
         || state.engine_rate_mode != EngineRateMode::Fixed
         || !state.device.rate_follows_sound_server()
+        || !graph_writable(state)
     {
         return;
     }
@@ -5794,6 +5814,9 @@ fn rate_authority_target(state: &TotalControl, clock: Option<PwClock>) -> Option
 /// still owns it.
 fn apply_allowed_rates(state: &mut TotalControl) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    if !graph_writable(state) {
         return;
     }
     let wanted = device_rates(state);
@@ -15364,6 +15387,9 @@ fn running_graph_quantum(state: &TotalControl) -> u32 {
 /// another quantum, that actual value is adopted with a notice, so the
 /// displayed value is always the truth.
 fn reconcile_quantum(state: &mut TotalControl) {
+    if !graph_writable(state) {
+        return;
+    }
     let Some(force) = state
         .engine
         .map(|engine| engine.force_quantum)
@@ -15440,6 +15466,9 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() || rate == 0 {
         return;
     }
+    if !graph_writable(state) {
+        return;
+    }
     let floor = minimum_quantum(state, rate);
     let current = state.engine_force_quantum;
     let target = if current == 0 {
@@ -15470,6 +15499,9 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
 /// immediate mode switch (P1).
 fn force_engine_reprepare(state: &mut TotalControl) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    if !graph_writable(state) {
         return;
     }
     if !engine_intent(state, crate::audio_path_service::Intent::Reprepare) {
@@ -15529,6 +15561,9 @@ fn engine_sched_policy(state: &TotalControl, rate: u32) -> pw_clock::SchedPolicy
 /// transition, the reference pattern.
 fn apply_engine_policy(state: &mut TotalControl, rate: u32) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() || rate == 0 {
+        return;
+    }
+    if !graph_writable(state) {
         return;
     }
     let policy = engine_sched_policy(state, rate);
