@@ -78,9 +78,59 @@ All development switches use the `TOTALCONTROL_` prefix:
 | `uc-route-out` example | Route a playback pair to one matrix output pair (`uc-route-out <source> <matrix_channel> [gain_db]`) |
 | `uc-loopback` example | Write the UC loopback bank (`uc-loopback <card> <index> [more]`) |
 | `ucx-dump-compare` example | Request the full dump and compare it with a saved scene |
+| `tools/fireface-hwdep.c` | Unified hwdep access: counters, words, `dump`, `loopback`, `loopback-setup` |
+| `tools/alsa-latency-probe.c` | PCM loopback measurement: impulse latency + `pattern` sample-exact mode |
 
 Protocol captures and measurements are evidence, not specifications. Record
 the device model, transport, firmware and rate with every capture.
+
+## Loopback measurement (UCX)
+
+Reproducible procedure for routing a playback pair to an output and capturing
+it back, either through the device's internal loopback or an external cable.
+`fireface-hwdep loopback-setup` performs the device configuration in one call;
+`alsa-latency-probe` performs the measurement.
+
+Build: `gcc -O2 -Ikernel -o fireface-hwdep tools/fireface-hwdep.c` and
+`gcc -O2 -o alsa-latency-probe tools/alsa-latency-probe.c -lasound -lm -lpthread`.
+
+| Step | Command | Why |
+|---|---|---|
+| 1. Close the GUI | stop `totalcontrol-gui` | One shared hwdep event FIFO: a second reader steals dump/state events, and the GUI's scene reapply overwrites routing and mutes mid-measurement. |
+| 2. Free the PCM | `pactl set-card-profile <card> off` | A direct-ALSA tool needs `hw:` open; IF1 writes are bulk transfers with a 100 ms timeout that race ISO audio traffic, so they land only while the PCM is idle. |
+| 3. Configure | `fireface-hwdep loopback-setup AN5/6 pb1` | Zeroes the output submix, writes unity matrix coefficients, sets output volume 0 dB, **unmutes the capture inputs**, enables internal loopback. Add `--cable` for an external cable (loopback flag off). |
+| 4a. Internal, sample-exact | `alsa-latency-probe pattern hw:0,0 48000 2 1 2 5 6 18` | Digital tap: bit-exact comparison is meaningful. Reports exact / Q23-truncated / zero / other per channel. |
+| 4b. Cable, latency | `alsa-latency-probe hw:0,0 48000 1024 48 0 4 -1 18 0.5` | Impulse-train phase gives the analog round-trip latency. |
+| 5. Restore | `pactl set-card-profile <card> pro-audio` | Returns the card to the graph. |
+
+`loopback-setup <out> <src>`: `<out>` is `AN1/2 AN3/4 AN5/6 PH7/8 SPDIF
+ADAT1/2 ADAT3/4 ADAT5/6 ADAT7/8`; `<src>` is `pb1..pb17` or `in1..in7`
+(N feeds the left side, N+1 the right).
+
+Channel ordering: TotalControl's internal output pairs are Phones-first
+(pair 0 = Phones 7/8); the UCX DSP channels are AN-first (dsp 0 = AN1/2,
+dsp 6 = Phones 7/8). `loopback-setup` works in DSP/hardware numbers, not the
+internal pair index. The loopback capture input mirrors the DSP channel for
+the analog outputs only (AN1/2 → in1/2, AN5/6 → in5/6, verified); for
+Phones/SPDIF/ADAT the capture channel is unverified — scan the capture
+channels rather than assuming a number.
+
+Verified failure causes, each baked into the procedure above:
+
+- **Muted capture input** is the usual silent-capture cause. The input word
+  `NN00` bit 0 is mute; `loopback-setup` clears it. A silent capture otherwise
+  looks identical to an absent cable.
+- **Matrix coefficients are write-only live DSP** (`0x4000 + dsp*0x40 + src`,
+  unity coarse `0x9000`). The state dump's `NNa0` words are fader-derived and
+  do not reflect them; verify routing by audio, not by the dump.
+- **Internal loopback quantizes to Q23** (23 fractional bits, truncation toward
+  zero, max error 2^-23 ≈ −138 dBFS). About half of full-scale F32 samples lose
+  one mantissa bit; this is a device property, present on every output pair.
+  The host path (ALSA FLOAT_LE ↔ driver ↔ wire) is a bit-exact word copy.
+- **A cable path is not sample-exact.** The converters add fractional-sample
+  group delay and noise; use the impulse mode, not the pattern mode, for it.
+- **The startup gate mutes the first ≤256 ms.** The pattern mode skips that
+  window and aligns on several anchor frames.
 
 ## Build and test helpers
 
