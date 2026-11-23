@@ -444,12 +444,9 @@ pub fn parse_hw_params(text: &str) -> Option<CardStream> {
     })
 }
 
-/// The open *playback* stream of the ALSA card whose `id` is `card_id`.
-/// `None` when no such card exists or nothing is playing. Playback only: the
-/// capture side is held open by TotalControl's own input meter, so
-/// reading it would report the app's own stream
-/// (it once showed the meter's period as the card's).
-pub fn card_stream(card_id: &str) -> Option<CardStream> {
+/// The procfs directory of the ALSA card whose `id` is `card_id`. `None` when
+/// no such card exists.
+fn card_proc_dir(card_id: &str) -> Option<std::path::PathBuf> {
     let cards = std::fs::read_dir("/proc/asound").ok()?;
     for entry in cards.flatten() {
         let dir = entry.path();
@@ -458,13 +455,85 @@ pub fn card_stream(card_id: &str) -> Option<CardStream> {
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.starts_with("card"));
         let id = std::fs::read_to_string(dir.join("id")).unwrap_or_default();
-        if !is_card || id.trim() != card_id {
-            continue;
+        if is_card && id.trim() == card_id {
+            return Some(dir);
         }
-        let text = std::fs::read_to_string(dir.join("pcm0p/sub0/hw_params")).ok()?;
-        return parse_hw_params(&text);
     }
     None
+}
+
+/// The open *playback* stream of the ALSA card whose `id` is `card_id`.
+/// `None` when no such card exists or nothing is playing. Playback only: the
+/// capture side is held open by TotalControl's own input meter, so
+/// reading it would report the app's own stream
+/// (it once showed the meter's period as the card's).
+pub fn card_stream(card_id: &str) -> Option<CardStream> {
+    let dir = card_proc_dir(card_id)?;
+    let text = std::fs::read_to_string(dir.join("pcm0p/sub0/hw_params")).ok()?;
+    parse_hw_params(&text)
+}
+
+/// The kernel's view of the open playback PCM, from
+/// `/proc/asound/<card>/pcm0p/sub0/status`. Server-free: these are short kernel
+/// reads, never a sound-server call, so they keep flowing when PipeWire stalls.
+/// `None` when the PCM is closed (`closed`) or the card is absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PcmStatus {
+    /// The PCM state (`RUNNING`, `SETUP`, `PREPARED`, `PAUSED`, `SUSPENDED`,
+    /// `XRUN`).
+    pub state: String,
+    /// The owning process id (`owner_pid`), present since kernel v2.6.33.
+    /// `None` only on a kernel that does not print it (defensive).
+    pub owner_pid: Option<u32>,
+    /// `snd_pcm_delay`: the ring fill plus the in-flight URB queue, in frames.
+    pub delay: Option<u32>,
+    /// The ring fill (`appl_ptr − hw_ptr`), in frames: the audio queued ahead
+    /// of the hardware read pointer.
+    pub fill: Option<u32>,
+}
+
+/// Pure parser for the playback PCM `status` file. `None` for `closed`.
+pub fn parse_pcm_status(text: &str) -> Option<PcmStatus> {
+    if text.trim() == "closed" {
+        return None;
+    }
+    let field = |name: &str| -> Option<u64> {
+        let line = text
+            .lines()
+            .find(|l| l.split(':').next().map(|k| k.trim()) == Some(name))?;
+        line.split(':').nth(1)?.trim().parse().ok()
+    };
+    let state = text
+        .lines()
+        .find(|l| l.starts_with("state:"))
+        .and_then(|l| l.split(':').nth(1))
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+    let fill = match (field("appl_ptr"), field("hw_ptr")) {
+        (Some(appl), Some(hw)) => Some(appl.saturating_sub(hw) as u32),
+        _ => None,
+    };
+    Some(PcmStatus {
+        state,
+        owner_pid: field("owner_pid").map(|v| v as u32),
+        delay: field("delay").map(|v| v as u32),
+        fill,
+    })
+}
+
+/// The open playback PCM status of the ALSA card whose `id` is `card_id`.
+/// `None` when the card is absent or the PCM is closed.
+pub fn card_pcm_status(card_id: &str) -> Option<PcmStatus> {
+    let dir = card_proc_dir(card_id)?;
+    let text = std::fs::read_to_string(dir.join("pcm0p/sub0/status")).ok()?;
+    parse_pcm_status(&text)
+}
+
+/// The `comm` of a process, read from `/proc/<pid>/comm`. `None` when the
+/// process is gone or unreadable. Kernel `comm` is bounded to 15 characters.
+pub fn process_comm(pid: u32) -> Option<String> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    Some(text.trim().to_string())
 }
 
 /// The PipeWire node ids of the RME Pro Audio playback and capture nodes,
@@ -669,6 +738,27 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         assert!((s.period_ms() - 5.333).abs() < 0.01);
         assert!((s.buffer_ms() - 10.667).abs() < 0.01);
         assert_eq!(parse_hw_params("closed\n"), None);
+    }
+
+    #[test]
+    fn parses_the_playback_pcm_status() {
+        // The desk-verified `status` layout: `key   : value`, pointers after a
+        // `-----` rule. delay = fill + the in-flight URB queue.
+        let text = "state: RUNNING\nowner_pid   : 2109270\n\
+                     trigger_time: 428157.725532926\ntstamp      : 430338.914271538\n\
+                     delay       : 1797\navail       : 6491\navail_max   : 7211\n\
+                     -----\nhw_ptr      : 104697003\nappl_ptr    : 104698704\n";
+        let s = parse_pcm_status(text).unwrap();
+        assert_eq!(s.state, "RUNNING");
+        assert_eq!(s.owner_pid, Some(2109270));
+        assert_eq!(s.delay, Some(1797));
+        assert_eq!(s.fill, Some(1701));
+        assert_eq!(parse_pcm_status("closed\n"), None);
+        // A kernel without owner_pid still reports the delay and fill.
+        let no_owner = "state: RUNNING\ndelay       : 96\n-----\nhw_ptr      : 100\nappl_ptr    : 148\n";
+        let s = parse_pcm_status(no_owner).unwrap();
+        assert_eq!(s.owner_pid, None);
+        assert_eq!(s.fill, Some(48));
     }
 
     #[test]

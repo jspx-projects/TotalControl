@@ -15198,14 +15198,6 @@ fn running_rate(state: &TotalControl) -> u32 {
     clock_facts(state).running_rate()
 }
 
-/// The rate Device mode forces: the device's set rate is the boss. Falls back
-/// to the stored host force, then the running graph rate, when no device rate
-/// is set. Used by both the mode handler and the startup restore so they
-/// cannot diverge.
-fn device_mode_rate(state: &TotalControl) -> u32 {
-    clock_facts(state).device_mode_rate()
-}
-
 /// The rate Fixed mode forces and holds. On internal clock it is the user's
 /// stored fixed choice. Slaved to an external clock the device's own reported
 /// rate is the authority and the host follows it, so the readback wins. Used
@@ -15323,15 +15315,6 @@ fn reconcile_quantum(state: &mut TotalControl) {
         state.quantum_change_at = None;
         state.quantum_reforced = false;
     }
-}
-
-/// The smallest graph quantum the driver can run at `rate`: one URB
-/// (`pw_clock::period_floor`). The graph quantum is the ALSA period under
-/// IRQ scheduling and two periods under timer scheduling; either way the
-/// period floor is the quantum floor. The mock keeps a low floor so its
-/// picker stays populated.
-fn quantum_floor(state: &TotalControl, rate: u32) -> u32 {
-    clock_facts(state).quantum_floor(rate)
 }
 
 /// The supported rates the GUI offers: the driver-reported envelope when

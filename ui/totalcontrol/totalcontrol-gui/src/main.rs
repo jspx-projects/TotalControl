@@ -13,6 +13,7 @@
 //! cargo run -p totalcontrol-gui -- --build-id  # print the build identifier and exit
 //! ```
 
+mod audio_path_service;
 mod audio_perf;
 mod about;
 mod app;
