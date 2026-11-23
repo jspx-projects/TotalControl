@@ -389,8 +389,11 @@ device's rates — and offers no Auto: the quantum is forced at or above that
 minimum so it stays achievable when the graph changes rate. The `Sample rate`
 row shows the device rate, and the `Graph` row shows the graph rate that follows it.
 
-Rate and quantum changes apply over a few seconds while playback continues (the
-player is never stopped). Until a change takes effect, the affected value is
+Rate and quantum changes apply whether or not audio is playing. While a stream
+plays, the change applies over a few seconds and the player keeps running. When
+nothing is playing, TotalControl briefly activates the device to apply the
+change, so the device already runs at the requested rate and quantum before the
+next stream starts. Until a change takes effect, the affected value is
 orange, and a toast at the bottom of the window announces the change when it is
 requested. The `Sample rate` row confirms against the rate the unit itself
 reports; the `Graph` row confirms against the running stream; the quantum

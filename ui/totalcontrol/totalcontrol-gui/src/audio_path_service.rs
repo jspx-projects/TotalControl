@@ -87,8 +87,9 @@ pub enum Intent {
     /// Apply a scheduling policy to both Pro Audio nodes (the worker reads the
     /// node ids; no nodes is a no-op).
     SetSchedPolicy(SchedPolicy),
-    /// Bump the quantum by one frame and restore it: two re-prepares, the final
-    /// quantum unchanged, so a freshly applied policy lands immediately.
+    /// Apply the pending rate/quantum forces even when the graph is idle: a
+    /// brief capture activation held open until the device confirms the forced
+    /// state (a suspended node never applies a force on its own).
     Reprepare,
     /// Replace `clock.allowed-rates`, saving the previous value.
     ApplyAllowedRates(Vec<u32>),
@@ -184,9 +185,10 @@ impl AudioPathService {
         let worker_inbox = Arc::clone(&inbox);
         let worker_snapshot = Arc::clone(&snapshot);
         let worker_stop = Arc::clone(&stop);
+        let worker_card = card_id.clone();
         let worker_join = std::thread::Builder::new()
             .name("totalcontrol-engine-pw".into())
-            .spawn(move || run_pw_worker(&worker_inbox, &worker_snapshot, &worker_stop))
+            .spawn(move || run_pw_worker(&worker_inbox, &worker_snapshot, &worker_stop, &worker_card))
             .expect("starting the engine PipeWire worker");
 
         Self { inbox, snapshot, stop, joins: vec![kernel_join, worker_join] }
@@ -246,7 +248,7 @@ fn collect_kernel_facts(card_id: &str, snapshot: &Arc<Mutex<EngineSnapshot>>, st
 
 /// The PipeWire worker: executes intents and the graph reads, every call
 /// bounded by the `pw_clock` timeout. A stall here delays only the graph facts.
-fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>, stop: &AtomicBool) {
+fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>, stop: &AtomicBool, card_id: &str) {
     // The allowed-rates ownership state lives here, off the UI thread.
     let mut allowed_saved: Option<Vec<u32>> = None;
     let mut allowed_written: Option<Vec<u32>> = None;
@@ -290,13 +292,10 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
                 }
             }
             Intent::Reprepare => {
-                if let Some(clock) = pw_clock::read() {
-                    let q = clock.effective_quantum();
-                    if q > 0 {
-                        let bump = if q > 1 { q - 1 } else { q + 1 };
-                        let _ = pw_clock::force_quantum(bump);
-                        let _ = pw_clock::force_quantum(q);
-                    }
+                // Apply the forces even when the graph is idle: a brief capture
+                // activation, held until the device confirms the forced state.
+                if !pw_clock::capture_reprepare(card_id) {
+                    log::warn!("capture re-prepare did not confirm the forced engine state");
                 }
             }
             Intent::ApplyAllowedRates(wanted) => {
@@ -397,5 +396,117 @@ mod tests {
         assert!(snap.stream.is_none());
         assert!(snap.clock.is_none());
         assert!(snap.kernel_at.is_none());
+    }
+
+    /// Live desk check: the service's kernel-fact collector and PipeWire worker
+    /// read the real card. Run with `--ignored` on a machine with a Fireface.
+    #[test]
+    #[ignore]
+    fn live_service_collects_kernel_facts_and_graph() {
+        let card_id = std::fs::read_dir("/proc/asound")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if !p.file_name()?.to_str()?.starts_with("card") {
+                    return None;
+                }
+                let id = std::fs::read_to_string(p.join("id")).ok()?;
+                id.trim().contains("Fireface").then(|| id.trim().to_string())
+            })
+            .next()
+            .expect("a Fireface card present");
+        let svc = AudioPathService::spawn(card_id.clone());
+
+        let mut snap = svc.snapshot();
+        for _ in 0..100 {
+            if snap.kernel_at.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            snap = svc.snapshot();
+        }
+        assert!(snap.kernel_at.is_some(), "kernel facts collected");
+        assert_eq!(snap.stream, pw_clock::card_stream(&card_id), "stream matches procfs");
+        let expect_owner = match pw_clock::card_pcm_status(&card_id) {
+            None => PcmOwner::Idle,
+            Some(s) => match s.owner_pid {
+                Some(pid) => PcmOwner::from_comm(pw_clock::process_comm(pid).as_deref()),
+                None => PcmOwner::Unknown,
+            },
+        };
+        assert_eq!(snap.owner, expect_owner, "owner classification matches procfs");
+
+        assert!(svc.send(Intent::Poll { probe_quantum: false }));
+        for _ in 0..80 {
+            if snap.pw_at.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            snap = svc.snapshot();
+        }
+        assert!(snap.pw_at.is_some(), "graph read completed on the worker");
+    }
+
+    /// Live desk check: a rate force applies while the graph is idle/suspended,
+    /// because the force is followed by a re-prepare (the fix for the idle
+    /// rate/quantum bug). Drives the service's exact `ForceRate → Reprepare`
+    /// sequence and reads the card rate back from procfs. Restores the original
+    /// rate afterwards. Run with `--ignored`, PipeWire owning the Fireface, and
+    /// no other TotalControl instance running.
+    #[test]
+    #[ignore]
+    fn live_rate_force_applies_while_idle() {
+        let card_id = std::fs::read_dir("/proc/asound")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if !p.file_name()?.to_str()?.starts_with("card") {
+                    return None;
+                }
+                let id = std::fs::read_to_string(p.join("id")).ok()?;
+                id.trim().contains("Fireface").then(|| id.trim().to_string())
+            })
+            .next()
+            .expect("a Fireface card present");
+        let svc = AudioPathService::spawn(card_id.clone());
+
+        let mut snap = svc.snapshot();
+        for _ in 0..100 {
+            if snap.kernel_at.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            snap = svc.snapshot();
+        }
+        let baseline = snap.stream.map(|s| s.rate).unwrap_or(0);
+        assert!(baseline > 0, "an open stream to read a rate from");
+        let target = if baseline == 48_000 { 44_100 } else { 48_000 };
+
+        // The handler's sequence: force the rate, then re-prepare so it lands
+        // even though the node is suspended.
+        assert!(svc.send(Intent::ForceRate(target)));
+        assert!(svc.send(Intent::Reprepare));
+        let mut applied = false;
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(100));
+            if pw_clock::card_stream(&card_id).map(|s| s.rate) == Some(target) {
+                applied = true;
+                break;
+            }
+        }
+
+        // Restore the baseline before asserting, so a failure still leaves the
+        // card at the rate it had.
+        let _ = svc.send(Intent::ForceRate(baseline));
+        let _ = svc.send(Intent::Reprepare);
+        for _ in 0..60 {
+            if pw_clock::card_stream(&card_id).map(|s| s.rate) == Some(baseline) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(applied, "rate {target} applied while idle (baseline {baseline})");
     }
 }

@@ -426,6 +426,66 @@ pub fn set_source_suspended(node: &str, suspended: bool) -> bool {
     set_suspended("suspend-source", node, suspended)
 }
 
+/// Apply the current rate/quantum forces by activating the graph with a brief
+/// capture stream, held open until the device confirms the forced state, then
+/// closed. A suspended node never applies a force — the graph only re-prepares
+/// while a stream is running — so this is what makes a Device-mode change land
+/// while idle. The capture reads the inputs and injects nothing into the
+/// playback path, so it does not interfere with a DAW; PipeWire owns the PCM
+/// and multiplexes the capture. The audio is discarded to `/dev/null`.
+///
+/// This is a closed loop — force, activate, confirm, retry — not a fixed sleep:
+/// the capture stays open until the device runs at the forced rate and quantum.
+/// Returns true when the device confirmed the forced state.
+pub fn capture_reprepare(card_id: &str) -> bool {
+    let Some(clock) = read() else { return false };
+    let target_rate = clock.effective_rate();
+    let target_quantum = clock.effective_quantum();
+    if target_rate == 0 {
+        return false;
+    }
+    let Some(source) = fireface_source_name() else { return false };
+    for _attempt in 0..2 {
+        let Ok(mut child) = Command::new("pw-record")
+            .args(["--target", &source, "/dev/null"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return false;
+        };
+        // Wait until the device runs at the forced rate and quantum. A forced
+        // quantum must match exactly; an Auto (0) quantum is graph-conducted and
+        // scaled with the rate, so only confirm the graph is running. Polling
+        // (not a single read) is what makes a quantum-only change confirm: the
+        // rate is already at target there, so we must wait for the quantum to
+        // land. The capture stays open until the device confirms.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut confirmed = false;
+        while Instant::now() < deadline {
+            let rate_ok = card_stream(card_id).is_some_and(|s| s.rate == target_rate);
+            let quantum_ok = rate_ok
+                && if clock.force_quantum > 0 {
+                    graph_quantum() == Some(target_quantum)
+                } else {
+                    graph_quantum().is_some()
+                };
+            if rate_ok && quantum_ok {
+                confirmed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        if confirmed {
+            return true;
+        }
+    }
+    false
+}
+
 /// Parses a `hw_params` file. `None` for "closed" (the card is idle).
 pub fn parse_hw_params(text: &str) -> Option<CardStream> {
     let field = |name: &str| -> Option<u32> {
@@ -719,6 +779,130 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         force_quantum(before.force_quantum).unwrap();
         force_rate(before.force_rate).unwrap();
         assert_eq!(read(), Some(before));
+    }
+
+    /// Live desk matrix: every device rate and a spread of quanta must apply
+    /// while the graph is idle, via the capture re-prepare, repeatably. Run
+    /// with `--ignored`, PipeWire owning the Fireface, no other TotalControl
+    /// instance. Restores the original forces afterwards.
+    #[test]
+    #[ignore]
+    fn live_rate_and_quantum_matrix_applies_while_idle() {
+        let card = std::fs::read_dir("/proc/asound")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if !p.file_name()?.to_str()?.starts_with("card") {
+                    return None;
+                }
+                let id = std::fs::read_to_string(p.join("id")).ok()?;
+                id.trim().contains("Fireface").then(|| id.trim().to_string())
+            })
+            .next()
+            .expect("a Fireface card present");
+        let before = read().expect("PipeWire is running");
+
+        // Rate matrix: Auto quantum so no per-rate quantum floor interferes.
+        force_quantum(0).unwrap();
+        let mut rate_fail: Vec<(u32, bool, Option<u32>)> = Vec::new();
+        for &r in &DEVICE_SAMPLE_RATES {
+            force_rate(r).unwrap();
+            let ok = capture_reprepare(&card);
+            let actual = card_stream(&card).map(|s| s.rate);
+            if !ok || actual != Some(r) {
+                rate_fail.push((r, ok, actual));
+            }
+        }
+
+        // Quantum matrix at 48 kHz: capture_reprepare confirms the running
+        // quantum while the graph is active.
+        force_rate(48_000).unwrap();
+        capture_reprepare(&card);
+        let mut quantum_fail: Vec<u32> = Vec::new();
+        for &q in &[128u32, 256, 512, 1024] {
+            force_quantum(q).unwrap();
+            if !capture_reprepare(&card) {
+                quantum_fail.push(q);
+            }
+        }
+
+        // Restore the original forces.
+        force_quantum(before.force_quantum).unwrap();
+        force_rate(before.force_rate).unwrap();
+        capture_reprepare(&card);
+
+        assert!(rate_fail.is_empty(), "rate matrix failures (rate, confirmed, actual): {rate_fail:?}");
+        assert!(quantum_fail.is_empty(), "quantum matrix failures: {quantum_fail:?}");
+    }
+
+    /// Live desk check: a rate change also lands while a playback stream is
+    /// already running (the graph is active, not idle). Run with `--ignored`,
+    /// PipeWire owning the Fireface. Restores the original force afterwards.
+    #[test]
+    #[ignore]
+    fn live_rate_change_while_a_stream_is_playing() {
+        let card = std::fs::read_dir("/proc/asound")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if !p.file_name()?.to_str()?.starts_with("card") {
+                    return None;
+                }
+                let id = std::fs::read_to_string(p.join("id")).ok()?;
+                id.trim().contains("Fireface").then(|| id.trim().to_string())
+            })
+            .next()
+            .expect("a Fireface card present");
+        let before = read().expect("PipeWire is running");
+        let sink = fireface_sink_name().expect("the Fireface sink");
+
+        // A few seconds of silence as a stand-in playback stream.
+        let wav = std::env::temp_dir().join("tc-playing-state.wav");
+        {
+            let rate = 48_000u32;
+            let data_bytes = rate * 6 * 2 * 2; // 6 s, stereo, 16-bit
+            let mut v: Vec<u8> = Vec::new();
+            v.extend(b"RIFF");
+            v.extend(&(36 + data_bytes).to_le_bytes());
+            v.extend(b"WAVE");
+            v.extend(b"fmt ");
+            v.extend(&16u32.to_le_bytes());
+            v.extend(&1u16.to_le_bytes());
+            v.extend(&2u16.to_le_bytes());
+            v.extend(&rate.to_le_bytes());
+            v.extend(&(rate * 4).to_le_bytes());
+            v.extend(&4u16.to_le_bytes());
+            v.extend(&16u16.to_le_bytes());
+            v.extend(b"data");
+            v.extend(&data_bytes.to_le_bytes());
+            v.resize(v.len() + data_bytes as usize, 0);
+            std::fs::write(&wav, v).unwrap();
+        }
+        let mut player = Command::new("pw-play")
+            .args(["--target", &sink])
+            .arg(&wav)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("pw-play");
+        std::thread::sleep(Duration::from_secs(1));
+
+        let start = card_stream(&card).map(|s| s.rate).unwrap_or(48_000);
+        let target = if start == 48_000 { 44_100 } else { 48_000 };
+        force_rate(target).unwrap();
+        let ok = capture_reprepare(&card);
+        let actual = card_stream(&card).map(|s| s.rate);
+
+        let _ = player.kill();
+        let _ = player.wait();
+        let _ = std::fs::remove_file(&wav);
+        force_rate(before.force_rate).unwrap();
+        capture_reprepare(&card);
+
+        assert!(ok && actual == Some(target),
+            "playing-state rate change: confirmed={ok} actual={actual:?} target={target}");
     }
 
     #[test]

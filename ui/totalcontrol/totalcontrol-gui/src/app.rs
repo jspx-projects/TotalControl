@@ -5809,6 +5809,9 @@ fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
     if let Some(e) = state.engine.as_mut() {
         e.force_rate = desired;
     }
+    // Re-asserting the force must also apply it: a restarted/idle graph will
+    // not pick up the metadata on its own.
+    force_engine_reprepare(state);
     log::info!("rate-authority: re-asserted {desired} Hz");
 }
 
@@ -5999,6 +6002,9 @@ pub fn restore_engine(state: &mut TotalControl) {
     // A remembered quantum may sit below the floor of the rate the graph opens
     // at; raise it to the floor instead of forcing an impossible value.
     enforce_quantum_floor(state, running_rate(state));
+    // Apply the restored forces so the device starts at the remembered rate and
+    // quantum even when the graph is idle; metadata alone does not move it.
+    force_engine_reprepare(state);
 }
 
 /// Writes the host settings if something changed (and a path is set).
@@ -12732,6 +12738,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 begin_rate_switch_window(state);
             }
             apply_graph_rate(state, rate, true);
+            // Apply the new rate even when the graph is idle/suspended: the
+            // force is metadata PipeWire only acts on at a re-prepare, so force
+            // one (as the mode switch does). A DAW user must see the rate set.
+            force_engine_reprepare(state);
             log::info!("rate-switch: requested {rate}");
             if state.device.rate_follows_sound_server() {
                 state.notice = Some((
@@ -12794,6 +12804,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 if let Some(e) = state.engine.as_mut() {
                     e.force_quantum = quantum;
                 }
+                // Apply even when the graph is idle/suspended (the force only
+                // lands at a re-prepare).
+                force_engine_reprepare(state);
                 state.notice = Some((
                     if quantum > 0 {
                         format!("Setting quantum to {quantum} samples \u{2014} applying\u{2026}")
@@ -15440,6 +15453,9 @@ fn reconcile_quantum(state: &mut TotalControl) {
     if !state.quantum_reforced && waited >= Duration::from_secs(3) {
         if !state.device.is_mock() {
             write_force_quantum(state, force);
+            // Push the re-forced quantum too; metadata alone does not apply it
+            // to an idle graph.
+            force_engine_reprepare(state);
         }
         state.quantum_reforced = true;
         return;
@@ -15516,13 +15532,13 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
     apply_engine_policy(state, rate);
 }
 
-/// Force the Pro Audio nodes to re-prepare so a freshly applied scheduling
-/// policy (timer ↔ IRQ) takes effect immediately, even mid-playback and even
-/// when the rate is unchanged. A same-value rate/quantum force does not
-/// re-prepare (desk-verified); a quantum change does. Bump the quantum by one
-/// frame and restore it: two re-prepares, the final quantum unchanged. This
-/// interrupts the stream briefly — the correctness trade for an honest,
-/// immediate mode switch (P1).
+/// Force the graph to apply the pending rate/quantum forces and scheduling
+/// policy, even when the graph is idle. A suspended node never applies a force
+/// on its own — the graph only re-prepares while a stream is running — so this
+/// issues the capture re-prepare: a brief capture activation, which injects
+/// nothing into the playback path, held open until the device confirms the
+/// forced state. This interrupts a playing stream briefly — the correctness
+/// trade for an honest, immediate change (P1).
 fn force_engine_reprepare(state: &mut TotalControl) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return;
@@ -15531,17 +15547,8 @@ fn force_engine_reprepare(state: &mut TotalControl) {
         return;
     }
     if !engine_intent(state, crate::audio_path_service::Intent::Reprepare) {
-        // No service: the legacy synchronous bump-and-restore.
-        let Some(clock) = pw_clock::read() else {
-            return;
-        };
-        let q = clock.effective_quantum();
-        if q == 0 {
-            return;
-        }
-        let bump = if q > 1 { q - 1 } else { q + 1 };
-        let _ = pw_clock::force_quantum(bump);
-        let _ = pw_clock::force_quantum(q);
+        // No service: apply synchronously via the same capture activation.
+        let _ = pw_clock::capture_reprepare(&state.device.card_id());
     }
 }
 

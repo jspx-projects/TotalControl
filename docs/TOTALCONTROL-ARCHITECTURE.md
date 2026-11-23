@@ -501,6 +501,15 @@ the actual value is adopted with a notice. The quantum picker offers the
 driver floor intersected with the host policy bounds, so an entry it shows can
 be honoured.
 
+A forced rate or quantum applies even when the graph is idle. A suspended node
+does not act on the force metadata, because the graph re-prepares only while a
+stream runs. TotalControl applies the force by activating the graph with a brief
+capture stream. The capture is held open until the device confirms the forced
+rate and quantum, then closed; the apply is a closed loop of force, activate,
+confirm and retry. The capture reads the inputs and injects nothing into the
+playback path. PipeWire owns the PCM and multiplexes the capture, so a DAW keeps
+its stream.
+
 The GUI reports a round-trip latency, not a measured acoustic round trip. It
 has two forms, and they are never added together:
 
