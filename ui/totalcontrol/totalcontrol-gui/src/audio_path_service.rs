@@ -19,15 +19,12 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use totalcontrol_core::audio_path::PcmOwner;
 use totalcontrol_core::pw_clock::{self, CardStream, PwClock, SchedPolicy};
-
-use iced::futures::stream;
-use tokio::sync::Notify;
 
 /// The latest-value engine snapshot. The kernel fields are refreshed by the
 /// collector independently of the graph fields, so a PipeWire stall leaves the
@@ -161,24 +158,6 @@ impl IntentInbox {
     }
 }
 
-/// Wakes the UI subscription when the service publishes a snapshot. The GUI
-/// still reads on its own cadence; this only tells an idle UI that fresh facts
-/// are available.
-static ENGINE_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
-
-fn engine_notify() -> Arc<Notify> {
-    Arc::clone(ENGINE_NOTIFY.get_or_init(|| Arc::new(Notify::new())))
-}
-
-/// The engine-fact stream consumed by `app::subscription`. It yields when the
-/// service publishes a snapshot.
-pub fn engine_stream() -> impl iced::futures::Stream<Item = ()> {
-    stream::unfold(engine_notify(), |notify| async move {
-        notify.notified().await;
-        Some(((), notify))
-    })
-}
-
 /// A running audio-path service.
 pub struct AudioPathService {
     inbox: Arc<IntentInbox>,
@@ -223,11 +202,6 @@ impl AudioPathService {
         self.inbox.send(intent)
     }
 
-    /// Ask the loops to stop and wait for them.
-    pub fn stop(mut self) {
-        self.shutdown();
-    }
-
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         self.inbox.request_stop();
@@ -265,7 +239,6 @@ fn collect_kernel_facts(card_id: &str, snapshot: &Arc<Mutex<EngineSnapshot>>, st
             snap.pcm_state = status.map(|s| s.state).unwrap_or_default();
             snap.kernel_at = Some(Instant::now());
         }
-        engine_notify().notify_waiters();
         // A fast cadence: the kernel facts are the live path under a stall.
         std::thread::sleep(Duration::from_millis(120));
     }
@@ -386,7 +359,6 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
                 }
             }
         }
-        engine_notify().notify_waiters();
     }
 }
 

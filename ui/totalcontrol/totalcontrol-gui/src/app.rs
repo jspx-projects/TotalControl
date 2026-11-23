@@ -3202,6 +3202,12 @@ pub struct TotalControl {
     /// attach. The driver is the single owner; the rate list and the quantum
     /// picker derive from it. `None` for the mock or before the first query.
     pub device_envelope: Option<totalcontrol_core::fireface::hwdep::RateEnvelope>,
+    /// The audio-path service: owns every sound-server call off the UI thread
+    /// and publishes the engine snapshot. `None` for the mock (which simulates
+    /// its clock) and before attach.
+    pub audio_path_service: Option<crate::audio_path_service::AudioPathService>,
+    /// The detected PCM owner, from the engine snapshot (kernel facts).
+    pub pcm_owner: totalcontrol_core::audio_path::PcmOwner,
 }
 
 impl TotalControl {
@@ -3778,6 +3784,8 @@ pub fn new_with_device(
         driver_floor: simulated.then_some(32),
         driver_queue: simulated.then_some((48, 2)),
         device_envelope: None,
+        audio_path_service: None,
+        pcm_owner: audio_path::PcmOwner::Idle,
     };
 
     state
@@ -3789,6 +3797,47 @@ pub fn new_with_device(
 pub(crate) fn maybe_attach_device_service(state: &mut TotalControl) {
     if crate::device_service::requested() {
         attach_device_service(state);
+    }
+}
+
+/// Attach the audio-path service for a real kernel-driven device. The mock
+/// simulates its clock and needs no server calls, so it keeps the direct path.
+/// Once attached, every sound-server call runs on the service's worker, never
+/// on the UI thread.
+pub(crate) fn maybe_attach_audio_path_service(state: &mut TotalControl) {
+    if state.audio_path_service.is_some() {
+        return;
+    }
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    let card_id = state.device.card_id();
+    state.audio_path_service = Some(crate::audio_path_service::AudioPathService::spawn(card_id));
+}
+
+/// Queue an engine intent on the audio-path service. Returns false when there
+/// is no service (the mock, or before attach), so the caller can fall back.
+fn engine_intent(state: &TotalControl, intent: crate::audio_path_service::Intent) -> bool {
+    state
+        .audio_path_service
+        .as_ref()
+        .is_some_and(|svc| svc.send(intent))
+}
+
+/// Force the graph rate off the UI thread. The engine poll confirms the actual
+/// graph; the caller reflects the force optimistically until then.
+fn write_force_rate(state: &TotalControl, rate: u32) {
+    if !engine_intent(state, crate::audio_path_service::Intent::ForceRate(rate)) {
+        if let Err(e) = pw_clock::force_rate(rate) {
+            log::warn!("Setting the PipeWire rate failed: {e}");
+        }
+    }
+}
+
+/// Force the graph quantum off the UI thread.
+fn write_force_quantum(state: &TotalControl, quantum: u32) {
+    if !engine_intent(state, crate::audio_path_service::Intent::ForceQuantum(quantum)) {
+        let _ = pw_clock::force_quantum(quantum);
     }
 }
 
@@ -4551,17 +4600,15 @@ fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
         return;
     }
     state.engine_force_rate = rate;
-    if let Err(e) = pw_clock::force_rate(rate) {
-        log::warn!("Setting the workspace PipeWire rate failed: {e}");
-        return;
-    }
+    write_force_rate(state, rate);
     state.device.set_meter_rate(rate);
     state.pending_device_rate = state
         .card_stream
         .is_some()
         .then_some((rate, Instant::now()));
-    state.engine = pw_clock::read();
-    state.card_stream = pw_clock::card_stream(&state.device.card_id());
+    if let Some(engine) = state.engine.as_mut() {
+        engine.force_rate = rate;
+    }
     state.startup_scene = Some(scene.clone());
     state.startup_scene_full_rewrite = true;
     state.startup_scene_due = Some(Instant::now() + Duration::from_millis(1_500));
@@ -5499,6 +5546,7 @@ fn finish_startup_setup(state: &mut TotalControl) {
         log::debug!("Control Room assignments not restored: {e}");
     }
     sync_surround_bridge(state);
+    maybe_attach_audio_path_service(state);
     restore_engine(state);
     state.device.begin_metering();
     maybe_attach_device_service(state);
@@ -5661,9 +5709,7 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     // The cushion for the new rate lands before the force; the rate change
     // re-prepares the PCM and picks it up (C1).
     apply_engine_policy(state, rate);
-    if let Err(e) = pw_clock::force_rate(rate) {
-        log::warn!("Setting the PipeWire rate failed: {e}");
-    }
+    write_force_rate(state, rate);
     if rate > 0 {
         state.device.set_meter_rate(rate);
         // Only wait for confirmation when a stream is open.  An idle card
@@ -5676,8 +5722,11 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     } else {
         state.pending_device_rate = None;
     }
-    state.engine = pw_clock::read();
-    state.card_stream = pw_clock::card_stream(&state.device.card_id());
+    // Reflect the force optimistically; the engine poll confirms the actual
+    // graph and the open stream from the kernel facts.
+    if let Some(e) = state.engine.as_mut() {
+        e.force_rate = rate;
+    }
     // The new rate may carry a higher period floor; keep the forced quantum
     // achievable so a rate switch never leaves an impossible setting.
     enforce_quantum_floor(state, rate);
@@ -5709,16 +5758,15 @@ fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
     };
     state.rate_authority_reforce = Some(Instant::now());
     apply_engine_policy(state, desired);
-    if let Err(e) = pw_clock::force_rate(desired) {
-        log::warn!("Re-asserting the device rate failed: {e}");
-        return;
-    }
+    write_force_rate(state, desired);
     state.engine_force_rate = desired;
     state.pending_device_rate = state
         .card_stream
         .is_some()
         .then_some((desired, Instant::now()));
-    state.engine = pw_clock::read();
+    if let Some(e) = state.engine.as_mut() {
+        e.force_rate = desired;
+    }
     log::info!("rate-authority: re-asserted {desired} Hz");
 }
 
@@ -5752,6 +5800,9 @@ fn apply_allowed_rates(state: &mut TotalControl) {
     if wanted.is_empty() {
         return;
     }
+    if engine_intent(state, crate::audio_path_service::Intent::ApplyAllowedRates(wanted.clone())) {
+        return;
+    }
     let Some(current) = pw_clock::read_allowed_rates() else {
         return;
     };
@@ -5773,6 +5824,9 @@ fn apply_allowed_rates(state: &mut TotalControl) {
 /// Restore `clock.allowed-rates` saved by [`apply_allowed_rates`], unless
 /// another tool has replaced the list since.
 fn restore_allowed_rates(state: &mut TotalControl) {
+    if engine_intent(state, crate::audio_path_service::Intent::RestoreAllowedRates) {
+        return;
+    }
     if let (Some(written), Some(saved)) = (
         state.allowed_rates_written.take(),
         state.allowed_rates_saved.take(),
@@ -5790,6 +5844,9 @@ fn restore_allowed_rates(state: &mut TotalControl) {
 /// restored on the next launch.
 pub fn release_engine(state: &mut TotalControl) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    if engine_intent(state, crate::audio_path_service::Intent::Release) {
         return;
     }
     if let Err(e) = pw_clock::force_rate(0) {
@@ -5835,9 +5892,7 @@ pub fn restore_engine(state: &mut TotalControl) {
             if state.device.is_uc_model() {
                 state.pending_device_rate = None;
             }
-            if let Err(e) = pw_clock::force_rate(0) {
-                log::warn!("Releasing the PipeWire rate override failed: {e}");
-            }
+            write_force_rate(state, 0);
         }
         EngineRateMode::Fixed => {
             if state.device.is_uc_model() {
@@ -5850,33 +5905,36 @@ pub fn restore_engine(state: &mut TotalControl) {
             state.engine_force_rate = rate;
             state.rate_authority_reforce = None;
             if rate > 0 {
-                if let Err(e) = pw_clock::force_rate(rate) {
-                    log::warn!("Restoring the PipeWire rate failed: {e}");
-                }
+                write_force_rate(state, rate);
                 // The input capture PCM shares the device clock; release it
                 // so the kernel driver can move the card to the requested
                 // rate.
                 state.device.set_meter_rate(rate);
-            } else if let Err(e) = pw_clock::force_rate(0) {
-                log::warn!("Releasing the PipeWire rate override failed: {e}");
+            } else {
+                write_force_rate(state, 0);
             }
         }
     }
     if state.engine_force_quantum > 0 {
-        if let Err(e) = pw_clock::force_quantum(state.engine_force_quantum) {
-            log::warn!("Restoring the PipeWire buffer size failed: {e}");
-        }
-    } else if pw_clock::read().is_some_and(|clock| clock.force_quantum != 0) {
-        // A previous session (or another tool) left a buffer override behind.
-        // TotalControl is the only graph-clock owner here, and the preference
-        // says "no override", so give the default back instead of inheriting
-        // it for the rest of the session.
-        if let Err(e) = pw_clock::force_quantum(0) {
-            log::warn!("Releasing a stale PipeWire buffer override failed: {e}");
-        }
+        write_force_quantum(state, state.engine_force_quantum);
+    } else {
+        // The preference says "no override": release any stale one a previous
+        // session or another tool left behind. A same-value force does not
+        // re-prepare, so this is a no-op when the graph already has no force.
+        write_force_quantum(state, 0);
     }
-    state.engine = pw_clock::read();
-    state.card_stream = pw_clock::card_stream(&state.device.card_id());
+    // Reflect the restored forces optimistically; the engine poll confirms the
+    // actual graph and the open stream from the kernel facts.
+    let engine = state.engine.get_or_insert(PwClock {
+        rate: 0,
+        quantum: 0,
+        force_rate: 0,
+        force_quantum: 0,
+        min_quantum: 0,
+        max_quantum: 0,
+    });
+    engine.force_rate = state.engine_force_rate;
+    engine.force_quantum = state.engine_force_quantum;
     // The scene was just written, but at the rate the card had before the
     // stream opens.  The unit reloads its stored mixer when the stream starts
     // (the `#70` case), so queue the same full rewrite a runtime rate change
@@ -10359,6 +10417,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             maybe_attach_device_service(state);
                         }
                         restart_surround_bridge(state);
+                        maybe_attach_audio_path_service(state);
                         restore_engine(state);
                         // Let the backend start any deferred metering after
                         // the reconnect scene and rate are in place.
@@ -12686,11 +12745,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
             } else if state.device.rate_follows_sound_server() {
                 apply_engine_policy(state, running_rate(state));
-                if let Err(e) = pw_clock::force_quantum(quantum) {
-                    log::warn!("Setting the PipeWire buffer size failed: {e}");
+                write_force_quantum(state, quantum);
+                if let Some(e) = state.engine.as_mut() {
+                    e.force_quantum = quantum;
                 }
-                state.engine = pw_clock::read();
-                state.card_stream = pw_clock::card_stream(&state.device.card_id());
                 state.notice = Some((
                     if quantum > 0 {
                         format!("Setting quantum to {quantum} samples \u{2014} applying\u{2026}")
@@ -12702,7 +12760,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::HostVolumeUnity => {
-            if pw_clock::set_fireface_sink_unity() {
+            if engine_intent(state, crate::audio_path_service::Intent::SetSinkUnity) {
+                state.notice = Some(("Host volume set to 0 dB".into(), Instant::now()));
+            } else if pw_clock::set_fireface_sink_unity() {
                 state.host_volume = pw_clock::fireface_sink_volume();
                 state.notice = Some(("Host volume set to 0 dB".into(), Instant::now()));
             }
@@ -12725,6 +12785,38 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     || state.quantum_change_at.is_some_and(|at| {
                         Instant::now().duration_since(at) < Duration::from_secs(10)
                     }));
+            // With the audio-path service attached, the graph reads run on its
+            // worker; here we only trigger a read and copy the latest snapshot
+            // (a cheap, non-blocking read). Kernel facts stay live even when
+            // PipeWire stalls. No server call runs on the UI thread.
+            if let Some(svc) = &state.audio_path_service {
+                svc.send(crate::audio_path_service::Intent::Poll { probe_quantum });
+                let snap = svc.snapshot();
+                state.pcm_owner = snap.owner;
+                if snap.kernel_at.is_some() {
+                    state.card_stream = snap.stream;
+                }
+                if snap.pw_at.is_some() {
+                    state.engine = snap.clock;
+                }
+                if snap.graph_quantum.is_some() {
+                    state.graph_quantum = snap.graph_quantum;
+                }
+                if snap.host_volume.is_some() {
+                    state.host_volume = snap.host_volume;
+                }
+                let sink_running = snap.sink_running;
+                return update(
+                    state,
+                    Message::EngineRead(
+                        state.engine,
+                        state.card_stream,
+                        sink_running,
+                        state.host_volume,
+                        state.graph_quantum,
+                    ),
+                );
+            }
             return Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
@@ -15295,14 +15387,14 @@ fn reconcile_quantum(state: &mut TotalControl) {
     let waited = changed.elapsed();
     if !state.quantum_reforced && waited >= Duration::from_secs(3) {
         if !state.device.is_mock() {
-            let _ = pw_clock::force_quantum(force);
+            write_force_quantum(state, force);
         }
         state.quantum_reforced = true;
         return;
     }
     if state.quantum_reforced && waited >= Duration::from_secs(6) {
         if !state.device.is_mock() {
-            let _ = pw_clock::force_quantum(actual);
+            write_force_quantum(state, actual);
         }
         if let Some(engine) = state.engine.as_mut() {
             engine.force_quantum = actual;
@@ -15365,9 +15457,7 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
     if let Some(engine) = state.engine.as_mut() {
         engine.force_quantum = target;
     }
-    if let Err(e) = pw_clock::force_quantum(target) {
-        log::warn!("Raising the PipeWire quantum to the mode floor failed: {e}");
-    }
+    write_force_quantum(state, target);
     apply_engine_policy(state, rate);
 }
 
@@ -15382,17 +15472,19 @@ fn force_engine_reprepare(state: &mut TotalControl) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return;
     }
-    let Some(clock) = pw_clock::read() else {
-        return;
-    };
-    let q = clock.effective_quantum();
-    if q == 0 {
-        return;
+    if !engine_intent(state, crate::audio_path_service::Intent::Reprepare) {
+        // No service: the legacy synchronous bump-and-restore.
+        let Some(clock) = pw_clock::read() else {
+            return;
+        };
+        let q = clock.effective_quantum();
+        if q == 0 {
+            return;
+        }
+        let bump = if q > 1 { q - 1 } else { q + 1 };
+        let _ = pw_clock::force_quantum(bump);
+        let _ = pw_clock::force_quantum(q);
     }
-    let bump = if q > 1 { q - 1 } else { q + 1 };
-    let _ = pw_clock::force_quantum(bump);
-    let _ = pw_clock::force_quantum(q);
-    state.engine = pw_clock::read();
 }
 
 /// Reconcile the device clock pitch with the rate-follow mode. The Device
@@ -15439,10 +15531,13 @@ fn apply_engine_policy(state: &mut TotalControl, rate: u32) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() || rate == 0 {
         return;
     }
+    let policy = engine_sched_policy(state, rate);
+    if engine_intent(state, crate::audio_path_service::Intent::SetSchedPolicy(policy)) {
+        return;
+    }
     let Some((out, inp)) = pw_clock::fireface_pro_node_ids() else {
         return;
     };
-    let policy = engine_sched_policy(state, rate);
     if pw_clock::set_sched_policy(out, &policy).is_ok() {
         let _ = pw_clock::set_sched_policy(inp, &policy);
     }
@@ -22560,7 +22655,7 @@ mod tests {
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
         temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
         uc_measured_rtl, uc_min_buffer_frames, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames,
-        ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, CardStream, ChannelId, DeviceHandle,
+        ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         PwClock, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
         TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,

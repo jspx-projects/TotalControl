@@ -229,6 +229,7 @@ fn main() -> iced::Result {
                     log::debug!("Control Room assignments not restored: {e}");
                 }
                 app::sync_surround_bridge(&mut state);
+                app::maybe_attach_audio_path_service(&mut state);
                 app::restore_engine(&mut state);
                 // Startup sync needs the direct handle: it drains the UCX
                 // state stream and reads the unit before the mirror exists.
