@@ -14,7 +14,75 @@
 //! last until PipeWire restarts. `pw-metadata` ships with PipeWire, so this
 //! needs no build dependency, like `pw_meter`'s use of `pw-record`.
 
-use std::process::{Command, Stdio};
+use std::io::Read;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+/// Hard bound on every PipeWire tool call. A busy or restarting server can
+/// stall `pw-dump`/`pw-cli`/`pw-metadata`; several of these calls run on the
+/// UI thread (a mode switch applies the engine policy), so an unbounded wait
+/// freezes the whole GUI. On timeout the child is killed and the call is
+/// treated as absent.
+const PW_TOOL_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Run a PipeWire tool with a timeout, draining stdout/stderr in threads so a
+/// large output (pw-dump) cannot fill the pipe and deadlock the child.
+/// `None` on spawn failure or timeout.
+fn run_timeout(cmd: &mut Command, timeout: Duration) -> Option<Output> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let mut so = child.stdout.take()?;
+    let mut se = child.stderr.take()?;
+    let oh = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = so.read_to_end(&mut b);
+        b
+    });
+    let eh = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = se.read_to_end(&mut b);
+        b
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if start.elapsed() < timeout => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = oh.join();
+                let _ = eh.join();
+                return None;
+            }
+            Err(_) => {
+                let _ = oh.join();
+                let _ = eh.join();
+                return None;
+            }
+        }
+    };
+    Some(Output {
+        status,
+        stdout: oh.join().unwrap_or_default(),
+        stderr: eh.join().unwrap_or_default(),
+    })
+}
+
+/// A PipeWire tool call with the standard timeout.
+fn pw_output(cmd: &mut Command) -> Option<Output> {
+    run_timeout(cmd, PW_TOOL_TIMEOUT)
+}
+
+/// Whether a PipeWire tool call succeeded within the timeout.
+fn pw_status_ok(cmd: &mut Command) -> bool {
+    pw_output(cmd).map(|o| o.status.success()).unwrap_or(false)
+}
 
 /// The sample-rate classes the supported Fireface and Babyface-classic
 /// models use:
@@ -88,10 +156,7 @@ pub fn parse(output: &str) -> Option<PwClock> {
 
 /// Reads the live clock. `None` if PipeWire (or `pw-metadata`) is absent.
 pub fn read() -> Option<PwClock> {
-    let out = Command::new("pw-metadata")
-        .args(["-n", "settings", "0"])
-        .output()
-        .ok()?;
+    let out = pw_output(Command::new("pw-metadata").args(["-n", "settings", "0"]))?;
     if !out.status.success() {
         return None;
     }
@@ -106,10 +171,11 @@ pub fn read() -> Option<PwClock> {
 /// driver clamps it to the floor, so several quanta share one period).  Two
 /// samples are taken because the first one can be empty.
 pub fn graph_quantum() -> Option<u32> {
-    let out = Command::new("pw-top")
-        .args(["-b", "-n", "2"])
-        .output()
-        .ok()?;
+    // pw-top takes two samples (~2 s); allow a longer bound than the rest.
+    let out = run_timeout(
+        Command::new("pw-top").args(["-b", "-n", "2"]),
+        Duration::from_secs(6),
+    )?;
     if !out.status.success() {
         return None;
     }
@@ -152,10 +218,7 @@ pub fn parse_allowed_rates(output: &str) -> Option<Vec<u32>> {
 /// Reads `clock.allowed-rates`.  `None` when PipeWire is absent or the key
 /// is not present.
 pub fn read_allowed_rates() -> Option<Vec<u32>> {
-    let out = Command::new("pw-metadata")
-        .args(["-n", "settings", "0"])
-        .output()
-        .ok()?;
+    let out = pw_output(Command::new("pw-metadata").args(["-n", "settings", "0"]))?;
     if !out.status.success() {
         return None;
     }
@@ -187,10 +250,8 @@ fn set(key: &str, value: u32) -> Result<(), String> {
 }
 
 fn set_value(key: &str, value: &str) -> Result<(), String> {
-    let status = Command::new("pw-metadata")
-        .args(["-n", "settings", "0", key, value])
-        .output()
-        .map_err(|e| format!("pw-metadata: {e}"))?
+    let status = pw_output(Command::new("pw-metadata").args(["-n", "settings", "0", key, value]))
+        .ok_or_else(|| format!("pw-metadata {key} {value} timed out"))?
         .status;
     if status.success() {
         Ok(())
@@ -282,10 +343,7 @@ pub fn card_number(card_id: &str) -> Option<i32> {
 /// Whether the RME Pro Audio sink is actually running a playback stream.
 /// `pactl list short sinks` reports the node state in its last field.
 pub fn fireface_sink_running() -> bool {
-    let Ok(out) = Command::new("pactl")
-        .args(["list", "short", "sinks"])
-        .output()
-    else {
+    let Some(out) = pw_output(Command::new("pactl").args(["list", "short", "sinks"])) else {
         return false;
     };
     if !out.status.success() {
@@ -300,10 +358,7 @@ pub fn fireface_sink_running() -> bool {
 
 /// Name of the RME Pro Audio sink/source node.
 fn fireface_node(kind: &str, suffix: &str) -> Option<String> {
-    let out = Command::new("pactl")
-        .args(["list", "short", kind])
-        .output()
-        .ok()?;
+    let out = pw_output(Command::new("pactl").args(["list", "short", kind]))?;
     if !out.status.success() {
         return None;
     }
@@ -329,10 +384,7 @@ pub fn fireface_source_name() -> Option<String> {
 /// full-scale CD.  Shown in the device sheet so the meters make sense.
 pub fn fireface_sink_volume() -> Option<(u32, f32)> {
     let name = fireface_sink_name()?;
-    let out = Command::new("pactl")
-        .args(["get-sink-volume", &name])
-        .output()
-        .ok()?;
+    let out = pw_output(Command::new("pactl").args(["get-sink-volume", &name]))?;
     if !out.status.success() {
         return None;
     }
@@ -355,22 +407,15 @@ pub fn set_fireface_sink_unity() -> bool {
     let Some(name) = fireface_sink_name() else {
         return false;
     };
-    Command::new("pactl")
-        .args(["set-sink-volume", &name, "100%"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    pw_status_ok(Command::new("pactl").args(["set-sink-volume", &name, "100%"]))
 }
 
 fn set_suspended(command: &str, node: &str, suspended: bool) -> bool {
-    Command::new("pactl")
-        .args([command, node, if suspended { "1" } else { "0" }])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    pw_status_ok(
+        Command::new("pactl")
+            .args([command, node, if suspended { "1" } else { "0" }])
+            .stdin(Stdio::null()),
+    )
 }
 
 pub fn set_sink_suspended(node: &str, suspended: bool) -> bool {
@@ -426,10 +471,7 @@ pub fn card_stream(card_id: &str) -> Option<CardStream> {
 /// from `pw-dump`. `None` when PipeWire is absent or does not own the
 /// device (a JACK client holding the PCM leaves no Pro Audio nodes).
 pub fn fireface_pro_node_ids() -> Option<(u32, u32)> {
-    let out = Command::new("pw-dump")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+    let out = pw_output(Command::new("pw-dump").stdin(Stdio::null()))?;
     if !out.status.success() {
         return None;
     }
@@ -458,11 +500,11 @@ pub fn parse_pro_node_ids(json: &str) -> Option<(u32, u32)> {
 
 /// The node's `api.alsa.headroom` as its Props parameter reports it.
 pub fn read_headroom(node: u32) -> Option<u32> {
-    let out = Command::new("pw-cli")
-        .args(["enum-params", &node.to_string(), "Props"])
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+    let out = pw_output(
+        Command::new("pw-cli")
+            .args(["enum-params", &node.to_string(), "Props"])
+            .stdin(Stdio::null()),
+    )?;
     if !out.status.success() {
         return None;
     }
@@ -489,13 +531,13 @@ pub fn parse_headroom(text: &str) -> Option<u32> {
 /// an empty pod in `pw-cli`).
 pub fn set_headroom(node: u32, frames: u32) -> Result<(), String> {
     let pod = format!("{{ \"params\": [ \"api.alsa.headroom\", {frames} ] }}");
-    let status = Command::new("pw-cli")
-        .args(["set-param", &node.to_string(), "Props", &pod])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("pw-cli: {e}"))?;
+    let status = pw_output(
+        Command::new("pw-cli")
+            .args(["set-param", &node.to_string(), "Props", &pod])
+            .stdin(Stdio::null()),
+    )
+    .ok_or_else(|| format!("pw-cli set-param headroom {frames} timed out"))?
+    .status;
     if status.success() {
         Ok(())
     } else {
@@ -531,13 +573,13 @@ pub fn sched_policy_pod(p: &SchedPolicy) -> String {
 /// toggle on a mode switch — a same-value force does not re-prepare).
 pub fn set_sched_policy(node: u32, p: &SchedPolicy) -> Result<(), String> {
     let pod = sched_policy_pod(p);
-    let status = Command::new("pw-cli")
-        .args(["set-param", &node.to_string(), "Props", &pod])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("pw-cli: {e}"))?;
+    let status = pw_output(
+        Command::new("pw-cli")
+            .args(["set-param", &node.to_string(), "Props", &pod])
+            .stdin(Stdio::null()),
+    )
+    .ok_or_else(|| "pw-cli set-param sched policy timed out".to_string())?
+    .status;
     if status.success() {
         Ok(())
     } else {
