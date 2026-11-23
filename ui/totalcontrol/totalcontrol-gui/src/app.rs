@@ -34,6 +34,7 @@ use crate::widgets::fader;
 use crate::widgets::knob::{knob, Knob};
 use crate::widgets::strip::{self, hint};
 use crate::workspaces::{self, Workspace, WorkspaceSnapshot, WorkspaceView};
+use totalcontrol_core::audio_path::{self, ClockFacts, RateCaps};
 use totalcontrol_core::pw_clock::{self, CardStream, PwClock};
 use totalcontrol_core::pw_meter;
 
@@ -2595,20 +2596,11 @@ pub enum RowMode {
     Two,
 }
 
-/// How the PipeWire graph's sample rate is chosen.
-///
-/// `Auto` is the default: the graph conducts and the device follows it.
-/// `Fixed` forces the device-set rate. The retired `Follow` (SW playback
-/// 1/2) preference deserializes as `Auto` through the serde alias.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum EngineRateMode {
-    /// PipeWire decides (`clock.force-rate = 0`).
-    #[default]
-    #[serde(alias = "Follow")]
-    Auto,
-    /// Force the rate stored in `engine_force_rate`.
-    Fixed,
-}
+/// How the graph's sample rate is chosen: the rate-authority setting, defined
+/// with the audio-path model in core. `Auto` (the default) lets the graph
+/// conduct and the device follows it; `Fixed` forces the device-set rate. The
+/// retired `Follow` preference deserializes as `Auto` through the serde alias.
+pub use totalcontrol_core::audio_path::EngineRateMode;
 
 /// The strip-rename field's widget id, so `RenameStart` can focus it.
 pub(crate) const RENAME_INPUT_ID: &str = "strip-rename";
@@ -5631,19 +5623,19 @@ fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &st
 /// keep the last known rate across that gap so a rate switch made while the
 /// stream was briefly closed is still detected when it reopens.
 fn card_rate_changed(last: Option<u32>, current: Option<u32>) -> bool {
-    matches!((last, current), (Some(old), Some(new)) if old != new)
+    audio_path::card_rate_changed(last, current)
 }
 
 /// Whether the first observed card rate differs from the rate the device
 /// reported when TotalControl opened it.  This is the common startup case: the
-/// scene is applied while the card is at its old rate, then PipeWire opens
-/// it at a different rate and the UC reloads its stored mixer.
+/// scene is applied while the card is at its old rate, then the owner opens
+/// it at a different rate and the unit reloads its stored mixer.
 fn first_rate_needs_reapply(last: Option<u32>, current: Option<u32>, model_rate: u32) -> bool {
-    last.is_none() && current.is_some_and(|rate| rate != model_rate)
+    audio_path::first_rate_needs_reapply(last, current, model_rate)
 }
 
 fn rate_needs_mixer_reapply(last: Option<u32>, current: Option<u32>, model_rate: u32) -> bool {
-    card_rate_changed(last, current) || first_rate_needs_reapply(last, current, model_rate)
+    audio_path::rate_needs_mixer_reapply(last, current, model_rate)
 }
 
 /// Force the PipeWire graph through the ordinary engine-rate path.  A
@@ -5736,26 +5728,16 @@ fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
 /// selection owns its confirmation window or a re-assert is still cooling
 /// down. Kept separate from the write so it is testable without PipeWire.
 fn rate_authority_target(state: &TotalControl, clock: Option<PwClock>) -> Option<u32> {
-    if state.device.is_mock()
-        || state.engine_rate_mode != EngineRateMode::Fixed
-        || !state.device.rate_follows_sound_server()
-    {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return None;
     }
-    let desired = device_authority_rate(state);
-    if desired == 0 || clock.map(|c| c.force_rate).unwrap_or(0) == desired {
-        return None;
-    }
-    if state.pending_device_rate.is_some() {
-        return None;
-    }
-    if state
+    let mut facts = clock_facts(state);
+    facts.clock = clock;
+    let pending = state.pending_device_rate.is_some();
+    let reforce_cooling = state
         .rate_authority_reforce
-        .is_some_and(|at| at.elapsed() < Duration::from_secs(3))
-    {
-        return None;
-    }
-    Some(desired)
+        .is_some_and(|at| at.elapsed() < Duration::from_secs(3));
+    facts.rate_authority_target(pending, reforce_cooling)
 }
 
 /// Replace `clock.allowed-rates` with the connected device's list, saving the
@@ -15163,18 +15145,46 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
 
 /// The rate the graph/card is actually running at, with the device model as
 /// the last fallback while both the stream and PipeWire are unavailable.
+/// The device's achievable rate/quantum envelope as the pure model reads it:
+/// the driver-reported envelope when present, else a low fallback floor (the
+/// mock). The driver is the single owner of the rate list and per-rate floor.
+fn rate_caps(state: &TotalControl) -> RateCaps {
+    let fallback = state.driver_floor.unwrap_or(32);
+    if let Some(env) = &state.device_envelope {
+        let rates = env.rate_list();
+        if !rates.is_empty() {
+            return RateCaps::new(
+                rates,
+                env.rates.iter().map(|r| (r.rate, r.period_floor)).collect(),
+                fallback,
+            );
+        }
+    }
+    // The mock, or a driver that did not report an envelope: the backend's
+    // static rate list and a low floor so the picker stays populated.
+    RateCaps::new(state.device.sample_rates().to_vec(), Vec::new(), fallback)
+}
+
+/// The immutable clock snapshot the pure audio-path decisions read, assembled
+/// from the application state. The audio-path service builds the same snapshot
+/// from its collected facts; these accessors keep one implementation in core.
+fn clock_facts(state: &TotalControl) -> ClockFacts {
+    ClockFacts {
+        mode: state.engine_rate_mode,
+        force_rate: state.engine_force_rate,
+        force_quantum: state.engine_force_quantum,
+        clock: state.engine,
+        stream: state.card_stream,
+        graph_quantum: state.graph_quantum,
+        device_rate: state.device.device_rate(),
+        clock_source_external: state.device.settings().clock_source != "Internal",
+        device_set_rate: state.device.settings().sample_rate,
+        caps: rate_caps(state),
+    }
+}
+
 pub(crate) fn current_graph_rate(state: &TotalControl) -> u32 {
-    // A forced rate is what the graph is being told to run at, even before
-    // the card's stream has reopened.  Without one, the open card stream is
-    // the graph's actual rate; the default `clock.rate` is the fallback.
-    state
-        .engine
-        .map(|engine| engine.force_rate)
-        .filter(|rate| *rate > 0)
-        .or_else(|| state.card_stream.map(|stream| stream.rate))
-        .or_else(|| state.engine.map(|engine| engine.rate))
-        .filter(|rate| *rate > 0)
-        .unwrap_or_else(|| state.device.settings().sample_rate)
+    clock_facts(state).current_graph_rate()
 }
 
 /// The device rate hub: the rate the device is set to run at, from which the
@@ -15185,13 +15195,7 @@ pub(crate) fn current_graph_rate(state: &TotalControl) -> u32 {
 /// device report / card stream is the hub. The idle status report alone is not
 /// used when a force is set: it lags at the last-running rate.
 fn running_rate(state: &TotalControl) -> u32 {
-    state
-        .engine
-        .map(|engine| engine.force_rate)
-        .filter(|rate| *rate > 0)
-        .or_else(|| state.device.device_rate().filter(|rate| *rate > 0))
-        .or_else(|| state.card_stream.map(|stream| stream.rate).filter(|rate| *rate > 0))
-        .unwrap_or_else(|| current_graph_rate(state))
+    clock_facts(state).running_rate()
 }
 
 /// The rate Device mode forces: the device's set rate is the boss. Falls back
@@ -15199,14 +15203,7 @@ fn running_rate(state: &TotalControl) -> u32 {
 /// is set. Used by both the mode handler and the startup restore so they
 /// cannot diverge.
 fn device_mode_rate(state: &TotalControl) -> u32 {
-    let device_rate = state.device.settings().sample_rate;
-    if device_rate > 0 {
-        device_rate
-    } else if state.engine_force_rate > 0 {
-        state.engine_force_rate
-    } else {
-        current_graph_rate(state)
-    }
+    clock_facts(state).device_mode_rate()
 }
 
 /// The rate Fixed mode forces and holds. On internal clock it is the user's
@@ -15215,16 +15212,7 @@ fn device_mode_rate(state: &TotalControl) -> u32 {
 /// by the mode handler, the startup restore and the live authority reconcile
 /// so they cannot diverge.
 fn device_authority_rate(state: &TotalControl) -> u32 {
-    if state.device.settings().clock_source != "Internal" {
-        if let Some(rate) = state.device.device_rate().filter(|r| *r > 0) {
-            return rate;
-        }
-    }
-    if state.engine_force_rate > 0 {
-        state.engine_force_rate
-    } else {
-        device_mode_rate(state)
-    }
+    clock_facts(state).device_authority_rate()
 }
 
 /// True while a forced graph rate waits to take effect on the running stream.
@@ -15343,27 +15331,14 @@ fn reconcile_quantum(state: &mut TotalControl) {
 /// period floor is the quantum floor. The mock keeps a low floor so its
 /// picker stays populated.
 fn quantum_floor(state: &TotalControl, rate: u32) -> u32 {
-    if let Some(env) = &state.device_envelope {
-        if let Some(floor) = env.period_floor(rate) {
-            return floor.max(1);
-        }
-    }
-    // The mock, or a rate the driver did not report: keep a low floor so the
-    // picker stays populated.
-    state.driver_floor.unwrap_or(32)
+    clock_facts(state).quantum_floor(rate)
 }
 
 /// The supported rates the GUI offers: the driver-reported envelope when
 /// present, otherwise the backend's static list (the mock). The driver is the
 /// single owner of the rate list.
 fn device_rates(state: &TotalControl) -> Vec<u32> {
-    if let Some(env) = &state.device_envelope {
-        let rates = env.rate_list();
-        if !rates.is_empty() {
-            return rates;
-        }
-    }
-    state.device.sample_rates().to_vec()
+    clock_facts(state).device_rates()
 }
 
 /// The convenience-path quantum minimum: the highest period floor across
@@ -15371,24 +15346,14 @@ fn device_rates(state: &TotalControl) -> Vec<u32> {
 /// every rate, so a graph-conducted rate switch never leaves an impossible
 /// quantum. Derived from the envelope (192 on the UCX), not hardcoded.
 fn convenience_quantum_min(state: &TotalControl) -> u32 {
-    device_rates(state)
-        .iter()
-        .map(|r| quantum_floor(state, *r))
-        .max()
-        .unwrap_or(1)
-        .max(1)
+    clock_facts(state).convenience_quantum_min()
 }
 
 /// The lowest quantum the current mode allows at `rate`. The Device path
 /// uses the rate's period floor; the convenience path also holds the
 /// convenience minimum so the quantum is safe at every graph rate.
 fn minimum_quantum(state: &TotalControl, rate: u32) -> u32 {
-    let floor = quantum_floor(state, rate);
-    if state.engine_rate_mode == EngineRateMode::Auto {
-        floor.max(convenience_quantum_min(state))
-    } else {
-        floor
-    }
+    clock_facts(state).minimum_quantum(rate)
 }
 
 /// Keep the quantum achievable at `rate`. A rate change can raise the
@@ -15470,54 +15435,15 @@ fn reconcile_device_pitch(state: &mut TotalControl) {
     state.pitch_clock_dirty = false;
 }
 
-/// The scheduling cushion (C1): `H = 2·P`, a whole multiple of the ALSA
-/// period. PipeWire's IRQ-mode wake threshold must stay period-aligned:
-/// at fractional rates a non-aligned target doubles the write-skip rate
-/// and collapses the ring fill (work note LEAD-BIAS-AND-CUSHION, Test 1;
-/// onset = target phase, margin-vs-phase cells). Two periods give a
-/// comfortable startup margin (Test 2, verified on UC and UCX at the
-/// reference lead bias). This is the PipeWire equivalent of the reference
-/// host's safety offset; JACK never sees it (it opens the PCM directly).
-fn cushion_headroom(period: u32) -> u32 {
-    period.saturating_mul(2)
-}
-
-/// The period the cushion aligns to: the live ALSA period while a stream
-/// is open, else the forced (or graph) quantum raised to the rate's floor.
-fn cushion_period(state: &TotalControl, rate: u32, stream: Option<CardStream>) -> u32 {
-    if let Some(s) = stream {
-        return s.period.max(1);
-    }
-    let quantum = if state.engine_force_quantum > 0 {
-        state.engine_force_quantum
-    } else {
-        state.engine.map(|e| e.effective_quantum()).unwrap_or(0)
-    };
-    quantum.max(quantum_floor(state, rate)).max(1)
-}
-
-/// The scheduling policy for the current rate authority (C1 three-tier
-/// model). Device (Fixed) is the pro path: IRQ scheduling + a period-aligned
-/// cushion `H = 2·P`, placed before each deliberate rate/quantum change.
-/// PipeWire (Auto) is the convenience path: timer scheduling + a fixed
-/// generous margin the DLL servos — safe at every rate without tracking the
-/// graph-conducted rate. JACK opens the PCM directly and uses neither.
+/// The scheduling policy for the current rate authority (the three-tier
+/// model), decided by the pure audio-path model. Device (Fixed) is the pro
+/// path: IRQ scheduling + a period-aligned cushion `H = 2·P`, placed before
+/// each deliberate rate/quantum change. PipeWire (Auto) is the convenience
+/// path: timer scheduling + a fixed generous margin the DLL servos — safe at
+/// every rate without tracking the graph-conducted rate. An external owner
+/// opens the PCM directly and uses neither.
 fn engine_sched_policy(state: &TotalControl, rate: u32) -> pw_clock::SchedPolicy {
-    if state.engine_rate_mode == EngineRateMode::Fixed {
-        pw_clock::SchedPolicy {
-            disable_tsched: true,
-            headroom: cushion_headroom(cushion_period(state, rate, None)),
-            start_delay: 0,
-            period_num: 32,
-        }
-    } else {
-        pw_clock::SchedPolicy {
-            disable_tsched: false,
-            headroom: 336,
-            start_delay: 3 * quantum_floor(state, rate),
-            period_num: 16,
-        }
-    }
+    clock_facts(state).sched_policy(rate)
 }
 
 /// Apply the scheduling policy to both Pro Audio nodes. Best-effort: no
@@ -22639,7 +22565,7 @@ mod tests {
         changes_host_settings, changes_workspace, channel_parity, channel_trim,
         channel_with_parity, choose_startup_kind,
         choose_startup_target, control_room_available, control_room_visual_width,
-        control_room_width, converter_frames, cushion_headroom, cushion_period,
+        control_room_width, converter_frames,
         engine_sched_policy, frames_ms, fx_reserve, fx_slot, global_feedback,
         engine_poll_fast, global_feedback_is_typed, global_messages, global_state_commands,
         host_settings_of,
@@ -27575,16 +27501,12 @@ mod tests {
     fn the_cushion_is_two_aligned_periods() {
         let mut state = new(true, None, None);
         state.driver_floor = Some(48);
-        assert_eq!(cushion_headroom(48), 96);
-        assert_eq!(cushion_headroom(184), 368);
-        // The live negotiated period is the truth while a stream is open.
-        let stream = CardStream { rate: 44_100, period: 48, buffer: 1536 };
-        assert_eq!(cushion_period(&state, 44_100, Some(stream)), 48);
-        // No stream: the forced quantum, raised to the rate's floor.
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        // The cushion aligns to the forced quantum raised to the rate's floor.
         state.engine_force_quantum = 32;
-        assert_eq!(cushion_period(&state, 44_100, None), 48);
+        assert_eq!(engine_sched_policy(&state, 44_100).headroom, 96); // 2·48
         state.engine_force_quantum = 96;
-        assert_eq!(cushion_period(&state, 44_100, None), 96);
+        assert_eq!(engine_sched_policy(&state, 44_100).headroom, 192); // 2·96
         // Auto quantum falls back to the graph quantum.
         state.engine_force_quantum = 0;
         state.engine = Some(PwClock {
@@ -27595,7 +27517,7 @@ mod tests {
             min_quantum: 32,
             max_quantum: 2048,
         });
-        assert_eq!(cushion_period(&state, 48_000, None), 64);
+        assert_eq!(engine_sched_policy(&state, 48_000).headroom, 128); // 2·64
         // The envelope floor wins over the module parameter.
         state.device_envelope = Some(totalcontrol_core::fireface::hwdep::RateEnvelope {
             urb_frames: 48,
@@ -27608,8 +27530,7 @@ mod tests {
             }],
         });
         state.engine = None;
-        assert_eq!(cushion_period(&state, 176_400, None), 184);
-        assert_eq!(cushion_headroom(cushion_period(&state, 176_400, None)), 368);
+        assert_eq!(engine_sched_policy(&state, 176_400).headroom, 368); // 2·184
     }
 
     #[test]
