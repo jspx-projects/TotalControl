@@ -5686,6 +5686,28 @@ fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &st
     log::info!("{reason}; reapplying the Fireface mixer scene");
 }
 
+/// Server-free scene reapply armed by an engine-run epoch (`run_seq` bump:
+/// stream prepare, recovery, resume). It works under any PCM owner — no
+/// PipeWire probe — closing the external-owner gap where a same-rate restart
+/// or a rate change was invisible. Every new run re-arms the debounce, so a
+/// burst of restarts (recovery churn) settles before the rewrite, and the
+/// scene carries the confirmed card rate so it never writes a stale rate back
+/// to the unit. Idempotent: a pending reapply is only upgraded, not duplicated.
+fn arm_engine_run_reapply(state: &mut TotalControl) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    schedule_mixer_reapply(state, Duration::from_secs(1), "Fireface engine run started");
+    if let Some(scene) = state.startup_scene.as_mut() {
+        if let Some(rate) = state.card_stream.map(|s| s.rate).filter(|r| *r > 0) {
+            scene.settings.sample_rate = rate;
+        }
+        // Re-arm past the driver transient: recovery churn keeps pushing the
+        // rewrite until the engine is stably running.
+        state.startup_scene_due = Some(Instant::now() + Duration::from_secs(1));
+    }
+}
+
 /// A change between two observed card rates.  `None` means "no open stream";
 /// keep the last known rate across that gap so a rate switch made while the
 /// stream was briefly closed is still detected when it reopens.
@@ -12901,8 +12923,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     if rate_changed {
                         // Keep the scene/model in step with the rate the
                         // card actually opened at, whether TotalControl, the
-                        // player or PipeWire initiated the switch.
-                        let _ = state.device.set_sample_rate(rate);
+                        // player or PipeWire initiated the switch. Under an
+                        // external owner the rate is read-only: the reapply
+                        // scene carries it, but the device is never written.
+                        if graph_writable(state) {
+                            let _ = state.device.set_sample_rate(rate);
+                        }
                     }
                     state.last_card_rate = Some(rate);
                 }
@@ -16383,6 +16409,9 @@ fn track_engine_run(
         // so re-base the per-run display baseline to this run's reading.
         if state.last_run_seq.is_some() {
             commit_rate_switch_window(state);
+            // A stopped→running epoch (prepare/recovery/resume): reapply the
+            // scene once stably running, server-free, under any owner.
+            arm_engine_run_reapply(state);
         }
         state.transport_perrun_base = Some(c);
     }
