@@ -134,6 +134,22 @@ impl PwClock {
     }
 }
 
+/// The bump-and-restore pair that forces a graph-wide re-prepare while leaving
+/// the quantum force exactly as it was: `(bump, restore)`. A quantum change is
+/// what makes PipeWire re-prepare every node, applying the scheduling policy and
+/// the forces to the PCM. The restore is the force itself, so an Auto (`0`) force
+/// stays Auto; the bump base is the force when set, else the graph default.
+/// `None` when no quantum is known to bump. Only acts while the graph is running.
+pub fn reprepare_bump(clock: &PwClock) -> Option<(u32, u32)> {
+    let restore = clock.force_quantum;
+    let base = if restore > 0 { restore } else { clock.quantum };
+    if base == 0 {
+        return None;
+    }
+    let bump = if base > 1 { base - 1 } else { base + 1 };
+    Some((bump, restore))
+}
+
 /// Parses `pw-metadata -n settings 0` output, lines like
 /// `update: id:0 key:'clock.rate' value:'48000' type:''`. `None` when the
 /// two defaults are missing (no PipeWire, or not its settings object).
@@ -455,19 +471,37 @@ pub fn capture_reprepare(card_id: &str) -> bool {
         else {
             return false;
         };
+        // Establish the re-prepare precondition from kernel ground truth: the
+        // capture PCM must be RUNNING (the graph active) before a forced
+        // re-prepare can act. Confirm it, do not guess a delay. Then force a
+        // graph-wide re-prepare (quantum bump-and-restore): activation alone
+        // resumes the PCM without re-preparing it, so a scheduling-policy change
+        // (timer↔IRQ, period-num, headroom) would not reach the running PCM and
+        // the buffer would stay at the previous path's geometry.
+        let awake = Instant::now() + Duration::from_millis(2000);
+        while Instant::now() < awake && !capture_running(card_id) {
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        if let Some((bump, restore)) = reprepare_bump(&clock) {
+            let _ = force_quantum(bump);
+            let _ = force_quantum(restore);
+        }
         // Wait until the device runs at the forced rate and quantum. A forced
-        // quantum must match exactly; an Auto (0) quantum is graph-conducted and
-        // scaled with the rate, so only confirm the graph is running. Polling
-        // (not a single read) is what makes a quantum-only change confirm: the
-        // rate is already at target there, so we must wait for the quantum to
-        // land. The capture stays open until the device confirms.
+        // quantum is confirmed by the PCM period (IRQ mode prepares period =
+        // quantum): the period persists while the node is suspended, whereas the
+        // running-graph quantum reads empty once the re-prepare lets the node
+        // idle. An Auto (0) quantum is graph-conducted, so only confirm the graph
+        // ran. Polling (not a single read) is what makes a quantum-only change
+        // confirm: the rate is already at target there, so we wait for the quantum
+        // to land. The capture stays open until the device confirms.
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut confirmed = false;
         while Instant::now() < deadline {
-            let rate_ok = card_stream(card_id).is_some_and(|s| s.rate == target_rate);
+            let stream = card_stream(card_id);
+            let rate_ok = stream.is_some_and(|s| s.rate == target_rate);
             let quantum_ok = rate_ok
                 && if clock.force_quantum > 0 {
-                    graph_quantum() == Some(target_quantum)
+                    stream.is_some_and(|s| s.period == target_quantum)
                 } else {
                     graph_quantum().is_some()
                 };
@@ -531,6 +565,17 @@ pub fn card_stream(card_id: &str) -> Option<CardStream> {
     let dir = card_proc_dir(card_id)?;
     let text = std::fs::read_to_string(dir.join("pcm0p/sub0/hw_params")).ok()?;
     parse_hw_params(&text)
+}
+
+/// Whether the card's capture PCM is `RUNNING` — kernel ground truth that the
+/// graph is active (in Pro Audio the capture node is the driver). Server-free.
+/// This is the re-prepare precondition: a forced re-prepare only acts while the
+/// graph is running, so it must be confirmed, not guessed.
+pub fn capture_running(card_id: &str) -> bool {
+    let Some(dir) = card_proc_dir(card_id) else { return false };
+    let Ok(text) = std::fs::read_to_string(dir.join("pcm0c/sub0/status")) else { return false };
+    text.lines()
+        .any(|l| l.starts_with("state:") && l.contains("RUNNING"))
 }
 
 /// The kernel's view of the open playback PCM, from
@@ -766,6 +811,27 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         .unwrap();
         assert_eq!(c.effective_rate(), 96_000);
         assert_eq!(c.effective_quantum(), 256);
+    }
+
+    #[test]
+    fn the_reprepare_bump_restores_the_force_and_preserves_auto() {
+        let clock = |force_quantum: u32, quantum: u32| PwClock {
+            rate: 48_000,
+            quantum,
+            force_rate: 0,
+            force_quantum,
+            min_quantum: 0,
+            max_quantum: 0,
+        };
+        // A forced quantum is nudged down one frame and put back exactly.
+        assert_eq!(reprepare_bump(&clock(256, 64)), Some((255, 256)));
+        // The smallest force bumps up, not to zero.
+        assert_eq!(reprepare_bump(&clock(1, 64)), Some((2, 1)));
+        // Auto (0) stays Auto: the bump uses the graph default, the restore is
+        // still 0, so the re-prepare never pins an Auto quantum.
+        assert_eq!(reprepare_bump(&clock(0, 256)), Some((255, 0)));
+        // Nothing to bump when no quantum is known.
+        assert_eq!(reprepare_bump(&clock(0, 0)), None);
     }
 
     /// Against the live PipeWire: run by hand (`--ignored`). Only ever

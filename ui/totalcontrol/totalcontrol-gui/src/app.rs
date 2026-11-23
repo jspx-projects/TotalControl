@@ -12610,6 +12610,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.engine_rate_mode = EngineRateMode::Fixed;
                 state.rate_authority_reforce = None;
                 apply_graph_rate(state, device_authority_rate(state), true);
+                // Apply the force and policy to the PCM now, not only when the
+                // reconcile next re-asserts; the device rate is re-tracked once
+                // the unit locks to the new source.
+                force_engine_reprepare(state);
             }
             notify_osc_raw(state, "/clock_source", vec![OscType::String(source)]);
         }
