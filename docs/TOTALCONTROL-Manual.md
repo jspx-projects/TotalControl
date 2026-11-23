@@ -405,6 +405,16 @@ device and `Rate follows` reads `Device` (read-only). TotalControl follows the
 rate the unit reports at the selected clock input and forces the graph to it,
 so a DAW and every application run at the external clock's rate.
 
+When another process owns the device — `jackd` (JACK) or a DAW opening the card
+directly (ALSA) — TotalControl detects the owner from the kernel and steps
+aside: `Rate follows` reads `JACK` or `ALSA` (read-only), the rate belongs to
+the owner, and TotalControl writes nothing to the clock. The mixer and meters
+keep working, and the mixer scene is reapplied when the owner's stream starts
+or changes rate. To use JACK or direct ALSA, free the device from PipeWire
+first: set the card's profile to Off, or stop PipeWire. A DAW that opens the
+card directly does not reserve it, so PipeWire must release it before the DAW
+can open it.
+
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A rate change in PipeWire mode is a runtime change, so it does not add an undo
 step or mark the workspace dirty. The chosen mode is remembered in the

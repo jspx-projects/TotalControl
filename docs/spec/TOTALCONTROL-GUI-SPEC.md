@@ -1318,10 +1318,13 @@ device) rate. It is a pair of radio buttons: `PipeWire` (the default) lets the
 sound server's graph conduct and the device follows it; `Device` forces the
 device-set rate. The rate value itself is set in the DEVICE group's Sample rate
 picker (Device mode); the control offers no rate list. It is usable only when
-the device clock source is Internal. Slaved to an external clock, the rate is
-determined by the device and `Rate follows` is a read-only `Device` label. The
-engine group always shows `Graph`, the rate PipeWire is currently running at,
-in every mode.
+the device clock source is Internal and PipeWire owns the PCM. Slaved to an
+external clock, the rate is determined by the device and `Rate follows` is a
+read-only `Device` label. When another process owns the PCM — `jackd` (JACK) or
+a DAW opening the card directly (ALSA) — `Rate follows` is a read-only report
+of that owner (`JACK` or `ALSA`); the owner determines the rate and TotalControl
+reads it. The engine group always shows `Graph`, the rate the card is currently
+running at, in every mode.
 
 Selecting a `Rate follows` mode takes effect immediately. The scheduling
 policy is applied and the Pro Audio nodes are forced to re-prepare, which
