@@ -389,7 +389,9 @@ authority (Device / PipeWire) -> device rate -> graph rate + quantum
 
 The device rate always wins; a stale graph request never overrides it. The
 quantum picker offers only quanta at or above the device rate's period floor
-(one URB), so an impossible quantum cannot be selected. In PipeWire mode the
+(one URB), so an impossible quantum cannot be selected. A quantum at the
+floor is the zero-slack corner: clean at nominal speed, but varispeed needs
+one period of slack at 96 kHz and above (section 14). In PipeWire mode the
 picker also holds a convenience minimum — the highest period floor across the
 device's rates — and offers no Auto: the quantum is forced at or above that
 minimum so it stays achievable when the graph changes rate. The `Sample rate`
@@ -1844,7 +1846,13 @@ it needs a rate-scaled `api.alsa.start-delay` of about three URBs, which adds
 steady latency; IRQ mode is preferred for low-latency work.
 
 At 96 kHz and 192 kHz use at least two milliseconds of quantum for
-low-latency recording: 192 frames at 96 kHz, 384 at 192 kHz.
+low-latency recording: 192 frames at 96 kHz, 384 at 192 kHz. The period
+floor (48 at 48 kHz, 96 at 96 kHz, 192 at 192 kHz) stays selectable and
+plays cleanly at nominal speed. It is the zero-slack corner of the
+PipeWire duplex wake: under varispeed it can miss cycles, mildly at
+48/96 kHz and severely at 192 kHz. For pitch work at 96 kHz and above,
+keep one period of slack (double the floor). For floor-quantum low
+latency, use the JACK or direct-ALSA path.
 
 The unit is the clock master: its converters run on the device's own clock
 (SteadyClock) and the host mirrors the stream rate to it. The computer's
