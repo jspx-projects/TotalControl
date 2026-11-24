@@ -1337,6 +1337,21 @@ pub fn pick_list_pending(
     style
 }
 
+/// The pick-list surface as a read-only field: a grayed control keeps the
+/// field shape (surface, border, radius) but opens no menu. Used for a value
+/// an external owner controls (GUI spec §3.3, gray-when-owned).
+pub fn grayed_field(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(surface())),
+        border: Border {
+            color: border(),
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
 /// The width of the thin scrollbar's rail and scroller. A scrollable reserves
 /// this much horizontal space when the scrollbar appears, so a fixed-width
 /// panel must add it to its width to keep the content's right edge clear.

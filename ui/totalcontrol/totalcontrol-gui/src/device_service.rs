@@ -343,6 +343,18 @@ impl Mirror {
         let _ = self.commands.send(Command::Run(Box::new(command)));
     }
 
+    /// The server-free idle device-rate write (the JACK / direct-ALSA pro
+    /// path). Updates the local scene rate at once — the rate-change reapply
+    /// captures the mirror scene immediately after this call — and queues the
+    /// idle write on the service thread. The device readback confirms the rate.
+    pub fn set_sample_rate_idle(&mut self, rate: u32) -> Result<(), Error> {
+        self.scene.settings.sample_rate = rate;
+        self.run(move |d| {
+            let _ = d.set_sample_rate_idle(rate);
+        });
+        Ok(())
+    }
+
     /// Apply a connect or restore scene on the service thread without
     /// rewriting output levels the unit already holds.
     pub fn apply_scene_at_connect(&mut self, scene: &Scene) -> Result<(), Error> {

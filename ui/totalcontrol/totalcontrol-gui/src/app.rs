@@ -1754,6 +1754,20 @@ impl DeviceHandle {
         }
         false
     }
+    /// The server-free idle device-rate write (the JACK / direct-ALSA pro
+    /// path). Sets the device clock while no owner holds the PCM; the device
+    /// readback confirms the rate. `Ok` when the write was issued.
+    pub fn set_sample_rate_idle(&mut self, rate: u32) -> Result<(), totalcontrol_core::Error> {
+        match self {
+            DeviceHandle::Mirror(d) => d.set_sample_rate_idle(rate),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => d.set_sample_rate_idle(rate).map(|_| ()),
+            #[cfg(feature = "alsa")]
+            DeviceHandle::BabyfaceClassic(d) => d.set_sample_rate_idle(rate).map(|_| ()),
+            DeviceHandle::ControlOnly(_) => Ok(()),
+            DeviceHandle::Mock(d) => d.set_sample_rate(rate),
+        }
+    }
     /// Whether this backend implements `set_sensitivity`.
     pub fn has_sensitivity_control(&self) -> bool {
         match self {
@@ -3221,6 +3235,8 @@ pub struct TotalControl {
     pub audio_path_service: Option<crate::audio_path_service::AudioPathService>,
     /// The detected PCM owner, from the engine snapshot (kernel facts).
     pub pcm_owner: totalcontrol_core::audio_path::PcmOwner,
+    /// The owning process's `comm`, for the "Controlled by <owner>" tooltip.
+    pub pcm_owner_comm: Option<String>,
 }
 
 impl TotalControl {
@@ -3802,6 +3818,7 @@ pub fn new_with_device(
         device_envelope: None,
         audio_path_service: None,
         pcm_owner: audio_path::PcmOwner::Idle,
+        pcm_owner_comm: None,
     };
 
     state
@@ -5745,6 +5762,32 @@ fn first_rate_needs_reapply(last: Option<u32>, current: Option<u32>, model_rate:
 
 fn rate_needs_mixer_reapply(last: Option<u32>, current: Option<u32>, model_rate: u32) -> bool {
     audio_path::rate_needs_mixer_reapply(last, current, model_rate)
+}
+
+/// The external PCM owner's name for the "Controlled by <owner>" tooltip and
+/// notices: the owning process's `comm` (e.g. `reaper`, `jackd`), falling back
+/// to the path label when it could not be resolved.
+fn external_owner_name(state: &TotalControl) -> String {
+    state.pcm_owner_comm.clone().unwrap_or_else(|| match state.pcm_owner {
+        audio_path::PcmOwner::Jack => "JACK".into(),
+        _ => "ALSA".into(),
+    })
+}
+
+/// The server-free idle device-rate write (the JACK / direct-ALSA pro path).
+/// No sound server and no PCM owner: the driver adopts the rate, commits it
+/// and confirms it from the state-word readback, then arms the scene reapply.
+/// The picker shows pending until the device readback matches the selection.
+/// Not the PipeWire force — that path is used only while PipeWire owns the PCM.
+fn apply_idle_device_rate(state: &mut TotalControl, rate: u32) {
+    state.engine_force_rate = rate;
+    if let Err(e) = state.device.set_sample_rate_idle(rate) {
+        fail(state, "set_sample_rate_idle", &e);
+        return;
+    }
+    // The confirmation is the device state-word readback (device_rate_pending),
+    // not an open card stream: the PCM is closed while idle.
+    state.pending_device_rate = None;
 }
 
 /// Force the PipeWire graph through the ordinary engine-rate path.  A
@@ -12760,6 +12803,21 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.rate_switch_until = None;
         }
         Message::EngineRate(rate) => {
+            // Under an external owner (JACK / direct ALSA) the owner sets the
+            // device rate; TotalControl only reports it. A rate request never
+            // lands and never shows a false "applying…".
+            if detected_path(state).is_external() {
+                if rate > 0 {
+                    state.notice = Some((
+                        format!(
+                            "The device rate is controlled by {}.",
+                            external_owner_name(state)
+                        ),
+                        Instant::now(),
+                    ));
+                }
+                return Task::none();
+            }
             state.engine_rate_mode = if rate == 0 {
                 EngineRateMode::Auto
             } else {
@@ -12769,11 +12827,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if state.transport_counters.is_some() {
                 begin_rate_switch_window(state);
             }
-            apply_graph_rate(state, rate, true);
-            // Apply the new rate even when the graph is idle/suspended: the
-            // force is metadata PipeWire only acts on at a re-prepare, so force
-            // one (as the mode switch does). A DAW user must see the rate set.
-            force_engine_reprepare(state);
+            if rate > 0
+                && matches!(detected_path(state), audio_path::AudioPath::Idle)
+                && state.device.rate_follows_sound_server()
+            {
+                // No owner holds the PCM: the server-free idle device-rate
+                // write, not the gated PipeWire force.
+                apply_idle_device_rate(state, rate);
+            } else {
+                apply_graph_rate(state, rate, true);
+                // Apply the new rate even when the graph is idle/suspended: the
+                // force is metadata PipeWire only acts on at a re-prepare, so force
+                // one (as the mode switch does). A DAW user must see the rate set.
+                force_engine_reprepare(state);
+            }
             log::info!("rate-switch: requested {rate}");
             if state.device.rate_follows_sound_server() {
                 state.notice = Some((
@@ -12854,6 +12921,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(shown as i32)]);
         }
         Message::EngineQuantum(quantum) => {
+            // Under an external owner the quantum is the owner's ALSA period,
+            // fixed while it runs. A request never lands; report, don't apply.
+            if detected_path(state).is_external() {
+                if quantum > 0 {
+                    state.notice = Some((
+                        format!(
+                            "The quantum is controlled by {}.",
+                            external_owner_name(state)
+                        ),
+                        Instant::now(),
+                    ));
+                }
+                return Task::none();
+            }
             state.quantum_change_at = Some(Instant::now());
             state.quantum_reforced = false;
             if !state.device.is_mock() {
@@ -12916,6 +12997,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 svc.send(crate::audio_path_service::Intent::Poll { probe_quantum });
                 let snap = svc.snapshot();
                 state.pcm_owner = snap.owner;
+                state.pcm_owner_comm = snap.owner_comm.clone();
                 state.reprepare_gen = snap.reprepare_gen;
                 state.reprepare_ok = snap.reprepare_ok;
                 if snap.kernel_at.is_some() {
@@ -15732,6 +15814,26 @@ fn readout(value: String, text_size: f32) -> Element<'static, Message> {
     text(value).color(theme::text_sec()).size(text_size).into()
 }
 
+/// A grayed read-only value in a picker slot under an external owner: the
+/// field shape stays, the value reads muted, no menu opens, and the tooltip
+/// names the owner ("Controlled by <owner>"). The owner sets the value while
+/// it holds the PCM; TotalControl reports it (gray-when-owned, GUI spec §3.3).
+fn owned_field(value: String, owner: &str, scale: f32, text_size: f32) -> Element<'static, Message> {
+    strip::hint(
+        container(
+            text(value)
+                .color(theme::disabled_text())
+                .size(text_size)
+                .width(Length::Fill),
+        )
+        .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+        .width(Length::Fill)
+        .style(theme::grayed_field),
+        format!("Controlled by {owner}"),
+        scale,
+    )
+}
+
 /// A sample rate as people say it: "48 kHz", "44.1 kHz", "176.4 kHz".
 pub(crate) fn rate_label(hz: u32) -> String {
     if hz % 1000 == 0 {
@@ -15972,23 +16074,60 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // it lives in the AUDIO ENGINE group, not here.
     let internal = settings.clock_source == "Internal";
     let device_mode = state.engine_rate_mode == EngineRateMode::Fixed;
-    // Row 1: the nominal-rate picker. It is editable only in Device mode on the
-    // internal clock; in Auto mode or under an external clock the rate is not
-    // the user's to set, so the row keeps its slot as a nonvisible placeholder
-    // (the card does not resize between modes, GUI spec §4).
-    if state.device.is_mock() || (internal && device_mode) {
-        body = body.push(
-            container(device_rate_row)
+    // Row 1: the nominal-rate picker. Active in Device mode on the internal
+    // clock (the PipeWire force, or the server-free idle write while no owner
+    // holds the PCM); grayed under an external owner, which sets the rate;
+    // a nonvisible filler in convenience mode or under an external clock.
+    // The row keeps one vertical slot in every state (GUI spec §4).
+    let rate_picker = if state.device.is_mock() {
+        audio_path::PickerState::Active
+    } else {
+        audio_path::rate_picker_state(detected_path(state), state.engine_rate_mode, !internal)
+    };
+    match rate_picker {
+        audio_path::PickerState::Active => {
+            body = body.push(
+                container(device_rate_row)
+                    .height(Length::Fixed(30.0 * scale))
+                    .align_y(iced::Alignment::Center)
+                    .width(Length::Fill),
+            );
+        }
+        audio_path::PickerState::Grayed => {
+            // The owner sets the rate: report the device truth, grayed, with
+            // the owner named in the tooltip. Never a false "applying…".
+            let owned_rate = state
+                .device
+                .device_rate()
+                .filter(|r| *r > 0)
+                .or_else(|| state.card_stream.map(|s| s.rate).filter(|r| *r > 0))
+                .unwrap_or(settings.sample_rate);
+            body = body.push(
+                container(
+                    row![
+                        caption("Sample rate"),
+                        owned_field(
+                            rate_label(owned_rate),
+                            &external_owner_name(state),
+                            scale,
+                            text_size,
+                        ),
+                    ]
+                    .spacing(theme::SPACE_MD * scale)
+                    .align_y(iced::Alignment::Center),
+                )
                 .height(Length::Fixed(30.0 * scale))
                 .align_y(iced::Alignment::Center)
                 .width(Length::Fill),
-        );
-    } else {
-        body = body.push(
-            iced::widget::Space::new()
-                .width(Length::Fill)
-                .height(Length::Fixed(30.0 * scale)),
-        );
+            );
+        }
+        audio_path::PickerState::Filler => {
+            body = body.push(
+                iced::widget::Space::new()
+                    .width(Length::Fill)
+                    .height(Length::Fixed(30.0 * scale)),
+            );
+        }
     }
     // Row 2: the current (actual) device clock, read-only. Always shown, so the
     // displayed rate is the truth: the nominal rate with pitch applied in Device
@@ -16374,17 +16513,32 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     );
-    body = body.push(
-        row![
-            caption("Quantum"),
+    // The quantum picker: TotalControl forces the graph quantum, except under
+    // an external owner, where the quantum is the owner's ALSA period — a
+    // grayed read-only report naming the owner (gray-when-owned).
+    let quantum_control: Element<'static, Message> =
+        if audio_path::quantum_picker_state(detected_path(state)) == audio_path::PickerState::Grayed
+        {
+            let period = state.card_stream.map(|s| s.period).filter(|p| *p > 0);
+            owned_field(
+                period
+                    .map(|p| format!("{p} samples"))
+                    .unwrap_or_else(|| "\u{2014}".into()),
+                &external_owner_name(state),
+                scale,
+                text_size,
+            )
+        } else {
             strip::hint(
                 quantum_pick,
                 "The graph quantum; orange until the graph runs at the selection.",
                 scale,
-            ),
-        ]
-        .spacing(theme::SPACE_MD * scale)
-        .align_y(iced::Alignment::Center),
+            )
+        };
+    body = body.push(
+        row![caption("Quantum"), quantum_control]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
     );
     // The RTL field carries its own label on row 1 (`RTL x.x ms`) with the
     // formula wrapping below; convenience shows the same four-row slot blank.
@@ -27863,6 +28017,61 @@ mod tests {
         state.rate_authority_reforce = None;
         state.engine_rate_mode = EngineRateMode::Auto;
         assert_eq!(rate_authority_target(&state, Some(cleared)), None);
+    }
+
+    #[test]
+    fn engine_rate_under_an_external_owner_names_the_owner_and_never_applies() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.engine_force_rate = 48_000;
+        state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::Jack;
+        state.pcm_owner_comm = Some("jackd".into());
+        let _ = update(&mut state, Message::EngineRate(96_000));
+        // The owner is named; there is no false "applying…"; the force is left
+        // alone because the owner, not TotalControl, sets the rate.
+        let notice = state.notice.as_ref().expect("a notice").0.clone();
+        assert!(notice.contains("jackd"), "{notice}");
+        assert!(!notice.contains("applying"), "{notice}");
+        assert_eq!(state.engine_force_rate, 48_000);
+    }
+
+    #[test]
+    fn engine_quantum_under_an_external_owner_never_shows_applying() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::DirectAlsa;
+        state.pcm_owner_comm = Some("reaper".into());
+        let _ = update(&mut state, Message::EngineQuantum(256));
+        let notice = state.notice.as_ref().expect("a notice").0.clone();
+        assert!(notice.contains("reaper"), "{notice}");
+        assert!(!notice.contains("applying"), "{notice}");
+    }
+
+    #[test]
+    fn engine_rate_while_idle_routes_to_the_server_free_device_write() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        attach_device_service(&mut state);
+        let (mut snapshot, sender, bus) = {
+            let service = state.device_service.as_ref().expect("service attached");
+            (service.snapshot(), service.command_sender(), service.meter_bus())
+        };
+        snapshot.info.rate_follows = true;
+        snapshot.info.is_mock = false;
+        state.device = DeviceHandle::Mirror(crate::device_service::Mirror::new(
+            snapshot, sender, bus,
+        ));
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.device.settings_mut().clock_source = "Internal".into();
+        // No owner holds the PCM: the idle path.
+        state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::Idle;
+        let _ = update(&mut state, Message::EngineRate(96_000));
+        // The idle device-rate write updates the model rate at once (the
+        // device readback confirms it); it is not the gated PipeWire force.
+        assert_eq!(state.device.settings().sample_rate, 96_000);
+        assert_eq!(state.engine_force_rate, 96_000);
+        assert_eq!(state.engine_rate_mode, EngineRateMode::Fixed);
     }
 
     #[test]

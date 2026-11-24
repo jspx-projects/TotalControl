@@ -34,6 +34,9 @@ use totalcontrol_core::pw_clock::{self, CardStream, PwClock, SchedPolicy};
 pub struct EngineSnapshot {
     /// Who holds the playback PCM (kernel `owner_pid` → `comm`).
     pub owner: PcmOwner,
+    /// The owning process's `comm`, for the "Controlled by <owner>" tooltip
+    /// on a grayed control. `None` when idle or unresolved.
+    pub owner_comm: Option<String>,
     /// The open playback stream (`hw_params`), `None` when idle.
     pub stream: Option<CardStream>,
     /// `snd_pcm_delay` (ring fill + in-flight URBs), frames.
@@ -68,6 +71,7 @@ impl Default for EngineSnapshot {
     fn default() -> Self {
         Self {
             owner: PcmOwner::Idle,
+            owner_comm: None,
             stream: None,
             delay: None,
             fill: None,
@@ -235,16 +239,21 @@ fn collect_kernel_facts(card_id: &str, snapshot: &Arc<Mutex<EngineSnapshot>>, st
     while !stop.load(Ordering::Relaxed) {
         let status = pw_clock::card_pcm_status(card_id);
         let stream = pw_clock::card_stream(card_id);
+        let comm = status
+            .as_ref()
+            .and_then(|s| s.owner_pid)
+            .and_then(pw_clock::process_comm);
         let owner = match &status {
             None => PcmOwner::Idle,
             Some(s) => match s.owner_pid {
-                Some(pid) => PcmOwner::from_comm(pw_clock::process_comm(pid).as_deref()),
+                Some(_) => PcmOwner::from_comm(comm.as_deref()),
                 None => PcmOwner::Unknown,
             },
         };
         {
             let mut snap = snapshot.lock().unwrap();
             snap.owner = owner;
+            snap.owner_comm = comm;
             snap.stream = stream;
             snap.delay = status.as_ref().and_then(|s| s.delay);
             snap.fill = status.as_ref().and_then(|s| s.fill);
