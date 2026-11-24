@@ -5717,6 +5717,12 @@ fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &st
 /// scene carries the confirmed card rate so it never writes a stale rate back
 /// to the unit. Idempotent: a pending reapply is only upgraded, not duplicated.
 fn arm_engine_run_reapply(state: &mut TotalControl) {
+    // The engine start commits the nominal rate to the device, wiping the
+    // pitched clock. Re-assert the saved pitch through the gated reconcile
+    // so every restart re-establishes the programmed clock — the fresh-start
+    // precondition on the restart path. The reconcile guards capability,
+    // mode and clock source itself, as on every other pitch path.
+    state.pitch_clock_dirty = true;
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return;
     }
@@ -22929,7 +22935,7 @@ mod tests {
         engine_poll_fast, global_feedback_is_typed, global_messages, global_state_commands,
         host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
-        note_observed_rate_switch, track_engine_run,
+        note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
         convenience_quantum_min, minimum_quantum, reconcile_device_pitch,
         power_sum_output_meters, quantum_pending, rate_authority_target,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
@@ -28074,6 +28080,23 @@ mod tests {
         state.pitch_clock_dirty = true;
         reconcile_device_pitch(&mut state);
         assert_eq!(state.pitch_clock_applied, Some(1.5));
+    }
+
+    #[test]
+    fn an_engine_run_reasserts_the_pitch() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.pro_pitch = 1.5;
+        state.pitch_clock_applied = Some(1.5);
+        state.pitch_clock_dirty = false;
+        arm_engine_run_reapply(&mut state);
+        // The restart wiped the device clock; the reconcile must write again.
+        assert!(state.pitch_clock_dirty);
+        reconcile_device_pitch(&mut state);
+        assert_eq!(state.pitch_clock_applied, Some(1.5));
+        assert!(!state.pitch_clock_dirty);
     }
 
     #[test]

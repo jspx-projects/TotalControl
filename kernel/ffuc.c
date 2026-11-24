@@ -253,6 +253,7 @@ unsigned int ffuc_rate_from_index(unsigned int idx)
 /* -- vendor requests ------------------------------------------------- */
 
 static void ffuc_track_clock(struct ffuc *chip, u16 val, u16 idx);
+static unsigned int ffuc_programmed_clock(const struct ffuc *chip);
 
 int ffuc_vendor_send(struct ffuc *chip, u8 req, u16 val, u16 idx,
 		     const void *data, u16 len)
@@ -1712,7 +1713,7 @@ static void ffuc_fb_put(struct ffuc *chip, unsigned int pos, unsigned int frames
 
 static void ffuc_fb_put_nominal(struct ffuc *chip)
 {
-	chip->fb_acc += chip->rate;
+	chip->fb_acc += ffuc_programmed_clock(chip);
 	ffuc_fb_put(chip, chip->in_end, chip->fb_acc / 8000, 0, false);
 	chip->fb_acc %= 8000;
 }
@@ -1759,7 +1760,7 @@ static bool ffuc_fb_get(struct ffuc *chip, u64 k, unsigned int *pos,
 static u32 ffuc_lead_seed(struct ffuc *chip)
 {
 	u64 wrap = ffuc_iso_wrap(chip);
-	u64 step_q32 = div64_u64((u64)chip->rate << 32, 8000);
+	u64 step_q32 = div64_u64((u64)ffuc_programmed_clock(chip) << 32, 8000);
 	s64 span_pkts, pos_q32;
 
 	/* Packets between the fb slot the seed represents and the fill
@@ -2112,14 +2113,18 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 		if (!ffuc_fb_get(chip, k, &pos[i], &frames[i], &phase[i])) {
 			if (k < chip->fb_delay) {
 				atomic_inc(&chip->out_fb_priming);
-				/* Priming carries nominal-cadence frames, never
-				 * empty packets: the device output buffer must
-				 * stay fed before feedback exists.  The
-				 * fractional accumulator advances the lead at
-				 * the exact nominal rate (rate/8000 per
-				 * packet), so the handover to the mirrored
-				 * counts carries no cadence step. */
-				chip->out_prime_acc += chip->rate;
+				/* Priming carries programmed-cadence frames
+				 * (nominal scaled by the pitch), never empty
+				 * packets: the device output buffer must stay
+				 * fed before feedback exists. The fractional
+				 * accumulator advances at the exact programmed
+				 * clock, so a re-prepare under pitch primes at
+				 * the rate the device consumes and the handover
+				 * to the mirrored counts carries no cadence
+				 * step. Priming at nominal under pitch leaves a
+				 * deficit that starves the ring and churns XRUN
+				 * recovery (each recovery primes again). */
+				chip->out_prime_acc += ffuc_programmed_clock(chip);
 				frames[i] = min(chip->out_prime_acc / 8000,
 						m->max_frames);
 				chip->out_prime_acc %= 8000;
