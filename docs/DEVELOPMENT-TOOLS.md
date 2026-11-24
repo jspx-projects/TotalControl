@@ -11,6 +11,7 @@ testing.
 - [Mock modes](#mock-modes)
 - [Environment variables](#environment-variables)
 - [Capture and probe tools](#capture-and-probe-tools)
+- [Bench verification tooling](#bench-verification-tooling)
 - [Build and test helpers](#build-and-test-helpers)
 - [Licensing](#licensing)
 
@@ -83,6 +84,19 @@ All development switches use the `TOTALCONTROL_` prefix:
 
 Protocol captures and measurements are evidence, not specifications. Record
 the device model, transport, firmware and rate with every capture.
+
+## Bench verification tooling
+
+`tools/bench/` holds the reusable verification and measurement set for the
+driver and the host audio path: the PipeWire graph lab (`pw-lab.py`
+run/matrix/watch), device-clock writes (`clock-write.c`), hwdep diagnostics,
+host/ALSA fill and latency probes, soak/load/recovery tests, and the RTL /
+loopback measurement tools. The generic layer is device-agnostic (`--card N` /
+`CARD=N`); the protocol layer dispatches per model. See `tools/bench/README.md`
+for the tool list, build flags and runtime dependencies, and
+`tools/bench/RTL-MEASUREMENT.md` / `CHANNEL-NUMBERING.md` for the measurement
+method. Measurement data is not committed; the tools write to a directory you
+choose.
 
 ## Loopback measurement (UCX)
 
