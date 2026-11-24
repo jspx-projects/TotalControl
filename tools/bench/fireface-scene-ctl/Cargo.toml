@@ -1,0 +1,11 @@
+[package]
+name = "fireface-scene-ctl"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+totalcontrol-core = { path = "../../../ui/totalcontrol/totalcontrol-core" }
+serde_json = "1"
+
+[workspace]
