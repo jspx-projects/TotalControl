@@ -964,6 +964,13 @@ are the four base-rate family divisors: 32 kHz, 44.1 kHz, 48 kHz and 50 kHz
 (family 0..3); the fourth word is the 50 kHz divisor, verified by the UC
 pitch capture where it tracks the 48 kHz word at 25/24.
 
+The driver clamps the active family's word to the pitch envelope
+(DRIVER-DESIGN §4.1.1): the programmed clock stays at or below the band's
+packet capacity (`8000 × max_frames`). At 192 kHz the positive range ends at
++4.1667 %; every other rate carries the full ±5 %. The clamp is counted by
+`pitch_clamps` and returned in the vendor write's value/index. The other
+families' words pass untouched.
+
 The mode group (item 7) writes, in order:
 
 ```text

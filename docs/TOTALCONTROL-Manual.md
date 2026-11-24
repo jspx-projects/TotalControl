@@ -434,7 +434,11 @@ The `Pitch` slider changes the speed and pitch of the whole interface from
 Double-click the slider to return to 0.0 %. Pitch is written to the device
 as soon as it changes. Right after switching to Device mode, the clock write
 waits until the scheduling change has applied, so the interface never runs a
-pitched clock on the convenience scheduling.
+pitched clock on the convenience scheduling. The positive end depends on the
+sample rate: the interface's USB transport carries the pitched clock only up
+to a per-rate ceiling, and at 192 kHz the slider ends at +4.1 % (the ceiling
+is +4.17 %). Every other rate offers the full +5.0 %. A pitch saved at a lower
+rate clamps to the ceiling when you switch to 192 kHz.
 
 Pitch is a Device-mode control on the internal clock. The slider is shown only
 when `Rate follows` is Device **and** `Clock source` is Internal. When `Rate
