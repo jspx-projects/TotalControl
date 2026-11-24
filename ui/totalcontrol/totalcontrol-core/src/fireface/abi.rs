@@ -7,7 +7,7 @@
 
 use std::mem::size_of;
 
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 pub const HWDEP_MAX_DATA: usize = 64;
 pub const HWDEP_MAX_WORDS: usize = 63;
 pub const HWDEP_MAX_RATES: usize = 16;
@@ -160,6 +160,22 @@ pub struct HwdepEnvelope {
     pub rates: [HwdepRateEnv; HWDEP_MAX_RATES],
 }
 
+/// Set the device clock rate while the engine is idle (no PCM owner). The
+/// driver adopts the rate, commits it, confirms it from the state-word rate
+/// readback and bumps `run_seq`. Idle-only: `-EBUSY` while an owner holds the
+/// PCM. `confirmed` returns the state-word rate after the write. ABI 8.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HwdepSetRate {
+    /// In: requested rate, Hz.
+    pub rate: u32,
+    /// In: must be 0.
+    pub flags: u32,
+    /// Out: the state-word rate after the write, Hz.
+    pub confirmed: u32,
+    pub reserved: [u32; 5],
+}
+
 /// Linux `_IOC` encoding (the generic asm-generic layout used on x86_64,
 /// arm64 and most modern architectures).
 const fn ioc(dir: u32, ty: u8, nr: u8, size: usize) -> u64 {
@@ -177,6 +193,8 @@ pub const IOCTL_VENDOR: u64 = ioc(IOC_READ | IOC_WRITE, b'F', 0x11, size_of::<Hw
 pub const IOCTL_WRITE_WORDS: u64 = ioc(IOC_WRITE, b'F', 0x12, size_of::<HwdepWords>());
 pub const IOCTL_COUNTERS: u64 = ioc(IOC_READ, b'F', 0x13, size_of::<HwdepCounters>());
 pub const IOCTL_ENVELOPE: u64 = ioc(IOC_READ, b'F', 0x14, size_of::<HwdepEnvelope>());
+pub const IOCTL_SET_RATE: u64 =
+    ioc(IOC_READ | IOC_WRITE, b'F', 0x16, size_of::<HwdepSetRate>());
 
 impl HwdepInfo {
     pub fn name_str(&self) -> String {
@@ -221,6 +239,8 @@ mod tests {
         // ffuc_hwdep_rate_env: 3 * 4 = 12; envelope: 4 * 4 + 16 * 12 = 208
         assert_eq!(size_of::<HwdepRateEnv>(), 12);
         assert_eq!(size_of::<HwdepEnvelope>(), 208);
+        // ffuc_hwdep_set_rate: 8 * 4 = 32
+        assert_eq!(size_of::<HwdepSetRate>(), 32);
     }
 
     #[test]
@@ -229,5 +249,7 @@ mod tests {
         assert_eq!(IOCTL_INFO, 0x80c4_4610);
         // _IOR('F', 0x14, 208) = 0x80d04614
         assert_eq!(IOCTL_ENVELOPE, 0x80d0_4614);
+        // _IOWR('F', 0x16, 32) = 0xc0204616
+        assert_eq!(IOCTL_SET_RATE, 0xc020_4616);
     }
 }

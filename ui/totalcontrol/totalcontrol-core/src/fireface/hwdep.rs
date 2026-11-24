@@ -114,6 +114,26 @@ impl Hwdep {
         Ok(unsafe { env.assume_init() })
     }
 
+    /// Set the device clock rate while the engine is idle (no PCM owner).
+    /// The driver adopts, commits and confirms the rate from the state-word
+    /// readback, returning the confirmed rate. Idle-only: an owner holding
+    /// the PCM yields `EBUSY`. The server-free idle device-rate setting of
+    /// the JACK / direct-ALSA path (ABI 8).
+    pub fn set_rate_idle(&self, rate: u32) -> io::Result<u32> {
+        let mut r = HwdepSetRate { rate, flags: 0, confirmed: 0, reserved: [0; 5] };
+        let ret = unsafe {
+            libc::ioctl(
+                self.file.as_raw_fd(),
+                IOCTL_SET_RATE as libc::c_ulong,
+                &mut r,
+            )
+        };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(r.confirmed)
+    }
+
     /// One EP0 vendor request.  For [`Direction::In`] the returned vector is
     /// the payload the device sent; for [`Direction::Out`] it is empty.
     pub fn vendor(

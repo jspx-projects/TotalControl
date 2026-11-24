@@ -24172,6 +24172,8 @@ mod tests {
             rate: 48_000,
             period: 64,
             buffer: 768,
+            channels: 18,
+            format: totalcontrol_core::pw_clock::PcmFormat::S32Le,
         });
         state.graph_quantum = Some(128);
         assert!(!quantum_pending(&state));
@@ -24333,6 +24335,8 @@ mod tests {
             rate: 48_000,
             period: 48,
             buffer: 768,
+            channels: 18,
+            format: totalcontrol_core::pw_clock::PcmFormat::S32Le,
         };
         state.card_stream = Some(stream);
         let _ = update(&mut state, Message::EngineRead(None, Some(stream), true, None, None));
@@ -26405,6 +26409,8 @@ mod tests {
             rate: 44_100,
             period: 128,
             buffer: 256,
+            channels: 18,
+            format: totalcontrol_core::pw_clock::PcmFormat::S32Le,
         });
         assert_eq!(super::current_graph_rate(&state), 44_100);
         state.engine.as_mut().unwrap().force_rate = 96_000;
@@ -26691,6 +26697,8 @@ mod tests {
             rate: 44_100,
             period: 512,
             buffer: 1536,
+            channels: 18,
+            format: totalcontrol_core::pw_clock::PcmFormat::S32Le,
         });
         assert_eq!(
             crate::sidebar::clock_line(&state, "Internal"),
@@ -27759,8 +27767,13 @@ mod tests {
         state.engine_rate_mode = EngineRateMode::Auto;
         state.device.settings_mut().sample_rate = 88_200;
         state.last_card_rate = Some(48_000);
-        let stream =
-            totalcontrol_core::pw_clock::CardStream { rate: 96_000, period: 48, buffer: 384 };
+        let stream = totalcontrol_core::pw_clock::CardStream {
+            rate: 96_000,
+            period: 48,
+            buffer: 384,
+            channels: 18,
+            format: totalcontrol_core::pw_clock::PcmFormat::S32Le,
+        };
         let _ = update(&mut state, Message::EngineRead(None, Some(stream), false, None, None));
 
         assert_eq!(

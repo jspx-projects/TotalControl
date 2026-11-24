@@ -165,6 +165,15 @@ pub trait ControlTransport: Send {
     fn counters(&self) -> Option<HwdepCounters> {
         None
     }
+
+    /// The server-free idle device-rate write, when the backend has it.
+    /// `None` means the backend has no idle-rate command. `Some(Ok(rate))`
+    /// is the confirmed device rate; `Some(Err(e))` is a refusal (e.g. an
+    /// owner holds the PCM).
+    fn set_rate_idle(&self, rate: u32) -> Option<Result<u32, Error>> {
+        let _ = rate;
+        None
+    }
 }
 
 struct HwdepTransport {
@@ -236,6 +245,10 @@ impl ControlTransport for HwdepTransport {
 
     fn counters(&self) -> Option<HwdepCounters> {
         self.hw.counters().ok()
+    }
+
+    fn set_rate_idle(&self, rate: u32) -> Option<Result<u32, Error>> {
+        Some(self.hw.set_rate_idle(rate).map_err(Error::from))
     }
 }
 
@@ -1154,6 +1167,29 @@ impl Fireface {
     /// Driver-side transport health, when the hwdep transport is in use.
     pub fn transport_counters(&self) -> Option<HwdepCounters> {
         self.transport.lock().ok().and_then(|t| t.counters())
+    }
+
+    /// The server-free idle device-rate write (the JACK / direct-ALSA pro
+    /// path). Sets the device clock while no owner holds the PCM; the driver
+    /// adopts, commits and confirms the rate, and arms the scene reapply.
+    /// Returns the confirmed device rate. An owner holding the PCM surfaces
+    /// as an I/O error (`EBUSY`); a backend without the command is
+    /// `Unsupported`.
+    pub fn set_sample_rate_idle(&mut self, rate: u32) -> Result<u32, Error> {
+        let confirmed = {
+            let t = self.transport.lock().unwrap();
+            match t.set_rate_idle(rate) {
+                Some(res) => res?,
+                None => {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "the backend has no idle device-rate write",
+                    )));
+                }
+            }
+        };
+        self.settings.sample_rate = rate;
+        Ok(confirmed)
     }
 
     /// The rate the unit reports for its active clock source, read from the
