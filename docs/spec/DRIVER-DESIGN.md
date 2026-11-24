@@ -984,7 +984,11 @@ in §4.1.1). The device clock therefore has two owners:
   the PipeWire force and re-prepare; the engine-start commit lands it on the
   device.
 - **Pitch** — the host's rate-follow-mode reconcile: nominal in PipeWire (Auto)
-  mode, the pro pitch in Device mode after IRQ scheduling is confirmed.
+  mode and under any external clock source (the unit is slaved, so the external
+  rate is respected), the pro pitch in Device mode on the internal clock after
+  IRQ scheduling is confirmed. Pitch starts at nominal (0 %) and is reset to 0
+  on a clock-source change, a rate-follow-mode change, startup and workspace
+  load; a saved pitch is not auto-restored.
 
 A mixer scene apply writes the mixer group only. It adopts the scene's rate and
 pitch into the host model but writes neither clock word into the device, so a

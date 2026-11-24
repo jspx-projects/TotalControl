@@ -434,11 +434,18 @@ The `Pitch` slider changes the speed and pitch of the whole interface from
 Double-click the slider to return to 0.0 %. Pitch is written to the device
 as soon as it changes.
 
-Pitch is a Device-mode control. It is shown when `Rate follows` is Device.
-When `Rate follows` is PipeWire the slider is hidden (its row keeps its space)
-and the interface runs at its nominal clock. A pitched clock cannot be tracked
-by the convenience timer scheduling, so pitch is not available there. Your
-saved pitch is kept and returns when you select Device again.
+Pitch is a Device-mode control on the internal clock. The slider is shown only
+when `Rate follows` is Device **and** `Clock source` is Internal. When `Rate
+follows` is PipeWire the slider is hidden (its row keeps its space) and the
+interface runs at its nominal clock — a pitched clock cannot be tracked by the
+convenience timer scheduling. Under an external clock source (SPDIF, Optical/
+ADAT, Word Clock) the interface is slaved to that clock: the slider is hidden,
+pitch is held at 0 %, and the externally applied rate is respected.
+
+Pitch always starts from a clean slate (0 %). Changing the clock source,
+switching `Rate follows` (either direction), starting TotalControl, or loading
+a workspace resets pitch to 0 %. A saved pitch is not restored automatically;
+set it again from the slider after the change.
 
 ### About dialog
 

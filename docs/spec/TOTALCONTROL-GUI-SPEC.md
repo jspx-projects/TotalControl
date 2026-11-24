@@ -1279,11 +1279,17 @@ secondary text colour; editable controls use the primary colour.
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
 fine enough). Double-click resets to 0.0 %. Every change is written immediately
-to the device. Pitch is a Device-path control: the slider is shown when `Rate
-follows` is Device. When `Rate follows` is PipeWire the row is a nonvisible
-filler of the same height (§4) and the device clock runs nominal (0 %). The
-saved pitch is preserved in the scene and returns to the clock when Device is
-selected again.
+to the device. Pitch is a Device-path control on the internal clock: the slider
+is shown only when `Rate follows` is Device **and** `Clock source` is Internal.
+Otherwise the row is a nonvisible filler of the same height (§4) and the device
+clock runs nominal (0 %). Under an external clock source (SPDIF, Optical/ADAT,
+Word Clock) the unit is slaved: pitch is held at 0 % in both rate-follow modes
+and the externally applied rate is respected.
+
+Pitch starts from a clean slate (0 %). It is reset to 0 on a clock-source
+change, on a rate-follow-mode change (either direction), at startup and on a
+workspace load. A saved pitch is not auto-restored to the clock; the user sets
+pitch from the slider after the transition.
 
 The panel is 360 px wide at scale 1 and its caption column is 110 px. The
 width reserves the thin scrollbar's width so an appearing scrollbar does not

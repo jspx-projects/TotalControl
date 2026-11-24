@@ -3147,7 +3147,10 @@ pub struct TotalControl {
     /// The user's pro pitch intent, owned by the GUI. A scene reapply clones
     /// the device settings and can clobber `settings.pitch_percent`, so the
     /// slider, the Device-path clock and persistence use this instead. Set by
-    /// the pitch slider and workspace load; never by a stream-restart reapply.
+    /// the pitch slider only. Clean slate: reset to 0 on a clock-source change,
+    /// a rate-follow-mode change, startup and workspace load — a saved pitch is
+    /// never auto-restored, and it is writable only in Device mode on the
+    /// internal clock.
     pub pro_pitch: f32,
     /// The audio-path worker's re-prepare completion fact (copied from the
     /// engine snapshot each poll): a generation counter and whether the last
@@ -4525,10 +4528,12 @@ fn apply_workspace_state(
     apply_workspace_sample_rate(state, &scene);
     apply_workspace_monitor_state(state, &scene)?;
     if state.device.capabilities().pitch {
-        state.pro_pitch = scene.settings.pitch_percent;
+        // Clean slate: a workspace load starts at nominal pitch. The saved
+        // scene pitch is not restored to the clock.
+        state.pro_pitch = 0.0;
         state
             .device
-            .set_pitch(scene.settings.pitch_percent)
+            .set_pitch(0.0)
             .map_err(|e| e.to_string())?;
     }
     state.talkback_on = false;
@@ -5607,9 +5612,11 @@ fn schedule_startup_full_reapply(state: &mut TotalControl) {
 }
 
 fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
-    // The startup scene carries the saved pro pitch intent.
+    // Clean slate: pitch starts at nominal on connect. A saved scene pitch is
+    // not restored to the clock; the user sets pitch from the slider in Device
+    // mode on the internal clock.
     if state.device.capabilities().pitch {
-        state.pro_pitch = scene.settings.pitch_percent;
+        state.pro_pitch = 0.0;
     }
     // Correctness: establish the Control Room assignment before the scene
     // write, so the scene's monitor flags (Speaker B, Dim) restore against a
@@ -11694,10 +11701,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_osc_bool(state, format!("/{kind}/{id}/stereo"), linked);
         }
         Message::PitchChanged(v) => {
-            // Pitch is a Device-path control; the convenience clock runs
-            // nominal. Ignore pitch moves outside Device mode (the slider is
-            // hidden there, but OSC/controllers may still send them).
-            if state.engine_rate_mode == EngineRateMode::Fixed {
+            // Pitch is a Device-path control on the internal clock; the
+            // convenience clock runs nominal and a slaved (external) clock
+            // must not be pitched. Ignore pitch moves outside that case (the
+            // slider is hidden there, but OSC/controllers may still send them).
+            let internal = state.device.settings().clock_source == "Internal";
+            if state.engine_rate_mode == EngineRateMode::Fixed && internal {
                 state.pro_pitch = v;
                 if let Err(e) = state.device.set_pitch(v) {
                     fail(state, "set_pitch", &e);
@@ -12613,6 +12622,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if let Err(e) = state.device.set_clock_source(&source) {
                 fail(state, "set_clock_source", &e);
             }
+            // Clean slate: a clock-source change resets pitch to nominal. Under
+            // an external source the unit is slaved and pitch must stay 0; on
+            // the internal clock the user starts from 0 and sets pitch anew.
+            state.pro_pitch = 0.0;
+            state.pitch_clock_dirty = true;
+            reconcile_device_pitch(state);
             // Slaved to an external clock the device owns the rate: hold
             // Fixed mode and follow the device's reported rate. The live
             // reconcile tracks it once the unit locks to the new source.
@@ -12777,9 +12792,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 EngineRateMode::Auto => {
                     state.engine_rate_mode = EngineRateMode::Auto;
                     state.rate_authority_reforce = None;
-                    // Convenience runs the nominal clock: pitch is a Device-path
-                    // control. Force 0 % without touching the saved pro pitch.
+                    // Clean slate: the convenience clock runs nominal. Reset the
+                    // pitch intent to 0 so a later return to Device starts fresh.
                     // Nominal is safe in any scheduling mode, so no dependency.
+                    state.pro_pitch = 0.0;
                     state.pitch_after_reprepare = None;
                     state.pitch_clock_dirty = true;
                     reconcile_device_pitch(state);
@@ -12799,6 +12815,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 EngineRateMode::Fixed => {
                     state.engine_rate_mode = EngineRateMode::Fixed;
                     state.rate_authority_reforce = None;
+                    // Clean slate: entering Device mode starts at nominal pitch.
+                    // A saved pitch is not restored — the user sets pitch from
+                    // the slider afterwards, so the clock precondition is always
+                    // known (0 %) at the transition.
+                    state.pro_pitch = 0.0;
+                    state.pitch_clock_dirty = true;
                     // Land the IRQ policy and the rate force, then re-prepare.
                     apply_graph_rate(state, device_authority_rate(state), true);
                     // The pitched clock belongs only to an IRQ-scheduled graph.
@@ -15614,7 +15636,13 @@ fn reconcile_device_pitch(state: &mut TotalControl) {
         return;
     }
     let saved = state.pro_pitch;
-    let desired = if state.engine_rate_mode == EngineRateMode::Fixed {
+    // Pitch is a clock control only on the internal clock. Under an external
+    // source (SPDIF, Optical/ADAT, Word Clock) the unit is slaved: its rate is
+    // the externally applied clock, and a pitched DDS quad would try to move a
+    // clock the device does not own. Hold nominal (0 %) under any external
+    // source, in both rate-follow modes, and respect the external rate.
+    let internal = state.device.settings().clock_source == "Internal";
+    let desired = if state.engine_rate_mode == EngineRateMode::Fixed && internal {
         saved
     } else {
         0.0
@@ -15996,7 +16024,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .width(Length::Fill),
     );
     if state.device.capabilities().pitch {
-        if state.engine_rate_mode == EngineRateMode::Fixed {
+        if state.engine_rate_mode == EngineRateMode::Fixed && internal {
             let value = state.pro_pitch;
             body = body.push(
                 row![
@@ -16016,9 +16044,11 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 .align_y(iced::Alignment::Center),
             );
         } else {
-            // Convenience: pitch is a Device-path control and the clock runs
-            // nominal. The row keeps its space as a nonvisible filler so the
-            // card does not resize (GUI spec §4). Height matches the slider.
+            // Pitch is shown only in Device mode on the internal clock. In
+            // PipeWire (Auto) mode the clock runs nominal; under an external
+            // clock source the unit is slaved and pitch is not a control. The
+            // row keeps its space as a nonvisible filler so the card does not
+            // resize (GUI spec §4). Height matches the slider.
             body = body.push(
                 iced::widget::Space::new()
                     .width(Length::Fill)
@@ -27970,6 +28000,56 @@ mod tests {
     }
 
     #[test]
+    fn a_slaved_clock_holds_nominal_pitch_even_in_device_mode() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.pro_pitch = 1.5;
+        state.pitch_clock_applied = Some(1.5);
+        state.pitch_clock_dirty = true;
+        // External clock: the unit is slaved, so the pitched clock is not
+        // written even in Device mode; the external rate is respected.
+        let _ = state.device.set_clock_source("Word Clock");
+        reconcile_device_pitch(&mut state);
+        assert_eq!(state.pitch_clock_applied, Some(0.0));
+        // Back on the internal clock the pro pitch is applied again.
+        let _ = state.device.set_clock_source("Internal");
+        state.pitch_clock_dirty = true;
+        reconcile_device_pitch(&mut state);
+        assert_eq!(state.pitch_clock_applied, Some(1.5));
+    }
+
+    #[test]
+    fn a_clock_source_change_resets_pitch_to_a_clean_slate() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.pro_pitch = 2.0;
+        let _ = update(&mut state, Message::ClockSourceSelected("Word Clock".into()));
+        assert_eq!(state.pro_pitch, 0.0);
+        assert_eq!(state.pitch_clock_applied, Some(0.0));
+        // Returning to the internal clock also starts from a clean slate.
+        let _ = update(&mut state, Message::ClockSourceSelected("Internal".into()));
+        assert_eq!(state.pro_pitch, 0.0);
+    }
+
+    #[test]
+    fn entering_device_mode_resets_pitch_to_a_clean_slate() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Auto;
+        state.pro_pitch = 2.0;
+        let _ = update(&mut state, Message::EngineRateMode(EngineRateMode::Fixed));
+        // A saved pitch is not restored on the mode change; the clock starts
+        // nominal and the user sets pitch from the slider afterwards.
+        assert_eq!(state.pro_pitch, 0.0);
+        assert_eq!(state.pitch_clock_applied, Some(0.0));
+    }
+
+    #[test]
     fn a_pitched_clock_waits_for_a_confirmed_reprepare() {
         let mut state = new(true, None, None);
         state.device = DeviceHandle::open_mock_ucx();
@@ -28098,7 +28178,10 @@ mod tests {
         assert!(target.snapshots[2].is_some());
         assert!(!target.talkback_on);
         assert_eq!(target.device.settings().sample_rate, 44_100);
-        assert_eq!(target.device.settings().pitch_percent, 1.5);
+        // Clean slate: a workspace load resets pitch to nominal; the saved
+        // scene pitch (1.5) is not restored to the clock.
+        assert_eq!(target.device.settings().pitch_percent, 0.0);
+        assert_eq!(target.pro_pitch, 0.0);
         assert_eq!(target.workspace_path, Some(PathBuf::from("/tmp/test.tcws")));
         assert!(!target.workspace_dirty);
     }
