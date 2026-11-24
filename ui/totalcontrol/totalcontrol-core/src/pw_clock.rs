@@ -150,6 +150,28 @@ pub fn reprepare_bump(clock: &PwClock) -> Option<(u32, u32)> {
     Some((bump, restore))
 }
 
+/// The rate a re-prepare must land on. A forced rate is the authority (Device
+/// mode). Without a force (Auto mode) the graph rate is conducted by the playing
+/// stream, so the re-prepare preserves that conducted rate rather than
+/// re-imposing the default: the capture activation otherwise conducts the graph
+/// to its own default rate and tramples the stream's rate. `conducting` is the
+/// open playback stream's rate, `None` when idle (then the default applies).
+pub fn reprepare_rate_target(clock: &PwClock, conducting: Option<u32>) -> u32 {
+    if clock.force_rate > 0 {
+        clock.force_rate
+    } else {
+        conducting.filter(|r| *r > 0).unwrap_or(clock.rate)
+    }
+}
+
+/// Whether a negotiated ALSA period confirms the target graph quantum. IRQ
+/// scheduling prepares `period = quantum`; timer scheduling serves a batch
+/// device at two ALSA periods per graph cycle, so `period = quantum / 2`. Either
+/// relationship confirms the quantum.
+pub fn period_confirms_quantum(period: u32, quantum: u32) -> bool {
+    period == quantum || period.saturating_mul(2) == quantum
+}
+
 /// Parses `pw-metadata -n settings 0` output, lines like
 /// `update: id:0 key:'clock.rate' value:'48000' type:''`. `None` when the
 /// two defaults are missing (no PipeWire, or not its settings object).
@@ -455,15 +477,20 @@ pub fn set_source_suspended(node: &str, suspended: bool) -> bool {
 /// Returns true when the device confirmed the forced state.
 pub fn capture_reprepare(card_id: &str) -> bool {
     let Some(clock) = read() else { return false };
-    let target_rate = clock.effective_rate();
+    // Preserve the conducted rate in Auto mode: the capture activation conducts
+    // the graph to its own rate, so activating at the default would trample a
+    // playing stream's rate. See reprepare_rate_target.
+    let conducting = card_stream(card_id).map(|s| s.rate);
+    let target_rate = reprepare_rate_target(&clock, conducting);
     let target_quantum = clock.effective_quantum();
     if target_rate == 0 {
         return false;
     }
     let Some(source) = fireface_source_name() else { return false };
+    let rate_arg = target_rate.to_string();
     for _attempt in 0..2 {
         let Ok(mut child) = Command::new("pw-record")
-            .args(["--target", &source, "/dev/null"])
+            .args(["--rate", &rate_arg, "--target", &source, "/dev/null"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -487,13 +514,15 @@ pub fn capture_reprepare(card_id: &str) -> bool {
             let _ = force_quantum(restore);
         }
         // Wait until the device runs at the forced rate and quantum. A forced
-        // quantum is confirmed by the PCM period (IRQ mode prepares period =
-        // quantum): the period persists while the node is suspended, whereas the
-        // running-graph quantum reads empty once the re-prepare lets the node
-        // idle. An Auto (0) quantum is graph-conducted, so only confirm the graph
-        // ran. Polling (not a single read) is what makes a quantum-only change
-        // confirm: the rate is already at target there, so we wait for the quantum
-        // to land. The capture stays open until the device confirms.
+        // quantum is confirmed by the PCM period: IRQ mode prepares period =
+        // quantum, timer mode serves a batch device at two periods per graph
+        // cycle (period = quantum / 2); either relationship confirms it. The
+        // period persists while the node is suspended, whereas the running-graph
+        // quantum reads empty once the re-prepare lets the node idle. An Auto (0)
+        // quantum is graph-conducted, so only confirm the graph ran. Polling (not
+        // a single read) is what makes a quantum-only change confirm: the rate is
+        // already at target there, so we wait for the quantum to land. The capture
+        // stays open until the device confirms.
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut confirmed = false;
         while Instant::now() < deadline {
@@ -501,7 +530,7 @@ pub fn capture_reprepare(card_id: &str) -> bool {
             let rate_ok = stream.is_some_and(|s| s.rate == target_rate);
             let quantum_ok = rate_ok
                 && if clock.force_quantum > 0 {
-                    stream.is_some_and(|s| s.period == target_quantum)
+                    stream.is_some_and(|s| period_confirms_quantum(s.period, target_quantum))
                 } else {
                     graph_quantum().is_some()
                 };
@@ -832,6 +861,39 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         assert_eq!(reprepare_bump(&clock(0, 256)), Some((255, 0)));
         // Nothing to bump when no quantum is known.
         assert_eq!(reprepare_bump(&clock(0, 0)), None);
+    }
+
+    #[test]
+    fn the_reprepare_rate_target_preserves_the_conducted_rate_in_auto() {
+        let clock = |force_rate: u32, rate: u32| PwClock {
+            rate,
+            quantum: 192,
+            force_rate,
+            force_quantum: 0,
+            min_quantum: 0,
+            max_quantum: 0,
+        };
+        // A forced rate is the authority, whatever is conducting.
+        assert_eq!(reprepare_rate_target(&clock(96_000, 48_000), Some(192_000)), 96_000);
+        // Auto with a playing stream: preserve the conducted rate, not the default.
+        assert_eq!(reprepare_rate_target(&clock(0, 48_000), Some(192_000)), 192_000);
+        // Auto idle: no conducted rate, the default applies.
+        assert_eq!(reprepare_rate_target(&clock(0, 48_000), None), 48_000);
+        // A zero/absent conducted rate falls back to the default.
+        assert_eq!(reprepare_rate_target(&clock(0, 48_000), Some(0)), 48_000);
+    }
+
+    #[test]
+    fn the_period_confirms_the_quantum_in_both_scheduling_modes() {
+        // IRQ: period = quantum. Timer/batch: period = quantum / 2.
+        assert!(period_confirms_quantum(256, 256));
+        assert!(period_confirms_quantum(128, 256));
+        assert!(period_confirms_quantum(192, 192));
+        assert!(period_confirms_quantum(96, 192));
+        // A different quantum is not confirmed.
+        assert!(!period_confirms_quantum(128, 512));
+        assert!(!period_confirms_quantum(256, 192));
+        assert!(!period_confirms_quantum(0, 256));
     }
 
     /// Against the live PipeWire: run by hand (`--ignored`). Only ever

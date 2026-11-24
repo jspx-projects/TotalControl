@@ -3149,6 +3149,16 @@ pub struct TotalControl {
     /// slider, the Device-path clock and persistence use this instead. Set by
     /// the pitch slider and workspace load; never by a stream-restart reapply.
     pub pro_pitch: f32,
+    /// The audio-path worker's re-prepare completion fact (copied from the
+    /// engine snapshot each poll): a generation counter and whether the last
+    /// re-prepare confirmed the forced engine state.
+    pub reprepare_gen: u64,
+    pub reprepare_ok: bool,
+    /// When set, a non-zero pitched clock waits for a re-prepare newer than this
+    /// generation to confirm before it is written: the pitched clock belongs
+    /// only to an IRQ-scheduled graph, and the mode switch lands IRQ via the
+    /// re-prepare. `None` means no pending dependency (write immediately).
+    pub pitch_after_reprepare: Option<u64>,
     /// Last time Fixed mode re-asserted its rate after the live force
     /// diverged (a PipeWire restart or an external write). Bounds the retry.
     pub rate_authority_reforce: Option<Instant>,
@@ -3763,6 +3773,9 @@ pub fn new_with_device(
         pitch_clock_applied: None,
         pitch_clock_dirty: true,
         pro_pitch: 0.0,
+        reprepare_gen: 0,
+        reprepare_ok: false,
+        pitch_after_reprepare: None,
         rate_authority_reforce: None,
         allowed_rates_saved: None,
         allowed_rates_written: None,
@@ -12766,6 +12779,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.rate_authority_reforce = None;
                     // Convenience runs the nominal clock: pitch is a Device-path
                     // control. Force 0 % without touching the saved pro pitch.
+                    // Nominal is safe in any scheduling mode, so no dependency.
+                    state.pitch_after_reprepare = None;
                     state.pitch_clock_dirty = true;
                     reconcile_device_pitch(state);
                     apply_graph_rate(state, 0, false);
@@ -12775,15 +12790,39 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     apply_engine_policy(state, running_rate(state));
                     enforce_quantum_floor(state, running_rate(state));
                     force_engine_reprepare(state);
+                    // Re-assert the pitch after the re-prepare, while the graph
+                    // is running: the device clock must be (re)written into a
+                    // running graph for the host fill to lock onto it. Writing it
+                    // only before the re-prepare leaves the tracking unlocked.
+                    state.pitch_clock_dirty = true;
                 }
                 EngineRateMode::Fixed => {
                     state.engine_rate_mode = EngineRateMode::Fixed;
                     state.rate_authority_reforce = None;
-                    // Restore the saved pro pitch to the device clock.
-                    state.pitch_clock_dirty = true;
-                    reconcile_device_pitch(state);
+                    // Land the IRQ policy and the rate force, then re-prepare.
                     apply_graph_rate(state, device_authority_rate(state), true);
+                    // The pitched clock belongs only to an IRQ-scheduled graph.
+                    // Record the worker's re-prepare generation before issuing
+                    // the re-prepare, and defer the saved pitch until a newer
+                    // re-prepare confirms IRQ — the fresh-start precondition
+                    // (IRQ established before the pitched clock). The reconcile
+                    // writes the pitch once the dependency is satisfied.
+                    let gen_before = state
+                        .audio_path_service
+                        .as_ref()
+                        .map(|svc| svc.snapshot().reprepare_gen);
                     force_engine_reprepare(state);
+                    state.pitch_clock_dirty = true;
+                    let async_reprepare = gen_before.is_some()
+                        && !state.device.is_mock()
+                        && state.device.rate_follows_sound_server()
+                        && graph_writable(state);
+                    state.pitch_after_reprepare = if async_reprepare { gen_before } else { None };
+                    if !async_reprepare {
+                        // The re-prepare ran synchronously (or none is needed):
+                        // IRQ is already in place, so reconcile the pitch now.
+                        reconcile_device_pitch(state);
+                    }
                 }
             }
             let shown = state
@@ -12855,6 +12894,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 svc.send(crate::audio_path_service::Intent::Poll { probe_quantum });
                 let snap = svc.snapshot();
                 state.pcm_owner = snap.owner;
+                state.reprepare_gen = snap.reprepare_gen;
+                state.reprepare_ok = snap.reprepare_ok;
                 if snap.kernel_at.is_some() {
                     state.card_stream = snap.stream;
                 }
@@ -15561,6 +15602,13 @@ fn force_engine_reprepare(state: &mut TotalControl) {
 /// a pitched clock cannot starve the timer-scheduled ring. A scene reapply
 /// writes the saved pitch behind our back, so `pitch_clock_dirty` forces a
 /// re-assert. The stored host setting is never changed here.
+///
+/// A non-zero pitched clock is written only once the graph is IRQ-scheduled:
+/// the playback node follows a pitched clock through the IRQ wake cadence, and
+/// a timer-scheduled graph drains the ring before its servo locks. When the
+/// mode switch deferred the pitch behind a re-prepare
+/// (`pitch_after_reprepare`), the write waits for a newer re-prepare to confirm
+/// IRQ — the fresh-start precondition. Nominal (0 %) is safe in any mode.
 fn reconcile_device_pitch(state: &mut TotalControl) {
     if !state.device.capabilities().pitch {
         return;
@@ -15574,6 +15622,16 @@ fn reconcile_device_pitch(state: &mut TotalControl) {
     if !state.pitch_clock_dirty && state.pitch_clock_applied == Some(desired) {
         return;
     }
+    if desired != 0.0 {
+        if let Some(dep) = state.pitch_after_reprepare {
+            if !(state.reprepare_gen > dep && state.reprepare_ok) {
+                // IRQ is not confirmed yet; keep the dirty flag and retry on the
+                // next poll rather than write a pitched clock into a timer graph.
+                return;
+            }
+        }
+    }
+    state.pitch_after_reprepare = None;
     let _ = state.device.write_pitch_clock(desired);
     state.pitch_clock_applied = Some(desired);
     state.pitch_clock_dirty = false;
@@ -15652,6 +15710,57 @@ pub(crate) fn rate_label(hz: u32) -> String {
         format!("{} kHz", hz / 1000)
     } else {
         format!("{:.1} kHz", hz as f32 / 1000.0)
+    }
+}
+
+/// An exact rate in hertz with a thousands separator, e.g. `47,952 Hz`. The
+/// readouts show the actual running rate, not a rounded kHz label, so a pitched
+/// clock is displayed correctly (principle 1: the displayed value is the truth).
+pub(crate) fn hz_label(hz: u32) -> String {
+    let digits = hz.to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("{grouped} Hz")
+}
+
+/// The device's actual clock: the base rate the unit reports, scaled by the
+/// applied pitch. Pitch is on the clock only in Device mode with the internal
+/// clock; the convenience path runs nominal, and under an external clock the
+/// unit is slaved and pitch does not take effect. This is the rate the device
+/// really runs at, distinct from the graph rate (which stays at the nominal
+/// base).
+fn actual_device_rate(state: &TotalControl) -> Option<u32> {
+    let base = state
+        .device
+        .device_rate()
+        .filter(|r| *r > 0)
+        .or_else(|| {
+            let r = state.device.settings().sample_rate;
+            (r > 0).then_some(r)
+        })?;
+    let internal = state.device.settings().clock_source == "Internal";
+    let pitch = if state.engine_rate_mode == EngineRateMode::Fixed && internal {
+        state.pro_pitch
+    } else {
+        0.0
+    };
+    Some((base as f64 * (1.0 + pitch as f64 / 100.0)).round() as u32)
+}
+
+/// A nominal-rate picker option. The listbox always shows the nominal rate the
+/// user selected (as a readable kHz label); the actual clock is reported
+/// separately by the read-only `Current rate` readout.
+#[derive(Clone, Copy, PartialEq)]
+struct NominalRate(u32);
+
+impl std::fmt::Display for NominalRate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&rate_label(self.0))
     }
 }
 
@@ -15779,9 +15888,9 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         caption("Sample rate"),
         strip::hint(
             pick_list(
-                device_rates(state),
-                Some(settings.sample_rate),
-                Message::SampleRateSelected,
+                device_rates(state).into_iter().map(NominalRate).collect::<Vec<_>>(),
+                Some(NominalRate(settings.sample_rate)),
+                |NominalRate(rate)| Message::SampleRateSelected(rate),
             )
             .style(if device_rate_pending(state) {
                 theme::pick_list_pending
@@ -15835,49 +15944,57 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // it lives in the AUDIO ENGINE group, not here.
     let internal = settings.clock_source == "Internal";
     let device_mode = state.engine_rate_mode == EngineRateMode::Fixed;
-    if !state.device.is_mock() && (!internal || !device_mode) {
-        let dev_rate = state
-            .device
-            .device_rate()
-            .filter(|r| *r > 0)
-            .or_else(|| (settings.sample_rate > 0).then_some(settings.sample_rate));
-        let rate_text = dev_rate.map(rate_label).unwrap_or_else(|| "\u{2014}".into());
-        let hint = if !internal {
-            "Reported by the device \u{2014} set by the external clock source."
-        } else {
-            "Reported by the device \u{2014} follows the PipeWire graph."
-        };
-        // The sample-rate row keeps one vertical slot whether it is a picker
-        // (Device) or a read-only readout (PipeWire / external clock), so the
-        // card does not resize between modes (GUI spec §4).
-        body = body.push(
-            container(
-                row![
-                    caption("Sample rate"),
-                    strip::hint(
-                        text(rate_text)
-                            .color(theme::text_sec())
-                            .size(text_size)
-                            .width(Length::Fill),
-                        hint,
-                        scale,
-                    ),
-                ]
-                .spacing(theme::SPACE_MD * scale)
-                .align_y(iced::Alignment::Center),
-            )
-            .height(Length::Fixed(30.0 * scale))
-            .align_y(iced::Alignment::Center)
-            .width(Length::Fill),
-        );
-    } else {
+    // Row 1: the nominal-rate picker. It is editable only in Device mode on the
+    // internal clock; in Auto mode or under an external clock the rate is not
+    // the user's to set, so the row keeps its slot as a nonvisible placeholder
+    // (the card does not resize between modes, GUI spec §4).
+    if state.device.is_mock() || (internal && device_mode) {
         body = body.push(
             container(device_rate_row)
                 .height(Length::Fixed(30.0 * scale))
                 .align_y(iced::Alignment::Center)
                 .width(Length::Fill),
         );
+    } else {
+        body = body.push(
+            iced::widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fixed(30.0 * scale)),
+        );
     }
+    // Row 2: the current (actual) device clock, read-only. Always shown, so the
+    // displayed rate is the truth: the nominal rate with pitch applied in Device
+    // mode, the conducted/reported rate otherwise (principle 1).
+    let current_text = actual_device_rate(state)
+        .map(hz_label)
+        .unwrap_or_else(|| "\u{2014}".into());
+    let current_hint = if !internal {
+        "Reported by the device \u{2014} set by the external clock source."
+    } else if !device_mode {
+        "Reported by the device \u{2014} follows the PipeWire graph."
+    } else {
+        "The device's actual clock \u{2014} nominal rate with pitch applied."
+    };
+    body = body.push(
+        container(
+            row![
+                caption("Current rate"),
+                strip::hint(
+                    text(current_text)
+                        .color(theme::text_sec())
+                        .size(text_size)
+                        .width(Length::Fill),
+                    current_hint,
+                    scale,
+                ),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        )
+        .height(Length::Fixed(30.0 * scale))
+        .align_y(iced::Alignment::Center)
+        .width(Length::Fill),
+    );
     if state.device.capabilities().pitch {
         if state.engine_rate_mode == EngineRateMode::Fixed {
             let value = state.pro_pitch;
@@ -16202,7 +16319,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         row![
             caption("Graph"),
             strip::hint(
-                text(rate_label(
+                text(hz_label(
                     state
                         .card_stream
                         .map(|stream| stream.rate)
@@ -26268,6 +26385,33 @@ mod tests {
     }
 
     #[test]
+    fn hz_label_shows_the_exact_rate_with_a_thousands_separator() {
+        assert_eq!(super::hz_label(48_000), "48,000 Hz");
+        assert_eq!(super::hz_label(47_952), "47,952 Hz");
+        assert_eq!(super::hz_label(44_100), "44,100 Hz");
+        assert_eq!(super::hz_label(192_000), "192,000 Hz");
+        assert_eq!(super::hz_label(96_000), "96,000 Hz");
+    }
+
+    #[test]
+    fn the_actual_device_rate_applies_pitch_only_in_device_mode_on_internal_clock() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.pro_pitch = -0.1;
+        // Device mode on the internal clock: the pitch is on the clock.
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        assert_eq!(super::actual_device_rate(&state), Some(47_952));
+        // Convenience runs nominal even though a pro pitch is saved.
+        state.engine_rate_mode = EngineRateMode::Auto;
+        assert_eq!(super::actual_device_rate(&state), Some(48_000));
+        // External clock: the unit is slaved, pitch does not take effect.
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        let _ = state.device.set_clock_source("Word Clock");
+        assert_eq!(super::actual_device_rate(&state), Some(48_000));
+    }
+
+    #[test]
     fn a_card_rate_change_is_detected_across_a_closed_stream() {
         assert!(!super::card_rate_changed(None, Some(48_000)));
         assert!(super::card_rate_changed(Some(48_000), Some(44_100)));
@@ -27797,6 +27941,69 @@ mod tests {
         state.pitch_clock_dirty = true;
         reconcile_device_pitch(&mut state);
         assert_eq!(state.pitch_clock_applied, Some(1.5));
+    }
+
+    #[test]
+    fn a_pitched_clock_waits_for_the_irq_reprepare_to_confirm() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.pro_pitch = 1.5;
+        state.pitch_clock_applied = Some(0.0);
+        state.pitch_clock_dirty = true;
+        // The mode switch deferred the pitch behind re-prepare generation 5.
+        state.pitch_after_reprepare = Some(5);
+        state.reprepare_gen = 5;
+        state.reprepare_ok = true;
+        reconcile_device_pitch(&mut state);
+        // No newer re-prepare has confirmed IRQ yet: the pitch stays deferred.
+        assert_eq!(state.pitch_clock_applied, Some(0.0));
+        assert!(state.pitch_clock_dirty);
+        assert_eq!(state.pitch_after_reprepare, Some(5));
+        // The re-prepare completes and the generation advances: the pitch lands.
+        state.reprepare_gen = 6;
+        reconcile_device_pitch(&mut state);
+        assert_eq!(state.pitch_clock_applied, Some(1.5));
+        assert!(state.pitch_after_reprepare.is_none());
+        assert!(!state.pitch_clock_dirty);
+    }
+
+    #[test]
+    fn a_pitched_clock_waits_for_a_confirmed_reprepare() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.pro_pitch = 1.5;
+        state.pitch_clock_applied = Some(0.0);
+        state.pitch_clock_dirty = true;
+        state.pitch_after_reprepare = Some(5);
+        state.reprepare_gen = 6; // newer, but the re-prepare did not confirm
+        state.reprepare_ok = false;
+        reconcile_device_pitch(&mut state);
+        assert_eq!(state.pitch_clock_applied, Some(0.0));
+        assert!(state.pitch_clock_dirty);
+        state.reprepare_ok = true;
+        reconcile_device_pitch(&mut state);
+        assert_eq!(state.pitch_clock_applied, Some(1.5));
+    }
+
+    #[test]
+    fn nominal_pitch_is_written_without_waiting_for_a_reprepare() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Auto;
+        state.pro_pitch = 1.5;
+        state.pitch_clock_applied = Some(1.5);
+        state.pitch_clock_dirty = true;
+        state.pitch_after_reprepare = Some(5);
+        state.reprepare_gen = 0; // no re-prepare has run
+        reconcile_device_pitch(&mut state);
+        // Nominal is safe in any scheduling mode: it lands immediately.
+        assert_eq!(state.pitch_clock_applied, Some(0.0));
+        assert!(state.pitch_after_reprepare.is_none());
     }
 
     #[test]

@@ -1228,6 +1228,7 @@ sheet shows that value. A value is written when it changes there.
 |---|---|---|
 | Clock source | yes | yes |
 | Sample rate | yes | yes, when the device owns the rate |
+| Current rate | yes | yes |
 | Pitch | yes | yes |
 | Line In reference | yes | — |
 | Line Out reference | yes | — |
@@ -1259,16 +1260,21 @@ is PipeWire (§4). The `Single speed word clock` and `Word clock in`
 (termination) rows are Device-path clock-sync controls likewise: shown in
 Device, same-height fillers in PipeWire. The signal-path settings (Optical and
 SPDIF format, the UC reference levels, EQ for Record) and the Firmware/Serial
-readouts stay in both modes. The `Sample rate` row reports the device rate.
+readouts stay in both modes. The `Sample rate` row is the nominal-rate picker.
 When the clock source is Internal and `Rate follows` is Device, it is an
-editable picker of the device-supported rates; selecting a rate drives the card
-through the engine-rate path. When `Rate follows` is PipeWire, or the clock
-source is external, the row is a read-only readout of the rate the unit reports
-(state word `0x11`), with a hint that it is device-reported. The row keeps one
-vertical slot whether it is a picker or a readout, so the card does not resize
-between modes (§4). The rate authority lives in the host engine group, not here. Read-only reports (the device rate,
-Graph and the latency readout) use the secondary text colour; editable controls
-use the primary colour.
+editable picker of the device-supported rates (the nominal rate); selecting a
+rate drives the card through the engine-rate path. When `Rate follows` is
+PipeWire, or the clock source is external, the rate is not the user's to set, so
+the row keeps its slot as a nonvisible placeholder. The `Current rate` row
+directly below is a read-only readout of the device's actual clock, shown in
+every mode: the nominal rate with pitch applied in Device mode on the internal
+clock, and the conducted/reported rate otherwise. It is displayed in hertz with
+a thousands separator (e.g. `47,952 Hz`), so the displayed value is the truth
+even when pitch detunes the clock. Each row keeps one vertical slot whether it
+is a picker, a readout or a placeholder, so the card does not resize between
+modes (§4). The rate authority lives in the host engine group, not here.
+Read-only reports (the current rate, Graph and the latency readout) use the
+secondary text colour; editable controls use the primary colour.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already

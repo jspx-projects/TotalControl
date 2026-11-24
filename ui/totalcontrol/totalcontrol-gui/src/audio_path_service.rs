@@ -54,6 +54,14 @@ pub struct EngineSnapshot {
     pub host_volume: Option<(u32, f32)>,
     /// When the graph facts were last read.
     pub pw_at: Option<Instant>,
+    /// Re-prepare completion fact: a generation counter bumped after every
+    /// `Reprepare` intent runs, and whether that re-prepare confirmed the forced
+    /// engine state. The GUI gates a pitched-clock write on a generation newer
+    /// than the one it recorded when it requested the re-prepare, so the pitch
+    /// only lands after IRQ scheduling is established (the fresh-start
+    /// precondition).
+    pub reprepare_gen: u64,
+    pub reprepare_ok: bool,
 }
 
 impl Default for EngineSnapshot {
@@ -70,6 +78,8 @@ impl Default for EngineSnapshot {
             sink_running: false,
             host_volume: None,
             pw_at: None,
+            reprepare_gen: 0,
+            reprepare_ok: false,
         }
     }
 }
@@ -294,9 +304,15 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
             Intent::Reprepare => {
                 // Apply the forces even when the graph is idle: a brief capture
                 // activation, held until the device confirms the forced state.
-                if !pw_clock::capture_reprepare(card_id) {
+                let ok = pw_clock::capture_reprepare(card_id);
+                if !ok {
                     log::warn!("capture re-prepare did not confirm the forced engine state");
                 }
+                // Publish the completion so the GUI can sequence a pitched-clock
+                // write after the re-prepare that establishes IRQ scheduling.
+                let mut snap = snapshot.lock().unwrap();
+                snap.reprepare_gen += 1;
+                snap.reprepare_ok = ok;
             }
             Intent::ApplyAllowedRates(wanted) => {
                 if wanted.is_empty() {

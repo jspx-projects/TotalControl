@@ -335,10 +335,16 @@ setting from the unit when it connects.
 
 The panel separates what the device owns from what the host engine drives. In
 the device group, `Clock source` picks one of the unit's own clock options
-(Internal, SPDIF coax., Optical, Word clock). `Sample rate` shows the device
-rate: an editable picker of the device-supported rates when the clock is
-Internal and `Rate follows` is Device, and a read-only readout of the rate the
-unit reports when `Rate follows` is PipeWire, or the clock source is external.
+(Internal, SPDIF coax., Optical, Word clock). `Sample rate` is the nominal-rate
+picker: an editable picker of the device-supported rates when the clock is
+Internal and `Rate follows` is Device; otherwise the rate is not yours to set
+and the row keeps its place as a blank placeholder. Directly below it,
+`Current rate` is a read-only readout of the rate the device is actually
+clocking, shown in hertz (for example `47,952 Hz`). In Device mode on the
+internal clock it is the nominal rate with your pitch applied; in PipeWire mode
+or on an external clock it is the rate the unit reports. The picker always shows
+the nominal rate you selected, and `Current rate` always shows the truth, so a
+pitched clock is displayed correctly.
 
 The engine `Rate follows` control chooses who determines the rate. It is a pair
 of radio buttons, usable only when the clock source is Internal:
