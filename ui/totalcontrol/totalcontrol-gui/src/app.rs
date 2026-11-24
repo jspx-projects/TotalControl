@@ -16388,12 +16388,17 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     );
     // The RTL field carries its own label on row 1 (`RTL x.x ms`) with the
     // formula wrapping below; convenience shows the same four-row slot blank.
-    let rtl_content = if state.engine_rate_mode == EngineRateMode::Fixed {
-        latency_readout(state, clock)
+    // The tooltip belongs only to the visible field: a hint on the blank filler
+    // would pop up over an invisible row and obscure the neighbouring controls.
+    if state.engine_rate_mode == EngineRateMode::Fixed {
+        body = body.push(strip::hint(
+            latency_readout(state, clock),
+            "Round Trip Latency",
+            scale,
+        ));
     } else {
-        rtl_blank(scale)
-    };
-    body = body.push(strip::hint(rtl_content, "Round Trip Latency", scale));
+        body = body.push(rtl_blank(scale));
+    }
     // Transport diagnostics in three sections by reset behaviour:
     //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
     //  - This stream: per-run transport detail, cleared on stream restart
