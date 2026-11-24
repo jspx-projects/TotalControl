@@ -336,9 +336,13 @@ setting from the unit when it connects.
 The panel separates what the device owns from what the host engine drives. In
 the device group, `Clock source` picks one of the unit's own clock options
 (Internal, SPDIF coax., Optical, Word clock). `Sample rate` is the nominal-rate
-picker: an editable picker of the device-supported rates when the clock is
-Internal and `Rate follows` is Device; otherwise the rate is not yours to set
-and the row keeps its place as a blank placeholder. Directly below it,
+picker. It is an editable picker of the device-supported rates when the clock
+is Internal and `Rate follows` is Device. When a DAW or `jackd` owns the device
+(JACK / direct ALSA), the picker stays visible but grayed: it shows the rate the
+device is actually running, you cannot change it there, and its tooltip names
+the owner (`Controlled by <owner>`). In PipeWire mode, or on an external clock,
+the rate is not yours to set and the row keeps its place as a blank placeholder.
+Directly below it,
 `Current rate` is a read-only readout of the rate the device is actually
 clocking, shown in hertz (for example `47,952 Hz`). In Device mode on the
 internal clock it is the nominal rate with your pitch applied; in PipeWire mode
@@ -416,13 +420,57 @@ so a DAW and every application run at the external clock's rate.
 
 When another process owns the device — `jackd` (JACK) or a DAW opening the card
 directly (ALSA) — TotalControl detects the owner from the kernel and steps
-aside: `Rate follows` reads `JACK` or `ALSA` (read-only), the rate belongs to
-the owner, and TotalControl writes nothing to the clock. The mixer and meters
-keep working, and the mixer scene is reapplied when the owner's stream starts
-or changes rate. To use JACK or direct ALSA, free the device from PipeWire
-first: set the card's profile to Off, or stop PipeWire. A DAW that opens the
-card directly does not reserve it, so PipeWire must release it before the DAW
-can open it.
+aside: `Rate follows` reads `JACK` or `ALSA` (read-only), and the rate and
+quantum belong to the owner. The `Sample rate` and `Quantum` pickers stay
+visible but grayed, showing the rate and period the owner is actually running;
+their tooltips name the owner. TotalControl writes nothing to the clock while
+the owner runs. The mixer and meters keep working, and the mixer scene is
+reapplied when the owner's stream starts or changes rate.
+
+The owner's rate is honored: when a DAW opens the card at its project rate, the
+device moves to that rate and TotalControl reports it (the device follows the
+DAW, so nothing is resampled). This is why you set the rate in your DAW for
+direct-ALSA work, and in `jackd` for JACK work.
+
+**Setting the rate while idle.** With no owner holding the device, the Device
+mode `Sample rate` picker is active and writes the device clock directly — no
+sound server is needed. Use it to preset the rate before you start `jackd` or
+the DAW. The device confirms the rate from its own clock readback.
+
+**The JACK / direct-ALSA workflow.**
+
+1. Free the device from PipeWire: set the card's profile to Off, or stop
+   PipeWire. A DAW that opens the card directly does not reserve it, so PipeWire
+   must release it first. Only one process can hold the device at a time; a
+   second opener is refused by the kernel.
+2. (Optional) Set the rate in TotalControl while the device is idle.
+3. Start `jackd` with a rate and period that match your session, then start the
+   DAW (which follows `jackd`):
+
+   ```text
+   jackd -d alsa -d hw:<card> -r <rate> -p <quantum> -n 3
+   ```
+
+   For example `jackd -d alsa -d hw:UCX -r 48000 -p 128 -n 3`. A small `-n`
+   (number of periods) keeps latency low; the default couples the buffer fill to
+   the capacity and adds latency.
+4. For direct ALSA, open the card as `hw:` in the DAW (not `plughw:`, which can
+   resample above the driver) and set the project rate, block size and periods
+   there.
+
+**Block size and buffer limits.** The driver accepts a block (period) at or
+above the rate's period floor — one USB transfer: 48 frames at 32–48 kHz, 96 at
+64–96 kHz, 192 at 128–192 kHz — and a buffer (block × periods) large enough to
+cover the transfers in flight plus margin. A block below the floor, or a buffer
+below the minimum, is refused when the DAW opens the device. REAPER's defaults
+(512-frame block, 3 periods, 32-bit) are valid at every device rate. Use 32-bit
+output: the driver accepts 32-bit float and 32-bit integer; a 16/24-bit request
+fails to open.
+
+To change the rate or quantum of a running `jackd`, restart it — the JACK API
+fixes both at server start. TotalControl reports the owner's values while it
+runs and guides the matching command here; it does not restart the server for
+you.
 
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A rate change in PipeWire mode is a runtime change, so it does not add an undo
