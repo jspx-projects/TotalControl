@@ -814,6 +814,14 @@ pub trait RmeDevice {
         self.set_pitch(pitch_percent)
     }
 
+    /// Store the pitch host setting without writing the device clock. The
+    /// slider stores the setting at once and writes the clock through the
+    /// gated pitch reconcile, so a pitched clock waits for the IRQ
+    /// re-prepare confirmation after a mode switch.
+    fn store_pitch_setting(&mut self, pitch_percent: f32) {
+        self.settings_mut().pitch_percent = pitch_percent.clamp(-5.0, 5.0);
+    }
+
     /// Set the active sample rate in Hz. The proprietary USB backend
     /// does a mid-session `SET_INTERFACE` + stream restart; the ALSA
     /// backend and the mock leave it to the system (no-op). Errors on
