@@ -647,12 +647,16 @@ playback, keeping the two directions aligned.
 
 **Priming.** The OUT stream starts before the feedback ring holds
 entries for it. The first `fb_delay` OUT packets of a run are the
-priming window. A priming packet carries the nominal frame count, so
-the device output buffer stays fed before feedback exists. The lead
-words advance at the nominal cadence through the window. The data is
-silence while the stream is not running or the host ring is dry; an
-anchored, filled stream sends ring data in the priming window like in
-any other packet.
+priming window. A priming packet carries the programmed frame count
+(the programmed clock / 8000, fractional part carried), so the device
+output buffer stays fed before feedback exists at the rate the device
+actually consumes. The lead words advance at the programmed cadence
+through the window. A re-prepare under pitch therefore primes at the
+pitched clock; priming at nominal under pitch leaves a supply deficit
+that starves the ring and churns XRUN recovery, because every recovery
+primes again. The data is silence while the stream is not running or
+the host ring is dry; an anchored, filled stream sends ring data in the
+priming window like in any other packet.
 
 **The lead anchor seed.** The lead counter starts from the device
 timestamp: the unwrapped position rewound by the packets between the
@@ -729,7 +733,7 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
 | start ramp | the device's packet sequence when a stream-counter reset is caught mid-flight: header-only and sub-cadence packets at position 0, then a jump into the reset timeline. The start margin (§7) prevents its reception | K1.1 continuity expectation |
 | priming window | the first `fb_delay` OUT packets of a run, before feedback exists for them | K1.3 priming |
-| nominal frame count | `rate/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window | K1.3 priming |
+| programmed frame count | `programmed_clock/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window and of the nominal substitution | K1.3 priming |
 | cadence mean | mean frames per packet × 8000; the device clock the capture packets reveal | K1.4 cadence verdict |
 | programmed clock | the nominal rate scaled by the pitch the host writes through the DDS divisor; the cadence judge's reference | K1.4 cadence verdict |
 | convergence window | 80 packets, one add/drop period of the 44.1 kHz family; the span over which the stop verdict averages the cadence mean | K1.4 stop verdict |
@@ -742,6 +746,21 @@ Guards:
 | K1.5 continuity (A8) | URB start-frame sequence | a discontinuity marks the engine broken → K10 |
 | K7 latch watchdog (A6, A7) | D6 status byte 3 bit 7 | a latched output while playback runs, after the grace, marks the engine broken → K10 |
 | URB error burst | completion status | above `FFUC_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
+
+**Clock-source audit.** Every consumer of the rate as a cadence, the
+clock it uses, and its behaviour under pitch. A new consumer belongs in
+this table; a nominal-rate assumption under pitch is a defect unless the
+table states why it is safe.
+
+| Consumer | Clock | Under pitch |
+|---|---|---|
+| Priming accumulator (K1.3) | programmed | primes at the consumption rate; a re-prepare under pitch stays fed |
+| IN-error nominal substitution | programmed | the estimate matches the device delivery |
+| Lead-seed rewind step | programmed | the position extrapolation matches the device timeline |
+| Cadence judge reference | programmed | the verdict compares against the actual clock |
+| URB geometry (`ffuc_urb_frames`) | nominal (`hw_params`) | the geometry is per nominal rate; the mirrored frame counts carry the pitch |
+| Device-timestamp phase fraction | nominal | the fraction decodes below 1 frame; the integer position slope carries the rate |
+| ALSA `hw_params` / period contract | nominal | the graph rate contract is nominal; pitch is a device-clock control only |
 
 **The cadence verdict.** The cadence mean is the mean frames per packet
 × 8000: the device clock the capture packets reveal. A convergence window
