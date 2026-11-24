@@ -786,9 +786,10 @@ left and hard right, each carrying its own side of the source; turn the
 balance towards the centre on one of them to send both sides there, and the
 other keeps its own setting.
 
-Linking the output pair again returns each source to its natural side, with
-the pair balance following the two levels. Splitting again starts the mono
-outputs hard left and hard right.
+Linking the output pair again returns each source to its natural side and
+sets every linked balance back to centre. The pair level is the geometric
+mean of the two split levels. Splitting again starts the mono outputs hard
+left and hard right.
 
 When the input and the selected submix are both mono, there is no left/right
 position to set: the pan/balance knob disappears and `MONO` is shown in the

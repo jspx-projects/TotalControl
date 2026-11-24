@@ -1682,10 +1682,11 @@ output has its own balance and the other block is not written. A mono source
 has one cell and no balance into a mono target, so its T2 shows `MONO`.
 
 Linking the output pair folds each source's natural cells — left source into
-the left output, right source into the right output — into the pair send and
-balance. Cross cells are dropped and the per-block overrides cleared.
-Splitting again returns each source's two mono blocks to hard left and hard
-right.
+the left output, right source into the right output — into one pair level.
+The pair level is the geometric mean of the two natural gains, and every
+linked input and playback balance returns to centre. Cross cells are dropped,
+and the per-block overrides and balances are cleared. Splitting again returns
+each source's two mono blocks to hard left and hard right.
 
 Balance is independent of the fader level: it keeps its value at 0 and is
 applied when the fader rises. This applies to a linked input or playback pair

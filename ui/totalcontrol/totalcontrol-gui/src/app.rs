@@ -28803,17 +28803,17 @@ mod tests {
         assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4);
         assert_eq!(state.device.matrix_cell(right, left_block), None);
 
-        // Re-link: the natural cells become the stereo pair send and
-        // balance, and the per-block overrides are cleared.
+        // Re-link: the balance centres and the pair level is the geometric
+        // mean of the two natural cells (0.25 and 1.0 -> 0.5).
         let _ = update(
             &mut state,
             Message::StereoLinkChanged(ChannelId::Output(0), true),
         );
         assert!(!state.device.has_pair_cell_override(left, 0));
         assert!(!state.device.has_pair_cell_override(right, 0));
-        assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.25).abs() < 1e-4);
-        assert!((state.device.matrix_cell(right, right_block).unwrap() - 1.0).abs() < 1e-4);
-        assert_eq!(super::channel_pan(&state, left, out), 75);
+        assert!((state.device.matrix_cell(left, left_block).unwrap() - 0.5).abs() < 1e-4);
+        assert!((state.device.matrix_cell(right, right_block).unwrap() - 0.5).abs() < 1e-4);
+        assert_eq!(super::channel_pan(&state, left, out), 0);
 
         // Re-split: the two blocks return to hard L and hard R.
         let _ = update(
