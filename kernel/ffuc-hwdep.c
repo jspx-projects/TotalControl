@@ -247,9 +247,30 @@ static int ffuc_hwdep_vendor(struct ffuc *chip,
 	if (v.direction)
 		ret = ffuc_vendor_recv(chip, v.request, v.value, v.index,
 				       data, v.length);
-	else
+	else {
+		/* The pitch envelope: the ISO transport carries at most
+		 * max_frames frames per microframe packet. A DDS divisor that
+		 * programs a clock above 8000 * max_frames drives the device
+		 * into a folded capture cadence and transport errors, so the
+		 * active family's word clamps to the ceiling. The other
+		 * families store their pitch for later rates and pass
+		 * untouched; the rate sequence writes nominal words, which
+		 * are always in envelope. */
+		if (v.request == FFUC_REQ_DDS && chip->iso && chip->rate &&
+		    chip->mode &&
+		    (v.index & 0x03) == ffuc_rate_family(chip->rate)) {
+			u32 val = v.value, idx = v.index;
+
+			if (ffuc_dds_clamp(val, idx, chip->rate,
+					   chip->mode->max_frames, &val, &idx)) {
+				atomic_inc(&chip->pitch_clamps);
+				v.value = (u16)val;
+				v.index = (u16)idx;
+			}
+		}
 		ret = ffuc_vendor_send(chip, v.request, v.value, v.index,
 				       data, v.length);
+	}
 	mutex_unlock(&chip->ctl_lock);
 
 	if (ret >= 0 && v.direction && v.length)

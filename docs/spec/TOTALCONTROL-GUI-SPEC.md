@@ -1288,8 +1288,15 @@ owner-controlled value uses the disabled text colour.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
-fine enough). Double-click resets to 0.0 %. Every change is written immediately
-to the device. Pitch is a Device-path control on the internal clock: the slider
+fine enough). Double-click resets to 0.0 %. Every change is stored immediately
+and written to the device clock at once. While a switch to Device mode is still
+applying, the clock write waits for the IRQ re-prepare confirmation; the stored
+value and the slider update immediately. The positive end follows the pitch
+envelope: the transport carries the programmed clock only up to the band's
+packet capacity (DRIVER-DESIGN §4.1.1), so at 192 kHz the slider ends at
++4.1 %; every other rate offers the full +5.0 %. A saved pitch above the
+running rate's envelope clamps to the slider maximum when the rate changes.
+Pitch is a Device-path control on the internal clock: the slider
 is shown only when `Rate follows` is Device **and** `Clock source` is Internal.
 Otherwise the row is a nonvisible filler of the same height (§4) and the device
 clock runs nominal (0 %). Under an external clock source (SPDIF, Optical/ADAT,
@@ -1360,7 +1367,12 @@ above the device rate's period floor (one URB), plus the exact floor. When
 `Rate follows` is PipeWire the picker also holds the convenience minimum —
 the highest period floor across the device's supported rates — and offers no
 Auto. The convenience quantum is forced at or above that minimum, so it is
-achievable at every graph rate. Under an external owner (JACK / direct ALSA)
+achievable at every graph rate. On the PipeWire path a selected quantum below
+twice the rate floor shows a zero-slack warning line, and applying pitch in
+that zone raises a notice to double the quantum: the duplex wake can silence
+or stutter pitched playback below one period of slack. Under an external owner the
+warning does not apply; the owner's write-ahead covers the floor. Under an
+external owner (JACK / direct ALSA)
 the quantum is the owner's ALSA period, fixed while it runs: the picker is
 visible but inactive, a grayed read-only report of the actual period, with the
 owner named in the tooltip (`Controlled by <owner>`).

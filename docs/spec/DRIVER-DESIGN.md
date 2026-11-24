@@ -287,6 +287,7 @@ the geometry.
 | buffer | ALSA | `buffer_size`; the circular buffer, an integer number of periods |
 | buffer min | driver | the minimum buffer the driver accepts at a rate; URB-aligned |
 | quantum | PipeWire | the graph cycle in frames (`clock.quantum`) |
+| pitch envelope | driver | the varispeed range the transport carries at a rate; the programmed clock stays at or below the band's packet capacity |
 
 With `api.alsa.disable-tsched` the quantum equals the period; the period floor
 is therefore the minimum quantum. `urb_frames` sets the period floor; `nurbs`
@@ -298,6 +299,28 @@ microframes into one URB; at `urb_frames=48`, `iso_packets=8`, so one URB spans
 1 ms and carries `8 × ceil(R/8000)` frames. The driver signals completion one
 URB at a time, so the period floor is one URB. The ceiling packs whole frames
 per microframe; the fractional remainder is the feedback add/drop (§4.3).
+
+The ISO endpoint's high-bandwidth capacity bounds the programmed clock. The
+4x endpoint carries 2 × 652 bytes OUT and 2 × 604 bytes IN per microframe
+(25 frames at the 4x word width); `max_frames` is 7 / 13 / 25 at 1x / 2x / 4x.
+The band capacity is `8000 × max_frames` frames/s: 56000 / 104000 / 200000.
+The pitch envelope keeps the programmed clock `R × (1 + pitch/100)` at or
+below the band capacity:
+
+```text
+capacity(band) = 8000 * max_frames(band)
+pitch_max(R)   = min(5 %, (capacity(band(R)) / R - 1) * 100)
+```
+
+Every rate carries the full ±5 % except 192 kHz positive pitch, which ends at
++4.1667 % (200000 / 192000). The driver clamps the active family's DDS divisor
+word to the ceiling on every vendor DDS write (`ffuc_dds_clamp`, counted by
+`pitch_clamps`); the clamped divisor rounds up on the word's 256-unit grid so
+the decoded clock stays at or below the capacity. The other families' words
+pass untouched. The rate sequence writes nominal words, which are always in
+envelope. Above the ceiling the device's capture cadence folds back and the
+transport errors, so the clamp is a correctness boundary, not a preference.
+The GUI offers the same envelope on the pitch slider (0.1 % grid).
 
 ```text
 ISO:           urb = iso_packets * ceil(rate / 8000)
@@ -387,7 +410,9 @@ pitch: a positive pitch drains the ring before the servo locks, while a negative
 pitch fills toward capacity. A pitched clock therefore belongs only to an
 IRQ-scheduled graph and is applied after IRQ scheduling is established — the
 mode-switch precondition (the fresh-start reference: IRQ is landed while idle,
-before the pitched clock and the stream).
+before the pitched clock and the stream). The programmed clock stays within
+the pitch envelope (§4.1.1): the driver clamps every DDS write to the band's
+packet capacity, so the device never runs a clock the transport cannot carry.
 
 **Timer-mode start preconditions.** A timer-mode start is correct only when it
 reaches the fresh-start state before real audio flows:
@@ -622,12 +647,16 @@ playback, keeping the two directions aligned.
 
 **Priming.** The OUT stream starts before the feedback ring holds
 entries for it. The first `fb_delay` OUT packets of a run are the
-priming window. A priming packet carries the nominal frame count, so
-the device output buffer stays fed before feedback exists. The lead
-words advance at the nominal cadence through the window. The data is
-silence while the stream is not running or the host ring is dry; an
-anchored, filled stream sends ring data in the priming window like in
-any other packet.
+priming window. A priming packet carries the programmed frame count
+(the programmed clock / 8000, fractional part carried), so the device
+output buffer stays fed before feedback exists at the rate the device
+actually consumes. The lead words advance at the programmed cadence
+through the window. A re-prepare under pitch therefore primes at the
+pitched clock; priming at nominal under pitch leaves a supply deficit
+that starves the ring and churns XRUN recovery, because every recovery
+primes again. The data is silence while the stream is not running or
+the host ring is dry; an anchored, filled stream sends ring data in the
+priming window like in any other packet.
 
 **The lead anchor seed.** The lead counter starts from the device
 timestamp: the unwrapped position rewound by the packets between the
@@ -704,7 +733,7 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
 | start ramp | the device's packet sequence when a stream-counter reset is caught mid-flight: header-only and sub-cadence packets at position 0, then a jump into the reset timeline. The start margin (§7) prevents its reception | K1.1 continuity expectation |
 | priming window | the first `fb_delay` OUT packets of a run, before feedback exists for them | K1.3 priming |
-| nominal frame count | `rate/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window | K1.3 priming |
+| programmed frame count | `programmed_clock/8000` frames per packet, the fractional part carried to the next packet; the cadence of the priming window and of the nominal substitution | K1.3 priming |
 | cadence mean | mean frames per packet × 8000; the device clock the capture packets reveal | K1.4 cadence verdict |
 | programmed clock | the nominal rate scaled by the pitch the host writes through the DDS divisor; the cadence judge's reference | K1.4 cadence verdict |
 | convergence window | 80 packets, one add/drop period of the 44.1 kHz family; the span over which the stop verdict averages the cadence mean | K1.4 stop verdict |
@@ -717,6 +746,21 @@ Guards:
 | K1.5 continuity (A8) | URB start-frame sequence | a discontinuity marks the engine broken → K10 |
 | K7 latch watchdog (A6, A7) | D6 status byte 3 bit 7 | a latched output while playback runs, after the grace, marks the engine broken → K10 |
 | URB error burst | completion status | above `FFUC_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
+
+**Clock-source audit.** Every consumer of the rate as a cadence, the
+clock it uses, and its behaviour under pitch. A new consumer belongs in
+this table; a nominal-rate assumption under pitch is a defect unless the
+table states why it is safe.
+
+| Consumer | Clock | Under pitch |
+|---|---|---|
+| Priming accumulator (K1.3) | programmed | primes at the consumption rate; a re-prepare under pitch stays fed |
+| IN-error nominal substitution | programmed | the estimate matches the device delivery |
+| Lead-seed rewind step | programmed | the position extrapolation matches the device timeline |
+| Cadence judge reference | programmed | the verdict compares against the actual clock |
+| URB geometry (`ffuc_urb_frames`) | nominal (`hw_params`) | the geometry is per nominal rate; the mirrored frame counts carry the pitch |
+| Device-timestamp phase fraction | nominal | the fraction decodes below 1 frame; the integer position slope carries the rate |
+| ALSA `hw_params` / period contract | nominal | the graph rate contract is nominal; pitch is a device-clock control only |
 
 **The cadence verdict.** The cadence mean is the mean frames per packet
 × 8000: the device clock the capture packets reveal. A convergence window
@@ -836,7 +880,7 @@ a bounded reply wait (§5.2).
 | `INFO` | identity, capabilities, endpoint numbers, rate, firmware |
 | `VENDOR` | one EP0 vendor request (read or write, up to 64 bytes) |
 | `WRITE_WORDS` | up to 63 IF1 register words; the kernel adds odd parity |
-| `COUNTERS` | transport error counters (host ring, USB, feedback, pointer, events): cumulative per instance and per-run classes, the `run_seq` re-base epoch, and the `urb_errors` gauge; `run_seq` added at ABI 7 |
+| `COUNTERS` | transport error counters (host ring, USB, feedback, pointer, events): cumulative per instance and per-run classes, the `run_seq` re-base epoch, the `urb_errors` gauge, and `pitch_clamps` (DDS writes clamped to the pitch envelope); `run_seq` added at ABI 7 |
 | `CLOCK` | the device timestamp: the unwrapped device position at a host time, the raw phase field, the windowed device rate `rate_meas`, and the start-frame anchor (`sof_ns(f) = anchor_ns + f·125000`, one unit per ISO packet); ABI 6 |
 | `SET_RATE` | set the device clock rate while the engine is idle (no PCM owner): adopt, commit, confirm from the state-word rate readback, bump `run_seq`; ABI 8 (§7.2) |
 

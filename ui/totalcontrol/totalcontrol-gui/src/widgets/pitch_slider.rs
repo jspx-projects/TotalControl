@@ -173,12 +173,13 @@ impl<Message> canvas::Program<Message> for PitchSlider<Message> {
 pub fn pitch_slider(
     value: f32,
     scale: f32,
+    range: (f32, f32),
     on_change: impl Fn(f32) -> crate::app::Message + 'static,
     on_reset: impl Fn() -> crate::app::Message + 'static,
 ) -> Element<'static, crate::app::Message> {
     Canvas::new(PitchSlider {
         value,
-        range: (-5.0, 5.0),
+        range,
         step: 0.1,
         scale,
         on_change: Box::new(on_change),

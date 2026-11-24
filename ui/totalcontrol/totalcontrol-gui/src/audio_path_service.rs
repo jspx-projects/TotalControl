@@ -271,8 +271,29 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
     // The allowed-rates ownership state lives here, off the UI thread.
     let mut allowed_saved: Option<Vec<u32>> = None;
     let mut allowed_written: Option<Vec<u32>> = None;
+    // A policy issued before the Pro Audio nodes existed (a fresh PipeWire,
+    // a module reload) is held here and lands when the nodes appear.
+    let mut pending_policy: Option<SchedPolicy> = None;
 
     while !stop.load(Ordering::Relaxed) {
+        if let Some(policy) = pending_policy.take() {
+            if let Some((out, inp)) = pw_clock::fireface_pro_node_ids() {
+                if pw_clock::set_sched_policy(out, &policy).is_ok() {
+                    let _ = pw_clock::set_sched_policy(inp, &policy);
+                    // The same transition as a deliberate policy change:
+                    // the props land at a re-prepare, confirmed from the
+                    // device, and the completion feeds the pitch gate.
+                    let ok = pw_clock::capture_reprepare(card_id);
+                    let mut snap = snapshot.lock().unwrap();
+                    snap.reprepare_gen += 1;
+                    snap.reprepare_ok = ok;
+                } else {
+                    pending_policy = Some(policy);
+                }
+            } else {
+                pending_policy = Some(policy);
+            }
+        }
         let Some(intent) = inbox.recv_timeout(Duration::from_millis(250)) else {
             continue;
         };
@@ -308,6 +329,11 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
                     if pw_clock::set_sched_policy(out, &policy).is_ok() {
                         let _ = pw_clock::set_sched_policy(inp, &policy);
                     }
+                    pending_policy = None;
+                } else {
+                    // The nodes do not exist yet; the loop applies the
+                    // policy when they appear.
+                    pending_policy = Some(policy);
                 }
             }
             Intent::Reprepare => {

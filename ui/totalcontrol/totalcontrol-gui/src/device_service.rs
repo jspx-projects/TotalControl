@@ -821,6 +821,16 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
+    fn store_pitch_setting(&mut self, pitch_percent: f32) {
+        // Store locally at once (the next command reads the fresh setting)
+        // and on the device thread, so the published snapshot carries it.
+        let pitch = pitch_percent.clamp(-5.0, 5.0);
+        self.scene.settings.pitch_percent = pitch;
+        self.run(move |d| {
+            d.store_pitch_setting(pitch);
+        });
+    }
+
     // The remaining controls have no required trait body; forward the ones
     // the mixer uses.  Each one becomes a `Run` command on the device
     // thread, so the model snapshot is the single source of truth.

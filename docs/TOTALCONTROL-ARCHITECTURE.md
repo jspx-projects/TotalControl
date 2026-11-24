@@ -510,6 +510,14 @@ confirm and retry. The capture reads the inputs and injects nothing into the
 playback path. PipeWire owns the PCM and multiplexes the capture, so a DAW keeps
 its stream.
 
+A reconnect (the unit reappears after a module reload or re-enumeration) runs
+the same engine restore as a fresh start: the mode's scheduling policy, the
+forces and the scene. The policy reaches the Pro Audio nodes even when they
+appear after the restore (a fresh PipeWire, a recreated card): the worker holds
+the policy pending and applies it with a confirmed re-prepare once the nodes
+exist. The scheduling state is therefore the same on every path — fresh start,
+mode switch, reconnect.
+
 The GUI reports a round-trip latency, not a measured acoustic round trip. It
 has two forms, and they are never added together:
 
@@ -583,14 +591,32 @@ controller schedules both directions' first URB at the same microframe
 (measured: start frames equal at 1x and 4x). The offset is roughly 875 us,
 stable and rate-independent.
 
-A quantum equal to the 1 ms USB period (96 frames at 96 kHz, 192 frames at
-192 kHz) is the zero-slack corner: the offset exceeds the follower's entire
-margin and the daemon skips cycles. The corner is inherent to the geometry,
-not a driver defect. The offset cannot be scheduled away, and waking the
-graph earlier would expose the follower to the other direction's stale
-pointer — the false-availability failure the gate prevents. One period of
-slack removes the penalty: at 96 kHz use 192 frames or more, at 192 kHz
-384 frames or more. The manual carries this guidance.
+A quantum equal to the 1 ms USB period (48 frames at 48 kHz, 96 at 96 kHz,
+192 at 192 kHz) is the zero-slack corner: the follower's margin is the whole
+quantum minus the wake offset, and a missed cycle substitutes silence. The
+corner is inherent to the geometry, not a driver defect. The offset cannot
+be scheduled away, and waking the graph earlier would expose the follower
+to the other direction's stale pointer — the false-availability failure the
+gate prevents.
+
+The corner's severity scales with the rate (desk-verified, UCX, IRQ
+scheduling, H = 2·period, controlled supply):
+
+| Quantum = floor | Nominal playback | +5 % varispeed |
+|---|---|---|
+| 48 kHz / 48 | clean | ~1 underrun per 6 s (controlled sine) |
+| 96 kHz / 96 | clean | ~1 underrun per 6 s (controlled sine) |
+| 192 kHz / 192 | clean | ring collapse (hundreds of underruns) |
+
+The severity depends on the supply path: program material at 48 kHz / 48
+with positive pitch silenced playback entirely (every follower cycle
+missed), while the controlled sine at the same point shows the milder
+bound above. One period of slack removes the penalty in every case: at
+96 kHz use 192 frames or more, at 192 kHz 384 frames or more. The floor
+stays selectable — the driver accepts it and nominal playback is clean —
+and the manual carries the varispeed guidance. The JACK and direct-ALSA
+paths do not use the duplex gate; their just-in-time fill with the
+application's write-ahead is the low-latency path at floor quanta.
 
 
 ## 11. Development tools

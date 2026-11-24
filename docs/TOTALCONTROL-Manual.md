@@ -393,10 +393,15 @@ authority (Device / PipeWire) -> device rate -> graph rate + quantum
 
 The device rate always wins; a stale graph request never overrides it. The
 quantum picker offers only quanta at or above the device rate's period floor
-(one URB), so an impossible quantum cannot be selected. In PipeWire mode the
+(one URB), so an impossible quantum cannot be selected. A quantum at the
+floor is the zero-slack corner: clean at nominal speed, but varispeed needs
+one period of slack at any rate (section 14). In PipeWire mode the
 picker also holds a convenience minimum — the highest period floor across the
 device's rates — and offers no Auto: the quantum is forced at or above that
-minimum so it stays achievable when the graph changes rate. The `Sample rate`
+minimum so it stays achievable when the graph changes rate. On the PipeWire
+path the panel warns when the selected quantum is below twice the rate floor,
+and applying pitch there raises a notice to double the quantum: pitched
+playback can silence or stutter below one period of slack (section 14). The `Sample rate`
 row shows the device rate, and the `Graph` row shows the graph rate that follows it.
 
 Rate and quantum changes apply whether or not audio is playing. While a stream
@@ -480,7 +485,13 @@ application preferences, not in a workspace.
 The `Pitch` slider changes the speed and pitch of the whole interface from
 -5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Hold Shift for 0.01 % steps.
 Double-click the slider to return to 0.0 %. Pitch is written to the device
-as soon as it changes.
+as soon as it changes. Right after switching to Device mode, the clock write
+waits until the scheduling change has applied, so the interface never runs a
+pitched clock on the convenience scheduling. The positive end depends on the
+sample rate: the interface's USB transport carries the pitched clock only up
+to a per-rate ceiling, and at 192 kHz the slider ends at +4.1 % (the ceiling
+is +4.17 %). Every other rate offers the full +5.0 %. A pitch saved at a lower
+rate clamps to the ceiling when you switch to 192 kHz.
 
 Pitch is a Device-mode control on the internal clock. The slider is shown only
 when `Rate follows` is Device **and** `Clock source` is Internal. When `Rate
@@ -1886,7 +1897,13 @@ it needs a rate-scaled `api.alsa.start-delay` of about three URBs, which adds
 steady latency; IRQ mode is preferred for low-latency work.
 
 At 96 kHz and 192 kHz use at least two milliseconds of quantum for
-low-latency recording: 192 frames at 96 kHz, 384 at 192 kHz.
+low-latency recording: 192 frames at 96 kHz, 384 at 192 kHz. The period
+floor (48 at 48 kHz, 96 at 96 kHz, 192 at 192 kHz) stays selectable and
+plays cleanly at nominal speed. It is the zero-slack corner of the
+PipeWire duplex wake: under varispeed it can miss cycles — from occasional
+dropouts to complete silence — and collapses at 192 kHz. For pitch work at
+any rate, keep one period of slack (double the floor). For floor-quantum
+low latency, use the JACK or direct-ALSA path.
 
 The unit is the clock master: its converters run on the device's own clock
 (SteadyClock) and the host mirrors the stream rate to it. The computer's

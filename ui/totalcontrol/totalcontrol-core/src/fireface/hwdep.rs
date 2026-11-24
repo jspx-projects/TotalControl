@@ -55,12 +55,20 @@ impl Hwdep {
             ));
         }
         if info.abi != ABI_VERSION {
-            log::warn!(
-                "{}: hwdep ABI {} newer than built {}; compatible, continuing",
-                hwdep.path.display(),
-                info.abi,
-                ABI_VERSION
-            );
+            // Once per card path: the reconnect probe reopens frequently,
+            // and the compatibility fact does not change between opens.
+            use std::collections::HashSet;
+            use std::sync::{Mutex, OnceLock};
+            static WARNED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+            let seen = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
+            if seen.lock().unwrap().insert(hwdep.path.clone()) {
+                log::warn!(
+                    "{}: hwdep ABI {} newer than built {}; compatible, continuing",
+                    hwdep.path.display(),
+                    info.abi,
+                    ABI_VERSION
+                );
+            }
         }
         Ok(hwdep)
     }
