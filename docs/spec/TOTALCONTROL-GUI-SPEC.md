@@ -1357,7 +1357,11 @@ above the device rate's period floor (one URB), plus the exact floor. When
 `Rate follows` is PipeWire the picker also holds the convenience minimum —
 the highest period floor across the device's supported rates — and offers no
 Auto. The convenience quantum is forced at or above that minimum, so it is
-achievable at every graph rate.
+achievable at every graph rate. On the PipeWire path a selected quantum below
+twice the rate floor shows a zero-slack warning line, and applying pitch in
+that zone raises a notice to double the quantum: the duplex wake can silence
+or stutter pitched playback below one period of slack. Under an external owner the
+warning does not apply; the owner's write-ahead covers the floor.
 
 Rate and quantum changes apply asynchronously: PipeWire renegotiates the
 running stream over a few seconds while the player keeps playing (resampled);

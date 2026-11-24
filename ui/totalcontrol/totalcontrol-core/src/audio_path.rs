@@ -273,6 +273,19 @@ impl ClockFacts {
         (max.min(5.0).max(0.0)) as f32
     }
 
+    /// The zero-slack zone: the effective quantum below twice the rate floor.
+    /// Nominal playback is clean there; varispeed can miss every follower
+    /// cycle and silence playback. One period of slack (twice the floor)
+    /// removes the penalty.
+    pub fn zero_slack(&self, rate: u32) -> bool {
+        let q = if self.force_quantum > 0 {
+            self.force_quantum
+        } else {
+            self.graph_quantum.unwrap_or(0)
+        };
+        q > 0 && q < 2 * self.quantum_floor(rate)
+    }
+
     /// The lowest quantum the current mode allows at `rate`. The Device path
     /// uses the rate's period floor; the convenience path also holds the
     /// convenience minimum so the quantum is safe at every graph rate.
@@ -575,6 +588,27 @@ mod tests {
         );
         assert_eq!(interrupt.pitch_max_percent(192_000), 5.0);
         assert_eq!(f.pitch_max_percent(0), 5.0);
+    }
+
+    #[test]
+    fn zero_slack_is_below_twice_the_floor() {
+        let mut f = facts(EngineRateMode::Fixed);
+        // 48k floor 48: the floor itself is zero-slack, 96 is safe.
+        f.force_quantum = 48;
+        assert!(f.zero_slack(48_000));
+        f.force_quantum = 96;
+        assert!(!f.zero_slack(48_000));
+        // 192k floor 192: 256 is still zero-slack, 384 is safe.
+        f.force_quantum = 256;
+        assert!(f.zero_slack(192_000));
+        f.force_quantum = 384;
+        assert!(!f.zero_slack(192_000));
+        // No force: the graph quantum decides; unknown is not warned.
+        f.force_quantum = 0;
+        f.graph_quantum = Some(192);
+        assert!(f.zero_slack(192_000));
+        f.graph_quantum = None;
+        assert!(!f.zero_slack(192_000));
     }
 
     // ── Scheduling policy (three-tier) ──────────────────────────────
