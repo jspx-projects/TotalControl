@@ -504,6 +504,15 @@ impl BabyfaceClassic {
 }
 
 impl BabyfaceClassic {
+    /// The server-free idle device-rate write (the JACK / direct-ALSA pro
+    /// path). Sets the device clock while no owner holds the PCM; the driver
+    /// adopts, commits and confirms the rate. Returns the confirmed rate.
+    pub fn set_sample_rate_idle(&mut self, rate: u32) -> Result<u32, Error> {
+        let confirmed = self.hw.lock().unwrap().set_rate_idle(rate)?;
+        self.state.set_sample_rate(rate)?;
+        Ok(confirmed)
+    }
+
     /// Whether DSP meter packets are arriving.
     pub fn meters_available(&self) -> bool {
         self.pump_meters();

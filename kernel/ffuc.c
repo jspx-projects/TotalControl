@@ -2960,6 +2960,80 @@ static void ffuc_iso_align(struct ffuc *chip)
 		in, out, ok ? "" : " (not contiguous, unchecked)", chip->out_lead);
 }
 
+/* Commit the adopted rate to the device with nothing running: the
+ * Windows-personality restart settle, the alternate-setting (re)selection
+ * and the rate sequence.  Shared by engine start and the idle device-rate
+ * write so both establish the same device clock state (one transition,
+ * every path).  The caller holds chip->mutex and has set chip->rate and
+ * chip->mode to the target. */
+static int ffuc_engine_commit_rate(struct ffuc *chip)
+{
+	const struct ffuc_mode *m = chip->mode;
+	int ret;
+
+	/* PipeWire reconfigures both nodes for a new quantum by closing and
+	 * reopening them within milliseconds.  Windows leaves seconds
+	 * between a session close and the next open; a start that follows
+	 * the close word at once (interface reselect, session words) leaves
+	 * a UC_WIN_RME unit dead in both directions until the module is
+	 * reloaded.  100 ms was enough on the bench; keep a margin.  The
+	 * settle is a Windows-personality property (FFUC_QUIRK_WIN_SESSION);
+	 * the AP personality restarts without it. */
+	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) &&
+	    chip->engine_stopped_at) {
+		unsigned long ready = chip->engine_stopped_at +
+				      msecs_to_jiffies(FFUC_RESTART_SETTLE_MS);
+
+		if (time_before(jiffies, ready))
+			msleep(jiffies_to_msecs(ready - jiffies) + 1);
+	}
+
+	/* alt 0 -> alt N reselect clears the UCX IF5 output latch. */
+	if (chip->desc->quirks & FFUC_QUIRK_ALT_RESELECT) {
+		ret = usb_set_interface(chip->dev, chip->audio_iface, 0);
+		if (ret < 0)
+			return ret;
+		chip->cur_alt = 0;
+	}
+	/* Windows never issues SET_INTERFACE for the UC, including across a
+	 * 48 <-> 44.1 live rate change (both use alt 1).  Re-selecting the
+	 * same alt on the rate-change restart resets the streaming endpoints
+	 * after the session words and leaves both directions silent.  Only
+	 * program a genuinely different alt (2x/4x, or first start). */
+	{
+		bool skip_alt = chip->model == FFUC_MODEL_UC &&
+				chip->uc_session &&
+				chip->cur_alt == m->alt;
+
+		dev_dbg(&chip->dev->dev,
+			"rate commit: rate=%u alt=%u cur_alt=%u session=%d skip_alt=%d\n",
+			chip->rate, m->alt, chip->cur_alt,
+			chip->session_reopen, skip_alt);
+		if (!skip_alt) {
+			ret = usb_set_interface(chip->dev, chip->audio_iface,
+						m->alt);
+			if (ret < 0)
+				return ret;
+			chip->cur_alt = m->alt;
+		}
+	}
+	/* Commit the rate on every start.  The device keeps its own rate
+	 * across personality switches and prior sessions, and the init
+	 * sequence does not set it, so a cached value cannot be trusted.
+	 * This point is reached only with nothing running, so the commit
+	 * cannot glitch a live stream.  On a Windows-session unit the close
+	 * word needs the Windows gap before the rate write (A2: 220 ms);
+	 * writing right after the close wedges the unit.  The settle above
+	 * already separated the close from this start. */
+	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) && chip->uc_session)
+		msleep(200);
+	ret = chip->desc->ops->set_rate(chip, chip->rate);
+	dev_dbg(&chip->dev->dev,
+		"rate commit: %u Hz alt %u cur_alt %u ret=%d\n",
+		chip->rate, m->alt, chip->cur_alt, ret);
+	return ret;
+}
+
 static int ffuc_engine_start(struct ffuc *chip)
 {
 	const struct ffuc_mode *m = chip->mode;
@@ -2996,66 +3070,7 @@ static int ffuc_engine_start(struct ffuc *chip)
 			FFUC_SAMPLE_BYTES;
 	if (WARN_ON(bytes > chip->urb_bytes_max))
 		return -EINVAL;
-	/* PipeWire reconfigures both nodes for a new quantum by closing and
-	 * reopening them within milliseconds.  Windows leaves seconds
-	 * between a session close and the next open; a start that follows
-	 * the close word at once (interface reselect, session words) leaves
-	 * a UC_WIN_RME unit dead in both directions until the module is
-	 * reloaded.  100 ms was enough on the bench; keep a margin.  The
-	 * settle is a Windows-personality property (FFUC_QUIRK_WIN_SESSION);
-	 * the AP personality restarts without it. */
-	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) &&
-	    chip->engine_stopped_at) {
-		unsigned long ready = chip->engine_stopped_at +
-				      msecs_to_jiffies(FFUC_RESTART_SETTLE_MS);
-
-		if (time_before(jiffies, ready))
-			msleep(jiffies_to_msecs(ready - jiffies) + 1);
-	}
-
-	/* alt 0 -> alt N reselect clears the UCX IF5 output latch. */
-	if (chip->desc->quirks & FFUC_QUIRK_ALT_RESELECT) {
-		ret = usb_set_interface(chip->dev, chip->audio_iface, 0);
-		if (ret < 0)
-			return ret;
-		chip->cur_alt = 0;
-	}
-	/* Windows never issues SET_INTERFACE for the UC, including across a
-	 * 48 <-> 44.1 live rate change (both use alt 1).  Re-selecting the
-	 * same alt on the rate-change restart resets the streaming endpoints
-	 * after the session words and leaves both directions silent.  Only
-	 * program a genuinely different alt (2x/4x, or first start). */
-	{
-		bool skip_alt = chip->model == FFUC_MODEL_UC &&
-				chip->uc_session &&
-				chip->cur_alt == m->alt;
-
-		dev_dbg(&chip->dev->dev,
-			"engine start: rate=%u alt=%u cur_alt=%u session=%d skip_alt=%d\n",
-			chip->rate, m->alt, chip->cur_alt,
-			chip->session_reopen, skip_alt);
-		if (!skip_alt) {
-			ret = usb_set_interface(chip->dev, chip->audio_iface,
-						m->alt);
-			if (ret < 0)
-				return ret;
-			chip->cur_alt = m->alt;
-		}
-	}
-	/* Cold start: commit the rate on every start.  The device keeps its
-	 * own rate across personality switches and prior sessions, and the
-	 * init sequence does not set it, so a cached value cannot be
-	 * trusted.  This point is reached only with nothing running, so the
-	 * commit cannot glitch a live stream.  On a Windows-session unit the
-	 * close word needs the Windows gap before the rate write (A2:
-	 * 220 ms); writing right after the close wedges the unit.  The
-	 * settle above already separated the close from this start. */
-	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) && chip->uc_session)
-		msleep(200);
-	ret = chip->desc->ops->set_rate(chip, chip->rate);
-	dev_dbg(&chip->dev->dev,
-		"engine start: rate commit %u Hz alt %u cur_alt %u ret=%d\n",
-		chip->rate, m->alt, chip->cur_alt, ret);
+	ret = ffuc_engine_commit_rate(chip);
 	if (ret < 0)
 		return ret;
 
@@ -3362,6 +3377,110 @@ void ffuc_query_envelope(struct ffuc *chip, struct ffuc_hwdep_envelope *env)
 		n++;
 	}
 	env->count = n;
+}
+
+/* Confirm the committed rate from the state-word rate readback: poll the
+ * internal-clock rate index until it matches, bounded.  The readiness
+ * condition is the device's own rate report, not a timed guess. */
+static int ffuc_confirm_idle_rate(struct ffuc *chip, unsigned int rate,
+				  unsigned int *confirmed)
+{
+	unsigned long deadline = jiffies +
+				 msecs_to_jiffies(FFUC_IDLE_RATE_CONFIRM_MS);
+	unsigned int read_rate = 0;
+	__le32 word;
+	int ret;
+
+	for (;;) {
+		ret = ffuc_vendor_recv(chip, FFUC_REQ_STATUS, 0, 0, &word,
+				       sizeof(word));
+		if (ret == 0) {
+			read_rate = ffuc_rate_from_index(le32_to_cpu(word) >> 24);
+			if (read_rate == rate) {
+				*confirmed = read_rate;
+				return 0;
+			}
+		}
+		if (time_after(jiffies, deadline))
+			break;
+		msleep(20);
+	}
+	*confirmed = read_rate;
+	return -EIO;
+}
+
+/* The server-free idle device-rate write (the JACK / direct-ALSA pro path).
+ * Precondition: the engine is idle, no owner holds the PCM.  Action: adopt
+ * the rate and commit it to the device.  Postcondition: the state-word
+ * readback confirms the rate; a run_seq bump arms the host scene reapply.
+ * Idle-only: while an owner runs it sets the rate and this refuses (-EBUSY).
+ * Not used under PipeWire, which forces the graph rate. */
+int ffuc_set_rate_idle(struct ffuc *chip, unsigned int rate,
+		       unsigned int *confirmed)
+{
+	unsigned int old_rate, old_clock;
+	const struct ffuc_mode *old_mode;
+	int ret;
+
+	*confirmed = 0;
+	if (!ffuc_rate_supported(chip, rate))
+		return -EINVAL;
+
+	mutex_lock(&chip->mutex);
+	if (READ_ONCE(chip->disconnected)) {
+		ret = -ENODEV;
+		goto unlock;
+	}
+	/* Idle-only: an owner holding the PCM sets the rate itself. */
+	if (chip->engine_running || chip->hw_params_mask || chip->prepared_mask) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+
+	old_rate = chip->rate;
+	old_clock = chip->clock_rate;
+	old_mode = chip->mode;
+	chip->rate = rate;
+	chip->clock_rate = rate;
+	chip->mode = &chip->modes[ffuc_mode_index(rate)];
+	/* The UC session words follow the rate-change path: the next engine
+	 * start re-opens the session at the new rate.  The session-close word
+	 * was already sent when the stream stopped (or there was no session).
+	 * UC session behaviour on a host-initiated idle rate change is a
+	 * needs-hardware item; this mirrors the verified hw_params flow. */
+	if (chip->model == FFUC_MODEL_UC) {
+		chip->session_reopen = true;
+		chip->uc_session = true;
+	}
+
+	mutex_lock(&chip->ctl_lock);
+	ret = ffuc_engine_commit_rate(chip);
+	if (ret == 0) {
+		int cret = ffuc_confirm_idle_rate(chip, rate, confirmed);
+
+		if (cret < 0)
+			/* Committed but unconfirmed: the device moved, so keep
+			 * the adopt and report the readback honestly. */
+			ret = cret;
+	} else {
+		/* The device write failed: restore the adopted state. */
+		chip->rate = old_rate;
+		chip->clock_rate = old_clock;
+		chip->mode = old_mode;
+	}
+	mutex_unlock(&chip->ctl_lock);
+	if (ret < 0)
+		goto unlock;
+
+	/* A confirmed device-rate change is a re-base epoch: the host reapplies
+	 * the scene (rate-dependent DSP) and re-bases its per-run view. */
+	chip->run_seq++;
+	dev_dbg(&chip->dev->dev,
+		"idle rate write: %u Hz confirmed %u Hz run_seq %u\n",
+		rate, *confirmed, chip->run_seq);
+unlock:
+	mutex_unlock(&chip->mutex);
+	return ret;
 }
 
 static int ffuc_pcm_open(struct snd_pcm_substream *subs)

@@ -1260,12 +1260,21 @@ is PipeWire (§4). The `Single speed word clock` and `Word clock in`
 (termination) rows are Device-path clock-sync controls likewise: shown in
 Device, same-height fillers in PipeWire. The signal-path settings (Optical and
 SPDIF format, the UC reference levels, EQ for Record) and the Firmware/Serial
-readouts stay in both modes. The `Sample rate` row is the nominal-rate picker.
-When the clock source is Internal and `Rate follows` is Device, it is an
-editable picker of the device-supported rates (the nominal rate); selecting a
-rate drives the card through the engine-rate path. When `Rate follows` is
-PipeWire, or the clock source is external, the rate is not the user's to set, so
-the row keeps its slot as a nonvisible placeholder. The `Current rate` row
+readouts stay in both modes. The `Sample rate` row is the nominal-rate picker
+with three states, derived from the detected audio path and the rate authority:
+
+| State | Condition | Presentation |
+|---|---|---|
+| Active | Internal clock, `Rate follows` Device, and PipeWire owns the PCM or nobody does | an editable picker of the device-supported rates |
+| Grayed | an external owner (JACK / direct ALSA) holds the PCM | visible but inactive: the actual device rate as a grayed read-only value, no menu opens |
+| Filler | `Rate follows` PipeWire, or the clock source is external | a nonvisible placeholder of the same height |
+
+In the Active state, selecting a rate drives the card: while PipeWire owns the
+PCM it forces the graph rate; while idle (no owner) it writes the device clock
+server-free (the driver's idle device-rate write), with no sound server. In the
+Grayed state the owner sets the rate, so the picker reports the device truth and
+its tooltip names the owner (`Controlled by <owner>`, the owning process name).
+A grayed control never shows an "applying…" state. The `Current rate` row
 directly below is a read-only readout of the device's actual clock, shown in
 every mode: the nominal rate with pitch applied in Device mode on the internal
 clock, and the conducted/reported rate otherwise. It is displayed in hertz with
@@ -1274,7 +1283,8 @@ even when pitch detunes the clock. Each row keeps one vertical slot whether it
 is a picker, a readout or a placeholder, so the card does not resize between
 modes (§4). The rate authority lives in the host engine group, not here.
 Read-only reports (the current rate, Graph and the latency readout) use the
-secondary text colour; editable controls use the primary colour.
+secondary text colour; editable controls use the primary colour; a grayed
+owner-controlled value uses the disabled text colour.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
@@ -1361,7 +1371,21 @@ achievable at every graph rate. On the PipeWire path a selected quantum below
 twice the rate floor shows a zero-slack warning line, and applying pitch in
 that zone raises a notice to double the quantum: the duplex wake can silence
 or stutter pitched playback below one period of slack. Under an external owner the
-warning does not apply; the owner's write-ahead covers the floor.
+warning does not apply; the owner's write-ahead covers the floor. Under an
+external owner (JACK / direct ALSA)
+the quantum is the owner's ALSA period, fixed while it runs: the picker is
+visible but inactive, a grayed read-only report of the actual period, with the
+owner named in the tooltip (`Controlled by <owner>`).
+
+On the JACK / direct-ALSA path the owner adopts a rate and the device follows
+it; TotalControl reports the device truth and reapplies the scene on a rate
+change. While an owner holds the PCM the rate and quantum pickers are grayed
+(the owner sets them); a rate or quantum request through OSC is reported as
+controlled by the owner, never applied and never shown as "applying…". While
+idle (no owner) the Device-mode rate picker writes the device clock server-free
+(the driver's idle device-rate write), confirmed from the device state-word
+readback. The convenience path (`Rate follows` PipeWire) is unchanged: the
+graph conducts and the device follows it.
 
 Rate and quantum changes apply asynchronously: PipeWire renegotiates the
 running stream over a few seconds while the player keeps playing (resampled);

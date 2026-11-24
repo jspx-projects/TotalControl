@@ -850,11 +850,12 @@ the engine. The host sees an xrun and re-prepares.
 
 ## 5. Control transports and hwdep ABI
 
-The hwdep ABI is versioned (`FFUC_ABI_VERSION`, currently 7). The host checks
+The hwdep ABI is versioned (`FFUC_ABI_VERSION`, currently 8). The host checks
 it at open. The `COUNTERS` reply carries two counter classes — cumulative per
 driver instance (zeroed on reattach) and per-run (reset on every engine start)
-— plus `run_seq`, an engine-run epoch that increments on every engine start so
-the host can re-base the per-run view, and `urb_errors`, a consecutive-error
+— plus `run_seq`, a re-base epoch that increments on every engine start and on
+a confirmed idle device-rate write (`SET_RATE`), so the host can re-base the
+per-run view and reapply the scene, and `urb_errors`, a consecutive-error
 gauge rather than a total.
 
 U2 carries two transfer modes with opposite characteristics:
@@ -879,8 +880,9 @@ a bounded reply wait (§5.2).
 | `INFO` | identity, capabilities, endpoint numbers, rate, firmware |
 | `VENDOR` | one EP0 vendor request (read or write, up to 64 bytes) |
 | `WRITE_WORDS` | up to 63 IF1 register words; the kernel adds odd parity |
-| `COUNTERS` | transport error counters (host ring, USB, feedback, pointer, events): cumulative per instance and per-run classes, the `run_seq` engine-run epoch, the `urb_errors` gauge, and `pitch_clamps` (DDS writes clamped to the pitch envelope); `run_seq` added at ABI 7 |
+| `COUNTERS` | transport error counters (host ring, USB, feedback, pointer, events): cumulative per instance and per-run classes, the `run_seq` re-base epoch, the `urb_errors` gauge, and `pitch_clamps` (DDS writes clamped to the pitch envelope); `run_seq` added at ABI 7 |
 | `CLOCK` | the device timestamp: the unwrapped device position at a host time, the raw phase field, the windowed device rate `rate_meas`, and the start-frame anchor (`sof_ns(f) = anchor_ns + f·125000`, one unit per ISO packet); ABI 6 |
+| `SET_RATE` | set the device clock rate while the engine is idle (no PCM owner): adopt, commit, confirm from the state-word rate readback, bump `run_seq`; ABI 8 (§7.2) |
 
 `read()`/`poll()` deliver events:
 
@@ -1037,6 +1039,56 @@ in §4.1.1). The device clock therefore has two owners:
 A mixer scene apply writes the mixer group only. It adopts the scene's rate and
 pitch into the host model but writes neither clock word into the device, so a
 scene reapply on a running stream does not move the clock.
+
+### 7.2 The idle device-rate write
+
+`SET_RATE` sets the device clock rate with no sound server and no PCM owner. It
+is the idle device-rate setting of the JACK / direct-ALSA professional path.
+Under PipeWire the host forces the graph rate instead; `SET_RATE` is not used
+there.
+
+| Term | Shape | Definition |
+|---|---|---|
+| idle | `engine_running = 0`, `hw_params_mask = 0`, `prepared_mask = 0` | no owner holds the PCM |
+| rate index | state word (`0x11` IN) bits 24–31 | `family | (band << 2)`, the internal-clock rate (§11.7 of the UCX spec) |
+| re-base epoch | `run_seq` | increments on engine start and on a confirmed idle rate write |
+
+The command is one transition with a precondition, an action and a
+postcondition:
+
+| Stage | Behaviour |
+|---|---|
+| Precondition | the engine is idle; an owner holding the PCM refuses with `-EBUSY` |
+| Action | adopt the rate into `chip->rate`, `clock_rate` and `mode`; commit it with the same rate-commit flow as engine start (§7) |
+| Postcondition | the state-word rate index reads back the requested rate; `run_seq` increments to arm the host scene reapply |
+
+The rate commit is shared with engine start (`ffuc_engine_commit_rate`): the
+Windows-personality restart settle, the alternate-setting (re)selection and the
+rate sequence. Both paths therefore establish the same device clock state. The
+confirmation polls the state-word rate index with a bounded timeout
+(`FFUC_IDLE_RATE_CONFIRM_MS`); the device's own rate report is the readiness
+condition.
+
+`struct ffuc_hwdep_set_rate` (ABI 8):
+
+| Field | Dir | Meaning |
+|---|---|---|
+| `rate` | in | requested rate, Hz |
+| `flags` | in | must be 0 |
+| `confirmed` | out | the state-word rate after the write, Hz |
+| `reserved[5]` | — | zero |
+
+Return codes: `-EINVAL` unsupported rate or non-zero flags; `-EBUSY` an owner
+holds the PCM; `-EIO` the rate committed but the readback did not confirm
+(`confirmed` carries the last read rate); `-ENODEV` disconnected. On a
+confirmed write the driver keeps the adopted rate; on a failed device write it
+restores the previous adopted rate.
+
+The UC session words follow the rate-change path: the idle write arms
+`session_reopen` so the next engine start re-opens the session at the new rate.
+Open item: the UC session-word behaviour on a host-initiated idle rate change
+is needs-hardware; the implemented flow mirrors the verified `hw_params`
+rate-change sequence and is desk-verified on the UCX only.
 
 ## 8. Suspend, resume and hotplug
 

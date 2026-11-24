@@ -18,7 +18,7 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 
-#define FFUC_ABI_VERSION	7
+#define FFUC_ABI_VERSION	8
 
 /* Largest payload in one FFUC_HWDEP_IOCTL_VENDOR request. */
 #define FFUC_HWDEP_MAX_DATA	64
@@ -191,6 +191,8 @@ struct ffuc_hwdep_envelope {
 	_IOR('F', 0x14, struct ffuc_hwdep_envelope)
 #define FFUC_HWDEP_IOCTL_CLOCK \
 	_IOR('F', 0x15, struct ffuc_hwdep_clock)
+#define FFUC_HWDEP_IOCTL_SET_RATE \
+	_IOWR('F', 0x16, struct ffuc_hwdep_set_rate)
 
 /* The device timestamp (Stage 1): where the device clock was, at a host
  * time.  The start-frame anchor maps the running IN packet index to host
@@ -209,6 +211,21 @@ struct ffuc_hwdep_clock {
 	__u64 frames;
 	__u32 wrap;
 	__u32 reserved;
+};
+
+/* Set the device clock rate while the engine is idle (no PCM owner).  The
+ * driver adopts the rate, commits it to the device and confirms it from the
+ * state-word rate readback, then bumps run_seq so the host reapplies the
+ * scene.  Idle-only: -EBUSY while an owner holds the PCM, -EINVAL for an
+ * unsupported rate, -EIO if the readback does not confirm.  `confirmed`
+ * returns the rate the state word reports after the write.  Not used under
+ * PipeWire (which forces the graph rate); this is the server-free idle
+ * device-rate setting for the JACK / direct-ALSA path.  ABI 8. */
+struct ffuc_hwdep_set_rate {
+	__u32 rate;		/* in: requested rate, Hz */
+	__u32 flags;		/* in: must be 0 */
+	__u32 confirmed;	/* out: state-word rate after the write, Hz */
+	__u32 reserved[5];
 };
 
 #endif /* _FFUC_UAPI_H */

@@ -144,6 +144,49 @@ pub fn classify(
     }
 }
 
+/// The presentation of a rate/quantum picker, derived from the detected path
+/// and the rate authority. `Active`: TotalControl sets the value. `Grayed`:
+/// visible but read-only — an external owner sets it, and the picker reports
+/// the actual value. `Filler`: the row keeps its slot as a nonvisible
+/// placeholder (convenience mode, or the rate under an external clock).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerState {
+    Active,
+    Grayed,
+    Filler,
+}
+
+/// The DEVICE sample-rate picker state. Editable only on the internal clock
+/// in Device mode: under PipeWire TotalControl forces the graph rate, and
+/// while idle it writes the device rate server-free. Under an external owner
+/// (JACK / direct ALSA) the owner sets the rate, so the picker is a grayed
+/// read-only report. In convenience (Auto) mode, or under an external clock,
+/// the rate is not the user's to set and the row is a filler.
+pub fn rate_picker_state(
+    path: AudioPath,
+    mode: EngineRateMode,
+    clock_source_external: bool,
+) -> PickerState {
+    if clock_source_external || mode == EngineRateMode::Auto {
+        return PickerState::Filler;
+    }
+    if path.is_external() {
+        return PickerState::Grayed;
+    }
+    PickerState::Active
+}
+
+/// The engine-group quantum picker state. Under an external owner the
+/// quantum is the owner's ALSA period, fixed while it runs: a grayed
+/// read-only report. Otherwise TotalControl forces the graph quantum.
+pub fn quantum_picker_state(path: AudioPath) -> PickerState {
+    if path.is_external() {
+        PickerState::Grayed
+    } else {
+        PickerState::Active
+    }
+}
+
 /// The device's achievable rate/quantum envelope, device-agnostic. The driver
 /// is the single owner of the supported rates and the per-rate period floor;
 /// the GUI fills this from the driver's reported envelope (or the mock's
@@ -445,6 +488,7 @@ pub fn rate_needs_mixer_reapply(last: Option<u32>, current: Option<u32>, model_r
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pw_clock::PcmFormat;
 
     fn caps_ucx() -> RateCaps {
         // The UCX envelope: per-rate period floors (one URB), 192 the highest.
@@ -539,6 +583,70 @@ mod tests {
         assert!(!AudioPath::External(ExternalOwner::Jack).tc_forces_rate());
         assert!(!AudioPath::External(ExternalOwner::Alsa).tc_forces_rate());
         assert!(!AudioPath::Idle.tc_forces_rate());
+    }
+
+    // ── Picker state (gray-when-owned) ──────────────────────────────
+
+    #[test]
+    fn rate_picker_is_active_when_tc_sets_the_rate() {
+        // PipeWire Device mode forces; idle writes the device rate server-free.
+        assert_eq!(
+            rate_picker_state(AudioPath::PwDevice, EngineRateMode::Fixed, false),
+            PickerState::Active
+        );
+        assert_eq!(
+            rate_picker_state(AudioPath::Idle, EngineRateMode::Fixed, false),
+            PickerState::Active
+        );
+    }
+
+    #[test]
+    fn rate_picker_is_grayed_under_an_external_owner() {
+        assert_eq!(
+            rate_picker_state(AudioPath::External(ExternalOwner::Jack), EngineRateMode::Fixed, false),
+            PickerState::Grayed
+        );
+        assert_eq!(
+            rate_picker_state(AudioPath::External(ExternalOwner::Alsa), EngineRateMode::Fixed, false),
+            PickerState::Grayed
+        );
+    }
+
+    #[test]
+    fn rate_picker_is_a_filler_in_convenience_or_external_clock() {
+        // Auto mode: the graph conducts, the rate is not the user's to set.
+        assert_eq!(
+            rate_picker_state(AudioPath::PwFollow, EngineRateMode::Auto, false),
+            PickerState::Filler
+        );
+        assert_eq!(
+            rate_picker_state(AudioPath::Idle, EngineRateMode::Auto, false),
+            PickerState::Filler
+        );
+        // External clock: the device owns the rate, in either mode.
+        assert_eq!(
+            rate_picker_state(AudioPath::PwDevice, EngineRateMode::Fixed, true),
+            PickerState::Filler
+        );
+        assert_eq!(
+            rate_picker_state(AudioPath::External(ExternalOwner::Jack), EngineRateMode::Fixed, true),
+            PickerState::Filler
+        );
+    }
+
+    #[test]
+    fn quantum_picker_is_grayed_only_under_an_external_owner() {
+        assert_eq!(
+            quantum_picker_state(AudioPath::External(ExternalOwner::Jack)),
+            PickerState::Grayed
+        );
+        assert_eq!(
+            quantum_picker_state(AudioPath::External(ExternalOwner::Alsa)),
+            PickerState::Grayed
+        );
+        assert_eq!(quantum_picker_state(AudioPath::PwDevice), PickerState::Active);
+        assert_eq!(quantum_picker_state(AudioPath::PwFollow), PickerState::Active);
+        assert_eq!(quantum_picker_state(AudioPath::Idle), PickerState::Active);
     }
 
     // ── Quantum floor / convenience minimum ─────────────────────────
@@ -643,7 +751,7 @@ mod tests {
         f.force_quantum = 96;
         // The running stream still holds the old period; the cushion aligns to
         // the target quantum the PCM will re-prepare at, not the live period.
-        f.stream = Some(CardStream { rate: 48_000, period: 48, buffer: 2048 });
+        f.stream = Some(CardStream { rate: 48_000, period: 48, buffer: 2048, channels: 18, format: PcmFormat::S32Le });
         assert_eq!(f.cushion_period(48_000), 96);
         assert_eq!(f.sched_policy(48_000).headroom, 192);
         // Without a force, the graph quantum raised to the floor is the target.
@@ -693,7 +801,7 @@ mod tests {
         let mut f = facts(EngineRateMode::Auto);
         f.device_set_rate = 44_100;
         assert_eq!(f.running_rate(), 44_100); // falls to the graph/set rate
-        f.stream = Some(CardStream { rate: 48_000, period: 48, buffer: 1024 });
+        f.stream = Some(CardStream { rate: 48_000, period: 48, buffer: 1024, channels: 18, format: PcmFormat::S32Le });
         assert_eq!(f.running_rate(), 48_000);
         f.device_rate = Some(96_000);
         assert_eq!(f.running_rate(), 96_000);

@@ -8,6 +8,7 @@
  *   ioctl(VENDOR)        one EP0 vendor request (read or write, with data)
  *   ioctl(WRITE_WORDS)   one or more IF1 register words (parity added here)
  *   ioctl(COUNTERS)      transport health counters
+ *   ioctl(SET_RATE)      set the device clock rate while idle (no PCM owner)
  *   read()/poll()        meter, IF1 state and status events
  *
  * The IF1 meter (0x85) and state (0x8d) endpoints are read continuously by
@@ -365,6 +366,26 @@ static int ffuc_hwdep_counters(struct ffuc *chip,
 	return 0;
 }
 
+static int ffuc_hwdep_set_rate(struct ffuc *chip,
+			       struct ffuc_hwdep_set_rate __user *arg)
+{
+	struct ffuc_hwdep_set_rate r;
+	unsigned int confirmed = 0;
+	int ret;
+
+	if (copy_from_user(&r, arg, sizeof(r)))
+		return -EFAULT;
+	if (r.flags)
+		return -EINVAL;
+	ret = ffuc_set_rate_idle(chip, r.rate, &confirmed);
+	if (ret < 0)
+		return ret;
+	r.confirmed = confirmed;
+	if (copy_to_user(arg, &r, sizeof(r)))
+		return -EFAULT;
+	return 0;
+}
+
 static int ffuc_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
 			    unsigned int cmd, unsigned long arg)
 {
@@ -384,6 +405,8 @@ static int ffuc_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
 		return ffuc_hwdep_counters(chip, (void __user *)arg);
 	case FFUC_HWDEP_IOCTL_CLOCK:
 		return ffuc_hwdep_clock(chip, (void __user *)arg);
+	case FFUC_HWDEP_IOCTL_SET_RATE:
+		return ffuc_hwdep_set_rate(chip, (void __user *)arg);
 	case FFUC_HWDEP_IOCTL_ENVELOPE: {
 		struct ffuc_hwdep_envelope env;
 

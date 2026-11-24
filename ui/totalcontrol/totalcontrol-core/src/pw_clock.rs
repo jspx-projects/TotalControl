@@ -298,6 +298,36 @@ fn set_value(key: &str, value: &str) -> Result<(), String> {
     }
 }
 
+/// The host sample format of an open stream. The driver offers exactly
+/// `FLOAT_LE` and `S32_LE`; any other reading is reported as unknown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PcmFormat {
+    FloatLe,
+    S32Le,
+    #[default]
+    Unknown,
+}
+
+impl PcmFormat {
+    /// Parse the `format:` field of `hw_params`.
+    pub fn parse(s: &str) -> Self {
+        match s.trim() {
+            "FLOAT_LE" => PcmFormat::FloatLe,
+            "S32_LE" => PcmFormat::S32Le,
+            _ => PcmFormat::Unknown,
+        }
+    }
+
+    /// The format as the kernel names it, for a read-only report.
+    pub fn label(self) -> &'static str {
+        match self {
+            PcmFormat::FloatLe => "FLOAT_LE",
+            PcmFormat::S32Le => "S32_LE",
+            PcmFormat::Unknown => "unknown",
+        }
+    }
+}
+
 /// What the card itself is running at, from the kernel's view of its open
 /// stream (`/proc/asound/<card>/pcm0p/sub0/hw_params`, else the capture
 /// side). This is the truth the graph clock cannot give: the sound server
@@ -311,6 +341,10 @@ pub struct CardStream {
     pub period: u32,
     /// Frames in the whole ring buffer.
     pub buffer: u32,
+    /// The channel count the owner opened.
+    pub channels: u32,
+    /// The host sample format the owner negotiated.
+    pub format: PcmFormat,
 }
 
 impl CardStream {
@@ -560,10 +594,19 @@ pub fn parse_hw_params(text: &str) -> Option<CardStream> {
             .parse()
             .ok()
     };
+    let text_field = |name: &str| -> Option<&str> {
+        let line = text.lines().find(|l| l.starts_with(name))?;
+        line[name.len()..]
+            .trim_start_matches(':')
+            .split_whitespace()
+            .next()
+    };
     Some(CardStream {
         rate: field("rate")?,
         period: field("period_size")?,
         buffer: field("buffer_size")?,
+        channels: field("channels").unwrap_or(0),
+        format: text_field("format").map(PcmFormat::parse).unwrap_or_default(),
     })
 }
 
@@ -1044,12 +1087,30 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
             CardStream {
                 rate: 48_000,
                 period: 256,
-                buffer: 512
+                buffer: 512,
+                channels: 12,
+                format: PcmFormat::S32Le,
             }
         );
         assert!((s.period_ms() - 5.333).abs() < 0.01);
         assert!((s.buffer_ms() - 10.667).abs() < 0.01);
         assert_eq!(parse_hw_params("closed\n"), None);
+    }
+
+    #[test]
+    fn parses_the_owner_format_and_channels() {
+        let text = "access: MMAP_INTERLEAVED\nformat: FLOAT_LE\nsubformat: STD\n\
+                    channels: 18\nrate: 96000 (96000/1)\nperiod_size: 128\n\
+                    buffer_size: 512\n";
+        let s = parse_hw_params(text).unwrap();
+        assert_eq!(s.channels, 18);
+        assert_eq!(s.format, PcmFormat::FloatLe);
+        assert_eq!(s.format.label(), "FLOAT_LE");
+        // A missing format/channels reads as unknown, never a fabricated value.
+        let bare = "rate: 48000\nperiod_size: 48\nbuffer_size: 288\n";
+        let b = parse_hw_params(bare).unwrap();
+        assert_eq!(b.channels, 0);
+        assert_eq!(b.format, PcmFormat::Unknown);
     }
 
     #[test]
