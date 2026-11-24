@@ -7789,18 +7789,24 @@ impl RmeDevice for Fireface {
             self.apply_ucx_preamp_state()?;
             self.apply_ucx_device_settings()?;
         }
-        if self.settings.sample_rate > 0 {
-            self.set_sample_rate(self.settings.sample_rate)?;
-        }
+        // The device clock is not part of the mixer scene write. The rate
+        // family word is committed by the kernel at engine start (nothing
+        // running); writing it here into a running stream moves the clock to
+        // the model rate's family and drains the ring when that family differs
+        // from the stream's. The scene's rate is adopted into the model above
+        // (settings clone); the host moves the actual clock through the graph
+        // force / re-prepare, never a raw family word into a live stream.
         let result = match batch {
             Some(batch) => batch.finish(),
             None => Ok(()),
         };
-        if result.is_ok() && self.profile.capabilities().pitch {
-            // Pitch is a host setting and is always written to the device.
-            let pitch = self.settings.pitch_percent;
-            self.set_pitch(pitch)?;
-        }
+        // Pitch is a clock control owned by the host's rate-follow-mode
+        // reconcile (nominal in PipeWire/Auto, the pro pitch in Device/IRQ,
+        // written only after IRQ scheduling is confirmed). A scene apply must
+        // not write it: a non-zero pitch into a timer-scheduled graph drains
+        // the ring (the graph cannot track a pitched clock), and every reapply
+        // would re-write the saved pitch. The scene's pitch is adopted into the
+        // model above; the reconcile writes the mode-correct clock.
         if result.is_ok() {
             // Reconcile the Control Room monitor state with the live
             // assignment: a flag loaded against a not-yet-assigned pair is
@@ -10347,18 +10353,22 @@ mod tests {
     }
 
     #[test]
-    fn uc_pitch_is_written_on_scene_apply() {
+    fn uc_scene_apply_adopts_pitch_without_writing_the_clock() {
         let (mut dev, writes) = open(Model::Uc);
         let mut scene = dev.capture_scene();
         scene.settings.pitch_percent = 1.5;
         writes.lock().unwrap().clear();
         dev.apply_scene(&scene).unwrap();
+        // The scene's pitch is adopted into the model, but the pitch clock is
+        // owned by the host's rate-follow-mode reconcile, not the scene apply:
+        // a non-zero pitch written into a timer graph drains the ring.
+        assert_eq!(dev.settings().pitch_percent, 1.5);
         let w = writes.lock().unwrap();
         assert_eq!(
             w.iter()
                 .filter(|x| matches!(x, Write::Vendor(protocol::req::DDS, ..)))
                 .count(),
-            4
+            0
         );
     }
 
@@ -11420,9 +11430,10 @@ mod tests {
         dev.apply_scene(&scene).unwrap();
         let w = writes.lock().unwrap();
 
-        // TotalMix mixer push: 30 × 0x15, 18 × 0x1a, 666 × 0x12, plus the
-        // four DDS words written from the host pitch setting.
-        assert_eq!(w.len(), 718);
+        // TotalMix mixer push: 30 × 0x15, 18 × 0x1a, 666 × 0x12. The pitch
+        // clock is not part of the connect write (it is owned by the host's
+        // rate-follow-mode reconcile), so no DDS words follow the push.
+        assert_eq!(w.len(), 714);
         for (i, write) in w[..30].iter().enumerate() {
             assert_eq!(*write, Write::Vendor(protocol::req::LOOPBACK, 0, i as u16));
         }
@@ -11440,8 +11451,7 @@ mod tests {
 
         // Outputs are numeric ascending and written in reverse order, so
         // the final pair pushed is AN1/2 (encoder 4/5, masters 992/993).
-        // The four DDS words follow the mixer push.
-        let first_pair = w.len() - 80;
+        let first_pair = w.len() - 76;
         assert_eq!(w[first_pair], Write::Vendor(protocol::req::PGA, 6, 4));
         assert_eq!(w[first_pair + 1], Write::Vendor(protocol::req::PGA, 6, 5));
         assert_eq!(
@@ -11452,8 +11462,6 @@ mod tests {
             w[first_pair + 3],
             Write::Vendor(protocol::req::MIXER, 0x2000, 993)
         );
-        assert_eq!(w[718 - 4], Write::Vendor(protocol::req::DDS, 0xc350, 0));
-        assert_eq!(w[718 - 1], Write::Vendor(protocol::req::DDS, 0x7d00, 3));
     }
 
     #[test]
@@ -12160,7 +12168,7 @@ mod tests {
     }
 
     #[test]
-    fn ucx_scene_applies_saved_sample_rate() {
+    fn ucx_scene_apply_adopts_saved_rate_without_writing_the_family_word() {
         let (mut dev, writes) = open(Model::Ucx);
         let mut scene = dev.capture_scene();
         scene.settings.sample_rate = 44_100;
@@ -12168,8 +12176,11 @@ mod tests {
 
         dev.apply_scene(&scene).unwrap();
 
+        // The scene's rate is adopted into the model. The device family word is
+        // committed by the kernel at engine start; a scene apply must not write
+        // it into a running stream (a cross-family word moves the clock).
         assert_eq!(dev.settings().sample_rate, 44_100);
-        assert!(writes
+        assert!(!writes
             .lock()
             .unwrap()
             .iter()
