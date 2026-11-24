@@ -589,18 +589,19 @@ pub trait RmeDevice {
                 if i % 2 != 0 {
                     continue;
                 }
-                if !self.has_pair_cell_override(left, pair)
-                    && !self.has_pair_cell_override(right, pair)
-                {
-                    continue;
-                }
+                // TotalMix re-centres the balance on re-link and folds the
+                // level to the geometric mean of the two natural cells. The
+                // split itself leaves the device send gain unchanged, so the
+                // old max/ratio fold kept the split-side balance.
                 let left_cell = self.matrix_cell(left, blocks[0]).unwrap_or(0.0);
                 let right_cell = self.matrix_cell(right, blocks[1]).unwrap_or(0.0);
-                let level = left_cell.max(right_cell);
-                let balance = output_balance_from_volumes(left_cell, right_cell);
-                let (left_level, right_level) = output_balance_to_volumes(level, balance);
-                self.set_volume(left, pair, left_level)?;
-                self.set_volume(right, pair, right_level)?;
+                let level = (left_cell * right_cell).sqrt();
+                self.set_volume(left, pair, level)?;
+                self.set_volume(right, pair, level)?;
+                for block in blocks {
+                    self.set_pair_block_balance(left, block, 0)?;
+                    self.set_pair_block_balance(right, block, 0)?;
+                }
             } else {
                 let cid = ChannelId::Input(i);
                 if !self.has_pair_cell_override(cid, pair) {
@@ -621,18 +622,15 @@ pub trait RmeDevice {
                 if i % 2 != 0 {
                     continue;
                 }
-                if !self.has_pair_cell_override(left, pair)
-                    && !self.has_pair_cell_override(right, pair)
-                {
-                    continue;
-                }
                 let left_cell = self.matrix_cell(left, blocks[0]).unwrap_or(0.0);
                 let right_cell = self.matrix_cell(right, blocks[1]).unwrap_or(0.0);
-                let level = left_cell.max(right_cell);
-                let balance = output_balance_from_volumes(left_cell, right_cell);
-                let (left_level, right_level) = output_balance_to_volumes(level, balance);
-                self.set_volume(left, pair, left_level)?;
-                self.set_volume(right, pair, right_level)?;
+                let level = (left_cell * right_cell).sqrt();
+                self.set_volume(left, pair, level)?;
+                self.set_volume(right, pair, level)?;
+                for block in blocks {
+                    self.set_pair_block_balance(left, block, 0)?;
+                    self.set_pair_block_balance(right, block, 0)?;
+                }
             } else {
                 let cid = ChannelId::Playback(i);
                 if !self.has_pair_cell_override(cid, pair) {

@@ -10147,6 +10147,73 @@ mod tests {
     }
 
     #[test]
+    fn ucx_output_relink_centres_playback_balance_and_folds_to_geometric_mean() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        let pb_left = ChannelId::Playback(0);
+        let pb_right = ChannelId::Playback(1);
+
+        dev.set_playback_volume(0, 0, 0, 0.5).unwrap();
+        dev.set_output_linked(0, false).unwrap();
+        let blocks = dev.matrix_blocks_for_pair(0);
+        dev.set_matrix_cell(pb_left, blocks[0], 0.8).unwrap();
+        dev.set_matrix_cell(pb_right, blocks[1], 0.4).unwrap();
+
+        dev.set_output_linked(0, true).unwrap();
+
+        let expected = (0.8f32 * 0.4).sqrt();
+        assert!((dev.volume(pb_left, 0).unwrap() - expected).abs() < 1e-5);
+        assert!((dev.volume(pb_right, 0).unwrap() - expected).abs() < 1e-5);
+        for block in blocks {
+            assert_eq!(dev.pair_block_balance(pb_left, block), Some(0));
+            assert_eq!(dev.pair_block_balance(pb_right, block), Some(0));
+        }
+        assert!((dev.matrix_cell(pb_left, blocks[0]).unwrap() - expected).abs() < 1e-5);
+        assert!((dev.matrix_cell(pb_right, blocks[1]).unwrap() - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn ucx_output_relink_centres_input_balance_and_folds_to_geometric_mean() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        let in_left = ChannelId::Input(4);
+        let in_right = ChannelId::Input(5);
+
+        dev.set_input_volume(2, 0, 0, 0.5).unwrap();
+        dev.set_output_linked(0, false).unwrap();
+        let blocks = dev.matrix_blocks_for_pair(0);
+        dev.set_matrix_cell(in_left, blocks[0], 0.8).unwrap();
+        dev.set_matrix_cell(in_right, blocks[1], 0.4).unwrap();
+
+        dev.set_output_linked(0, true).unwrap();
+
+        let expected = (0.8f32 * 0.4).sqrt();
+        assert!((dev.volume(in_left, 0).unwrap() - expected).abs() < 1e-5);
+        assert!((dev.volume(in_right, 0).unwrap() - expected).abs() < 1e-5);
+        for block in blocks {
+            assert_eq!(dev.pair_block_balance(in_left, block), Some(0));
+            assert_eq!(dev.pair_block_balance(in_right, block), Some(0));
+        }
+        assert!((dev.matrix_cell(in_left, blocks[0]).unwrap() - expected).abs() < 1e-5);
+        assert!((dev.matrix_cell(in_right, blocks[1]).unwrap() - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn ucx_output_relink_centres_balance_even_at_a_zero_fader() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        let pb_left = ChannelId::Playback(0);
+        let pb_right = ChannelId::Playback(1);
+
+        dev.set_playback_volume(0, 0, 0, 0.0).unwrap();
+        dev.set_output_linked(0, false).unwrap();
+        let blocks = dev.matrix_blocks_for_pair(0);
+        dev.set_matrix_cell(pb_left, blocks[0], 0.0).unwrap();
+        dev.set_matrix_cell(pb_right, blocks[1], 0.0).unwrap();
+        dev.set_output_linked(0, true).unwrap();
+
+        assert_eq!(dev.pair_block_balance(pb_left, blocks[0]), Some(0));
+        assert_eq!(dev.pair_block_balance(pb_right, blocks[1]), Some(0));
+    }
+
+    #[test]
     fn uc_output_link_round_trip_keeps_the_derived_balance() {
         let (mut dev, _writes) = open(Model::Uc);
         dev.set_output_linked(0, false).unwrap();
