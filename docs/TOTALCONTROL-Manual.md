@@ -394,7 +394,10 @@ floor is the zero-slack corner: clean at nominal speed, but varispeed needs
 one period of slack at any rate (section 14). In PipeWire mode the
 picker also holds a convenience minimum — the highest period floor across the
 device's rates — and offers no Auto: the quantum is forced at or above that
-minimum so it stays achievable when the graph changes rate. The `Sample rate`
+minimum so it stays achievable when the graph changes rate. On the PipeWire
+path the panel warns when the selected quantum is below twice the rate floor,
+and applying pitch there raises a notice to double the quantum: pitched
+playback can silence or stutter below one period of slack (section 14). The `Sample rate`
 row shows the device rate, and the `Graph` row shows the graph rate that follows it.
 
 Rate and quantum changes apply whether or not audio is playing. While a stream

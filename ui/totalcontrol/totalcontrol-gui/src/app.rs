@@ -11728,6 +11728,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 // reconcile writes immediately.
                 state.pitch_clock_dirty = true;
                 reconcile_device_pitch(state);
+                // The zero-slack corner is PipeWire's duplex wake; under an
+                // external owner the application's write-ahead covers it.
+                let facts = clock_facts(state);
+                let rate = running_rate(state);
+                if v != 0.0
+                    && !detected_path(state).is_external()
+                    && facts.zero_slack(rate)
+                {
+                    let need = 2 * facts.quantum_floor(rate);
+                    state.notice = Some((
+                        format!("Pitch needs {need}+ samples at this rate; raise the quantum."),
+                        Instant::now(),
+                    ));
+                }
                 notify_osc_raw(state, "/pitch", vec![OscType::Float(v)]);
             }
         }
@@ -16423,6 +16437,22 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     );
+    // The zero-slack corner is PipeWire's duplex wake: below twice the rate
+    // floor, varispeed can silence playback. Warn only on the PipeWire path;
+    // an external owner's just-in-time write-ahead covers the floor.
+    if !external_owner && clock_facts(state).zero_slack(running_rate(state)) {
+        let need = 2 * clock_facts(state).quantum_floor(running_rate(state));
+        body = body.push(
+            row![
+                caption(""),
+                text(format!("Zero-slack: pitch can silence or stutter below {need} samples"))
+                    .color(theme::ysim())
+                    .size(theme::TEXT_SM * scale),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    }
     // The RTL field carries its own label on row 1 (`RTL x.x ms`) with the
     // formula wrapping below; convenience shows the same four-row slot blank.
     // The tooltip belongs only to the visible field: a hint on the blank filler
@@ -27954,6 +27984,26 @@ mod tests {
         assert_eq!(p.headroom, 336);
         assert_eq!(p.start_delay, 144);
         assert_eq!(engine_sched_policy(&state, 176_400).start_delay, 552);
+    }
+
+    #[test]
+    fn pitch_in_the_zero_slack_zone_warns() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.device.settings_mut().sample_rate = 48_000;
+        state.engine_force_rate = 48_000;
+        state.engine = None;
+        state.driver_floor = Some(48);
+        state.engine_force_quantum = 48;
+        let _ = update(&mut state, Message::PitchChanged(1.0));
+        assert!(state.notice.is_some());
+        // One period of slack: no warning.
+        state.notice = None;
+        state.engine_force_quantum = 96;
+        let _ = update(&mut state, Message::PitchChanged(1.0));
+        assert!(state.notice.is_none());
     }
 
     #[test]
