@@ -228,7 +228,7 @@ raw `sudo rmmod`/`insmod`. Source copies live in [`scripts/lab/`](../scripts/lab
 | Helper | Usage | Purpose |
 |---|---|---|
 | `reset-fireface-usb` | `sudo -n reset-fireface-usb` | USB port reset (`usbreset`) without unplugging. Finds the unit by product string, waits for the card to reappear in `/proc/asound/cards`. Use when the card vanished or the interface will not re-bind. |
-| `reload-fireface-uc` | `sudo -n reload-fireface-uc` | Full module reload: discovers the newest `snd-fireface-uc.ko` (prefers `/usr/local/lib/ffuc-lab/`, else the newest build under any checkout), refuses a world-writable module, unbinds interfaces, `rmmod` + `insmod`, prints cards and hwdep nodes. |
+| `reload-fireface-uc` | `sudo -n reload-fireface-uc` | Full module reload: discovers the newest `snd-fireface-uc.ko` (prefers `/usr/local/lib/ffuc-lab/`, else the newest build under any checkout), refuses a world-writable module, unbinds interfaces, `rmmod` + `insmod`, prints cards and hwdep nodes. If `rmmod` fails (the module is still referenced), it re-binds the interfaces it unbound, reports the holders (`refcnt`, `fuser`) and exits non-zero — the unit keeps working on the loaded module. A true swap while the audio graph holds the device needs `scripts/bench-reload.sh`, which stops the graph first. |
 | `ffuc-lab` | `sudo -n ffuc-lab stats` / `ringtrace` / `pause <ms>` / `double <0\|1>` / `kill` | Driver debugfs surface. `stats` reads the transport counters; `ringtrace` reads the playback ring-fill trace (one record per URB completion). `pause`/`double`/`kill` probe the UC meter pump. Fixed subcommands only; `stats` and `ringtrace` are read-only. |
 
 Recovery sequence when the card disappears or a reload fails: stop the user
