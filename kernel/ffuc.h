@@ -77,6 +77,9 @@
 /* UCX IF5 settings-group settle, measured in the E2b connect capture. */
 #define FFUC_UCX_IF5_SETTLE_MS	100
 #define FFUC_RESTART_SETTLE_MS	250	/* UC: minimum engine stop -> start gap */
+/* Idle device-rate write: bounded poll of the state-word rate readback that
+ * confirms the committed rate (the readiness condition, not a timed guess). */
+#define FFUC_IDLE_RATE_CONFIRM_MS	500
 
 #define FFUC_MAX_EPS		2	/* endpoints per direction (alt 3) */
 #define FFUC_MAX_URBS		32
@@ -622,6 +625,8 @@ int ffuc_claim_interface(struct usb_interface *intf);
 void ffuc_release_interface(struct usb_interface *intf);
 unsigned int ffuc_rate_from_index(unsigned int idx);
 void ffuc_query_envelope(struct ffuc *chip, struct ffuc_hwdep_envelope *env);
+int ffuc_set_rate_idle(struct ffuc *chip, unsigned int rate,
+		       unsigned int *confirmed);
 
 /* ffuc-hwdep.c */
 void ffuc_event_put(struct ffuc *chip, u32 type, const void *data, u32 size,
