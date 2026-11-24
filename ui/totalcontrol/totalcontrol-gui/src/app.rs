@@ -11710,7 +11710,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // slider is hidden there, but OSC/controllers may still send them).
             let internal = state.device.settings().clock_source == "Internal";
             if state.engine_rate_mode == EngineRateMode::Fixed && internal {
-                let v = v.clamp(-5.0, 5.0);
+                // The pitch envelope: above the transport ceiling the device
+                // cannot carry the clock; clamp to the slider's grid maximum.
+                let v = v.clamp(-5.0, pitch_slider_max(state));
                 state.pro_pitch = v;
                 state.device.store_pitch_setting(v);
                 // The clock write runs through the same gated reconcile as
@@ -15387,7 +15389,8 @@ fn rate_caps(state: &TotalControl) -> RateCaps {
                 rates,
                 env.rates.iter().map(|r| (r.rate, r.period_floor)).collect(),
                 fallback,
-            );
+            )
+            .with_iso(env.iso);
         }
     }
     // The mock, or a driver that did not report an envelope: the backend's
@@ -15628,6 +15631,14 @@ fn force_engine_reprepare(state: &mut TotalControl) {
     }
 }
 
+/// The pitch slider's positive end: the transport's pitch envelope at the
+/// running rate, on the slider's 0.1 % grid. The driver clamps every DDS
+/// write to the same ceiling (`ffuc_dds_clamp`).
+fn pitch_slider_max(state: &TotalControl) -> f32 {
+    let max = clock_facts(state).pitch_max_percent(running_rate(state));
+    (max * 10.0).floor() / 10.0
+}
+
 /// Reconcile the device clock pitch with the rate-follow mode. The Device
 /// path runs the saved pro pitch; the convenience path runs nominal (0 %) so
 /// a pitched clock cannot starve the timer-scheduled ring. A scene reapply
@@ -15651,11 +15662,21 @@ fn reconcile_device_pitch(state: &mut TotalControl) {
     // clock the device does not own. Hold nominal (0 %) under any external
     // source, in both rate-follow modes, and respect the external rate.
     let internal = state.device.settings().clock_source == "Internal";
-    let desired = if state.engine_rate_mode == EngineRateMode::Fixed && internal {
+    let mut desired = if state.engine_rate_mode == EngineRateMode::Fixed && internal {
         saved
     } else {
         0.0
     };
+    // A saved pitch above the running rate's transport ceiling clamps to the
+    // slider's grid maximum; the stored setting follows so the display is the
+    // truth. The driver clamps the DDS write to the same ceiling.
+    if desired > 0.0 {
+        let max = pitch_slider_max(state);
+        if desired > max {
+            state.pro_pitch = max;
+            desired = max;
+        }
+    }
     if !state.pitch_clock_dirty && state.pitch_clock_applied == Some(desired) {
         return;
     }
@@ -16041,6 +16062,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     crate::widgets::pitch_slider::pitch_slider(
                         value,
                         scale,
+                        (-5.0, pitch_slider_max(state)),
                         Message::PitchChanged,
                         || Message::PitchChanged(0.0),
                     ),
@@ -27941,6 +27963,73 @@ mod tests {
         state.engine_rate_mode = EngineRateMode::Fixed;
         let _ = update(&mut state, Message::PitchChanged(1.5));
         assert_eq!(state.device.settings().pitch_percent, 1.5);
+    }
+
+    fn ucx_envelope() -> totalcontrol_core::fireface::hwdep::RateEnvelope {
+        totalcontrol_core::fireface::hwdep::RateEnvelope {
+            urb_frames: 48,
+            nurbs: 2,
+            iso: true,
+            rates: [
+                (32_000, 32), (44_100, 48), (48_000, 48), (64_000, 64),
+                (88_200, 96), (96_000, 96), (128_000, 128),
+                (176_400, 184), (192_000, 192),
+            ]
+            .iter()
+            .map(|(rate, floor)| totalcontrol_core::fireface::hwdep::RateEnv {
+                rate: *rate,
+                period_floor: *floor,
+                buffer_min: floor * 7,
+            })
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn the_pitch_slider_clamps_to_the_transport_envelope() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.device_envelope = Some(ucx_envelope());
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        // At 192k the transport ceiling is +4.1667%: the slider grid ends at
+        // +4.1%, and a +5% request clamps to it.
+        state.device.settings_mut().sample_rate = 192_000;
+        state.engine_force_rate = 192_000;
+        state.engine = None;
+        let _ = update(&mut state, Message::PitchChanged(5.0));
+        assert_eq!(state.pro_pitch, 4.1);
+        assert_eq!(state.device.settings().pitch_percent, 4.1);
+        // At 96k the full +5% is in envelope.
+        state.device.settings_mut().sample_rate = 96_000;
+        state.engine_force_rate = 96_000;
+        let _ = update(&mut state, Message::PitchChanged(5.0));
+        assert_eq!(state.pro_pitch, 5.0);
+        assert_eq!(state.device.settings().pitch_percent, 5.0);
+        // Negative pitch is always in envelope.
+        state.device.settings_mut().sample_rate = 192_000;
+        state.engine_force_rate = 192_000;
+        let _ = update(&mut state, Message::PitchChanged(-5.0));
+        assert_eq!(state.pro_pitch, -5.0);
+    }
+
+    #[test]
+    fn reconcile_clamps_a_saved_pitch_above_the_envelope() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.device_envelope = Some(ucx_envelope());
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        // A pitch saved at 96k (+5%) survives a rate change to 192k only
+        // clamped to the ceiling; the stored setting follows the display.
+        state.device.settings_mut().sample_rate = 192_000;
+        state.engine_force_rate = 192_000;
+        state.engine = None;
+        state.pro_pitch = 5.0;
+        state.pitch_clock_dirty = true;
+        reconcile_device_pitch(&mut state);
+        assert_eq!(state.pro_pitch, 4.1);
+        assert_eq!(state.pitch_clock_applied, Some(4.1));
     }
 
     #[test]

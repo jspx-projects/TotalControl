@@ -66,6 +66,40 @@ static inline u32 ffuc_dds_clock(u32 val, u32 idx, unsigned int rate)
 	return (u32)((0x5f5e10000000ULL * band) / p1);
 }
 
+/* The pitch envelope: the ISO transport carries at most max_frames frames
+ * per microframe packet (the endpoint's high-bandwidth capacity), so the
+ * programmed clock must stay at or below 8000 * max_frames. Above the
+ * ceiling the device's capture cadence folds back and the transport errors
+ * (verified on the UCX at 192 kHz above +4.1667%). Clamp a DDS divisor word
+ * pair to the ceiling; the divisor rounds up to the word's 256-unit grid so
+ * the decoded clock stays at or below the ceiling. Returns true when the
+ * word pair was clamped. The caller clamps only the active family's word;
+ * the other families store their pitch for later rates. */
+static inline bool ffuc_dds_clamp(u32 val, u32 idx, unsigned int rate,
+				  unsigned int max_frames, u32 *val_out,
+				  u32 *idx_out)
+{
+	u64 k = 0x5f5e10000000ULL;
+	u64 cap = (u64)max_frames * 8000;
+	u64 p1 = ((u64)val << 16) | (idx & 0xff00);
+	unsigned int band = rate > 114000 ? 4 : rate > 57000 ? 2 : 1;
+	u64 div;
+
+	if (!p1)
+		return false;
+	if ((k * band) / p1 <= cap)
+		return false;
+	/* The decode floors, so the smallest divisor whose decoded clock is
+	 * at or below the ceiling is floor(K / (cap + 1)) + 1. Round up to the
+	 * word's 256-unit grid; rounding up keeps the clock at or below the
+	 * ceiling, and one grid step below would exceed it. */
+	div = (k * band) / (cap + 1) + 1;
+	div = (div + 255) & ~0xffULL;
+	*val_out = (u32)(div >> 16);
+	*idx_out = (u32)((div & 0xff00) | (idx & 0x00ff));
+	return true;
+}
+
 /* Accumulate one capture URB's frames and track stationarity of the
  * window mean.  Two consecutive agreements (three windows) hold the mean
  * stationary before it is trusted; a disagreement clears it.  Called per

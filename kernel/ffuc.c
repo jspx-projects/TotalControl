@@ -428,7 +428,7 @@ static int ffuc_uc_init(struct ffuc *chip)
 				NULL, 0);
 }
 
-static unsigned int ffuc_rate_family(unsigned int rate)
+unsigned int ffuc_rate_family(unsigned int rate)
 {
 	switch (rate) {
 	case 32000:
@@ -2418,6 +2418,7 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 		   atomic_read(&chip->delta_zero));
 	seq_printf(m, "urb_errors %d\n", atomic_read(&chip->urb_errors));
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
+	seq_printf(m, "pitch_clamps %d\n", atomic_read(&chip->pitch_clamps));
 	seq_printf(m, "out_prefills %d\nout_prefill_timeouts %d\n",
 		   atomic_read(&chip->out_prefills),
 		   atomic_read(&chip->out_prefill_timeouts));

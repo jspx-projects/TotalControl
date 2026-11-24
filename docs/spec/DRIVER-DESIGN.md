@@ -287,6 +287,7 @@ the geometry.
 | buffer | ALSA | `buffer_size`; the circular buffer, an integer number of periods |
 | buffer min | driver | the minimum buffer the driver accepts at a rate; URB-aligned |
 | quantum | PipeWire | the graph cycle in frames (`clock.quantum`) |
+| pitch envelope | driver | the varispeed range the transport carries at a rate; the programmed clock stays at or below the band's packet capacity |
 
 With `api.alsa.disable-tsched` the quantum equals the period; the period floor
 is therefore the minimum quantum. `urb_frames` sets the period floor; `nurbs`
@@ -298,6 +299,28 @@ microframes into one URB; at `urb_frames=48`, `iso_packets=8`, so one URB spans
 1 ms and carries `8 × ceil(R/8000)` frames. The driver signals completion one
 URB at a time, so the period floor is one URB. The ceiling packs whole frames
 per microframe; the fractional remainder is the feedback add/drop (§4.3).
+
+The ISO endpoint's high-bandwidth capacity bounds the programmed clock. The
+4x endpoint carries 2 × 652 bytes OUT and 2 × 604 bytes IN per microframe
+(25 frames at the 4x word width); `max_frames` is 7 / 13 / 25 at 1x / 2x / 4x.
+The band capacity is `8000 × max_frames` frames/s: 56000 / 104000 / 200000.
+The pitch envelope keeps the programmed clock `R × (1 + pitch/100)` at or
+below the band capacity:
+
+```text
+capacity(band) = 8000 * max_frames(band)
+pitch_max(R)   = min(5 %, (capacity(band(R)) / R - 1) * 100)
+```
+
+Every rate carries the full ±5 % except 192 kHz positive pitch, which ends at
++4.1667 % (200000 / 192000). The driver clamps the active family's DDS divisor
+word to the ceiling on every vendor DDS write (`ffuc_dds_clamp`, counted by
+`pitch_clamps`); the clamped divisor rounds up on the word's 256-unit grid so
+the decoded clock stays at or below the capacity. The other families' words
+pass untouched. The rate sequence writes nominal words, which are always in
+envelope. Above the ceiling the device's capture cadence folds back and the
+transport errors, so the clamp is a correctness boundary, not a preference.
+The GUI offers the same envelope on the pitch slider (0.1 % grid).
 
 ```text
 ISO:           urb = iso_packets * ceil(rate / 8000)
@@ -387,7 +410,9 @@ pitch: a positive pitch drains the ring before the servo locks, while a negative
 pitch fills toward capacity. A pitched clock therefore belongs only to an
 IRQ-scheduled graph and is applied after IRQ scheduling is established — the
 mode-switch precondition (the fresh-start reference: IRQ is landed while idle,
-before the pitched clock and the stream).
+before the pitched clock and the stream). The programmed clock stays within
+the pitch envelope (§4.1.1): the driver clamps every DDS write to the band's
+packet capacity, so the device never runs a clock the transport cannot carry.
 
 **Timer-mode start preconditions.** A timer-mode start is correct only when it
 reaches the fresh-start state before real audio flows:
@@ -835,7 +860,7 @@ a bounded reply wait (§5.2).
 | `INFO` | identity, capabilities, endpoint numbers, rate, firmware |
 | `VENDOR` | one EP0 vendor request (read or write, up to 64 bytes) |
 | `WRITE_WORDS` | up to 63 IF1 register words; the kernel adds odd parity |
-| `COUNTERS` | transport error counters (host ring, USB, feedback, pointer, events): cumulative per instance and per-run classes, the `run_seq` engine-run epoch, and the `urb_errors` gauge; `run_seq` added at ABI 7 |
+| `COUNTERS` | transport error counters (host ring, USB, feedback, pointer, events): cumulative per instance and per-run classes, the `run_seq` engine-run epoch, the `urb_errors` gauge, and `pitch_clamps` (DDS writes clamped to the pitch envelope); `run_seq` added at ABI 7 |
 | `CLOCK` | the device timestamp: the unwrapped device position at a host time, the raw phase field, the windowed device rate `rate_meas`, and the start-frame anchor (`sof_ns(f) = anchor_ns + f·125000`, one unit per ISO packet); ABI 6 |
 
 `read()`/`poll()` deliver events:

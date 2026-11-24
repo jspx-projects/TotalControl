@@ -28,6 +28,8 @@ test:
 	./test/meter-pair-test
 	$(CC) -std=c11 -Wall -Wextra -Werror -o test/cadence-test test/cadence-test.c
 	./test/cadence-test
+	$(CC) -std=c11 -Wall -Wextra -Werror -o test/pitch-envelope-test test/pitch-envelope-test.c -lm
+	./test/pitch-envelope-test
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean

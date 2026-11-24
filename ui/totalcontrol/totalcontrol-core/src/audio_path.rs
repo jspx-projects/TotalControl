@@ -156,11 +156,20 @@ pub struct RateCaps {
     /// The floor for a rate the driver did not report (the mock, or an absent
     /// envelope): the driver's global `urb_frames`, else a low default.
     fallback_floor: u32,
+    /// ISO transport: the pitch envelope derives from the per-band packet
+    /// capacity. Interrupt transports carry no per-microframe frame ceiling.
+    iso: bool,
 }
 
 impl RateCaps {
     pub fn new(rates: Vec<u32>, floors: Vec<(u32, u32)>, fallback_floor: u32) -> Self {
-        Self { rates, floors, fallback_floor: fallback_floor.max(1) }
+        Self { rates, floors, fallback_floor: fallback_floor.max(1), iso: false }
+    }
+
+    /// Mark the transport ISO (the driver-reported envelope carries the flag).
+    pub fn with_iso(mut self, iso: bool) -> Self {
+        self.iso = iso;
+        self
     }
 
     /// The supported rates, in the driver's order. Empty means "use the
@@ -236,6 +245,32 @@ impl ClockFacts {
             .max()
             .unwrap_or(1)
             .max(1)
+    }
+
+    /// The pitch envelope: the highest varispeed percent the transport carries
+    /// at `rate`. The ISO endpoint delivers at most `max_frames` frames per
+    /// microframe packet — the band's highest period floor / 8 + 1 — so the
+    /// programmed clock `rate * (1 + pitch/100)` must stay at or below
+    /// `8000 * max_frames`. The driver clamps every DDS write to the same
+    /// ceiling (`ffuc_dds_clamp`); the slider offers the envelope so the
+    /// displayed value is what the device runs. Non-ISO transports carry no
+    /// per-microframe frame ceiling and keep the full ±5 % range.
+    pub fn pitch_max_percent(&self, rate: u32) -> f32 {
+        if !self.caps.iso || rate == 0 {
+            return 5.0;
+        }
+        let band = |r: u32| if r <= 48_000 { 1 } else if r <= 96_000 { 2 } else { 4 };
+        let band_floor = self
+            .device_rates()
+            .iter()
+            .filter(|r| band(**r) == band(rate))
+            .map(|r| self.quantum_floor(*r))
+            .max()
+            .unwrap_or_else(|| self.quantum_floor(rate));
+        // 8000 * (band_floor / 8 + 1), the band's packet capacity in frames/s.
+        let capacity = 1000 * band_floor + 8000;
+        let max = (capacity as f64 / rate as f64 - 1.0) * 100.0;
+        (max.min(5.0).max(0.0)) as f32
     }
 
     /// The lowest quantum the current mode allows at `rate`. The Device path
@@ -409,6 +444,7 @@ mod tests {
             ],
             48,
         )
+        .with_iso(true)
     }
 
     fn facts(mode: EngineRateMode) -> ClockFacts {
@@ -514,6 +550,31 @@ mod tests {
         // The Device path uses only the rate's own floor.
         let d = facts(EngineRateMode::Fixed);
         assert_eq!(d.minimum_quantum(48_000), 48);
+    }
+
+    #[test]
+    fn pitch_envelope_is_the_transport_capacity() {
+        let f = facts(EngineRateMode::Fixed);
+        // Every rate whose +5% clock fits the band capacity keeps the full
+        // range: 1x 56000, 2x 104000, 4x 200000 frames/s.
+        for rate in [32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 128_000, 176_400] {
+            assert_eq!(f.pitch_max_percent(rate), 5.0, "rate {rate}");
+        }
+        // 192k +5% programs 201600 > 200000: the ceiling is +4.1667%.
+        let max = f.pitch_max_percent(192_000);
+        assert!((max - 4.166667).abs() < 0.001, "192k max {max}");
+        // The ceiling clock stays at or below the capacity.
+        let clock = 192_000.0 * (1.0 + max as f64 / 100.0);
+        assert!(clock <= 200_000.0, "ceiling clock {clock}");
+        // A non-ISO transport keeps the full range at every rate.
+        let mut interrupt = f.clone();
+        interrupt.caps = RateCaps::new(
+            interrupt.device_rates(),
+            vec![(192_000, 1024)],
+            48,
+        );
+        assert_eq!(interrupt.pitch_max_percent(192_000), 5.0);
+        assert_eq!(f.pitch_max_percent(0), 5.0);
     }
 
     // ── Scheduling policy (three-tier) ──────────────────────────────

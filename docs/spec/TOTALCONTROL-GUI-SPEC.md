@@ -1281,7 +1281,12 @@ move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
 fine enough). Double-click resets to 0.0 %. Every change is stored immediately
 and written to the device clock at once. While a switch to Device mode is still
 applying, the clock write waits for the IRQ re-prepare confirmation; the stored
-value and the slider update immediately. Pitch is a Device-path control on the internal clock: the slider
+value and the slider update immediately. The positive end follows the pitch
+envelope: the transport carries the programmed clock only up to the band's
+packet capacity (DRIVER-DESIGN §4.1.1), so at 192 kHz the slider ends at
++4.1 %; every other rate offers the full +5.0 %. A saved pitch above the
+running rate's envelope clamps to the slider maximum when the rate changes.
+Pitch is a Device-path control on the internal clock: the slider
 is shown only when `Rate follows` is Device **and** `Clock source` is Internal.
 Otherwise the row is a nonvisible filler of the same height (§4) and the device
 clock runs nominal (0 %). Under an external clock source (SPDIF, Optical/ADAT,

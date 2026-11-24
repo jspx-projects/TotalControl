@@ -122,6 +122,7 @@
 
 struct ffuc;
 unsigned int ffuc_iso_wrap(struct ffuc *chip);
+unsigned int ffuc_rate_family(unsigned int rate);
 
 #define FFUC_STATE_BUF_SIZE	1024
 #define FFUC_EVENT_FIFO_SIZE	(64 * 1024)
@@ -564,6 +565,7 @@ struct ffuc {
 	int out_lag_min, out_lag_max;   /* (in_end - out_counter) mod wrap */
 	atomic_t out_resync;
 	atomic_t rate_mismatch;   /* cadence disagrees with chip->rate */
+	atomic_t pitch_clamps;    /* DDS writes clamped to the pitch envelope */
 	atomic_t in_frames_overflow; /* packet frames above the top bin */
 	atomic_t pcm_prepare_err;
 	atomic_t pcm_trigger_err;
