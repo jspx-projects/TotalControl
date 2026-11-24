@@ -510,6 +510,14 @@ confirm and retry. The capture reads the inputs and injects nothing into the
 playback path. PipeWire owns the PCM and multiplexes the capture, so a DAW keeps
 its stream.
 
+A reconnect (the unit reappears after a module reload or re-enumeration) runs
+the same engine restore as a fresh start: the mode's scheduling policy, the
+forces and the scene. The policy reaches the Pro Audio nodes even when they
+appear after the restore (a fresh PipeWire, a recreated card): the worker holds
+the policy pending and applies it with a confirmed re-prepare once the nodes
+exist. The scheduling state is therefore the same on every path — fresh start,
+mode switch, reconnect.
+
 The GUI reports a round-trip latency, not a measured acoustic round trip. It
 has two forms, and they are never added together:
 

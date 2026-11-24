@@ -6,6 +6,13 @@
 #
 # The module is discovered, not fixed to one checkout: a stable installed
 # copy is preferred, otherwise the newest build in any checkout is used.
+#
+# A reload needs the module unreferenced: the audio graph (PipeWire holding
+# the PCM) and any hwdep holder keep it loaded. If rmmod fails, the helper
+# re-binds the interfaces it unbound (restoring audio on the loaded module)
+# and reports the holders; it never leaves the unit unbound. For a true
+# swap while a graph holds the device, use scripts/bench-reload.sh, which
+# stops the graph first.
 set -eu
 
 KO=/usr/local/lib/ffuc-lab/snd-fireface-uc.ko
@@ -22,17 +29,34 @@ case $(ls -l "$KO" | cut -c9) in
 esac
 
 echo "loading $KO"
-for i in $(ls -d /sys/bus/usb/drivers/snd-fireface-uc/*:*.* 2>/dev/null || true); do
-    echo -n "$(basename "$i")" > /sys/bus/usb/drivers/snd-fireface-uc/unbind || true
+IFACES=$(ls -d /sys/bus/usb/drivers/snd-fireface-uc/*:*.* 2>/dev/null |
+         xargs -r -n1 basename || true)
+for i in $IFACES; do
+    echo -n "$i" > /sys/bus/usb/drivers/snd-fireface-uc/unbind || true
 done
 
 if ! rmmod snd_fireface_uc 2>/dev/null; then
     sleep 2
-    rmmod snd_fireface_uc 2>/dev/null || true
+    if ! rmmod snd_fireface_uc 2>/dev/null; then
+        # The module is still referenced. Restore the interfaces so the
+        # unit keeps working on the loaded module, and report the holders.
+        for i in $IFACES; do
+            echo -n "$i" > /sys/bus/usb/drivers/snd-fireface-uc/bind 2>/dev/null || true
+        done
+        echo "reload skipped: snd_fireface_uc is in use; interfaces re-bound" >&2
+        echo "refcnt: $(cat /sys/module/snd_fireface_uc/refcnt 2>/dev/null || echo '?')" >&2
+        fuser -v /dev/snd/* 2>&1 | sed 's/^/holder: /' >&2 || true
+        echo "stop the audio graph first (scripts/bench-reload.sh) for a true swap" >&2
+        exit 1
+    fi
 fi
 
 modprobe snd-pcm || true
-insmod "$KO"
+if ! insmod "$KO"; then
+    echo "insmod failed; the module is unloaded and the unit is offline" >&2
+    echo "recover: sudo -n reset-fireface-usb, then re-run this helper" >&2
+    exit 1
+fi
 sleep 2
 
 echo '--- cards ---'
