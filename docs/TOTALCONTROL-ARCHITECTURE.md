@@ -459,6 +459,35 @@ The host ring is the ALSA buffer managed by PipeWire or the application. The
 USB queue is the driver's feedback delay and queued URBs. The device lead is a
 fixed vendor-path delay. The converters add a fixed small delay.
 
+### Host audio path
+
+The host audio path is who owns the device's PCM and clock. Three paths are
+detected from kernel facts, never configured:
+
+| Path | PCM owner | Rate authority |
+|---|---|---|
+| PipeWire | `pipewire` | TotalControl (Device) or the graph (PipeWire) |
+| JACK | `jackd` / `jackdbus` | the JACK server / DAW |
+| direct ALSA | a DAW opening `hw:` | the DAW |
+
+The PCM owner is read from `/proc/asound/<card>/pcm0p/sub0/status` (`owner_pid`
+resolved through `/proc/<pid>/comm`); the open stream's rate, period and buffer
+come from `hw_params` and the live ring delay from `status`. With nobody holding
+the PCM the path is idle. Detection follows the PCM owner, not a server's
+presence: a DAW running on PipeWire's JACK emulation is a PipeWire client.
+
+The `audio_path` module (core) holds the fact snapshot, the owner→path
+classification and the clock-authority decisions as pure functions over that
+snapshot. The `audio_path_service` (GUI) is the effectful shell: a kernel-fact
+collector reads procfs on a fast cadence, never blocked by a server call, and a
+PipeWire worker executes the engine intents and the graph reads, each bounded by
+a timeout. Both publish one latest-value engine snapshot; the GUI reads it on
+its own cadence and issues intents only. No sound-server call runs on the UI
+thread, and the kernel facts stay live when PipeWire stalls. Under an external
+owner TotalControl reads the rate and writes nothing to the clock; the mixer
+scene is reapplied from the engine-run epoch (`run_seq`), server-free, on every
+path.
+
 The host clock source has one owner. The engine poll reads the graph clock
 metadata (`clock.rate`, `clock.quantum`, the forced values and the
 `min-quantum`/`max-quantum` policy bounds) and, while the device panel shows
@@ -471,6 +500,15 @@ quantum request is forced once more, and if the host still runs another value
 the actual value is adopted with a notice. The quantum picker offers the
 driver floor intersected with the host policy bounds, so an entry it shows can
 be honoured.
+
+A forced rate or quantum applies even when the graph is idle. A suspended node
+does not act on the force metadata, because the graph re-prepares only while a
+stream runs. TotalControl applies the force by activating the graph with a brief
+capture stream. The capture is held open until the device confirms the forced
+rate and quantum, then closed; the apply is a closed loop of force, activate,
+confirm and retry. The capture reads the inputs and injects nothing into the
+playback path. PipeWire owns the PCM and multiplexes the capture, so a DAW keeps
+its stream.
 
 The GUI reports a round-trip latency, not a measured acoustic round trip. It
 has two forms, and they are never added together:

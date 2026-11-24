@@ -378,6 +378,36 @@ TotalControl is not running.
 **JACK.** Opens the PCM directly and fills the ring just-in-time; neither
 the cushion nor the PipeWire policy applies. It is the lowest-latency path.
 
+**Varispeed (pitch) tracking.** The Pro Audio playback node follows the device
+clock through the graph wake cadence, not a resampler. Under IRQ scheduling the
+wake cadence is the device's period interrupts at the pitched rate, so the
+playback follows a pitched clock directly. Under timer scheduling the wake
+cadence is the host timer at the nominal rate and only the DLL servo tracks the
+pitch: a positive pitch drains the ring before the servo locks, while a negative
+pitch fills toward capacity. A pitched clock therefore belongs only to an
+IRQ-scheduled graph and is applied after IRQ scheduling is established — the
+mode-switch precondition (the fresh-start reference: IRQ is landed while idle,
+before the pitched clock and the stream).
+
+**Timer-mode start preconditions.** A timer-mode start is correct only when it
+reaches the fresh-start state before real audio flows:
+
+| Precondition | Ground truth |
+|---|---|
+| PCM and graph at the target rate | `hw_params`, graph clock |
+| device clock stable at that rate (no rate-change transient) | `rate_meas` |
+| ring primed to `start-delay + period + headroom` | prepare prime |
+| DLL servo converged (`corr = 1` at nominal pitch) | DLL state |
+| client audio delivered without dropped buffers | playback buffers |
+
+The prepare path resets the DLL servo and returns the queued playback buffers to
+the client, and a rate change makes the device clock transient. A correct
+re-prepare of a running stream re-establishes these preconditions before audio
+resumes; the fresh start (DLL locks during the silent prime, before client audio)
+is the reference. In PipeWire (Auto) mode the graph rate is conducted by the
+playing stream, so a re-prepare preserves that conducted rate rather than
+re-imposing the default.
+
 The steady ring fill carries the margin and is the host's queued latency.
 
 The ring capacity (`period-num × period`) is the stall headroom. It absorbs
@@ -929,6 +959,40 @@ session state, output latch), the driver polls it with a bounded timeout.
 Where the device provides no acknowledgement, the wait is a documented
 device quirk with capture evidence, expressed as a named quirk constant.
 See the TODO section for the readiness-poll work.
+
+### 7.1 Clock writes into a running engine
+
+The rate sequence is committed at engine start, when no stream is running. A
+running engine holds its clock until the next engine start; a same-rate
+re-prepare that keeps the engine alive does not re-commit the rate.
+
+A clock word written into a running engine takes effect immediately:
+
+| Write | Effect on a running engine |
+|---|---|
+| family word (`0x10`, wIndex 0x0030), active family | no change |
+| family word, a different family | clock moves to family base × band multiplier |
+| DDS divisor (`0x1b`), nominal pitch | no change |
+| DDS divisor, non-zero pitch | clock slews to base × (1 + pitch/100) |
+
+A clock that moves away from the graph rate drains or fills the ring until the
+host re-locks; a non-zero pitch under timer scheduling drains the ring, because
+the timer cadence cannot track a pitched clock (the Varispeed tracking paragraph
+in §4.1.1). The device clock therefore has two owners:
+
+- **Rate** — the driver, at engine start. The host moves the graph rate through
+  the PipeWire force and re-prepare; the engine-start commit lands it on the
+  device.
+- **Pitch** — the host's rate-follow-mode reconcile: nominal in PipeWire (Auto)
+  mode and under any external clock source (the unit is slaved, so the external
+  rate is respected), the pro pitch in Device mode on the internal clock after
+  IRQ scheduling is confirmed. Pitch starts at nominal (0 %) and is reset to 0
+  on a clock-source change, a rate-follow-mode change, startup and workspace
+  load; a saved pitch is not auto-restored.
+
+A mixer scene apply writes the mixer group only. It adopts the scene's rate and
+pitch into the host model but writes neither clock word into the device, so a
+scene reapply on a running stream does not move the clock.
 
 ## 8. Suspend, resume and hotplug
 

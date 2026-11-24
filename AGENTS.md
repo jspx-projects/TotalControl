@@ -26,6 +26,30 @@ stability constraints. Evidence decides: verify a claim by capture or test
 before it becomes a design rule. The full rationale and examples are in
 `docs/TOTALCONTROL-ARCHITECTURE.md` ("Governing principles").
 
+### State-transition correctness
+
+Correctness is establishing the same preconditions every time. A transition
+is correct only if it reaches the same verified state regardless of the path
+that led to it — a fresh start, a mode switch, an idle change, a recovery.
+Reason about every transition as a precondition, an action and a
+postcondition.
+
+- **Establish the precondition from ground truth.** Confirm the condition the
+  action needs (for example "the graph is running") from an authoritative
+  source before acting. A fixed delay, or a proxy that can read stale or
+  empty, is not a precondition. If the precondition cannot be confirmed, the
+  action is not yet safe to run.
+- **Confirm the postcondition.** After the action, verify from ground truth
+  that the intended state actually holds. Retry while it does not, and report
+  honestly if it cannot be reached. Never assume the action took effect.
+- **One transition, every path.** Every code path that changes the state goes
+  through the same transition that establishes the precondition and confirms
+  the postcondition. A path that only writes the new value without running the
+  transition leaves stale state — a defect, even when the common path works.
+- **The fresh start is the reference.** When a transition misbehaves, compare
+  it with the fresh-start case that works and find the precondition the
+  transition fails to re-establish.
+
 ## Required reading before changes
 
 Before changing code, tests, tooling or documentation, read the documents

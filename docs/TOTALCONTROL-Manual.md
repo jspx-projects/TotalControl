@@ -335,10 +335,16 @@ setting from the unit when it connects.
 
 The panel separates what the device owns from what the host engine drives. In
 the device group, `Clock source` picks one of the unit's own clock options
-(Internal, SPDIF coax., Optical, Word clock). `Sample rate` shows the device
-rate: an editable picker of the device-supported rates when the clock is
-Internal and `Rate follows` is Device, and a read-only readout of the rate the
-unit reports when `Rate follows` is PipeWire, or the clock source is external.
+(Internal, SPDIF coax., Optical, Word clock). `Sample rate` is the nominal-rate
+picker: an editable picker of the device-supported rates when the clock is
+Internal and `Rate follows` is Device; otherwise the rate is not yours to set
+and the row keeps its place as a blank placeholder. Directly below it,
+`Current rate` is a read-only readout of the rate the device is actually
+clocking, shown in hertz (for example `47,952 Hz`). In Device mode on the
+internal clock it is the nominal rate with your pitch applied; in PipeWire mode
+or on an external clock it is the rate the unit reports. The picker always shows
+the nominal rate you selected, and `Current rate` always shows the truth, so a
+pitched clock is displayed correctly.
 
 The engine `Rate follows` control chooses who determines the rate. It is a pair
 of radio buttons, usable only when the clock source is Internal:
@@ -389,8 +395,11 @@ device's rates — and offers no Auto: the quantum is forced at or above that
 minimum so it stays achievable when the graph changes rate. The `Sample rate`
 row shows the device rate, and the `Graph` row shows the graph rate that follows it.
 
-Rate and quantum changes apply over a few seconds while playback continues (the
-player is never stopped). Until a change takes effect, the affected value is
+Rate and quantum changes apply whether or not audio is playing. While a stream
+plays, the change applies over a few seconds and the player keeps running. When
+nothing is playing, TotalControl briefly activates the device to apply the
+change, so the device already runs at the requested rate and quantum before the
+next stream starts. Until a change takes effect, the affected value is
 orange, and a toast at the bottom of the window announces the change when it is
 requested. The `Sample rate` row confirms against the rate the unit itself
 reports; the `Graph` row confirms against the running stream; the quantum
@@ -405,6 +414,16 @@ device and `Rate follows` reads `Device` (read-only). TotalControl follows the
 rate the unit reports at the selected clock input and forces the graph to it,
 so a DAW and every application run at the external clock's rate.
 
+When another process owns the device — `jackd` (JACK) or a DAW opening the card
+directly (ALSA) — TotalControl detects the owner from the kernel and steps
+aside: `Rate follows` reads `JACK` or `ALSA` (read-only), the rate belongs to
+the owner, and TotalControl writes nothing to the clock. The mixer and meters
+keep working, and the mixer scene is reapplied when the owner's stream starts
+or changes rate. To use JACK or direct ALSA, free the device from PipeWire
+first: set the card's profile to Off, or stop PipeWire. A DAW that opens the
+card directly does not reserve it, so PipeWire must release it before the DAW
+can open it.
+
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A rate change in PipeWire mode is a runtime change, so it does not add an undo
 step or mark the workspace dirty. The chosen mode is remembered in the
@@ -415,11 +434,18 @@ The `Pitch` slider changes the speed and pitch of the whole interface from
 Double-click the slider to return to 0.0 %. Pitch is written to the device
 as soon as it changes.
 
-Pitch is a Device-mode control. It is shown when `Rate follows` is Device.
-When `Rate follows` is PipeWire the slider is hidden (its row keeps its space)
-and the interface runs at its nominal clock. A pitched clock cannot be tracked
-by the convenience timer scheduling, so pitch is not available there. Your
-saved pitch is kept and returns when you select Device again.
+Pitch is a Device-mode control on the internal clock. The slider is shown only
+when `Rate follows` is Device **and** `Clock source` is Internal. When `Rate
+follows` is PipeWire the slider is hidden (its row keeps its space) and the
+interface runs at its nominal clock — a pitched clock cannot be tracked by the
+convenience timer scheduling. Under an external clock source (SPDIF, Optical/
+ADAT, Word Clock) the interface is slaved to that clock: the slider is hidden,
+pitch is held at 0 %, and the externally applied rate is respected.
+
+Pitch always starts from a clean slate (0 %). Changing the clock source,
+switching `Rate follows` (either direction), starting TotalControl, or loading
+a workspace resets pitch to 0 %. A saved pitch is not restored automatically;
+set it again from the slider after the change.
 
 ### About dialog
 

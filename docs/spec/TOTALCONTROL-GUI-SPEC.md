@@ -1228,6 +1228,7 @@ sheet shows that value. A value is written when it changes there.
 |---|---|---|
 | Clock source | yes | yes |
 | Sample rate | yes | yes, when the device owns the rate |
+| Current rate | yes | yes |
 | Pitch | yes | yes |
 | Line In reference | yes | — |
 | Line Out reference | yes | — |
@@ -1259,25 +1260,36 @@ is PipeWire (§4). The `Single speed word clock` and `Word clock in`
 (termination) rows are Device-path clock-sync controls likewise: shown in
 Device, same-height fillers in PipeWire. The signal-path settings (Optical and
 SPDIF format, the UC reference levels, EQ for Record) and the Firmware/Serial
-readouts stay in both modes. The `Sample rate` row reports the device rate.
+readouts stay in both modes. The `Sample rate` row is the nominal-rate picker.
 When the clock source is Internal and `Rate follows` is Device, it is an
-editable picker of the device-supported rates; selecting a rate drives the card
-through the engine-rate path. When `Rate follows` is PipeWire, or the clock
-source is external, the row is a read-only readout of the rate the unit reports
-(state word `0x11`), with a hint that it is device-reported. The row keeps one
-vertical slot whether it is a picker or a readout, so the card does not resize
-between modes (§4). The rate authority lives in the host engine group, not here. Read-only reports (the device rate,
-Graph and the latency readout) use the secondary text colour; editable controls
-use the primary colour.
+editable picker of the device-supported rates (the nominal rate); selecting a
+rate drives the card through the engine-rate path. When `Rate follows` is
+PipeWire, or the clock source is external, the rate is not the user's to set, so
+the row keeps its slot as a nonvisible placeholder. The `Current rate` row
+directly below is a read-only readout of the device's actual clock, shown in
+every mode: the nominal rate with pitch applied in Device mode on the internal
+clock, and the conducted/reported rate otherwise. It is displayed in hertz with
+a thousands separator (e.g. `47,952 Hz`), so the displayed value is the truth
+even when pitch detunes the clock. Each row keeps one vertical slot whether it
+is a picker, a readout or a placeholder, so the card does not resize between
+modes (§4). The rate authority lives in the host engine group, not here.
+Read-only reports (the current rate, Graph and the latency readout) use the
+secondary text colour; editable controls use the primary colour.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
 fine enough). Double-click resets to 0.0 %. Every change is written immediately
-to the device. Pitch is a Device-path control: the slider is shown when `Rate
-follows` is Device. When `Rate follows` is PipeWire the row is a nonvisible
-filler of the same height (§4) and the device clock runs nominal (0 %). The
-saved pitch is preserved in the scene and returns to the clock when Device is
-selected again.
+to the device. Pitch is a Device-path control on the internal clock: the slider
+is shown only when `Rate follows` is Device **and** `Clock source` is Internal.
+Otherwise the row is a nonvisible filler of the same height (§4) and the device
+clock runs nominal (0 %). Under an external clock source (SPDIF, Optical/ADAT,
+Word Clock) the unit is slaved: pitch is held at 0 % in both rate-follow modes
+and the externally applied rate is respected.
+
+Pitch starts from a clean slate (0 %). It is reset to 0 on a clock-source
+change, on a rate-follow-mode change (either direction), at startup and on a
+workspace load. A saved pitch is not auto-restored to the clock; the user sets
+pitch from the slider after the transition.
 
 The panel is 360 px wide at scale 1 and its caption column is 110 px. The
 width reserves the thin scrollbar's width so an appearing scrollbar does not
@@ -1318,10 +1330,13 @@ device) rate. It is a pair of radio buttons: `PipeWire` (the default) lets the
 sound server's graph conduct and the device follows it; `Device` forces the
 device-set rate. The rate value itself is set in the DEVICE group's Sample rate
 picker (Device mode); the control offers no rate list. It is usable only when
-the device clock source is Internal. Slaved to an external clock, the rate is
-determined by the device and `Rate follows` is a read-only `Device` label. The
-engine group always shows `Graph`, the rate PipeWire is currently running at,
-in every mode.
+the device clock source is Internal and PipeWire owns the PCM. Slaved to an
+external clock, the rate is determined by the device and `Rate follows` is a
+read-only `Device` label. When another process owns the PCM — `jackd` (JACK) or
+a DAW opening the card directly (ALSA) — `Rate follows` is a read-only report
+of that owner (`JACK` or `ALSA`); the owner determines the rate and TotalControl
+reads it. The engine group always shows `Graph`, the rate the card is currently
+running at, in every mode.
 
 Selecting a `Rate follows` mode takes effect immediately. The scheduling
 policy is applied and the Pro Audio nodes are forced to re-prepare, which

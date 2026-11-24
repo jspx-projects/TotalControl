@@ -13,6 +13,7 @@
 //! - [`PlaybackChannel`]s (software playback streams)
 //! - Global [`DeviceSettings`] (clock, SPDIF, etc.)
 
+pub mod audio_path;
 #[cfg(feature = "alsa")]
 pub mod babyface_classic;
 pub mod capabilities;

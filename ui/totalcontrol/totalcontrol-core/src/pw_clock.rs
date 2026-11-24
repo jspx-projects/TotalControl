@@ -134,6 +134,44 @@ impl PwClock {
     }
 }
 
+/// The bump-and-restore pair that forces a graph-wide re-prepare while leaving
+/// the quantum force exactly as it was: `(bump, restore)`. A quantum change is
+/// what makes PipeWire re-prepare every node, applying the scheduling policy and
+/// the forces to the PCM. The restore is the force itself, so an Auto (`0`) force
+/// stays Auto; the bump base is the force when set, else the graph default.
+/// `None` when no quantum is known to bump. Only acts while the graph is running.
+pub fn reprepare_bump(clock: &PwClock) -> Option<(u32, u32)> {
+    let restore = clock.force_quantum;
+    let base = if restore > 0 { restore } else { clock.quantum };
+    if base == 0 {
+        return None;
+    }
+    let bump = if base > 1 { base - 1 } else { base + 1 };
+    Some((bump, restore))
+}
+
+/// The rate a re-prepare must land on. A forced rate is the authority (Device
+/// mode). Without a force (Auto mode) the graph rate is conducted by the playing
+/// stream, so the re-prepare preserves that conducted rate rather than
+/// re-imposing the default: the capture activation otherwise conducts the graph
+/// to its own default rate and tramples the stream's rate. `conducting` is the
+/// open playback stream's rate, `None` when idle (then the default applies).
+pub fn reprepare_rate_target(clock: &PwClock, conducting: Option<u32>) -> u32 {
+    if clock.force_rate > 0 {
+        clock.force_rate
+    } else {
+        conducting.filter(|r| *r > 0).unwrap_or(clock.rate)
+    }
+}
+
+/// Whether a negotiated ALSA period confirms the target graph quantum. IRQ
+/// scheduling prepares `period = quantum`; timer scheduling serves a batch
+/// device at two ALSA periods per graph cycle, so `period = quantum / 2`. Either
+/// relationship confirms the quantum.
+pub fn period_confirms_quantum(period: u32, quantum: u32) -> bool {
+    period == quantum || period.saturating_mul(2) == quantum
+}
+
 /// Parses `pw-metadata -n settings 0` output, lines like
 /// `update: id:0 key:'clock.rate' value:'48000' type:''`. `None` when the
 /// two defaults are missing (no PipeWire, or not its settings object).
@@ -426,6 +464,91 @@ pub fn set_source_suspended(node: &str, suspended: bool) -> bool {
     set_suspended("suspend-source", node, suspended)
 }
 
+/// Apply the current rate/quantum forces by activating the graph with a brief
+/// capture stream, held open until the device confirms the forced state, then
+/// closed. A suspended node never applies a force — the graph only re-prepares
+/// while a stream is running — so this is what makes a Device-mode change land
+/// while idle. The capture reads the inputs and injects nothing into the
+/// playback path, so it does not interfere with a DAW; PipeWire owns the PCM
+/// and multiplexes the capture. The audio is discarded to `/dev/null`.
+///
+/// This is a closed loop — force, activate, confirm, retry — not a fixed sleep:
+/// the capture stays open until the device runs at the forced rate and quantum.
+/// Returns true when the device confirmed the forced state.
+pub fn capture_reprepare(card_id: &str) -> bool {
+    let Some(clock) = read() else { return false };
+    // Preserve the conducted rate in Auto mode: the capture activation conducts
+    // the graph to its own rate, so activating at the default would trample a
+    // playing stream's rate. See reprepare_rate_target.
+    let conducting = card_stream(card_id).map(|s| s.rate);
+    let target_rate = reprepare_rate_target(&clock, conducting);
+    let target_quantum = clock.effective_quantum();
+    if target_rate == 0 {
+        return false;
+    }
+    let Some(source) = fireface_source_name() else { return false };
+    let rate_arg = target_rate.to_string();
+    for _attempt in 0..2 {
+        let Ok(mut child) = Command::new("pw-record")
+            .args(["--rate", &rate_arg, "--target", &source, "/dev/null"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return false;
+        };
+        // Establish the re-prepare precondition from kernel ground truth: the
+        // capture PCM must be RUNNING (the graph active) before a forced
+        // re-prepare can act. Confirm it, do not guess a delay. Then force a
+        // graph-wide re-prepare (quantum bump-and-restore): activation alone
+        // resumes the PCM without re-preparing it, so a scheduling-policy change
+        // (timer↔IRQ, period-num, headroom) would not reach the running PCM and
+        // the buffer would stay at the previous path's geometry.
+        let awake = Instant::now() + Duration::from_millis(2000);
+        while Instant::now() < awake && !capture_running(card_id) {
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        if let Some((bump, restore)) = reprepare_bump(&clock) {
+            let _ = force_quantum(bump);
+            let _ = force_quantum(restore);
+        }
+        // Wait until the device runs at the forced rate and quantum. A forced
+        // quantum is confirmed by the PCM period: IRQ mode prepares period =
+        // quantum, timer mode serves a batch device at two periods per graph
+        // cycle (period = quantum / 2); either relationship confirms it. The
+        // period persists while the node is suspended, whereas the running-graph
+        // quantum reads empty once the re-prepare lets the node idle. An Auto (0)
+        // quantum is graph-conducted, so only confirm the graph ran. Polling (not
+        // a single read) is what makes a quantum-only change confirm: the rate is
+        // already at target there, so we wait for the quantum to land. The capture
+        // stays open until the device confirms.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut confirmed = false;
+        while Instant::now() < deadline {
+            let stream = card_stream(card_id);
+            let rate_ok = stream.is_some_and(|s| s.rate == target_rate);
+            let quantum_ok = rate_ok
+                && if clock.force_quantum > 0 {
+                    stream.is_some_and(|s| period_confirms_quantum(s.period, target_quantum))
+                } else {
+                    graph_quantum().is_some()
+                };
+            if rate_ok && quantum_ok {
+                confirmed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        if confirmed {
+            return true;
+        }
+    }
+    false
+}
+
 /// Parses a `hw_params` file. `None` for "closed" (the card is idle).
 pub fn parse_hw_params(text: &str) -> Option<CardStream> {
     let field = |name: &str| -> Option<u32> {
@@ -444,12 +567,9 @@ pub fn parse_hw_params(text: &str) -> Option<CardStream> {
     })
 }
 
-/// The open *playback* stream of the ALSA card whose `id` is `card_id`.
-/// `None` when no such card exists or nothing is playing. Playback only: the
-/// capture side is held open by TotalControl's own input meter, so
-/// reading it would report the app's own stream
-/// (it once showed the meter's period as the card's).
-pub fn card_stream(card_id: &str) -> Option<CardStream> {
+/// The procfs directory of the ALSA card whose `id` is `card_id`. `None` when
+/// no such card exists.
+fn card_proc_dir(card_id: &str) -> Option<std::path::PathBuf> {
     let cards = std::fs::read_dir("/proc/asound").ok()?;
     for entry in cards.flatten() {
         let dir = entry.path();
@@ -458,13 +578,96 @@ pub fn card_stream(card_id: &str) -> Option<CardStream> {
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.starts_with("card"));
         let id = std::fs::read_to_string(dir.join("id")).unwrap_or_default();
-        if !is_card || id.trim() != card_id {
-            continue;
+        if is_card && id.trim() == card_id {
+            return Some(dir);
         }
-        let text = std::fs::read_to_string(dir.join("pcm0p/sub0/hw_params")).ok()?;
-        return parse_hw_params(&text);
     }
     None
+}
+
+/// The open *playback* stream of the ALSA card whose `id` is `card_id`.
+/// `None` when no such card exists or nothing is playing. Playback only: the
+/// capture side is held open by TotalControl's own input meter, so
+/// reading it would report the app's own stream
+/// (it once showed the meter's period as the card's).
+pub fn card_stream(card_id: &str) -> Option<CardStream> {
+    let dir = card_proc_dir(card_id)?;
+    let text = std::fs::read_to_string(dir.join("pcm0p/sub0/hw_params")).ok()?;
+    parse_hw_params(&text)
+}
+
+/// Whether the card's capture PCM is `RUNNING` — kernel ground truth that the
+/// graph is active (in Pro Audio the capture node is the driver). Server-free.
+/// This is the re-prepare precondition: a forced re-prepare only acts while the
+/// graph is running, so it must be confirmed, not guessed.
+pub fn capture_running(card_id: &str) -> bool {
+    let Some(dir) = card_proc_dir(card_id) else { return false };
+    let Ok(text) = std::fs::read_to_string(dir.join("pcm0c/sub0/status")) else { return false };
+    text.lines()
+        .any(|l| l.starts_with("state:") && l.contains("RUNNING"))
+}
+
+/// The kernel's view of the open playback PCM, from
+/// `/proc/asound/<card>/pcm0p/sub0/status`. Server-free: these are short kernel
+/// reads, never a sound-server call, so they keep flowing when PipeWire stalls.
+/// `None` when the PCM is closed (`closed`) or the card is absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PcmStatus {
+    /// The PCM state (`RUNNING`, `SETUP`, `PREPARED`, `PAUSED`, `SUSPENDED`,
+    /// `XRUN`).
+    pub state: String,
+    /// The owning process id (`owner_pid`), present since kernel v2.6.33.
+    /// `None` only on a kernel that does not print it (defensive).
+    pub owner_pid: Option<u32>,
+    /// `snd_pcm_delay`: the ring fill plus the in-flight URB queue, in frames.
+    pub delay: Option<u32>,
+    /// The ring fill (`appl_ptr − hw_ptr`), in frames: the audio queued ahead
+    /// of the hardware read pointer.
+    pub fill: Option<u32>,
+}
+
+/// Pure parser for the playback PCM `status` file. `None` for `closed`.
+pub fn parse_pcm_status(text: &str) -> Option<PcmStatus> {
+    if text.trim() == "closed" {
+        return None;
+    }
+    let field = |name: &str| -> Option<u64> {
+        let line = text
+            .lines()
+            .find(|l| l.split(':').next().map(|k| k.trim()) == Some(name))?;
+        line.split(':').nth(1)?.trim().parse().ok()
+    };
+    let state = text
+        .lines()
+        .find(|l| l.starts_with("state:"))
+        .and_then(|l| l.split(':').nth(1))
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+    let fill = match (field("appl_ptr"), field("hw_ptr")) {
+        (Some(appl), Some(hw)) => Some(appl.saturating_sub(hw) as u32),
+        _ => None,
+    };
+    Some(PcmStatus {
+        state,
+        owner_pid: field("owner_pid").map(|v| v as u32),
+        delay: field("delay").map(|v| v as u32),
+        fill,
+    })
+}
+
+/// The open playback PCM status of the ALSA card whose `id` is `card_id`.
+/// `None` when the card is absent or the PCM is closed.
+pub fn card_pcm_status(card_id: &str) -> Option<PcmStatus> {
+    let dir = card_proc_dir(card_id)?;
+    let text = std::fs::read_to_string(dir.join("pcm0p/sub0/status")).ok()?;
+    parse_pcm_status(&text)
+}
+
+/// The `comm` of a process, read from `/proc/<pid>/comm`. `None` when the
+/// process is gone or unreadable. Kernel `comm` is bounded to 15 characters.
+pub fn process_comm(pid: u32) -> Option<String> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    Some(text.trim().to_string())
 }
 
 /// The PipeWire node ids of the RME Pro Audio playback and capture nodes,
@@ -639,6 +842,60 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         assert_eq!(c.effective_quantum(), 256);
     }
 
+    #[test]
+    fn the_reprepare_bump_restores_the_force_and_preserves_auto() {
+        let clock = |force_quantum: u32, quantum: u32| PwClock {
+            rate: 48_000,
+            quantum,
+            force_rate: 0,
+            force_quantum,
+            min_quantum: 0,
+            max_quantum: 0,
+        };
+        // A forced quantum is nudged down one frame and put back exactly.
+        assert_eq!(reprepare_bump(&clock(256, 64)), Some((255, 256)));
+        // The smallest force bumps up, not to zero.
+        assert_eq!(reprepare_bump(&clock(1, 64)), Some((2, 1)));
+        // Auto (0) stays Auto: the bump uses the graph default, the restore is
+        // still 0, so the re-prepare never pins an Auto quantum.
+        assert_eq!(reprepare_bump(&clock(0, 256)), Some((255, 0)));
+        // Nothing to bump when no quantum is known.
+        assert_eq!(reprepare_bump(&clock(0, 0)), None);
+    }
+
+    #[test]
+    fn the_reprepare_rate_target_preserves_the_conducted_rate_in_auto() {
+        let clock = |force_rate: u32, rate: u32| PwClock {
+            rate,
+            quantum: 192,
+            force_rate,
+            force_quantum: 0,
+            min_quantum: 0,
+            max_quantum: 0,
+        };
+        // A forced rate is the authority, whatever is conducting.
+        assert_eq!(reprepare_rate_target(&clock(96_000, 48_000), Some(192_000)), 96_000);
+        // Auto with a playing stream: preserve the conducted rate, not the default.
+        assert_eq!(reprepare_rate_target(&clock(0, 48_000), Some(192_000)), 192_000);
+        // Auto idle: no conducted rate, the default applies.
+        assert_eq!(reprepare_rate_target(&clock(0, 48_000), None), 48_000);
+        // A zero/absent conducted rate falls back to the default.
+        assert_eq!(reprepare_rate_target(&clock(0, 48_000), Some(0)), 48_000);
+    }
+
+    #[test]
+    fn the_period_confirms_the_quantum_in_both_scheduling_modes() {
+        // IRQ: period = quantum. Timer/batch: period = quantum / 2.
+        assert!(period_confirms_quantum(256, 256));
+        assert!(period_confirms_quantum(128, 256));
+        assert!(period_confirms_quantum(192, 192));
+        assert!(period_confirms_quantum(96, 192));
+        // A different quantum is not confirmed.
+        assert!(!period_confirms_quantum(128, 512));
+        assert!(!period_confirms_quantum(256, 192));
+        assert!(!period_confirms_quantum(0, 256));
+    }
+
     /// Against the live PipeWire: run by hand (`--ignored`). Only ever
     /// writes the values already in place (`0` = no override when none is
     /// set), so it changes nothing on the machine it runs on.
@@ -650,6 +907,130 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         force_quantum(before.force_quantum).unwrap();
         force_rate(before.force_rate).unwrap();
         assert_eq!(read(), Some(before));
+    }
+
+    /// Live desk matrix: every device rate and a spread of quanta must apply
+    /// while the graph is idle, via the capture re-prepare, repeatably. Run
+    /// with `--ignored`, PipeWire owning the Fireface, no other TotalControl
+    /// instance. Restores the original forces afterwards.
+    #[test]
+    #[ignore]
+    fn live_rate_and_quantum_matrix_applies_while_idle() {
+        let card = std::fs::read_dir("/proc/asound")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if !p.file_name()?.to_str()?.starts_with("card") {
+                    return None;
+                }
+                let id = std::fs::read_to_string(p.join("id")).ok()?;
+                id.trim().contains("Fireface").then(|| id.trim().to_string())
+            })
+            .next()
+            .expect("a Fireface card present");
+        let before = read().expect("PipeWire is running");
+
+        // Rate matrix: Auto quantum so no per-rate quantum floor interferes.
+        force_quantum(0).unwrap();
+        let mut rate_fail: Vec<(u32, bool, Option<u32>)> = Vec::new();
+        for &r in &DEVICE_SAMPLE_RATES {
+            force_rate(r).unwrap();
+            let ok = capture_reprepare(&card);
+            let actual = card_stream(&card).map(|s| s.rate);
+            if !ok || actual != Some(r) {
+                rate_fail.push((r, ok, actual));
+            }
+        }
+
+        // Quantum matrix at 48 kHz: capture_reprepare confirms the running
+        // quantum while the graph is active.
+        force_rate(48_000).unwrap();
+        capture_reprepare(&card);
+        let mut quantum_fail: Vec<u32> = Vec::new();
+        for &q in &[128u32, 256, 512, 1024] {
+            force_quantum(q).unwrap();
+            if !capture_reprepare(&card) {
+                quantum_fail.push(q);
+            }
+        }
+
+        // Restore the original forces.
+        force_quantum(before.force_quantum).unwrap();
+        force_rate(before.force_rate).unwrap();
+        capture_reprepare(&card);
+
+        assert!(rate_fail.is_empty(), "rate matrix failures (rate, confirmed, actual): {rate_fail:?}");
+        assert!(quantum_fail.is_empty(), "quantum matrix failures: {quantum_fail:?}");
+    }
+
+    /// Live desk check: a rate change also lands while a playback stream is
+    /// already running (the graph is active, not idle). Run with `--ignored`,
+    /// PipeWire owning the Fireface. Restores the original force afterwards.
+    #[test]
+    #[ignore]
+    fn live_rate_change_while_a_stream_is_playing() {
+        let card = std::fs::read_dir("/proc/asound")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if !p.file_name()?.to_str()?.starts_with("card") {
+                    return None;
+                }
+                let id = std::fs::read_to_string(p.join("id")).ok()?;
+                id.trim().contains("Fireface").then(|| id.trim().to_string())
+            })
+            .next()
+            .expect("a Fireface card present");
+        let before = read().expect("PipeWire is running");
+        let sink = fireface_sink_name().expect("the Fireface sink");
+
+        // A few seconds of silence as a stand-in playback stream.
+        let wav = std::env::temp_dir().join("tc-playing-state.wav");
+        {
+            let rate = 48_000u32;
+            let data_bytes = rate * 6 * 2 * 2; // 6 s, stereo, 16-bit
+            let mut v: Vec<u8> = Vec::new();
+            v.extend(b"RIFF");
+            v.extend(&(36 + data_bytes).to_le_bytes());
+            v.extend(b"WAVE");
+            v.extend(b"fmt ");
+            v.extend(&16u32.to_le_bytes());
+            v.extend(&1u16.to_le_bytes());
+            v.extend(&2u16.to_le_bytes());
+            v.extend(&rate.to_le_bytes());
+            v.extend(&(rate * 4).to_le_bytes());
+            v.extend(&4u16.to_le_bytes());
+            v.extend(&16u16.to_le_bytes());
+            v.extend(b"data");
+            v.extend(&data_bytes.to_le_bytes());
+            v.resize(v.len() + data_bytes as usize, 0);
+            std::fs::write(&wav, v).unwrap();
+        }
+        let mut player = Command::new("pw-play")
+            .args(["--target", &sink])
+            .arg(&wav)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("pw-play");
+        std::thread::sleep(Duration::from_secs(1));
+
+        let start = card_stream(&card).map(|s| s.rate).unwrap_or(48_000);
+        let target = if start == 48_000 { 44_100 } else { 48_000 };
+        force_rate(target).unwrap();
+        let ok = capture_reprepare(&card);
+        let actual = card_stream(&card).map(|s| s.rate);
+
+        let _ = player.kill();
+        let _ = player.wait();
+        let _ = std::fs::remove_file(&wav);
+        force_rate(before.force_rate).unwrap();
+        capture_reprepare(&card);
+
+        assert!(ok && actual == Some(target),
+            "playing-state rate change: confirmed={ok} actual={actual:?} target={target}");
     }
 
     #[test]
@@ -669,6 +1050,27 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         assert!((s.period_ms() - 5.333).abs() < 0.01);
         assert!((s.buffer_ms() - 10.667).abs() < 0.01);
         assert_eq!(parse_hw_params("closed\n"), None);
+    }
+
+    #[test]
+    fn parses_the_playback_pcm_status() {
+        // The desk-verified `status` layout: `key   : value`, pointers after a
+        // `-----` rule. delay = fill + the in-flight URB queue.
+        let text = "state: RUNNING\nowner_pid   : 2109270\n\
+                     trigger_time: 428157.725532926\ntstamp      : 430338.914271538\n\
+                     delay       : 1797\navail       : 6491\navail_max   : 7211\n\
+                     -----\nhw_ptr      : 104697003\nappl_ptr    : 104698704\n";
+        let s = parse_pcm_status(text).unwrap();
+        assert_eq!(s.state, "RUNNING");
+        assert_eq!(s.owner_pid, Some(2109270));
+        assert_eq!(s.delay, Some(1797));
+        assert_eq!(s.fill, Some(1701));
+        assert_eq!(parse_pcm_status("closed\n"), None);
+        // A kernel without owner_pid still reports the delay and fill.
+        let no_owner = "state: RUNNING\ndelay       : 96\n-----\nhw_ptr      : 100\nappl_ptr    : 148\n";
+        let s = parse_pcm_status(no_owner).unwrap();
+        assert_eq!(s.owner_pid, None);
+        assert_eq!(s.fill, Some(48));
     }
 
     #[test]
