@@ -596,16 +596,19 @@ scheduling, H = 2·period, controlled supply):
 
 | Quantum = floor | Nominal playback | +5 % varispeed |
 |---|---|---|
-| 48 kHz / 48 | clean | ~1 underrun per 6 s |
-| 96 kHz / 96 | clean | ~1 underrun per 6 s |
+| 48 kHz / 48 | clean | ~1 underrun per 6 s (controlled sine) |
+| 96 kHz / 96 | clean | ~1 underrun per 6 s (controlled sine) |
 | 192 kHz / 192 | clean | ring collapse (hundreds of underruns) |
 
-One period of slack removes the penalty: at 96 kHz use 192 frames or more,
-at 192 kHz 384 frames or more. The floor stays selectable — the driver
-accepts it and nominal playback is clean — and the manual carries the
-varispeed guidance. The JACK and direct-ALSA paths do not use the duplex
-gate; their just-in-time fill with the application's write-ahead is the
-low-latency path at floor quanta.
+The severity depends on the supply path: program material at 48 kHz / 48
+with positive pitch silenced playback entirely (every follower cycle
+missed), while the controlled sine at the same point shows the milder
+bound above. One period of slack removes the penalty in every case: at
+96 kHz use 192 frames or more, at 192 kHz 384 frames or more. The floor
+stays selectable — the driver accepts it and nominal playback is clean —
+and the manual carries the varispeed guidance. The JACK and direct-ALSA
+paths do not use the duplex gate; their just-in-time fill with the
+application's write-ahead is the low-latency path at floor quanta.
 
 
 ## 11. Development tools
