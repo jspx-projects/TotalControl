@@ -16607,18 +16607,30 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .align_y(iced::Alignment::Center),
         );
     }
-    // The RTL field carries its own label on row 1 (`RTL x.x ms`) with the
+    // The RTL field is a labelled row like the others: the caption column
+    // carries `RTL`, the value column carries the total (`x.x ms`) with the
     // formula wrapping below; convenience shows the same four-row slot blank.
     // The tooltip belongs only to the visible field: a hint on the blank filler
     // would pop up over an invisible row and obscure the neighbouring controls.
     if state.engine_rate_mode == EngineRateMode::Fixed {
-        body = body.push(strip::hint(
-            latency_readout(state, clock),
-            "Round Trip Latency",
-            scale,
-        ));
+        body = body.push(
+            row![
+                caption("RTL"),
+                strip::hint(
+                    latency_readout(state, clock),
+                    "Round Trip Latency",
+                    scale,
+                ),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Start),
+        );
     } else {
-        body = body.push(rtl_blank(scale));
+        body = body.push(
+            row![caption("RTL"), rtl_blank(scale)]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Start),
+        );
     }
     // Transport diagnostics in three sections by reset behaviour:
     //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
@@ -16931,10 +16943,10 @@ fn transport_delta(
 /// rate-follow modes reserve the same four lines so the settings card never
 /// resizes (GUI spec §4). `value_color` carries the pending colour for the
 /// ring fallback; the formula lines use the secondary colour.
-/// The RTL field is a fixed four-row slot: row 1 carries the label and the
-/// total (`RTL x.x ms`), and the formula wraps naturally in the three rows
-/// below. Both rate-follow modes reserve the same slot, so the card never
-/// resizes (GUI spec §4).
+/// The RTL field is a fixed four-row slot in the value column: the caption
+/// column carries the `RTL` label, row 1 carries the total (`x.x ms`), and
+/// the formula wraps naturally in the three rows below. Both rate-follow
+/// modes reserve the same slot, so the card never resizes (GUI spec §4).
 fn rtl_field(
     first_line: String,
     formula: String,
@@ -16960,7 +16972,7 @@ fn rtl_block(
     value_color: Color,
     scale: f32,
 ) -> Element<'static, Message> {
-    rtl_field(format!("RTL {value}"), formula, value_color, scale)
+    rtl_field(value, formula, value_color, scale)
 }
 
 /// The convenience-path filler: the same four-row slot, blank.
