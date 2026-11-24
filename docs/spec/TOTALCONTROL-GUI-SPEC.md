@@ -2169,8 +2169,9 @@ applied to the running device as they change.
 ## 13. Latency display
 
 The Audio Configuration panel has one `RTL` field with the tooltip "Round
-Trip Latency". It is a fixed four-row slot: row 1 carries the label and total
-together (`RTL x.x ms`, one decimal, secondary grey), and the formula (USB
+Trip Latency". It is a fixed four-row slot in the value column, aligned with
+the pickers: the caption column carries the `RTL` label, row 1 carries the
+total (`x.x ms`, one decimal, secondary grey), and the formula (USB
 queue, device lead, converter, graph, in milliseconds) wraps naturally in the
 rows below. The formula and the terms are in the manual §14. The field is a
 Device-path report: when `Rate follows` is PipeWire the whole four-row slot
