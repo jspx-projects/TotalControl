@@ -432,7 +432,9 @@ application preferences, not in a workspace.
 The `Pitch` slider changes the speed and pitch of the whole interface from
 -5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Hold Shift for 0.01 % steps.
 Double-click the slider to return to 0.0 %. Pitch is written to the device
-as soon as it changes.
+as soon as it changes. Right after switching to Device mode, the clock write
+waits until the scheduling change has applied, so the interface never runs a
+pitched clock on the convenience scheduling.
 
 Pitch is a Device-mode control on the internal clock. The slider is shown only
 when `Rate follows` is Device **and** `Clock source` is Internal. When `Rate

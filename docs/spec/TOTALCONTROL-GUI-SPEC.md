@@ -1278,8 +1278,10 @@ secondary text colour; editable controls use the primary colour.
 
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
-fine enough). Double-click resets to 0.0 %. Every change is written immediately
-to the device. Pitch is a Device-path control on the internal clock: the slider
+fine enough). Double-click resets to 0.0 %. Every change is stored immediately
+and written to the device clock at once. While a switch to Device mode is still
+applying, the clock write waits for the IRQ re-prepare confirmation; the stored
+value and the slider update immediately. Pitch is a Device-path control on the internal clock: the slider
 is shown only when `Rate follows` is Device **and** `Clock source` is Internal.
 Otherwise the row is a nonvisible filler of the same height (§4) and the device
 clock runs nominal (0 %). Under an external clock source (SPDIF, Optical/ADAT,

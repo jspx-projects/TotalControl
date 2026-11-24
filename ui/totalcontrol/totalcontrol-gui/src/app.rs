@@ -671,6 +671,9 @@ impl RmeDevice for DeviceHandle {
     fn write_pitch_clock(&mut self, pitch_percent: f32) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, write_pitch_clock(pitch_percent))
     }
+    fn store_pitch_setting(&mut self, pitch_percent: f32) {
+        delegate!(self, store_pitch_setting(pitch_percent))
+    }
     fn set_sensitivity(
         &mut self,
         idx: usize,
@@ -11707,10 +11710,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // slider is hidden there, but OSC/controllers may still send them).
             let internal = state.device.settings().clock_source == "Internal";
             if state.engine_rate_mode == EngineRateMode::Fixed && internal {
+                let v = v.clamp(-5.0, 5.0);
                 state.pro_pitch = v;
-                if let Err(e) = state.device.set_pitch(v) {
-                    fail(state, "set_pitch", &e);
-                }
+                state.device.store_pitch_setting(v);
+                // The clock write runs through the same gated reconcile as
+                // the mode switch: while the entering-Device re-prepare has
+                // not confirmed IRQ, a pitched clock would drain the
+                // timer-scheduled ring. With no dependency pending the
+                // reconcile writes immediately.
+                state.pitch_clock_dirty = true;
+                reconcile_device_pitch(state);
                 notify_osc_raw(state, "/pitch", vec![OscType::Float(v)]);
             }
         }
@@ -28002,6 +28011,42 @@ mod tests {
         assert_eq!(state.pitch_clock_applied, Some(1.5));
         assert!(state.pitch_after_reprepare.is_none());
         assert!(!state.pitch_clock_dirty);
+    }
+
+    #[test]
+    fn the_pitch_slider_stores_at_once_and_gates_the_clock_write() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.pitch_clock_applied = Some(0.0);
+        // The mode switch deferred the pitch behind re-prepare generation 5.
+        state.pitch_after_reprepare = Some(5);
+        state.reprepare_gen = 5;
+        state.reprepare_ok = true;
+        let _ = update(&mut state, Message::PitchChanged(1.5));
+        // The setting and the slider value update at once; the clock stays
+        // nominal until a newer re-prepare confirms IRQ.
+        assert_eq!(state.pro_pitch, 1.5);
+        assert_eq!(state.device.settings().pitch_percent, 1.5);
+        assert_eq!(state.pitch_clock_applied, Some(0.0));
+        assert!(state.pitch_clock_dirty);
+        state.reprepare_gen = 6;
+        reconcile_device_pitch(&mut state);
+        assert_eq!(state.pitch_clock_applied, Some(1.5));
+        assert!(!state.pitch_clock_dirty);
+    }
+
+    #[test]
+    fn the_pitch_slider_writes_immediately_with_no_pending_reprepare() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        state.connected = true;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        let _ = update(&mut state, Message::PitchChanged(1.5));
+        assert_eq!(state.pitch_clock_applied, Some(1.5));
+        assert!(!state.pitch_clock_dirty);
+        assert_eq!(state.device.settings().pitch_percent, 1.5);
     }
 
     #[test]
