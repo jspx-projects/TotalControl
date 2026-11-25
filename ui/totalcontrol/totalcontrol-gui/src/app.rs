@@ -12897,12 +12897,32 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.pitch_after_reprepare = None;
                     state.pitch_clock_dirty = true;
                     reconcile_device_pitch(state);
+                    // Fresh start on the convenience path: an idle device must
+                    // not inherit the Device-mode rate. Reset it to the graph's
+                    // default rate before the force is released, so the next
+                    // client opens at its native rate, and a client that adopts
+                    // the device rate (a Web Audio context) starts from the
+                    // default. With a stream open the graph keeps its rate (the
+                    // documented rule) and only the release runs.
+                    let idle = state.card_stream.is_none();
+                    let target = if idle {
+                        clock_facts(state).default_graph_rate()
+                    } else {
+                        running_rate(state)
+                    };
+                    if idle && !state.device.is_mock() && graph_writable(state) {
+                        write_force_rate(state, target);
+                        force_engine_reprepare(state);
+                    }
+                    log::info!(
+                        "rate-follows: PipeWire mode, idle={idle}, default target {target} Hz, force released"
+                    );
                     apply_graph_rate(state, 0, false);
                     // Convenience path: timer + fixed margin. Force the quantum
                     // to the convenience minimum and re-prepare so the policy
                     // lands now, not at the next natural stream transition.
-                    apply_engine_policy(state, running_rate(state));
-                    enforce_quantum_floor(state, running_rate(state));
+                    apply_engine_policy(state, target);
+                    enforce_quantum_floor(state, target);
                     force_engine_reprepare(state);
                     // Re-assert the pitch after the re-prepare, while the graph
                     // is running: the device clock must be (re)written into a
@@ -16366,20 +16386,31 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
+    let internal = state.device.settings().clock_source == "Internal";
+    let external_owner = detected_path(state).is_external();
+    let clock = state.engine;
+    let heading_label = if external_owner {
+        match state.pcm_owner {
+            audio_path::PcmOwner::Jack => "AUDIO ENGINE \u{00b7} JACK",
+            _ => "AUDIO ENGINE \u{00b7} ALSA",
+        }
+    } else if state.device.is_mock() {
+        "AUDIO ENGINE \u{00b7} PIPEWIRE (SIMULATED)"
+    } else {
+        "AUDIO ENGINE \u{00b7} PIPEWIRE"
+    };
     let heading = row![
-        text(if state.device.is_mock() {
-            "AUDIO ENGINE \u{00b7} PIPEWIRE (SIMULATED)"
-        } else {
-            "AUDIO ENGINE \u{00b7} PIPEWIRE"
-        })
-        .color(theme::text_sec())
-        .size(text_size),
+        text(heading_label).color(theme::text_sec()).size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
 
-    let Some(clock) = state.engine else {
+    // The group renders even with PipeWire stopped: under an external owner
+    // (JACK / direct ALSA) the rate and period come from the kernel and the
+    // owner, not from the graph. Only a serverless, owner-less device falls
+    // back to the notice.
+    if clock.is_none() && !external_owner {
         return column![
             heading,
             text(
@@ -16392,7 +16423,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .width(Length::Fill)
         .into();
-    };
+    }
 
     // The period floor is one URB and scales with rate; the driver reports it
     // in the envelope (the single owner). Offer only quanta at or above the
@@ -16424,7 +16455,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let actual_quantum = state
         .graph_quantum
         .or_else(|| state.card_stream.map(|c| c.period).filter(|p| *p > 0))
-        .unwrap_or_else(|| clock.effective_quantum());
+        .unwrap_or_else(|| clock.map_or(0, |c| c.effective_quantum()));
     let auto_label = if actual_quantum > 0 {
         format!("Auto ({actual_quantum} samples)")
     } else {
@@ -16437,15 +16468,16 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .chain(quanta.iter().map(|q| format!("{q} samples")))
             .collect()
     };
-    let quantum_sel = if !convenience && clock.force_quantum == 0 {
+    let force_q = clock.map_or(0, |c| c.force_quantum);
+    let quantum_sel = if !convenience && force_q == 0 {
         quantum_opts[0].clone()
     } else {
         // Show the requested quantum; the warning reports any divergence from
         // the quantum the graph actually runs.
-        let shown = if convenience && clock.force_quantum == 0 {
+        let shown = if convenience && force_q == 0 {
             mode_floor
         } else {
-            clock.force_quantum
+            force_q
         };
         quantum_opts
             .iter()
@@ -16480,8 +16512,6 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .text_size(text_size)
     .width(Length::Fill);
 
-    let internal = state.device.settings().clock_source == "Internal";
-    let external_owner = detected_path(state).is_external();
     let mut body = column![heading];
     // The mode is ours to set only when the device runs on its internal clock
     // and no external process owns the PCM. Slaved to an external clock, the
@@ -16610,14 +16640,25 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // The RTL field is a labelled row like the others: the caption column
     // carries `RTL`, the value column carries the total (`x.x ms`) with the
     // formula wrapping below; convenience shows the same four-row slot blank.
-    // The tooltip belongs only to the visible field: a hint on the blank filler
-    // would pop up over an invisible row and obscure the neighbouring controls.
-    if state.engine_rate_mode == EngineRateMode::Fixed {
+    // An external owner (JACK / direct ALSA) has no PipeWire graph term: the
+    // owner's ALSA period is the host-ring term, so the field is shown there
+    // too. The tooltip belongs only to the visible field: a hint on the blank
+    // filler would pop up over an invisible row and obscure the neighbouring
+    // controls.
+    let rtl_clock = clock.unwrap_or(PwClock {
+        rate: 0,
+        quantum: 0,
+        force_rate: 0,
+        force_quantum: 0,
+        min_quantum: 0,
+        max_quantum: 0,
+    });
+    if state.engine_rate_mode == EngineRateMode::Fixed || external_owner {
         body = body.push(
             row![
                 caption("RTL"),
                 strip::hint(
-                    latency_readout(state, clock),
+                    latency_readout(state, rtl_clock),
                     "Round Trip Latency",
                     scale,
                 ),
@@ -16986,9 +17027,20 @@ fn rtl_blank(scale: f32) -> Element<'static, Message> {
 /// estimate. The convenience path shows no figure (a blank four-line filler).
 fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    if state.engine_rate_mode == EngineRateMode::Auto {
+    let external = detected_path(state).is_external();
+    if state.engine_rate_mode == EngineRateMode::Auto && !external {
         return rtl_blank(scale);
     }
+    // The host-ring term: the graph quantum on the PipeWire paths (the DAW
+    // runs through the graph), the owner's ALSA period under an external
+    // owner. The device terms (USB queue, lead, converter) are unchanged.
+    let host_ring = |period: u32| {
+        if external {
+            period
+        } else {
+            running_graph_quantum(state)
+        }
+    };
     let blank3 = || " ".to_string();
     match state.card_stream {
         Some(card) => {
@@ -17000,10 +17052,10 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             if state.device.is_uc_model() {
                 let measured = match state.device.personality_label() {
                     Some("PC") => state.driver_queue.and_then(|queue| {
-                        uc_measured_rtl(card.rate, queue, running_graph_quantum(state), false)
+                        uc_measured_rtl(card.rate, queue, host_ring(card.period), false)
                     }),
                     Some("AP") => state.driver_queue.and_then(|queue| {
-                        uc_measured_rtl(card.rate, queue, running_graph_quantum(state), true)
+                        uc_measured_rtl(card.rate, queue, host_ring(card.period), true)
                     }),
                     _ => None,
                 };
@@ -17016,7 +17068,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         usb,
                         lead,
                         converter: converter_frames(card.rate),
-                        graph: running_graph_quantum(state),
+                        graph: host_ring(card.period),
                         rate: card.rate,
                     };
                     return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
@@ -17035,7 +17087,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         usb,
                         lead,
                         converter: converter_frames(card.rate),
-                        graph: running_graph_quantum(state),
+                        graph: host_ring(card.period),
                         rate: card.rate,
                     };
                     return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
