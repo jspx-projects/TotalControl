@@ -13,6 +13,7 @@ testing.
 - [Capture and probe tools](#capture-and-probe-tools)
 - [Bench verification tooling](#bench-verification-tooling)
 - [Build and test helpers](#build-and-test-helpers)
+- [Kernel module and DKMS](#kernel-module-and-dkms)
 - [Licensing](#licensing)
 
 ## Support status
@@ -156,6 +157,64 @@ cargo test -p totalcontrol-gui
 cargo test -p totalcontrol-layout
 cargo build --workspace
 ```
+
+## Kernel module and DKMS
+
+The transport module is a standard out-of-tree Kbuild module. It builds on any
+distribution that has the kernel build tree for the running kernel:
+
+```sh
+make -C kernel          # against /lib/modules/$(uname -r)/build
+make -C kernel test     # host tests of the pure logic
+```
+
+Distro packages: `kernel-devel` (Fedora) or `linux-headers-$(uname -r)` /
+the matching `linux-headers-<flavour>` (Debian, Ubuntu).
+
+**DKMS.** `kernel/dkms.conf` registers the module with DKMS, which is the
+cross-distribution mechanism for surviving kernel upgrades. It carries
+nothing distro-specific: `make KVER=${kernelver}` uses the distribution's
+kernel build tree, and `AUTOINSTALL="yes"` lets each distribution's hook
+rebuild the module for every newly installed kernel (Fedora: the
+`kernel-install` hook plus `dkms.service`; Debian/Ubuntu:
+`/etc/kernel/postinst.d/dkms`). Registration and install:
+
+```sh
+sudo dkms add /usr/src/snd-fireface-uc-<version>
+sudo dkms install snd-fireface-uc/<version> -k "$(uname -r)"
+```
+
+A package installs the source under `/usr/src/snd-fireface-uc-<version>/`
+and runs those steps from `postinst` (Debian's `dh_dkms`, or the Fedora
+spec), with `prerm` calling `dkms remove`. Bump `PACKAGE_VERSION` with the
+package version so an upgrade replaces the older build cleanly.
+
+Upgrade survival depends on three things outside `dkms.conf`:
+
+- **Headers for the new kernel** — the package depends on the distribution's
+  header package so `dkms autoinstall` can build.
+- **Secure Boot** — DKMS signs with the distribution's Machine Owner Key;
+  enrol it once (`mokutil --import`) if Secure Boot is enabled.
+- **Source compatibility** — a new kernel can deprecate or remove APIs (the
+  7.3 workqueue warning is an example). Building against a current kernel
+  in CI catches this before a user upgrade does.
+
+`DEST_MODULE_LOCATION[0]="/updates/dkms"` is the upstream convention;
+Fedora places the module under `extra/` automatically and `depmod` searches
+both. A module loaded for bench work through `reload-fireface-uc` (an
+`insmod` from a checkout) lives only until the next boot; `modprobe`
+thereafter loads the DKMS-installed copy.
+
+**Other distributions.** The driver itself is distribution-neutral: the
+module needs only the kernel build tree, and the WirePlumber rule reads
+`/etc/wireplumber/wireplumber.conf.d/` on both Fedora and Debian-family
+systems. A Debian-family *package* still needs its own packaging — a
+`debian/` directory with `Depends: dkms`, a `linux-headers` recommendation
+(the kernel header package for the flavour: Debian's `linux-headers-amd64`,
+Ubuntu's `linux-headers-generic`), the source installed under `/usr/src`,
+`postinst`/`prerm` DKMS hooks, the udev rule and the desktop entry. That is
+a packaging addition, not a code change; the repository ships the Fedora
+packaging today.
 
 ## Channel layout preview
 
