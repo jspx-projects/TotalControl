@@ -510,6 +510,13 @@ confirm and retry. The capture reads the inputs and injects nothing into the
 playback path. PipeWire owns the PCM and multiplexes the capture, so a DAW keeps
 its stream.
 
+The Pro Audio nodes suspend when idle, releasing the PCM. An external owner —
+jackd or a direct-ALSA DAW — can then open the device at its own rate and
+TotalControl follows it (adopt and reflect). While a graph runs, the D-Bus
+device reservation is the graceful handover path (jackdbus); a plain jackd or
+direct-ALSA DAW is met with the kernel's exclusive open until the device is
+freed.
+
 A reconnect (the unit reappears after a module reload or re-enumeration) runs
 the same engine restore as a fresh start: the mode's scheduling policy, the
 forces and the scene. The policy reaches the Pro Audio nodes even when they

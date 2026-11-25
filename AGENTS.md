@@ -223,8 +223,12 @@ request; do not commit or push directly to `main`.
   `feat/`, `perf/`, `docs/`, `test/` and `chore/`.
 - Keep commits atomic. Explain why the change is needed in the commit message
   and in the PR description, using `.github/pull_request_template.md`.
-- Push the branch, open a draft PR early, and wait for CI. Do not merge with a
-  failing or missing required check.
+- Push the branch only when the change is ready for review or the user asks.
+- **Ask the user for permission before creating a pull request, every time.**
+  A draft counts as a pull request. A question, a discussion, an investigation
+  or a note does not become a pull request unless the user asks for one.
+- After the pull request exists, wait for CI. Do not merge with a failing or
+  missing required check.
 - Do not merge or close a pull request until the user has explicitly approved
   the completed change. Keep it open or draft while work continues; merge or
   close only when the user specifically asks for that action.

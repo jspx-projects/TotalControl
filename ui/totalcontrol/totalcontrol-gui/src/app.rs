@@ -3191,6 +3191,11 @@ pub struct TotalControl {
     /// its rate and hardware period, which the sound server may pin
     /// regardless of the quantum. `None` while the card is idle.
     pub card_stream: Option<CardStream>,
+    /// `snd_pcm_delay` of the open playback stream (ring fill + in-flight
+    /// URBs), frames. The live host-side term of the round-trip latency under
+    /// a PCM owner (the server-free paths read it from procfs). `None` when no
+    /// stream is open or the delay is unreadable.
+    pub pcm_delay: Option<u32>,
     /// Driver transport counters as last read, and the baseline they are
     /// shown relative to (set on connect or by the reset button).
     pub transport_counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
@@ -3240,6 +3245,11 @@ pub struct TotalControl {
     pub pcm_owner: totalcontrol_core::audio_path::PcmOwner,
     /// The owning process's `comm`, for the "Controlled by <owner>" tooltip.
     pub pcm_owner_comm: Option<String>,
+    /// Whether the live rate/quantum overrides were relinquished because an
+    /// external owner (JACK / direct ALSA) took the PCM. The stored
+    /// preferences stay; the live overrides are released so the owner's values
+    /// apply, and re-applied when the owner leaves.
+    pub external_owner_active: bool,
 }
 
 impl TotalControl {
@@ -3802,6 +3812,7 @@ pub fn new_with_device(
         allowed_rates_saved: None,
         allowed_rates_written: None,
         card_stream: None,
+        pcm_delay: None,
         transport_counters: None,
         transport_baseline: None,
         transport_perrun_base: None,
@@ -3822,6 +3833,7 @@ pub fn new_with_device(
         audio_path_service: None,
         pcm_owner: audio_path::PcmOwner::Idle,
         pcm_owner_comm: None,
+        external_owner_active: false,
     };
 
     state
@@ -5956,6 +5968,30 @@ fn restore_allowed_rates(state: &mut TotalControl) {
                 log::warn!("Restoring the PipeWire allowed rates failed: {e}");
             }
         }
+    }
+}
+
+/// Release TotalControl's live rate/quantum overrides so an external owner
+/// (JACK / direct ALSA) sets its own values. Unlike [`release_engine`], the
+/// stored preferences and the allowed-rate list are kept: this runs when an
+/// owner takes the PCM, and the stored mode re-applies when the owner leaves.
+fn relinquish_graph_overrides(state: &mut TotalControl) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    // Nothing to release when PipeWire is not running (no live graph).
+    if state.engine.is_none() {
+        return;
+    }
+    if !engine_intent(state, crate::audio_path_service::Intent::ForceRate(0)) {
+        let _ = pw_clock::force_rate(0);
+    }
+    if !engine_intent(state, crate::audio_path_service::Intent::ForceQuantum(0)) {
+        let _ = pw_clock::force_quantum(0);
+    }
+    if let Some(e) = state.engine.as_mut() {
+        e.force_rate = 0;
+        e.force_quantum = 0;
     }
 }
 
@@ -12897,12 +12933,32 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.pitch_after_reprepare = None;
                     state.pitch_clock_dirty = true;
                     reconcile_device_pitch(state);
+                    // Fresh start on the convenience path: an idle device must
+                    // not inherit the Device-mode rate. Reset it to the graph's
+                    // default rate before the force is released, so the next
+                    // client opens at its native rate, and a client that adopts
+                    // the device rate (a Web Audio context) starts from the
+                    // default. With a stream open the graph keeps its rate (the
+                    // documented rule) and only the release runs.
+                    let idle = state.card_stream.is_none();
+                    let target = if idle {
+                        clock_facts(state).default_graph_rate()
+                    } else {
+                        running_rate(state)
+                    };
+                    if idle && !state.device.is_mock() && graph_writable(state) {
+                        write_force_rate(state, target);
+                        force_engine_reprepare(state);
+                    }
+                    log::info!(
+                        "rate-follows: PipeWire mode, idle={idle}, default target {target} Hz, force released"
+                    );
                     apply_graph_rate(state, 0, false);
                     // Convenience path: timer + fixed margin. Force the quantum
                     // to the convenience minimum and re-prepare so the policy
                     // lands now, not at the next natural stream transition.
-                    apply_engine_policy(state, running_rate(state));
-                    enforce_quantum_floor(state, running_rate(state));
+                    apply_engine_policy(state, target);
+                    enforce_quantum_floor(state, target);
                     force_engine_reprepare(state);
                     // Re-assert the pitch after the re-prepare, while the graph
                     // is running: the device clock must be (re)written into a
@@ -13033,6 +13089,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.reprepare_ok = snap.reprepare_ok;
                 if snap.kernel_at.is_some() {
                     state.card_stream = snap.stream;
+                    state.pcm_delay = snap.delay;
                 }
                 if snap.pw_at.is_some() {
                     state.engine = snap.clock;
@@ -13150,6 +13207,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.last_sink_running = sink_running;
                 state.engine = clock;
                 state.card_stream = stream;
+                // While an external owner (JACK / direct ALSA) holds the PCM,
+                // the stored PipeWire mode must not determine the rate or
+                // quantum. Release the live overrides once on entry so the
+                // owner's values apply; reconcile re-applies the stored mode
+                // when the owner leaves.
+                if detected_path(state).is_external() {
+                    if !state.external_owner_active {
+                        relinquish_graph_overrides(state);
+                        state.pending_device_rate = None;
+                        state.quantum_change_at = None;
+                        state.external_owner_active = true;
+                        log::info!("external owner: relinquished the rate/quantum overrides");
+                    }
+                } else {
+                    state.external_owner_active = false;
+                }
                 // PipeWire may move the graph rate on its own (a player or
                 // another client). Keep the forced quantum at or above the new
                 // rate's period floor so the request never reads as impossible.
@@ -16095,10 +16168,17 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
 
+    // Device-path controls (clock source, pitch, word clock) are shown on the
+    // internal clock when TotalControl is the device-clock authority: in Device
+    // mode, or under an external owner (JACK / direct ALSA), where the owner
+    // sets the rate but the device options remain TotalControl's. The
+    // convenience (PipeWire) path keeps them as fillers.
+    let device_controls =
+        audio_path::device_controls_visible(detected_path(state), state.engine_rate_mode);
     let mut body = column![section("DEVICE")];
     // Clock source is a Device-path control. In convenience the row keeps its
     // space as a nonvisible filler, like Pitch (GUI spec §4).
-    if state.engine_rate_mode == EngineRateMode::Fixed {
+    if device_controls {
         body = body.push(
             row![
                 caption("Clock source"),
@@ -16187,6 +16267,8 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .unwrap_or_else(|| "\u{2014}".into());
     let current_hint = if !internal {
         "Reported by the device \u{2014} set by the external clock source."
+    } else if detected_path(state).is_external() {
+        "Reported by the device \u{2014} set by the running owner."
     } else if !device_mode {
         "Reported by the device \u{2014} follows the PipeWire graph."
     } else {
@@ -16213,7 +16295,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .width(Length::Fill),
     );
     if state.device.capabilities().pitch {
-        if state.engine_rate_mode == EngineRateMode::Fixed && internal {
+        if device_controls && internal {
             let value = state.pro_pitch;
             body = body.push(
                 row![
@@ -16278,7 +16360,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         // (H67/H68/H75, H71/H101).
         // Single-speed word clock is a clock-sync control: a Device-path
         // option, kept as a same-height filler in convenience (GUI spec §4).
-        if state.engine_rate_mode == EngineRateMode::Fixed {
+        if device_controls {
             body = body.push(check_row(
                 "Single speed word clock",
                 settings.word_clock_single_speed,
@@ -16318,7 +16400,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     if state.device.capabilities().word_clock_termination {
         // Word-clock input termination is a clock-sync control: a Device-path
         // option, kept as a same-height filler in convenience (GUI spec §4).
-        if state.engine_rate_mode == EngineRateMode::Fixed {
+        if device_controls {
             body = body.push(check_row(
                 "Word clock in",
                 settings.word_clock_termination,
@@ -16366,20 +16448,31 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
+    let internal = state.device.settings().clock_source == "Internal";
+    let external_owner = detected_path(state).is_external();
+    let clock = state.engine;
+    let heading_label = if external_owner {
+        match state.pcm_owner {
+            audio_path::PcmOwner::Jack => "AUDIO ENGINE \u{00b7} JACK",
+            _ => "AUDIO ENGINE \u{00b7} ALSA",
+        }
+    } else if state.device.is_mock() {
+        "AUDIO ENGINE \u{00b7} PIPEWIRE (SIMULATED)"
+    } else {
+        "AUDIO ENGINE \u{00b7} PIPEWIRE"
+    };
     let heading = row![
-        text(if state.device.is_mock() {
-            "AUDIO ENGINE \u{00b7} PIPEWIRE (SIMULATED)"
-        } else {
-            "AUDIO ENGINE \u{00b7} PIPEWIRE"
-        })
-        .color(theme::text_sec())
-        .size(text_size),
+        text(heading_label).color(theme::text_sec()).size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
 
-    let Some(clock) = state.engine else {
+    // The group renders even with PipeWire stopped: under an external owner
+    // (JACK / direct ALSA) the rate and period come from the kernel and the
+    // owner, not from the graph. Only a serverless, owner-less device falls
+    // back to the notice.
+    if clock.is_none() && !external_owner {
         return column![
             heading,
             text(
@@ -16392,7 +16485,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .width(Length::Fill)
         .into();
-    };
+    }
 
     // The period floor is one URB and scales with rate; the driver reports it
     // in the envelope (the single owner). Offer only quanta at or above the
@@ -16424,7 +16517,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let actual_quantum = state
         .graph_quantum
         .or_else(|| state.card_stream.map(|c| c.period).filter(|p| *p > 0))
-        .unwrap_or_else(|| clock.effective_quantum());
+        .unwrap_or_else(|| clock.map_or(0, |c| c.effective_quantum()));
     let auto_label = if actual_quantum > 0 {
         format!("Auto ({actual_quantum} samples)")
     } else {
@@ -16437,15 +16530,16 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .chain(quanta.iter().map(|q| format!("{q} samples")))
             .collect()
     };
-    let quantum_sel = if !convenience && clock.force_quantum == 0 {
+    let force_q = clock.map_or(0, |c| c.force_quantum);
+    let quantum_sel = if !convenience && force_q == 0 {
         quantum_opts[0].clone()
     } else {
         // Show the requested quantum; the warning reports any divergence from
         // the quantum the graph actually runs.
-        let shown = if convenience && clock.force_quantum == 0 {
+        let shown = if convenience && force_q == 0 {
             mode_floor
         } else {
-            clock.force_quantum
+            force_q
         };
         quantum_opts
             .iter()
@@ -16480,8 +16574,6 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .text_size(text_size)
     .width(Length::Fill);
 
-    let internal = state.device.settings().clock_source == "Internal";
-    let external_owner = detected_path(state).is_external();
     let mut body = column![heading];
     // The mode is ours to set only when the device runs on its internal clock
     // and no external process owns the PCM. Slaved to an external clock, the
@@ -16610,14 +16702,25 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // The RTL field is a labelled row like the others: the caption column
     // carries `RTL`, the value column carries the total (`x.x ms`) with the
     // formula wrapping below; convenience shows the same four-row slot blank.
-    // The tooltip belongs only to the visible field: a hint on the blank filler
-    // would pop up over an invisible row and obscure the neighbouring controls.
-    if state.engine_rate_mode == EngineRateMode::Fixed {
+    // An external owner (JACK / direct ALSA) has no PipeWire graph term: the
+    // owner's ALSA period is the host-ring term, so the field is shown there
+    // too. The tooltip belongs only to the visible field: a hint on the blank
+    // filler would pop up over an invisible row and obscure the neighbouring
+    // controls.
+    let rtl_clock = clock.unwrap_or(PwClock {
+        rate: 0,
+        quantum: 0,
+        force_rate: 0,
+        force_quantum: 0,
+        min_quantum: 0,
+        max_quantum: 0,
+    });
+    if state.engine_rate_mode == EngineRateMode::Fixed || external_owner {
         body = body.push(
             row![
                 caption("RTL"),
                 strip::hint(
-                    latency_readout(state, clock),
+                    latency_readout(state, rtl_clock),
                     "Round Trip Latency",
                     scale,
                 ),
@@ -16986,9 +17089,20 @@ fn rtl_blank(scale: f32) -> Element<'static, Message> {
 /// estimate. The convenience path shows no figure (a blank four-line filler).
 fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    if state.engine_rate_mode == EngineRateMode::Auto {
+    let external = detected_path(state).is_external();
+    if state.engine_rate_mode == EngineRateMode::Auto && !external {
         return rtl_blank(scale);
     }
+    // The host-ring term: the graph quantum on the PipeWire paths (the DAW
+    // runs through the graph), the owner's ALSA period under an external
+    // owner. The device terms (USB queue, lead, converter) are unchanged.
+    let host_ring = |period: u32| {
+        if external {
+            period
+        } else {
+            running_graph_quantum(state)
+        }
+    };
     let blank3 = || " ".to_string();
     match state.card_stream {
         Some(card) => {
@@ -16997,13 +17111,30 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             } else {
                 theme::text_sec()
             };
+            // External owner (JACK / direct ALSA): the host-side term is the
+            // live snd_pcm_delay (ring fill + in-flight URBs), so the value
+            // tracks the owner's write-ahead (e.g. jackd's -n). The device lead
+            // and converter stay the model terms. The delay already covers the
+            // in-flight URBs, so the USB queue is not added a second time.
+            if external {
+                if let Some(delay) = state.pcm_delay {
+                    let lead = 60; // UC/UCX device lead (see ucx_usb_frames)
+                    return rtl_live_block(
+                        delay,
+                        lead,
+                        converter_frames(card.rate),
+                        card.rate,
+                        scale,
+                    );
+                }
+            }
             if state.device.is_uc_model() {
                 let measured = match state.device.personality_label() {
                     Some("PC") => state.driver_queue.and_then(|queue| {
-                        uc_measured_rtl(card.rate, queue, running_graph_quantum(state), false)
+                        uc_measured_rtl(card.rate, queue, host_ring(card.period), false)
                     }),
                     Some("AP") => state.driver_queue.and_then(|queue| {
-                        uc_measured_rtl(card.rate, queue, running_graph_quantum(state), true)
+                        uc_measured_rtl(card.rate, queue, host_ring(card.period), true)
                     }),
                     _ => None,
                 };
@@ -17016,7 +17147,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         usb,
                         lead,
                         converter: converter_frames(card.rate),
-                        graph: running_graph_quantum(state),
+                        graph: host_ring(card.period),
                         rate: card.rate,
                     };
                     return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
@@ -17035,7 +17166,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         usb,
                         lead,
                         converter: converter_frames(card.rate),
-                        graph: running_graph_quantum(state),
+                        graph: host_ring(card.period),
                         rate: card.rate,
                     };
                     return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
@@ -17169,6 +17300,33 @@ impl RtlEstimate {
             frames_ms(self.graph, self.rate)
         )
     }
+}
+
+/// Live round-trip estimate under a PCM owner (JACK / direct ALSA): the
+/// host-side term is the stream's `snd_pcm_delay` (ring fill + in-flight
+/// URBs), read from procfs, so it tracks the owner's write-ahead (for example
+/// jackd's `-n`). The device lead and converter are the model terms. The delay
+/// already covers the in-flight URBs, so the USB queue is not added again.
+fn rtl_live_frames(delay: u32, lead: u32, converter: u32) -> u32 {
+    delay + lead + converter
+}
+
+fn rtl_live_block(
+    delay: u32,
+    lead: u32,
+    converter: u32,
+    rate: u32,
+    scale: f32,
+) -> Element<'static, Message> {
+    let total = rtl_live_frames(delay, lead, converter);
+    let summary = format!("{:.1} ms", frames_ms(total, rate));
+    let breakdown = format!(
+        "{:.1} ms host queue (live) + {:.1} ms device lead + {:.1} ms converter",
+        frames_ms(delay, rate),
+        frames_ms(lead, rate),
+        frames_ms(converter, rate)
+    );
+    rtl_block(summary, breakdown, theme::text_sec(), scale)
 }
 
 /// One loopback measurement of the UC device round trip.  The measurement
@@ -23134,6 +23292,7 @@ mod tests {
         note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
         convenience_quantum_min, minimum_quantum, reconcile_device_pitch,
         power_sum_output_meters, quantum_pending, rate_authority_target,
+        rtl_live_frames,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
         temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
@@ -28151,6 +28310,57 @@ mod tests {
         assert_eq!(state.device.settings().sample_rate, 96_000);
         assert_eq!(state.engine_force_rate, 96_000);
         assert_eq!(state.engine_rate_mode, EngineRateMode::Fixed);
+    }
+
+    #[test]
+    fn an_external_owner_relinquishes_the_live_overrides() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        attach_device_service(&mut state);
+        let (mut snapshot, sender, bus) = {
+            let service = state.device_service.as_ref().expect("service attached");
+            (service.snapshot(), service.command_sender(), service.meter_bus())
+        };
+        snapshot.info.rate_follows = true;
+        snapshot.info.is_mock = false;
+        state.device = DeviceHandle::Mirror(crate::device_service::Mirror::new(
+            snapshot, sender, bus,
+        ));
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.device.settings_mut().clock_source = "Internal".into();
+        // Avoid a pitch write on the reconcile below.
+        state.pro_pitch = 0.0;
+        state.pitch_clock_applied = Some(0.0);
+        state.pitch_clock_dirty = false;
+        // A stored Device-mode selection is in flight, and PipeWire is stopped
+        // (no graph clock) as for a real jackd session.
+        state.pending_device_rate = Some((192_000, Instant::now()));
+        state.quantum_change_at = Some(Instant::now());
+        state.engine = None;
+        // jackd takes the PCM: the stored mode must relinquish, not drive.
+        state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::Jack;
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None));
+        assert!(state.external_owner_active);
+        assert!(state.pending_device_rate.is_none());
+        assert!(state.quantum_change_at.is_none());
+        // The owner leaves: the flag clears so the stored mode can re-apply.
+        state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::Idle;
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None));
+        assert!(!state.external_owner_active);
+    }
+
+    #[test]
+    fn the_live_rtl_counts_the_host_delay_once() {
+        // Under a PCM owner the host term is the live snd_pcm_delay, which
+        // already covers the in-flight URBs. The live form adds only the device
+        // lead and converter on top — no separate USB-queue term (no double
+        // count).
+        assert_eq!(rtl_live_frames(465, 60, 13), 538);
+        // A fuller jackd write-ahead (-n 3) raises the number past the old
+        // one-period model: ~11.2 ms at 48 kHz.
+        assert!((frames_ms(538, 48_000) - 11.208).abs() < 0.05);
+        // A smaller buffer (-n 2) lowers it, exactly as the owner's -n changes.
+        assert!(rtl_live_frames(300, 60, 13) < rtl_live_frames(465, 60, 13));
     }
 
     #[test]

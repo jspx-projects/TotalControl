@@ -187,6 +187,15 @@ pub fn quantum_picker_state(path: AudioPath) -> PickerState {
     }
 }
 
+/// Whether the DEVICE group's device-path controls (clock source, pitch,
+/// word clock) are shown. They are shown in Device mode, and under an
+/// external owner (JACK / direct ALSA) — the owner sets the rate, but the
+/// device options remain TotalControl's. The convenience (PipeWire) path
+/// keeps them as nonvisible fillers.
+pub fn device_controls_visible(path: AudioPath, mode: EngineRateMode) -> bool {
+    mode == EngineRateMode::Fixed || path.is_external()
+}
+
 /// The device's achievable rate/quantum envelope, device-agnostic. The driver
 /// is the single owner of the supported rates and the per-rate period floor;
 /// the GUI fills this from the driver's reported envelope (or the mock's
@@ -353,6 +362,17 @@ impl ClockFacts {
             .or_else(|| self.clock.map(|c| c.rate))
             .filter(|r| *r > 0)
             .unwrap_or(self.device_set_rate)
+    }
+
+    /// The graph's configured default rate (`clock.rate`): the rate the
+    /// convenience path resets an idle device to when it takes over, so a
+    /// client that adopts the device rate starts from the default rather
+    /// than a leftover from Device mode.
+    pub fn default_graph_rate(&self) -> u32 {
+        self.clock
+            .map(|c| c.rate)
+            .filter(|r| *r > 0)
+            .unwrap_or(48_000)
     }
 
     /// The rate Device mode forces: the device's set rate is the boss. Falls
@@ -649,6 +669,25 @@ mod tests {
         assert_eq!(quantum_picker_state(AudioPath::Idle), PickerState::Active);
     }
 
+    #[test]
+    fn device_controls_show_in_device_mode_and_under_an_owner() {
+        // Device mode shows the device-path controls (clock source, pitch).
+        assert!(device_controls_visible(AudioPath::PwDevice, EngineRateMode::Fixed));
+        assert!(device_controls_visible(AudioPath::Idle, EngineRateMode::Fixed));
+        // Convenience (PipeWire) hides them as fillers.
+        assert!(!device_controls_visible(AudioPath::PwFollow, EngineRateMode::Auto));
+        assert!(!device_controls_visible(AudioPath::Idle, EngineRateMode::Auto));
+        // An external owner shows them regardless of the stored PipeWire mode,
+        // so JACK and ALSA render the same device section as Device mode.
+        for path in [
+            AudioPath::External(ExternalOwner::Jack),
+            AudioPath::External(ExternalOwner::Alsa),
+        ] {
+            assert!(device_controls_visible(path, EngineRateMode::Fixed));
+            assert!(device_controls_visible(path, EngineRateMode::Auto));
+        }
+    }
+
     // ── Quantum floor / convenience minimum ─────────────────────────
 
     #[test]
@@ -717,6 +756,32 @@ mod tests {
         assert!(f.zero_slack(192_000));
         f.graph_quantum = None;
         assert!(!f.zero_slack(192_000));
+    }
+
+    #[test]
+    fn default_graph_rate_is_the_configured_clock_rate() {
+        let mut f = facts(EngineRateMode::Auto);
+        // No engine snapshot: the canonical 48 kHz default.
+        assert_eq!(f.default_graph_rate(), 48_000);
+        f.clock = Some(PwClock {
+            rate: 44_100,
+            quantum: 0,
+            force_rate: 0,
+            force_quantum: 0,
+            min_quantum: 0,
+            max_quantum: 0,
+        });
+        assert_eq!(f.default_graph_rate(), 44_100);
+        // A missing rate falls back to the default.
+        f.clock = Some(PwClock {
+            rate: 0,
+            quantum: 0,
+            force_rate: 0,
+            force_quantum: 0,
+            min_quantum: 0,
+            max_quantum: 0,
+        });
+        assert_eq!(f.default_graph_rate(), 48_000);
     }
 
     // ── Scheduling policy (three-tier) ──────────────────────────────

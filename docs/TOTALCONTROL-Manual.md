@@ -354,7 +354,12 @@ The engine `Rate follows` control chooses who determines the rate. It is a pair
 of radio buttons, usable only when the clock source is Internal:
 
 - **PipeWire** (the default) lets the sound server's graph conduct; the device
-  follows whatever rate the graph runs at. When nothing is playing, the graph
+  follows whatever rate the graph runs at. Switching to PipeWire with nothing
+  playing resets the interface to the graph's default rate (48 kHz unless
+  PipeWire's configuration says otherwise), so a page or player that adopts the
+  device rate starts from the default rather than the rate Device mode left
+  behind. When nothing plays, the interface releases the graph after a few
+  seconds; the next stream then sets its own rate. When nothing is playing, the graph
   switches to the rate of the next stream that starts, so a DVD plays at 48 kHz
   and a CD started afterwards plays at 44.1 kHz, each at its native rate. A DAW
   that sets its own rate conducts the graph in this mode.
@@ -476,6 +481,23 @@ To change the rate or quantum of a running `jackd`, restart it — the JACK API
 fixes both at server start. TotalControl reports the owner's values while it
 runs and guides the matching command here; it does not restart the server for
 you.
+
+**External clock (SPDIF / ADAT / Word clock).** When the device clock source is
+set to an external input, the device is slaved to that source and its actual
+rate is the source's rate; TotalControl reports it and the rate is read-only.
+`jackd` fixes its rate at startup and the JACK API cannot change it, so start
+jackd with `-r` equal to the external source's rate:
+
+```text
+jackd -d alsa -d hw:<card> -r <external rate> -p 128 -n 3
+```
+
+REAPER, as a JACK client, follows `jackd`, not the device directly — the session
+is rate-matched only when jackd's `-r` matches the external rate. If they
+differ, the device runs at the external rate while jackd streams at its own
+rate; the driver counts a sustained `rate mismatch` (Diagnostics → Session) and
+the audio is not clean. If the external source changes rate mid-session, restart
+jackd at the new rate. Pitch is held at 0 % under an external clock.
 
 The `Graph` line always shows the rate PipeWire is running at, in every mode.
 A rate change in PipeWire mode is a runtime change, so it does not add an undo
@@ -1509,9 +1531,14 @@ groups with the stored ones.
 
 The Audio Configuration panel shows the round-trip latency in the `RTL` row
 (hover for "Round Trip Latency"): the value as `x.x ms` on the first line, and
-on the next three lines its contributions in milliseconds — USB queue, device
-lead, converter and graph. The RTL block is a Device-mode report; in PipeWire
-mode its four lines stay empty and the panel keeps the same height. The
+on the next three its contributions in milliseconds — the host queue, device
+lead and converter. The host term is the graph quantum on the PipeWire path
+(`graph`), and the live stream queue (`host queue (live)`) under an external
+owner — JACK or a direct-ALSA DAW. The RTL block is shown in Device mode and
+under an external owner; in PipeWire mode with no external owner its four lines
+stay empty and the panel keeps the same height. Under JACK or a direct-ALSA DAW
+the figure includes the device lead and converters that the DAW's own latency
+display may omit. The
 **Quantum** picker sets the PipeWire graph period in samples. In Device mode
 **Auto** lets PipeWire choose the quantum itself — a safe default for the device
 and rate. In PipeWire mode the quantum is forced at or above the convenience
@@ -1520,16 +1547,30 @@ achievable when the graph changes rate. Choose a specific value from the list to
 set it yourself; the list offers only quanta at or above the current rate's
 period floor, plus the exact floor for the lowest achievable latency.
 
-The value is the host round trip:
+The PipeWire value is the host round trip:
 
 ```text
 RTL = USB queue + device lead + converter delay + one graph period
 ```
 
+Under an external owner (JACK / direct ALSA) the host term is the live stream
+queue — the ring fill plus the in-flight URBs, read from the kernel — so the
+number follows the owner's actual write-ahead:
+
+```text
+RTL = host queue (live) + device lead + converter delay
+```
+
 The USB queue is the driver's in-flight URBs (three URBs at the standard
-setting), the device lead is the margin the unit holds ahead of its
-converters, the converter delay is the interface's conversion time, and the
-graph period is one PipeWire cycle (two ALSA periods under timer scheduling).
+setting) on the PipeWire path; under an external owner it is already inside the
+live host queue and is not counted again. The device lead is the margin the
+unit holds ahead of its converters, the converter delay is the interface's
+conversion time, and the graph period is one PipeWire cycle (two ALSA periods
+under timer scheduling). Because the host queue is live under an external
+owner, a larger `jackd -n` (more periods) shows as more latency and a smaller
+`-n` as less; TotalControl does not assume a fixed buffer. The host queue is
+read live; the device lead and converter are model terms, so treat the total as
+the host-side budget.
 
 The UC device side is measured by loopback (output 5 to input 5) for both
 personalities at 32, 44.1, 48, 96 and 192 kHz; the display applies the live
