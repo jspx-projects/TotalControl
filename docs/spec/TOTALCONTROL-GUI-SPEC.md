@@ -1255,10 +1255,13 @@ and Word.
 
 The `Clock source` row is a picker of the unit's own clock options only; it
 never lists host engine modes. It is a Device-path control: shown when `Rate
-follows` is Device, a nonvisible filler of the same height when `Rate follows`
-is PipeWire (§4). The `Single speed word clock` and `Word clock in`
+follows` is Device, and under an external owner (JACK / direct ALSA) regardless
+of the stored mode, where the owner sets the rate but the device options remain
+TotalControl's; a nonvisible filler of the same height when `Rate follows` is
+PipeWire (§4). The `Single speed word clock` and `Word clock in`
 (termination) rows are Device-path clock-sync controls likewise: shown in
-Device, same-height fillers in PipeWire. The signal-path settings (Optical and
+Device and under an external owner, same-height fillers in PipeWire. The
+signal-path settings (Optical and
 SPDIF format, the UC reference levels, EQ for Record) and the Firmware/Serial
 readouts stay in both modes. The `Sample rate` row is the nominal-rate picker
 with three states, derived from the detected audio path and the rate authority:
@@ -1297,11 +1300,12 @@ packet capacity (DRIVER-DESIGN §4.1.1), so at 192 kHz the slider ends at
 +4.1 %; every other rate offers the full +5.0 %. A saved pitch above the
 running rate's envelope clamps to the slider maximum when the rate changes.
 Pitch is a Device-path control on the internal clock: the slider
-is shown only when `Rate follows` is Device **and** `Clock source` is Internal.
-Otherwise the row is a nonvisible filler of the same height (§4) and the device
-clock runs nominal (0 %). Under an external clock source (SPDIF, Optical/ADAT,
-Word Clock) the unit is slaved: pitch is held at 0 % in both rate-follow modes
-and the externally applied rate is respected.
+is shown when `Clock source` is Internal and `Rate follows` is Device, or under
+an external owner (JACK / direct ALSA). Otherwise the row is a nonvisible filler
+of the same height (§4) and the device clock runs nominal (0 %). Under an
+external clock source (SPDIF, Optical/ADAT, Word Clock) the unit is slaved:
+pitch is held at 0 % in both rate-follow modes and the externally applied rate
+is respected.
 
 Pitch starts from a clean slate (0 %). It is reset to 0 on a clock-source
 change, on a rate-follow-mode change (either direction), at startup and on a
@@ -1391,7 +1395,11 @@ owner named in the tooltip (`Controlled by <owner>`).
 
 On the JACK / direct-ALSA path the owner adopts a rate and the device follows
 it; TotalControl reports the device truth and reapplies the scene on a rate
-change. While an owner holds the PCM the rate and quantum pickers are grayed
+change. When an owner takes the PCM, TotalControl releases its live
+`clock.force-rate` / `clock.force-quantum` overrides (keeping the stored
+preferences) so the owner's rate and quantum apply; the stored PipeWire mode
+does not determine the rate while the owner runs. While an owner holds the PCM
+the rate and quantum pickers are grayed
 (the owner sets them); a rate or quantum request through OSC is reported as
 controlled by the owner, never applied and never shown as "applying…". The
 stored rate-follow mode is remembered and does not change while the owner

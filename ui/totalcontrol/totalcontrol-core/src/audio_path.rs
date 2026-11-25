@@ -187,6 +187,15 @@ pub fn quantum_picker_state(path: AudioPath) -> PickerState {
     }
 }
 
+/// Whether the DEVICE group's device-path controls (clock source, pitch,
+/// word clock) are shown. They are shown in Device mode, and under an
+/// external owner (JACK / direct ALSA) — the owner sets the rate, but the
+/// device options remain TotalControl's. The convenience (PipeWire) path
+/// keeps them as nonvisible fillers.
+pub fn device_controls_visible(path: AudioPath, mode: EngineRateMode) -> bool {
+    mode == EngineRateMode::Fixed || path.is_external()
+}
+
 /// The device's achievable rate/quantum envelope, device-agnostic. The driver
 /// is the single owner of the supported rates and the per-rate period floor;
 /// the GUI fills this from the driver's reported envelope (or the mock's
@@ -658,6 +667,25 @@ mod tests {
         assert_eq!(quantum_picker_state(AudioPath::PwDevice), PickerState::Active);
         assert_eq!(quantum_picker_state(AudioPath::PwFollow), PickerState::Active);
         assert_eq!(quantum_picker_state(AudioPath::Idle), PickerState::Active);
+    }
+
+    #[test]
+    fn device_controls_show_in_device_mode_and_under_an_owner() {
+        // Device mode shows the device-path controls (clock source, pitch).
+        assert!(device_controls_visible(AudioPath::PwDevice, EngineRateMode::Fixed));
+        assert!(device_controls_visible(AudioPath::Idle, EngineRateMode::Fixed));
+        // Convenience (PipeWire) hides them as fillers.
+        assert!(!device_controls_visible(AudioPath::PwFollow, EngineRateMode::Auto));
+        assert!(!device_controls_visible(AudioPath::Idle, EngineRateMode::Auto));
+        // An external owner shows them regardless of the stored PipeWire mode,
+        // so JACK and ALSA render the same device section as Device mode.
+        for path in [
+            AudioPath::External(ExternalOwner::Jack),
+            AudioPath::External(ExternalOwner::Alsa),
+        ] {
+            assert!(device_controls_visible(path, EngineRateMode::Fixed));
+            assert!(device_controls_visible(path, EngineRateMode::Auto));
+        }
     }
 
     // ── Quantum floor / convenience minimum ─────────────────────────

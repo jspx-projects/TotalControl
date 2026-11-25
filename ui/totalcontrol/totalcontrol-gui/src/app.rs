@@ -3245,6 +3245,11 @@ pub struct TotalControl {
     pub pcm_owner: totalcontrol_core::audio_path::PcmOwner,
     /// The owning process's `comm`, for the "Controlled by <owner>" tooltip.
     pub pcm_owner_comm: Option<String>,
+    /// Whether the live rate/quantum overrides were relinquished because an
+    /// external owner (JACK / direct ALSA) took the PCM. The stored
+    /// preferences stay; the live overrides are released so the owner's values
+    /// apply, and re-applied when the owner leaves.
+    pub external_owner_active: bool,
 }
 
 impl TotalControl {
@@ -3828,6 +3833,7 @@ pub fn new_with_device(
         audio_path_service: None,
         pcm_owner: audio_path::PcmOwner::Idle,
         pcm_owner_comm: None,
+        external_owner_active: false,
     };
 
     state
@@ -5962,6 +5968,30 @@ fn restore_allowed_rates(state: &mut TotalControl) {
                 log::warn!("Restoring the PipeWire allowed rates failed: {e}");
             }
         }
+    }
+}
+
+/// Release TotalControl's live rate/quantum overrides so an external owner
+/// (JACK / direct ALSA) sets its own values. Unlike [`release_engine`], the
+/// stored preferences and the allowed-rate list are kept: this runs when an
+/// owner takes the PCM, and the stored mode re-applies when the owner leaves.
+fn relinquish_graph_overrides(state: &mut TotalControl) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    // Nothing to release when PipeWire is not running (no live graph).
+    if state.engine.is_none() {
+        return;
+    }
+    if !engine_intent(state, crate::audio_path_service::Intent::ForceRate(0)) {
+        let _ = pw_clock::force_rate(0);
+    }
+    if !engine_intent(state, crate::audio_path_service::Intent::ForceQuantum(0)) {
+        let _ = pw_clock::force_quantum(0);
+    }
+    if let Some(e) = state.engine.as_mut() {
+        e.force_rate = 0;
+        e.force_quantum = 0;
     }
 }
 
@@ -13177,6 +13207,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.last_sink_running = sink_running;
                 state.engine = clock;
                 state.card_stream = stream;
+                // While an external owner (JACK / direct ALSA) holds the PCM,
+                // the stored PipeWire mode must not determine the rate or
+                // quantum. Release the live overrides once on entry so the
+                // owner's values apply; reconcile re-applies the stored mode
+                // when the owner leaves.
+                if detected_path(state).is_external() {
+                    if !state.external_owner_active {
+                        relinquish_graph_overrides(state);
+                        state.pending_device_rate = None;
+                        state.quantum_change_at = None;
+                        state.external_owner_active = true;
+                        log::info!("external owner: relinquished the rate/quantum overrides");
+                    }
+                } else {
+                    state.external_owner_active = false;
+                }
                 // PipeWire may move the graph rate on its own (a player or
                 // another client). Keep the forced quantum at or above the new
                 // rate's period floor so the request never reads as impossible.
@@ -16122,10 +16168,17 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
 
+    // Device-path controls (clock source, pitch, word clock) are shown on the
+    // internal clock when TotalControl is the device-clock authority: in Device
+    // mode, or under an external owner (JACK / direct ALSA), where the owner
+    // sets the rate but the device options remain TotalControl's. The
+    // convenience (PipeWire) path keeps them as fillers.
+    let device_controls =
+        audio_path::device_controls_visible(detected_path(state), state.engine_rate_mode);
     let mut body = column![section("DEVICE")];
     // Clock source is a Device-path control. In convenience the row keeps its
     // space as a nonvisible filler, like Pitch (GUI spec §4).
-    if state.engine_rate_mode == EngineRateMode::Fixed {
+    if device_controls {
         body = body.push(
             row![
                 caption("Clock source"),
@@ -16214,6 +16267,8 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .unwrap_or_else(|| "\u{2014}".into());
     let current_hint = if !internal {
         "Reported by the device \u{2014} set by the external clock source."
+    } else if detected_path(state).is_external() {
+        "Reported by the device \u{2014} set by the running owner."
     } else if !device_mode {
         "Reported by the device \u{2014} follows the PipeWire graph."
     } else {
@@ -16240,7 +16295,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .width(Length::Fill),
     );
     if state.device.capabilities().pitch {
-        if state.engine_rate_mode == EngineRateMode::Fixed && internal {
+        if device_controls && internal {
             let value = state.pro_pitch;
             body = body.push(
                 row![
@@ -16305,7 +16360,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         // (H67/H68/H75, H71/H101).
         // Single-speed word clock is a clock-sync control: a Device-path
         // option, kept as a same-height filler in convenience (GUI spec §4).
-        if state.engine_rate_mode == EngineRateMode::Fixed {
+        if device_controls {
             body = body.push(check_row(
                 "Single speed word clock",
                 settings.word_clock_single_speed,
@@ -16345,7 +16400,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     if state.device.capabilities().word_clock_termination {
         // Word-clock input termination is a clock-sync control: a Device-path
         // option, kept as a same-height filler in convenience (GUI spec §4).
-        if state.engine_rate_mode == EngineRateMode::Fixed {
+        if device_controls {
             body = body.push(check_row(
                 "Word clock in",
                 settings.word_clock_termination,
@@ -28255,6 +28310,43 @@ mod tests {
         assert_eq!(state.device.settings().sample_rate, 96_000);
         assert_eq!(state.engine_force_rate, 96_000);
         assert_eq!(state.engine_rate_mode, EngineRateMode::Fixed);
+    }
+
+    #[test]
+    fn an_external_owner_relinquishes_the_live_overrides() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        attach_device_service(&mut state);
+        let (mut snapshot, sender, bus) = {
+            let service = state.device_service.as_ref().expect("service attached");
+            (service.snapshot(), service.command_sender(), service.meter_bus())
+        };
+        snapshot.info.rate_follows = true;
+        snapshot.info.is_mock = false;
+        state.device = DeviceHandle::Mirror(crate::device_service::Mirror::new(
+            snapshot, sender, bus,
+        ));
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.device.settings_mut().clock_source = "Internal".into();
+        // Avoid a pitch write on the reconcile below.
+        state.pro_pitch = 0.0;
+        state.pitch_clock_applied = Some(0.0);
+        state.pitch_clock_dirty = false;
+        // A stored Device-mode selection is in flight, and PipeWire is stopped
+        // (no graph clock) as for a real jackd session.
+        state.pending_device_rate = Some((192_000, Instant::now()));
+        state.quantum_change_at = Some(Instant::now());
+        state.engine = None;
+        // jackd takes the PCM: the stored mode must relinquish, not drive.
+        state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::Jack;
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None));
+        assert!(state.external_owner_active);
+        assert!(state.pending_device_rate.is_none());
+        assert!(state.quantum_change_at.is_none());
+        // The owner leaves: the flag clears so the stored mode can re-apply.
+        state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::Idle;
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None));
+        assert!(!state.external_owner_active);
     }
 
     #[test]
