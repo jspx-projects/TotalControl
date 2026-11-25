@@ -1341,8 +1341,12 @@ slot: row 1 is the label and total together (`RTL x.x ms`, secondary grey),
 and the formula (USB queue, device lead, converter, graph, in milliseconds)
 wraps naturally in the rows below. The formula and the calibration basis are
 in the manual §14. The RTL field is a Device-path report: when `Rate follows`
-is PipeWire the whole four-row slot stays blank (§4). The graph term assumes
-the DAW runs through PipeWire. It also shows the Fireface
+is PipeWire the whole four-row slot stays blank (§4). On the PipeWire path the
+host term is the graph quantum; under an external owner (JACK / direct ALSA)
+the host term is the live `snd_pcm_delay` of the running stream (ring fill plus
+in-flight URBs, read from the kernel), so the value follows the owner's actual
+write-ahead (e.g. `jackd -n`). The graph term assumes the DAW runs through
+PipeWire. It also shows the Fireface
 sink's host volume in percent and dB, with a `0 dB` action. The host volume is an attenuation before the interface, so it lowers
 the playback meters by the same amount; the interface's own faders remain
 the monitoring level.

@@ -3191,6 +3191,11 @@ pub struct TotalControl {
     /// its rate and hardware period, which the sound server may pin
     /// regardless of the quantum. `None` while the card is idle.
     pub card_stream: Option<CardStream>,
+    /// `snd_pcm_delay` of the open playback stream (ring fill + in-flight
+    /// URBs), frames. The live host-side term of the round-trip latency under
+    /// a PCM owner (the server-free paths read it from procfs). `None` when no
+    /// stream is open or the delay is unreadable.
+    pub pcm_delay: Option<u32>,
     /// Driver transport counters as last read, and the baseline they are
     /// shown relative to (set on connect or by the reset button).
     pub transport_counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
@@ -3802,6 +3807,7 @@ pub fn new_with_device(
         allowed_rates_saved: None,
         allowed_rates_written: None,
         card_stream: None,
+        pcm_delay: None,
         transport_counters: None,
         transport_baseline: None,
         transport_perrun_base: None,
@@ -13053,6 +13059,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.reprepare_ok = snap.reprepare_ok;
                 if snap.kernel_at.is_some() {
                     state.card_stream = snap.stream;
+                    state.pcm_delay = snap.delay;
                 }
                 if snap.pw_at.is_some() {
                     state.engine = snap.clock;
@@ -17049,6 +17056,23 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             } else {
                 theme::text_sec()
             };
+            // External owner (JACK / direct ALSA): the host-side term is the
+            // live snd_pcm_delay (ring fill + in-flight URBs), so the value
+            // tracks the owner's write-ahead (e.g. jackd's -n). The device lead
+            // and converter stay the model terms. The delay already covers the
+            // in-flight URBs, so the USB queue is not added a second time.
+            if external {
+                if let Some(delay) = state.pcm_delay {
+                    let lead = 60; // UC/UCX device lead (see ucx_usb_frames)
+                    return rtl_live_block(
+                        delay,
+                        lead,
+                        converter_frames(card.rate),
+                        card.rate,
+                        scale,
+                    );
+                }
+            }
             if state.device.is_uc_model() {
                 let measured = match state.device.personality_label() {
                     Some("PC") => state.driver_queue.and_then(|queue| {
@@ -17221,6 +17245,33 @@ impl RtlEstimate {
             frames_ms(self.graph, self.rate)
         )
     }
+}
+
+/// Live round-trip estimate under a PCM owner (JACK / direct ALSA): the
+/// host-side term is the stream's `snd_pcm_delay` (ring fill + in-flight
+/// URBs), read from procfs, so it tracks the owner's write-ahead (for example
+/// jackd's `-n`). The device lead and converter are the model terms. The delay
+/// already covers the in-flight URBs, so the USB queue is not added again.
+fn rtl_live_frames(delay: u32, lead: u32, converter: u32) -> u32 {
+    delay + lead + converter
+}
+
+fn rtl_live_block(
+    delay: u32,
+    lead: u32,
+    converter: u32,
+    rate: u32,
+    scale: f32,
+) -> Element<'static, Message> {
+    let total = rtl_live_frames(delay, lead, converter);
+    let summary = format!("{:.1} ms", frames_ms(total, rate));
+    let breakdown = format!(
+        "{:.1} ms host queue (live) + {:.1} ms device lead + {:.1} ms converter",
+        frames_ms(delay, rate),
+        frames_ms(lead, rate),
+        frames_ms(converter, rate)
+    );
+    rtl_block(summary, breakdown, theme::text_sec(), scale)
 }
 
 /// One loopback measurement of the UC device round trip.  The measurement
@@ -23186,6 +23237,7 @@ mod tests {
         note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
         convenience_quantum_min, minimum_quantum, reconcile_device_pitch,
         power_sum_output_meters, quantum_pending, rate_authority_target,
+        rtl_live_frames,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
         temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
@@ -28203,6 +28255,20 @@ mod tests {
         assert_eq!(state.device.settings().sample_rate, 96_000);
         assert_eq!(state.engine_force_rate, 96_000);
         assert_eq!(state.engine_rate_mode, EngineRateMode::Fixed);
+    }
+
+    #[test]
+    fn the_live_rtl_counts_the_host_delay_once() {
+        // Under a PCM owner the host term is the live snd_pcm_delay, which
+        // already covers the in-flight URBs. The live form adds only the device
+        // lead and converter on top — no separate USB-queue term (no double
+        // count).
+        assert_eq!(rtl_live_frames(465, 60, 13), 538);
+        // A fuller jackd write-ahead (-n 3) raises the number past the old
+        // one-period model: ~11.2 ms at 48 kHz.
+        assert!((frames_ms(538, 48_000) - 11.208).abs() < 0.05);
+        // A smaller buffer (-n 2) lowers it, exactly as the owner's -n changes.
+        assert!(rtl_live_frames(300, 60, 13) < rtl_live_frames(465, 60, 13));
     }
 
     #[test]
