@@ -6041,6 +6041,7 @@ pub fn release_engine(state: &mut TotalControl) {
             headroom: 336,
             start_delay: 0,
             period_num: 16,
+            period_size: 0,
         };
         let _ = pw_clock::set_sched_policy(out, &convenience);
         let _ = pw_clock::set_sched_policy(inp, &convenience);
@@ -15845,9 +15846,19 @@ fn force_engine_reprepare(state: &mut TotalControl) {
     if !graph_writable(state) {
         return;
     }
+    // A host stream owns the graph quantum. Forcing a global quantum under it
+    // would override the stream's own value and can leave the bumped period
+    // behind; the policy props land at the next natural re-prepare instead.
+    if state.card_stream.is_some() || state.conductor.is_some() {
+        return;
+    }
     if !engine_intent(state, crate::audio_path_service::Intent::Reprepare) {
         // No service: apply synchronously via the same capture activation.
-        let _ = pw_clock::capture_reprepare(&state.device.card_id());
+        let period = engine_sched_policy(state, running_rate(state)).period_size;
+        let _ = pw_clock::capture_reprepare_with_period(
+            &state.device.card_id(),
+            Some(period),
+        );
     }
 }
 

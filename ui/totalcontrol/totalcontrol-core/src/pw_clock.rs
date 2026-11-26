@@ -149,8 +149,13 @@ impl PwClock {
 /// stays Auto; the bump base is the force when set, else the graph default.
 /// `None` when no quantum is known to bump. Only acts while the graph is running.
 pub fn reprepare_bump(clock: &PwClock) -> Option<(u32, u32)> {
-    let restore = clock.force_quantum;
-    let base = if restore > 0 { restore } else { clock.quantum };
+    reprepare_bump_at(clock.effective_quantum(), clock.force_quantum)
+}
+
+/// The bump-and-restore pair for an explicit target period. The base is the
+/// period the PCM must end at, not the default: while a host stream runs the
+/// target comes from the policy, not from `clock.quantum`.
+pub fn reprepare_bump_at(base: u32, restore: u32) -> Option<(u32, u32)> {
     if base == 0 {
         return None;
     }
@@ -530,14 +535,33 @@ pub fn set_source_suspended(node: &str, suspended: bool) -> bool {
 /// the capture stays open until the device runs at the forced rate and quantum.
 /// Returns true when the device confirmed the forced state.
 pub fn capture_reprepare(card_id: &str) -> bool {
+    capture_reprepare_with_period(card_id, None)
+}
+
+/// The re-prepare with an explicit target period from the scheduling policy.
+/// The target is authoritative: while a host stream runs it is the graph's
+/// running quantum, not the stored default. Pins `api.alsa.period-size` on
+/// both Pro Audio nodes before and after the bump, so the bumped period can
+/// never be left behind, and confirms playback and capture independently.
+pub fn capture_reprepare_with_period(card_id: &str, period: Option<u32>) -> bool {
     let Some(clock) = read() else { return false };
     // Preserve the conducted rate in Auto mode: the capture activation conducts
     // the graph to its own rate, so activating at the default would trample a
     // playing stream's rate. See reprepare_rate_target.
-    let conducting = card_stream(card_id).map(|s| s.rate);
+    let playing = card_stream(card_id);
+    let conducting = playing.map(|s| s.rate);
     let target_rate = reprepare_rate_target(&clock, conducting);
-    let target_quantum = clock.effective_quantum();
-    if target_rate == 0 {
+    let target_quantum = period
+        .filter(|p| *p > 0)
+        .or_else(|| {
+            playing
+                .is_some()
+                .then(graph_quantum)
+                .flatten()
+                .filter(|q| *q > 0)
+        })
+        .unwrap_or_else(|| clock.effective_quantum());
+    if target_rate == 0 || target_quantum == 0 {
         return false;
     }
     let Some(source) = fireface_source_name() else { return false };
@@ -563,32 +587,41 @@ pub fn capture_reprepare(card_id: &str) -> bool {
         while Instant::now() < awake && !capture_running(card_id) {
             std::thread::sleep(Duration::from_millis(30));
         }
-        if let Some((bump, restore)) = reprepare_bump(&clock) {
+        // The ALSA node keeps the last negotiated period as its
+        // `api.alsa.period-size` property and uses it as the next
+        // `default_period_size`; the bump would otherwise stick. Pin the target
+        // before the bump and again after the restore.
+        pin_period(target_quantum);
+        if let Some((bump, restore)) =
+            reprepare_bump_at(target_quantum, clock.force_quantum)
+        {
             let _ = force_quantum(bump);
             let _ = force_quantum(restore);
         }
-        // Wait until the device runs at the forced rate and quantum. A forced
-        // quantum is confirmed by the PCM period: IRQ mode prepares period =
-        // quantum, timer mode serves a batch device at two periods per graph
-        // cycle (period = quantum / 2); either relationship confirms it. The
-        // period persists while the node is suspended, whereas the running-graph
-        // quantum reads empty once the re-prepare lets the node idle. An Auto (0)
-        // quantum is graph-conducted, so only confirm the graph ran. Polling (not
-        // a single read) is what makes a quantum-only change confirm: the rate is
-        // already at target there, so we wait for the quantum to land. The capture
-        // stays open until the device confirms.
+        pin_period(target_quantum);
+        // Wait until both directions run at the target rate and period. The PCM
+        // period is the audio truth: IRQ mode prepares period = quantum, timer
+        // mode serves a batch device at two periods per graph cycle
+        // (period = quantum / 2). The period persists while the node is
+        // suspended, whereas the running-graph quantum reads empty once the
+        // re-prepare lets the node idle. Polling, not a single read, makes a
+        // quantum-only change confirm. A closed direction is not a failure:
+        // the activated graph may expose only the capture side.
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut confirmed = false;
         while Instant::now() < deadline {
-            let stream = card_stream(card_id);
-            let rate_ok = stream.is_some_and(|s| s.rate == target_rate);
-            let quantum_ok = rate_ok
-                && if clock.force_quantum > 0 {
-                    stream.is_some_and(|s| period_confirms_quantum(s.period, target_quantum))
-                } else {
-                    graph_quantum().is_some()
-                };
-            if rate_ok && quantum_ok {
+            let play = card_stream(card_id);
+            let cap = capture_stream(card_id);
+            let present = play.is_some() || cap.is_some();
+            let play_ok = play.is_none_or(|s| {
+                s.rate == target_rate
+                    && period_confirms_quantum(s.period, target_quantum)
+            });
+            let cap_ok = cap.is_none_or(|s| {
+                s.rate == target_rate
+                    && period_confirms_quantum(s.period, target_quantum)
+            });
+            if present && play_ok && cap_ok {
                 confirmed = true;
                 break;
             }
@@ -600,7 +633,21 @@ pub fn capture_reprepare(card_id: &str) -> bool {
             return true;
         }
     }
+    // Leave the audio period at the intended value even when the graph could
+    // not confirm the change: a wrong period is an audible defect, a stale
+    // graph report is not.
+    pin_period(target_quantum);
     false
+}
+
+/// Pin both Pro Audio nodes' ALSA period. Best-effort: no nodes is a no-op.
+fn pin_period(period: u32) {
+    if period == 0 {
+        return;
+    }
+    let Some((out, inp)) = fireface_pro_node_ids() else { return };
+    let _ = set_node_period_size(out, period);
+    let _ = set_node_period_size(inp, period);
 }
 
 /// Parses a `hw_params` file. `None` for "closed" (the card is idle).
@@ -656,6 +703,14 @@ fn card_proc_dir(card_id: &str) -> Option<std::path::PathBuf> {
 pub fn card_stream(card_id: &str) -> Option<CardStream> {
     let dir = card_proc_dir(card_id)?;
     let text = std::fs::read_to_string(dir.join("pcm0p/sub0/hw_params")).ok()?;
+    parse_hw_params(&text)
+}
+
+/// The open *capture* stream of the card. Used only to confirm a re-prepare;
+/// the playback stream remains the audio truth. `None` when capture is closed.
+pub fn capture_stream(card_id: &str) -> Option<CardStream> {
+    let dir = card_proc_dir(card_id)?;
+    let text = std::fs::read_to_string(dir.join("pcm0c/sub0/hw_params")).ok()?;
     parse_hw_params(&text)
 }
 
@@ -909,6 +964,27 @@ pub fn set_headroom(node: u32, frames: u32) -> Result<(), String> {
     }
 }
 
+/// Set the node's `api.alsa.period-size`. The SPA ALSA plugin keeps the last
+/// negotiated period in this property and uses it as `default_period_size` on
+/// the next open, so an unset or stale value overrides the graph quantum. Pin
+/// it to the policy period at every re-prepare; `0` leaves the period to the
+/// graph. Applies at the next PCM re-prepare, like the rest of the policy.
+pub fn set_node_period_size(node: u32, period: u32) -> Result<(), String> {
+    let pod = format!("{{ \"params\": [ \"api.alsa.period-size\", {period} ] }}");
+    let status = pw_output(
+        Command::new("pw-cli")
+            .args(["set-param", &node.to_string(), "Props", &pod])
+            .stdin(Stdio::null()),
+    )
+    .ok_or_else(|| format!("pw-cli set-param period-size {period} timed out"))?
+    .status;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("pw-cli set-param period-size {period} failed ({status})"))
+    }
+}
+
 /// The scheduling policy for a Pro Audio node (C1 three-tier model):
 /// IRQ + per-rate cushion on the Device-authority pro path, timer + a fixed
 /// generous margin on the PipeWire convenience path.
@@ -919,6 +995,9 @@ pub struct SchedPolicy {
     pub headroom: u32,
     pub start_delay: u32,
     pub period_num: u32,
+    /// `api.alsa.period-size`: the pinned ALSA period. `0` leaves it to the
+    /// graph (timer mode); IRQ mode pins it to the selected quantum.
+    pub period_size: u32,
 }
 
 /// The `params` Props pod for a scheduling policy. The multi-key array form
@@ -927,8 +1006,9 @@ pub struct SchedPolicy {
 pub fn sched_policy_pod(p: &SchedPolicy) -> String {
     format!(
         "{{ \"params\": [ \"api.alsa.disable-tsched\", {}, \"api.alsa.headroom\", {}, \
-         \"api.alsa.start-delay\", {}, \"api.alsa.period-num\", {} ] }}",
-        p.disable_tsched, p.headroom, p.start_delay, p.period_num
+         \"api.alsa.start-delay\", {}, \"api.alsa.period-num\", {}, \
+         \"api.alsa.period-size\", {} ] }}",
+        p.disable_tsched, p.headroom, p.start_delay, p.period_num, p.period_size
     )
 }
 
@@ -1098,6 +1178,48 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         force_quantum(before.force_quantum).unwrap();
         force_rate(before.force_rate).unwrap();
         assert_eq!(read(), Some(before));
+    }
+
+    /// Live desk check: a re-prepare pins the playback and capture PCM to the
+    /// target period and cannot leave the bumped period behind. Run with
+    /// `--ignored`, PipeWire owning the Fireface, no playback stream. The
+    /// final 1024 re-prepare leaves the graph at the normal desk period.
+    #[test]
+    #[ignore]
+    fn live_reprepare_pins_both_period_sizes() {
+        let card = std::fs::read_dir("/proc/asound")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if !p.file_name()?.to_str()?.starts_with("card") {
+                    return None;
+                }
+                let id = std::fs::read_to_string(p.join("id")).ok()?;
+                id.trim().contains("Fireface").then(|| id.trim().to_string())
+            })
+            .next()
+            .expect("a Fireface card present");
+        assert!(
+            card_stream(&card).is_none(),
+            "pause playback before this desk test"
+        );
+        for target in [1024u32, 128, 512, 1024] {
+            assert!(
+                capture_reprepare_with_period(&card, Some(target)),
+                "re-prepare did not confirm {target}"
+            );
+            assert_eq!(
+                card_stream(&card).map(|s| s.period),
+                Some(target),
+                "playback period after {target}"
+            );
+            assert_eq!(
+                capture_stream(&card).map(|s| s.period),
+                Some(target),
+                "capture period after {target}"
+            );
+        }
     }
 
     /// Live desk matrix: every device rate and a spread of quanta must apply
@@ -1347,13 +1469,14 @@ R   71      0      0   4.8us   5.7us  + alsa_output.usb-RME_Fireface_UCX__x-00.p
 
     #[test]
     fn builds_the_sched_policy_pod() {
-        let irq = SchedPolicy { disable_tsched: true, headroom: 96, start_delay: 0, period_num: 32 };
+        let irq = SchedPolicy { disable_tsched: true, headroom: 96, start_delay: 0, period_num: 32, period_size: 48 };
         assert_eq!(
             sched_policy_pod(&irq),
             "{ \"params\": [ \"api.alsa.disable-tsched\", true, \"api.alsa.headroom\", 96, \
-             \"api.alsa.start-delay\", 0, \"api.alsa.period-num\", 32 ] }"
+             \"api.alsa.start-delay\", 0, \"api.alsa.period-num\", 32, \
+             \"api.alsa.period-size\", 48 ] }"
         );
-        let timer = SchedPolicy { disable_tsched: false, headroom: 336, start_delay: 144, period_num: 16 };
+        let timer = SchedPolicy { disable_tsched: false, headroom: 336, start_delay: 144, period_num: 16, period_size: 0 };
         assert!(sched_policy_pod(&timer).contains("\"api.alsa.disable-tsched\", false"));
         assert!(sched_policy_pod(&timer).contains("\"api.alsa.start-delay\", 144"));
     }

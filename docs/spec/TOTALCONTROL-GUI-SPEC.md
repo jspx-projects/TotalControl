@@ -1408,15 +1408,24 @@ being confirmed is itself the indicator. A bottom-centre toast announces the
 change at the moment it is requested. When the actual matches the desired the
 value returns to its normal colour.
 
-The quantum confirmation reads the running graph quantum from the server
-(`pw-top`), never the ALSA period: the batch rule and the driver floor let
-several quanta share one period. The picker offers the driver's period floor
-intersected with the host policy bounds (`clock.min-quantum`/`max-quantum`).
+The quantum confirmation reads the running graph quantum and the PCM period.
+The scheduling policy pins `api.alsa.period-size` to the selected quantum on
+both Pro Audio nodes: the ALSA node retains its last negotiated period as a
+node property and would otherwise override the graph quantum. Under interrupt
+scheduling the PCM period must equal the pinned quantum on both directions. A
+PCM period that differs from the graph quantum is a fault: the panel reports
+the running PCM period and the policy is reapplied. The picker offers the
+driver's period floor intersected
+with the host policy bounds (`clock.min-quantum`/`max-quantum`).
 While no stream runs, TotalControl is the authority for the quantum: the
 selection is written as `clock.quantum`, a refused request is retried once, and
 a value the host still does not run is replaced by the actual value on the next
-poll with a bottom-centre notice. While a stream runs the stream's quantum wins
-and the picker is a grayed report. The device rate is verified by reading
+poll with a bottom-centre notice. An idle apply pins the period before and
+after its capture re-prepare and confirms both directions before the value is
+shown as applied. While a stream runs the stream's quantum wins and the picker
+is a grayed report; TotalControl does not write a global force under the
+stream, and the policy props land at the next natural re-prepare. The device
+rate is verified by reading
 the unit's state word (`0x11`) and comparing its rate index to the set rate
 (UC spec §9.1, UCX spec §11.7). The readback polls the rate value at 50 ms
 while pending; the rate index matching the selection is the confirmation.
@@ -1432,6 +1441,10 @@ and TotalControl follows it. TotalControl never re-asserts a global
 node lock in the PipeWire graph. The client's node is the owner; its name is
 shown in the heading and the picker tooltips. When the stream stops, the device
 keeps the last rate and quantum; the next start uses the last value.
+The scheduling policy pins `api.alsa.period-size` to the running graph quantum
+and sizes the cushion `H = 2·P` from that running value, not from a stored
+target. A client that changes its own quantum is followed; the pin and the
+cushion are updated at the next re-prepare.
 A DAW that uses the JACK API or the node force/lock properties conducts the
 graph. A stream that only follows the graph runs at the graph's current rate;
 a second stream at another rate is resampled into it, because the device has

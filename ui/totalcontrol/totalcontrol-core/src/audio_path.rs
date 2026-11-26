@@ -407,28 +407,43 @@ impl ClockFacts {
             .unwrap_or(self.device_set_rate)
     }
 
-    /// The period the scheduling cushion aligns to: the user's target quantum
-    /// (the value the PCM will re-prepare at), else the graph quantum the
-    /// server runs, else the default/current quantum, raised to the rate's
-    /// floor. A stale probed quantum never overrides the target.
+    /// The period the scheduling cushion aligns to: the running graph quantum
+    /// while a host stream owns the graph, else the user's target quantum,
+    /// raised to the rate's floor. The running value is the audio truth: the
+    /// stored target can lag a host stream and must not size the cushion for a
+    /// period the PCM is not using.
     pub fn cushion_period(&self, rate: u32) -> u32 {
-        let quantum = (self.force_quantum > 0)
-            .then_some(self.force_quantum)
-            .or(self.graph_quantum)
-            .or_else(|| self.clock.map(|c| c.effective_quantum()))
-            .unwrap_or(0);
+        let quantum = if self.host_stream_active() {
+            self.graph_quantum
+                .filter(|q| *q > 0)
+                .or_else(|| self.stream.map(|s| s.period).filter(|p| *p > 0))
+                .or_else(|| self.clock.map(|c| c.effective_quantum()))
+                .or_else(|| (self.force_quantum > 0).then_some(self.force_quantum))
+                .unwrap_or(0)
+        } else {
+            (self.force_quantum > 0)
+                .then_some(self.force_quantum)
+                .or(self.graph_quantum)
+                .or_else(|| self.clock.map(|c| c.effective_quantum()))
+                .unwrap_or(0)
+        };
         quantum.max(self.quantum_floor(rate)).max(1)
     }
 
     /// The scheduling policy: interrupt scheduling with the period-aligned
     /// cushion `H = 2·P`, placed before each deliberate rate/quantum change.
-    /// This is the only policy the application applies.
+    /// This is the only policy the application applies. `period_size` pins the
+    /// ALSA period to `P`: the node keeps its last negotiated period as a
+    /// sticky property, so a bump or a previous stream would otherwise leave
+    /// the PCM at a period the policy did not choose.
     pub fn sched_policy(&self, rate: u32) -> SchedPolicy {
+        let period = self.cushion_period(rate);
         SchedPolicy {
             disable_tsched: true,
-            headroom: cushion_headroom(self.cushion_period(rate)),
+            headroom: cushion_headroom(period),
             start_delay: 0,
             period_num: 32,
+            period_size: period,
         }
     }
 
@@ -441,6 +456,9 @@ impl ClockFacts {
             headroom: 336,
             start_delay: 3 * self.quantum_floor(rate),
             period_num: 16,
+            // Timer scheduling serves a batch device at two ALSA periods per
+            // graph cycle; leave the period to the graph.
+            period_size: 0,
         }
     }
 
@@ -767,20 +785,38 @@ mod tests {
     }
 
     #[test]
-    fn cushion_targets_the_forced_quantum_before_the_transition() {
+    fn cushion_targets_the_running_graph_quantum_under_a_host_stream() {
         let mut f = facts();
         f.force_quantum = 96;
-        // A stale probed graph quantum must not override the target the PCM
-        // will re-prepare at.
+        // The stored target is not the running value while a host stream owns
+        // the graph: the running graph quantum sizes the cushion and pins the
+        // period. A stale stored 96 must not override a 1024 host graph.
+        f.graph_quantum = Some(1024);
+        f.stream = Some(CardStream { rate: 48_000, period: 1024, buffer: 32768, channels: 18, format: PcmFormat::S32Le });
+        assert_eq!(f.cushion_period(48_000), 1024);
+        assert_eq!(f.sched_policy(48_000).headroom, 2048);
+        assert_eq!(f.sched_policy(48_000).period_size, 1024);
+        // The running period is the fallback when the graph probe is missing.
+        f.graph_quantum = None;
+        assert_eq!(f.cushion_period(48_000), 1024);
+    }
+
+    #[test]
+    fn idle_cushion_targets_the_forced_quantum_before_the_transition() {
+        let mut f = facts();
+        f.force_quantum = 96;
+        // While idle the stored target is what the PCM will re-prepare at;
+        // a stale probed graph quantum must not override it.
         f.graph_quantum = Some(64);
-        f.stream = Some(CardStream { rate: 48_000, period: 48, buffer: 2048, channels: 18, format: PcmFormat::S32Le });
         assert_eq!(f.cushion_period(48_000), 96);
         assert_eq!(f.sched_policy(48_000).headroom, 192);
+        assert_eq!(f.sched_policy(48_000).period_size, 96);
         // Without a target, the graph quantum raised to the floor is the
         // period.
         f.force_quantum = 0;
         f.graph_quantum = None;
         assert_eq!(f.cushion_period(48_000), 48);
+        assert_eq!(f.sched_policy(48_000).period_size, 48);
     }
 
     // ── Rate authority ──────────────────────────────────────────────
