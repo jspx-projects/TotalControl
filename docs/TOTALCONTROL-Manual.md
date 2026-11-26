@@ -383,7 +383,8 @@ applications cannot play at different native rates at the same time. PipeWire
 switches the graph rate when the device is idle (between tracks); it does not
 interrupt a live stream to change rate. If a browser or another application
 holds a live stream at one rate, a new track at another rate is resampled until
-that stream stops.
+that stream stops. The interface publishes its supported rates to PipeWire, so a
+DAW's device rate list shows the rates the interface runs.
 
 The **host stream is the hub**. It sets the device rate, and the graph rate and
 the available quantum both derive from it:
