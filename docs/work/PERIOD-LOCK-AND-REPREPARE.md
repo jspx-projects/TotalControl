@@ -1,9 +1,12 @@
 # Period lock and re-prepare
 
-Status: implemented on `fix/period-lock-and-reprepare`; desk-verified on the
-UCX with PipeWire 1.6.11 and the checkout driver. The specification changes are
-in `TOTALCONTROL-GUI-SPEC.md`, `TOTALCONTROL-STATE-SPEC.md`,
-`TOTALCONTROL-ARCHITECTURE.md` and `DRIVER-DESIGN.md`.
+Status: implementation in progress on `fix/period-lock-and-reprepare`. The
+period pin, the two-direction re-prepare confirmation and the gate split are
+desk-verified on the UCX with PipeWire 1.6.11 and the checkout driver. The
+cushion multiplier is under test; H=2P does not pass the 50 ms worst-case
+matrix. The specification changes are in `TOTALCONTROL-GUI-SPEC.md`,
+`TOTALCONTROL-STATE-SPEC.md`, `TOTALCONTROL-ARCHITECTURE.md` and
+`DRIVER-DESIGN.md`.
 
 ## Model
 
