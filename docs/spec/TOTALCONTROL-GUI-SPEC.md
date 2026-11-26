@@ -1254,18 +1254,12 @@ sources, including LTC; the UCX offers four: Internal, SPDIF coax., Optical
 and Word.
 
 The `Clock source` row is a picker of the unit's own clock options only; it
-never lists host engine modes. It is a Device-path control: shown in
-professional mode (`Playback mode` unchecked), and under an external owner
-(JACK / direct ALSA) regardless of the stored mode, where the owner sets the
-rate but the device options remain
-TotalControl's; a nonvisible filler of the same height in timer mode
-(`Playback mode` checked) (§4). The `Single speed word clock` and `Word clock in`
-(termination) rows are Device-path clock-sync controls likewise: shown in
-professional mode and under an external owner, same-height fillers in timer
-mode. The
-signal-path settings (Optical and
-SPDIF format, the UC reference levels, EQ for Record) and the Firmware/Serial
-readouts stay in both modes. The `Sample rate` row is the nominal-rate picker
+never lists host engine modes. It is shown on every path. The picker is active
+only while audio is stopped (no PCM owner and no host stream); while audio
+runs it is a read-only report of the actual source. The `Single speed word
+clock` and `Word clock in` (termination) rows are clock-sync controls shown on
+every path. The signal-path settings (Optical and SPDIF format, the UC
+reference levels, EQ for Record) and the Firmware/Serial readouts stay. The `Sample rate` row is the nominal-rate picker
 with three states, derived from the detected audio path and the host stream:
 
 | State | Condition | Presentation |
@@ -1282,13 +1276,13 @@ picker reports the device truth. Under a PipeWire client the owner is the
 conducting node; under JACK or direct ALSA it is the owning process. The
 tooltip reads `Controlled by <owner>`. A grayed control never shows an
 "applying…" state. The `Current rate` row directly below is a read-only readout
-of the device's actual clock, shown in every mode: the nominal rate with pitch
+of the device's actual clock, shown in every state: the nominal rate with pitch
 applied when pitch is active, and the stream/graph rate otherwise. It is
 displayed in hertz with a thousands separator (e.g. `47,952 Hz`), so the
 displayed value is the truth even when pitch detunes the clock. Each row keeps
 one vertical slot whether it is a picker, a readout or a placeholder, so the
-card does not resize between modes (§4). The rate authority lives in the host
-engine group, not here.
+card does not resize between states (§4). The engine group names the current
+rate authority.
 Read-only reports (the current rate, Graph and the latency readout) use the
 secondary text colour; editable controls use the primary colour; a grayed
 owner-controlled value uses the disabled text colour.
@@ -1296,28 +1290,26 @@ owner-controlled value uses the disabled text colour.
 Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
 fine enough). Double-click resets to 0.0 %. Every change is stored immediately
-and written to the device clock at once. While a switch to professional mode is
-still applying, the clock write waits for the IRQ re-prepare confirmation; the
-stored value and the slider update immediately. The positive end follows the
-pitch envelope: the transport carries the programmed clock only up to the band's
-packet capacity (DRIVER-DESIGN §4.1.1), so at 192 kHz the slider ends at
-+4.1 %; every other rate offers the full +5.0 %. A saved pitch above the
-running rate's envelope clamps to the slider maximum when the rate changes.
+and written to the device clock at once. While the IRQ policy is still being
+applied after a rate or quantum change, the clock write waits for the
+re-prepare confirmation; the stored value and the slider update immediately.
+The positive end follows the pitch envelope: the transport carries the
+programmed clock only up to the band's packet capacity (DRIVER-DESIGN
+§4.1.1), so at 192 kHz the slider ends at +4.1 %; every other rate offers the
+full +5.0 %. A saved pitch above the running rate's envelope clamps to the
+slider maximum when the rate changes.
 Pitch is a device-clock control, so it behaves the same on every audio path:
-the slider is shown when `Clock source` is Internal and `Playback mode` is
-professional (unchecked), and under an external PCM owner (JACK / direct ALSA).
-In timer mode the row is a nonvisible filler of the same height (§4) and the
-device clock runs nominal (0 %). Under an external clock source (SPDIF,
-Optical/ADAT, Word Clock) the unit is slaved: pitch is held at 0 % and the
-externally applied rate is respected.
+the slider is shown when `Clock source` is Internal. Under an external clock
+source (SPDIF, Optical/ADAT, Word Clock) the unit is slaved: the slider is
+shown disabled at 0 % with a tooltip, pitch is held at 0 % and the externally
+applied rate is respected.
 A conducting PipeWire client sets the nominal graph rate; the device clock
 carries the pitch and the host stream follows the detuned clock. When a client
 changes the rate, TotalControl re-applies the pitch after the change, clamped
 to the new rate's envelope.
 
 Pitch starts from a clean slate (0 %). It is reset to 0 on a clock-source
-change, on a playback-mode change (either direction), at startup and on a
-workspace load. A saved pitch is not auto-restored to the clock; the user sets
+change, at startup and on a workspace load. A saved pitch is not auto-restored to the clock; the user sets
 pitch from the slider after the transition.
 
 The panel is 360 px wide at scale 1 and its caption column is 110 px. The
@@ -1340,75 +1332,68 @@ writes each channel's own register. Rows a unit has no register for are absent
 rather than shown inert.
 
 Below the device group, the host engine group shows the rate, quantum and
-latency. The host stream is the rate authority on every path. While a stream
-runs, the group renders from kernel facts even when PipeWire is not running:
-the heading names the owner (`AUDIO ENGINE · Bitwig Studio`, `JACK` or `ALSA`),
-the rate and quantum are grayed read-only reports, and `Graph` is the running
-rate. The "PipeWire is not running" notice is shown only when there is no
-stream and no graph. `Quantum` is the
-graph quantum: one ALSA period under IRQ scheduling, two periods under
-timer scheduling (a batch device is served two periods per graph cycle). The
-`RTL` field carries the tooltip "Round Trip Latency". It is a fixed four-row
-slot: row 1 is the label and total together (`RTL x.x ms`, secondary grey),
-and the formula (USB queue, device lead, converter, graph, in milliseconds)
-wraps naturally in the rows below. The formula and the calibration basis are
-in the manual §14. The RTL field is shown in professional mode; in timer mode
-the whole four-row slot stays blank (§4). The host term is the live
-`snd_pcm_delay` of the running stream (ring fill plus in-flight URBs, read from
-the kernel) when a stream runs, so the value follows the client's actual
-write-ahead (e.g. `jackd -n`); while idle it is the graph quantum. The graph
-term assumes the DAW runs through PipeWire. It also shows the Fireface
-sink's host volume in percent and dB, with a `0 dB` action. The host volume is an attenuation before the interface, so it lowers
-the playback meters by the same amount; the interface's own faders remain
-the monitoring level.
+latency. The device clock is the hub. While a stream runs, the group renders
+from kernel facts even when PipeWire is not running: the heading names the
+owner (`AUDIO ENGINE · Bitwig Studio`, `JACK` or `ALSA`), the rate and quantum
+are grayed read-only reports, and `Graph` is the running rate. The "PipeWire
+is not running" notice is shown only when there is no stream and no graph.
 
-The engine `Playback mode` control selects the scheduling policy, not the rate
-authority. It is a checkbox: checked is timer mode with a safe quantum;
-unchecked is professional mode (IRQ scheduling and the period-aligned cushion).
-The host stream is the rate authority on every path: a PipeWire client, a JACK
-client or a direct-ALSA DAW sets the rate and the quantum where it supports it;
-TotalControl follows and names the owner. While no stream runs, the rate and
-quantum pickers set the graph defaults. When another process owns the PCM —
-`jackd` or a DAW opening the card directly — the heading names the owner and the
-pickers are grayed read-only reports. The engine group always shows `Graph`, the
-rate the card is currently running at.
+`Quantum` is the host buffer: the graph period and, under interrupt
+scheduling, the ALSA period. The engine always uses interrupt scheduling with
+the period-aligned cushion `H = 2·P`; there is no playback-mode control. A
+larger quantum is the smooth-playback choice: it raises the period, the
+cushion and the queued audio, at the cost of latency.
 
-Toggling `Playback mode` takes effect immediately. The scheduling policy is
-applied and the Pro Audio nodes are forced to re-prepare, which briefly
-restarts the stream. The shown mode is the live mode.
+The `Input` row precedes the `Output` row. It shows `—` until the capture
+chain is measured. The `Output` row carries the tooltip "Output latency (host
+to analog output)". It is a fixed block: the first line is the total (`x.x
+ms`), and the formula (USB queue, device lead, converter, host term) wraps
+below. The host term is the live `snd_pcm_delay` of the running stream, split
+into the ring fill and the in-flight queue; while idle it is the graph
+quantum. The label names the authority: `graph` on the PipeWire and JACK
+paths, `ring` on direct ALSA. The formula and the calibration basis are in the
+manual §14. Both rows keep their height in every state.
 
-The host stream rate is the hub: the stream sets the device rate, and the graph
-rate and the available quantum derive from it. While no stream runs, the rate
-and quantum pickers set the graph defaults (`clock.rate` / `clock.quantum`);
-the device keeps the last value after a stream stops, and TotalControl does not
-restore an older value. The quantum picker offers every quantum at or above the
-running rate's period floor (one URB), plus the exact floor. In timer mode the
-picker holds the convenience minimum — the highest period floor across the
-device's supported rates — as the default when no quantum is chosen; a chosen
-quantum may be lower, down to the rate floor. In either playback mode a selected
-quantum below twice the rate floor shows a zero-slack warning line, and applying
-pitch in that zone raises a notice to double the quantum: the duplex wake can
-silence or stutter pitched playback below one period of slack. A rate change
-raises a quantum below the new rate's floor to that floor and reports it. While
-a stream runs, the quantum is the stream's graph quantum: the picker is visible
-but inactive, a grayed read-only report of the actual value, with the owner
-named in the tooltip (`Controlled by <owner>`).
+The group also shows the Fireface sink's host volume in percent and dB, with a
+`0 dB` action. The host volume is an attenuation before the interface, so it
+lowers the playback meters by the same amount; the interface's own faders
+remain the monitoring level.
+
+The engine group always shows `Graph`, the rate the card is currently running
+at. A host stream sets the rate; when no stream runs the rate picker sets the
+graph default and the server-free idle write sets the device rate. When
+another process owns the PCM — `jackd` or a DAW opening the card directly —
+the heading names the owner and the pickers are grayed read-only reports. The
+quantum picker is active while no stream runs; a running stream makes it a
+grayed report of the running value. The clock-source picker is
+active only while audio is stopped (no PCM owner and no stream); while audio
+runs it reports the actual source read-only.
+
+The quantum picker offers every quantum at or above the running rate's period
+floor (one URB), plus the exact floor. The safe default — the highest period
+floor across the device's supported rates — applies when no quantum is
+stored; a chosen quantum may be lower, down to the rate floor. A selected
+quantum below twice the rate floor shows the warning line "Audio stream can
+stutter below N samples.", where N is twice the rate floor; applying pitch in
+that zone raises a notice to double the quantum. A rate change raises a
+quantum below the new rate's floor to that floor and reports it. While a host
+stream runs, the quantum picker reports the host's value with the owner named
+in the tooltip (`Controlled by <owner>`).
 
 On the JACK / direct-ALSA path the owner adopts a rate and the device follows
 it; TotalControl reports the device truth and reapplies the scene on a rate
-change. When an owner takes the PCM, TotalControl releases any global
-`clock.force-rate` / `clock.force-quantum` override it wrote (the stored
-playback mode is kept) so the owner's rate and quantum apply. While an owner
-holds the PCM the rate and quantum pickers are grayed (the owner sets them); a
+change. When an owner takes the PCM, TotalControl releases any global force it
+wrote so the owner's rate and quantum apply. While an owner holds the PCM a
 rate or quantum request through OSC is reported as controlled by the owner,
-never applied and never shown as "applying…". The playback mode is remembered
-and does not change while the owner runs. When the owner releases the PCM,
-TotalControl initializes the path exactly as a fresh start: the scheduling
-policy, the current quantum or its default, the picker bounds and the scene.
-While idle (no owner) the professional-mode rate picker writes the device clock
-server-free (the driver's idle device-rate write), confirmed from the device
-state-word readback. The PipeWire path follows the same rule: the host stream
-sets the rate and the device follows it.
+never applied and never shown as "applying…". On release, TotalControl
+re-applies the policy and the picker bounds with the adopted values and
+reapplies the scene; it does not restore an older rate or quantum.
+
+Under an external clock the device rate is the authority. TotalControl writes
+that rate as the preferred graph default, never as a force. A host that runs
+another rate produces a persistent mismatch line; setting the host rate is the
+user's responsibility. The clock source is writable only while audio is
+stopped.
 
 While a stream runs, the rate and quantum have one authority: the stream. The
 pickers are grayed reports and no pending state is shown. A rate or quantum
@@ -1453,10 +1438,10 @@ a second stream at another rate is resampled into it, because the device has
 one clock.
 Slaved to an external clock, the device is the authority: the rate picker is a
 grayed report, a stream must match the external rate, and a conflicting client
-request is refused and reported. This is the one case where TotalControl holds
-the global graph force, to protect the device rate. Selecting an external clock
-source keeps the professional mode. The external-source field decode follows
-the spec layout and is not yet hardware-verified (UC spec §9.1 open item).
+request is refused and reported. TotalControl writes the device's rate as the
+preferred graph default, never as a force. The external-source field decode
+follows the spec layout and is not yet hardware-verified (UC spec §9.1 open
+item).
 
 The installer's PipeWire clock policy (`99-fireface.conf`) sets
 `clock.allowed-rates` to the nine rates every supported device runs (32–192
@@ -2218,28 +2203,27 @@ applied to the running device as they change.
 
 ## 13. Latency display
 
-The Audio Configuration panel has one `RTL` field with the tooltip "Round
-Trip Latency". It is a fixed four-row slot in the value column, aligned with
-the pickers: the caption column carries the `RTL` label, row 1 carries the
-total (`x.x ms`, one decimal, secondary grey), and the formula (USB
-queue, device lead, converter, graph, in milliseconds) wraps naturally in the
-rows below. The formula and the terms are in the manual §14. The field is a
-Device-path report and an external-owner report: in timer mode with no external
-owner the whole four-row slot
-stays blank (§4), so the panel does not resize between modes. Under an external
-owner (JACK or a direct-ALSA DAW) or a conducting PipeWire client the field is
-shown: the host term is the live stream queue (or the owner's ALSA period) and
-the device terms are
-the same, so the value includes the device lead and converters that the DAW's
-own display may omit. The formula's last term is labelled for the authority:
-`graph` on the PipeWire and JACK paths, `ring` on the direct-ALSA path. The buffer-size
-picker sets the graph period.
+The Audio Configuration panel has an `Input` row and an `Output` field. The
+`Input` row shows `—` until the capture chain is measured. The `Output` field
+carries the tooltip "Output latency (host to analog output)". It is a fixed
+block in the value column, aligned with the pickers: the caption column
+carries the `Output` label, the first line carries the total (`x.x ms`, one
+decimal, secondary grey), and the formula (host term, USB queue, device lead,
+converter, in milliseconds) wraps below. The `Input` row follows with `—` until the capture chain is measured.
+The formula and the terms are in the manual §14. The output field is shown on
+every path: the host term is the live stream queue split into ring fill and
+in-flight queue, or the graph quantum while idle. The device terms are the
+same, so the value includes the device lead and converters that the DAW's own
+display may omit. The host term's label follows the authority: `graph` on the
+PipeWire and JACK paths, `ring` on the direct-ALSA path. The quantum picker
+sets the graph period.
 
-The value is the host round trip: USB queue, device lead, converter delay and
-one graph period (the running graph quantum, two ALSA periods under timer
-scheduling). The UC device side is loopback-measured per personality at five
-rates; the display applies a live queue delta and adds the graph period. The
-measured device values (frames, at the calibration queue) are:
+The output value is the host-to-analog-output latency: host term + USB queue +
+device lead + converter delay. The live host term is `snd_pcm_delay` minus the
+in-flight queue; the device terms are the measured or model terms. The UC
+device side is loopback-measured per personality at five rates; the display
+applies a live queue delta. The measured device values (frames, at the
+calibration queue) are:
 
 | Rate | UC PC device | queue | UC AP device | queue |
 |---|---|---|---|---|

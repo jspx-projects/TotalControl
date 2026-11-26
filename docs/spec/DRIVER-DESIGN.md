@@ -94,7 +94,7 @@ and the latency. The ring fill is the queued reserve and equals the steady
 ring latency; `out_lead` is the driver's scheduling horizon (§4.1.2), a
 margin that keeps the device output buffer fed — not held audio, since the
 device plays largely on arrival. The diagram below shows the chain; the full
-geometry, the achievable envelope and the timer/IRQ scheduling rules are in
+geometry, the achievable envelope and the scheduling policy are in
 §4.1.1 and §4.1.2.
 
 ![USB audio buffering: quantum, period, URB and latency](usb-audio-buffering.svg)
@@ -367,71 +367,53 @@ parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
 `allowed-rates` are host policy and must permit the envelope; the installer
 owns that policy.
 
-The host scheduling policy has three paths, selected by the rate authority
-("Rate follows"). The startup prefill gate (§4.1.3) mutes the outputs from
-trigger until delivery is stable in every path.
+The host scheduling policy is one: interrupt scheduling with the period-aligned
+cushion. The startup prefill gate (§4.1.3) mutes the outputs from trigger until
+delivery is stable on every path.
 
-**Device (pro path).** IRQ scheduling (`api.alsa.disable-tsched = true`);
-the graph wakes on the device's period interrupts. TotalControl holds a
-period-aligned scheduling cushion, the playback headroom `H = 2·P`, on both
-Pro Audio nodes. The IRQ wake threshold `P + H` is a whole multiple of the
-period. At fractional rates the URB cadence does not divide the period; a
-non-aligned threshold lands mid-period, doubles the write-skip rate and
-collapses the ring fill. The aligned cushion holds the fill clean at every
-supported rate under load. TotalControl sets the cushion before it forces
-rate or quantum, so the value is in place when the re-prepare reads it —
-the reference pattern (the host sets rate and margin together, then
-restarts). The cushion is the host half of the reference margin pair; the
-device lead bias (§4.1.2) is the device half.
+**Interrupt scheduling (the policy).** IRQ scheduling
+(`api.alsa.disable-tsched = true`); the graph wakes on the device's period
+interrupts. TotalControl holds a period-aligned scheduling cushion, the
+playback headroom `H = 2·P`, on both Pro Audio nodes. The IRQ wake threshold
+`P + H` is a whole multiple of the period. At fractional rates the URB cadence
+does not divide the period; a non-aligned threshold lands mid-period, doubles
+the write-skip rate and collapses the ring fill. The aligned cushion holds the
+fill clean at every supported rate under load. TotalControl sets the cushion
+before it writes the rate or quantum, so the value is in place when the
+re-prepare reads it — the reference pattern (the host sets rate and margin
+together, then restarts). The cushion is the host half of the reference margin
+pair; the device lead bias (§4.1.2) is the device half. The packaged fallback
+uses interrupt scheduling with no extra headroom; TotalControl sets `2·P` at
+runtime.
 
-**PipeWire (convenience path, the default).** Timer scheduling
-(`api.alsa.disable-tsched = false`); the graph wakes on the host timer and
-the DLL holds the queued playback delay at its target. A fixed generous
-headroom is safe at every rate here: the DLL servos the fill, so the IRQ
-wake-threshold alignment law does not apply. The graph conducts the rate
-(the device follows each stream); no per-rate cushion tracking is needed.
-The PCM declares `SNDRV_PCM_INFO_BATCH`: its pointer advances once per
-period, so the host halves the requested period and adds one period of
-headroom above `api.alsa.headroom`. The path uses a rate-scaled
-`api.alsa.start-delay` of about three URBs to keep the post-switch decay
-minima above the demand at 2x/4x rates. The packaged node default is this
-convenience policy (timer, headroom 336); it is also the fallback when
-TotalControl is not running.
-
-**JACK.** Opens the PCM directly and fills the ring just-in-time; neither
-the cushion nor the PipeWire policy applies. It is the lowest-latency path.
+**JACK.** Opens the PCM directly and fills the ring just-in-time; the PipeWire
+policy does not apply. It is the lowest-latency path.
 
 **Varispeed (pitch) tracking.** The Pro Audio playback node follows the device
-clock through the graph wake cadence, not a resampler. Under IRQ scheduling the
-wake cadence is the device's period interrupts at the pitched rate, so the
-playback follows a pitched clock directly. Under timer scheduling the wake
-cadence is the host timer at the nominal rate and only the DLL servo tracks the
-pitch: a positive pitch drains the ring before the servo locks, while a negative
-pitch fills toward capacity. A pitched clock therefore belongs only to an
-IRQ-scheduled graph and is applied after IRQ scheduling is established — the
-mode-switch precondition (the fresh-start reference: IRQ is landed while idle,
-before the pitched clock and the stream). The programmed clock stays within
-the pitch envelope (§4.1.1): the driver clamps every DDS write to the band's
-packet capacity, so the device never runs a clock the transport cannot carry.
+clock through the graph wake cadence, not a resampler. Under interrupt
+scheduling the wake cadence is the device's period interrupts at the pitched
+rate, so the playback follows a pitched clock directly. A pitched clock
+belongs only to an interrupt-scheduled graph and is applied after the IRQ
+policy is established. The programmed clock stays within the pitch envelope
+(§4.1.1): the driver clamps every DDS write to the band's packet capacity, so
+the device never runs a clock the transport cannot carry.
 
-**Timer-mode start preconditions.** A timer-mode start is correct only when it
-reaches the fresh-start state before real audio flows:
+**Start preconditions.** A start is correct only when it reaches the
+fresh-start state before real audio flows:
 
 | Precondition | Ground truth |
 |---|---|
 | PCM and graph at the target rate | `hw_params`, graph clock |
 | device clock stable at that rate (no rate-change transient) | `rate_meas` |
 | ring primed to `start-delay + period + headroom` | prepare prime |
-| DLL servo converged (`corr = 1` at nominal pitch) | DLL state |
 | client audio delivered without dropped buffers | playback buffers |
 
-The prepare path resets the DLL servo and returns the queued playback buffers to
-the client, and a rate change makes the device clock transient. A correct
-re-prepare of a running stream re-establishes these preconditions before audio
-resumes; the fresh start (DLL locks during the silent prime, before client audio)
-is the reference. In PipeWire (Auto) mode the graph rate is conducted by the
-playing stream, so a re-prepare preserves that conducted rate rather than
-re-imposing the default.
+The prepare path returns the queued playback buffers to the client, and a rate
+change makes the device clock transient. A correct re-prepare of a running
+stream re-establishes these preconditions before audio resumes; the fresh
+start (the ring primed during the silent window, before client audio) is the
+reference. The graph rate is conducted by the playing stream; a re-prepare
+preserves that conducted rate rather than re-imposing the default.
 
 The steady ring fill carries the margin and is the host's queued latency.
 
@@ -529,12 +511,12 @@ half is the scheduling cushion the host policy holds (§4.1). The device
 lead is a scheduling horizon, not held audio: the device plays largely on
 arrival, so the measured playback path is smaller than `out_lead`.
 
-The graph quantum and the ALSA period are separate quantities. In IRQ
-scheduling the host uses `P = Q`. In timer scheduling with a BATCH device the
-host requests `P = Q/2`; the driver raises the period to the floor when the
-request falls below it, and the graph keeps running at `Q`. The period
-therefore does not identify the quantum. Measured at 48 kHz: `Q` 48 → `P` 48;
-`Q` 64 → `P` 48; `Q` 128 → `P` 64.
+The graph quantum and the ALSA period are separate quantities. Under
+interrupt scheduling the host uses `P = Q`. In the timer fallback (not a user
+policy) with a BATCH device the host requests `P = Q/2`; the driver raises the
+period to the floor when the request falls below it, and the graph keeps
+running at `Q`. The period therefore does not identify the quantum. Measured
+at 48 kHz: `Q` 48 → `P` 48; `Q` 64 → `P` 48; `Q` 128 → `P` 64.
 
 Three "buffer" knobs belong to three layers:
 
@@ -921,10 +903,10 @@ The host:
 - buffers the startup prefill (`api.alsa.start-delay`) so a rate or quantum
   switch starts with a filled ring rather than a dry one; the prefill is
   startup-only and adds no steady latency (§4.1.1);
-- runs timer-based scheduling against the declared BATCH pointer, so the
-  host DLL holds the playback delay at its target (§4.1.1);
+- declares `SNDRV_PCM_INFO_BATCH` so a timer-based host halves the requested
+  period and holds the delay at its target (the timer fallback);
 - sets the refill wake cushion (`api.alsa.headroom`) for the scheduling
-  margin in either mode (§4.1.1);
+  margin of the one interrupt-scheduling policy (§4.1.1);
 - keeps the ALSA buffer above `period + headroom` so the capture driver
   node keeps waking once per period (§4.1.1; the packaged `period-num`
   covers the smallest supported period);
@@ -1022,19 +1004,18 @@ A clock word written into a running engine takes effect immediately:
 | DDS divisor, non-zero pitch | clock slews to base × (1 + pitch/100) |
 
 A clock that moves away from the graph rate drains or fills the ring until the
-host re-locks; a non-zero pitch under timer scheduling drains the ring, because
-the timer cadence cannot track a pitched clock (the Varispeed tracking paragraph
-in §4.1.1). The device clock therefore has two owners:
+host re-locks; a non-zero pitch under the timer fallback drains the ring,
+because the timer cadence cannot track a pitched clock (the Varispeed tracking
+paragraph in §4.1.1). The device clock therefore has two owners:
 
-- **Rate** — the driver, at engine start. The host moves the graph rate through
-  the PipeWire force and re-prepare; the engine-start commit lands it on the
-  device.
-- **Pitch** — the host's rate-follow-mode reconcile: nominal in PipeWire (Auto)
-  mode and under any external clock source (the unit is slaved, so the external
-  rate is respected), the pro pitch in Device mode on the internal clock after
-  IRQ scheduling is confirmed. Pitch starts at nominal (0 %) and is reset to 0
-  on a clock-source change, a rate-follow-mode change, startup and workspace
-  load; a saved pitch is not auto-restored.
+- **Rate** — the driver, at engine start. The host writes the graph default and
+  re-prepares; a conductor's force wins; the engine-start commit lands the rate
+  on the device.
+- **Pitch** — the host's clock-pitch reconcile: nominal under any external
+  clock source (the unit is slaved), the user's pitch on the internal clock
+  after the IRQ policy is confirmed. Pitch starts at nominal (0 %) and is reset
+  to 0 on a clock-source change, startup and workspace load; a saved pitch is
+  not auto-restored.
 
 A mixer scene apply writes the mixer group only. It adopts the scene's rate and
 pitch into the host model but writes neither clock word into the device, so a

@@ -494,11 +494,11 @@ metadata (`clock.rate`, `clock.quantum`, the forced values and the
 conductor (`node.force-rate`, `node.force-quantum`, `node.lock-rate`,
 `node.lock-quantum`) and, while a change is being applied, the graph quantum the
 server actually runs (`pw-top`). A PipeWire client that sets a node force or
-lock overrides the graph defaults; TotalControl writes only `clock.rate` /
-`clock.quantum` while no stream runs and adopts the running values. It never
-writes a global `clock.force-rate` / `clock.force-quantum` while a stream runs:
-the global force clears the client's node lock in the PipeWire graph. The
-global force is used only under an external clock, where the device must win.
+lock overrides the graph defaults; TotalControl writes the defaults
+`clock.rate` / `clock.quantum` and adopts the running values. It never writes a
+global `clock.force-rate` / `clock.force-quantum`: the global force clears the
+client's node lock in the PipeWire graph. Under an external clock it writes the
+device rate as the preferred default and reports a mismatch; it does not force.
 The conducting node's name is the owner. The device keeps the last rate and
 quantum after the stream stops; TotalControl does not restore an older value.
 The quantum picker offers the driver floor intersected with the host policy
@@ -520,25 +520,27 @@ direct-ALSA DAW is met with the kernel's exclusive open until the device is
 freed.
 
 A reconnect (the unit reappears after a module reload or re-enumeration) runs
-the same engine restore as a fresh start: the mode's scheduling policy, the
-forces and the scene. The policy reaches the Pro Audio nodes even when they
-appear after the restore (a fresh PipeWire, a recreated card): the worker holds
-the policy pending and applies it with a confirmed re-prepare once the nodes
-exist. The scheduling state is therefore the same on every path — fresh start,
-mode switch, reconnect.
+the same engine restore as a fresh start: the scheduling policy, the adopted
+rate/quantum and the scene. The policy reaches the Pro Audio nodes even when
+they appear after the restore (a fresh PipeWire, a recreated card): the worker
+holds the policy pending and applies it with a confirmed re-prepare once the
+nodes exist. The scheduling state is therefore the same on every path — fresh
+start, owner release, reconnect.
 
-The GUI reports a round-trip latency, not a measured acoustic round trip. It
-has two forms, and they are never added together:
+The GUI reports output latency, not a measured acoustic round trip:
 
-- **Live:** `RTL = snd_pcm_delay + device lead + converter delay` (plus the
-  mirrored capture chain for a round trip). `snd_pcm_delay` is the ring
-  occupancy (`appl_ptr − hw_ptr`) plus the in-flight URB queue
-  (`runtime->delay`); the graph cycle is already contained in the queued
-  occupancy, so no separate quantum term is added.
-- **Model estimate:** the server's queued target (about one quantum plus the
-  headroom; two periods under timer scheduling) plus the in-flight queue, the
-  device lead and the converter delay. This is the planning value; it must
-  not be combined with a live `snd_pcm_delay`.
+- **Live:** `output latency = snd_pcm_delay + device lead + converter delay`.
+  `snd_pcm_delay` is the ring occupancy (`appl_ptr − hw_ptr`) plus the
+  in-flight URB queue (`runtime->delay`); the display splits out the in-flight
+  queue so the USB queue is counted once. The host term is labelled `graph` on
+  the PipeWire and JACK paths and `ring` on direct ALSA.
+- **Model estimate:** the graph quantum plus the in-flight queue, the device
+  lead and the converter delay. This is the planning value; it is not combined
+  with a live `snd_pcm_delay`.
+
+The input latency (ADC, input queue and capture ring) is not reported yet; the
+`Input` row shows `—`. The host-to-host round trip is the sum of the two rows
+once the input is measured.
 
 Every buffer is counted once. The host ring and the in-flight queue are
 distinct terms.
@@ -580,15 +582,12 @@ playback follower PCM to the capture driver PCM (`api.alsa.auto-link`).
 The driver's XRUN recovery re-prepares the driver and then each linked
 follower; an unlinked follower is skipped and must recover on its own.
 
-The host scheduling policy has three paths (DRIVER-DESIGN §4.1). The
-**Device** pro path uses IRQ scheduling and a period-aligned cushion
-`H = 2·period`, set before each rate/quantum change; a non-aligned IRQ wake
-threshold collapses the ring fill at fractional rates. The **PipeWire**
-convenience path (the default) uses timer scheduling and a fixed generous
-margin the DLL servos — safe at every rate, no per-rate tracking. **JACK**
-opens the PCM directly with a just-in-time fill. The refill wake cushion
-(`api.alsa.headroom`) requires `buffer > period + headroom`; below that
-limit the SPA wake thresholds degenerate and the graph cycles at buffer
+The host scheduling policy is one (DRIVER-DESIGN §4.1): interrupt scheduling
+with the period-aligned cushion `H = 2·period`, set before each rate/quantum
+change; a non-aligned IRQ wake threshold collapses the ring fill at fractional
+rates. **JACK** opens the PCM directly with a just-in-time fill. The refill
+wake cushion (`api.alsa.headroom`) requires `buffer > period + headroom`; below
+that limit the SPA wake thresholds degenerate and the graph cycles at buffer
 granularity, so the period count keeps the inequality at every quantum.
 
 The both-pending wake adds a deferral latency equal to the phase offset

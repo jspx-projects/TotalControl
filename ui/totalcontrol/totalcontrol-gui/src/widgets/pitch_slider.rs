@@ -27,6 +27,7 @@ pub struct PitchSlider<Message> {
     pub range: (f32, f32),
     pub step: f32,
     pub scale: f32,
+    pub enabled: bool,
     pub on_change: Box<dyn Fn(f32) -> Message>,
     pub on_reset: Box<dyn Fn() -> Message>,
 }
@@ -55,6 +56,9 @@ impl<Message> canvas::Program<Message> for PitchSlider<Message> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        if !self.enabled {
+            return None;
+        }
         let track_left = bounds.x + HANDLE_R * self.scale;
         let track_w = (bounds.width - 2.0 * HANDLE_R * self.scale).max(1.0);
         let locate = |x: f32| t_to_value((x - track_left) / track_w, self.range);
@@ -140,11 +144,21 @@ impl<Message> canvas::Program<Message> for PitchSlider<Message> {
         let zero_t = value_to_t(0.0, self.range);
         let x = left + t * width;
         let zero_x = left + zero_t * width;
+        let track = if self.enabled {
+            theme::border()
+        } else {
+            theme::disabled_text()
+        };
+        let active = if self.enabled {
+            theme::ACCENT
+        } else {
+            theme::disabled_text()
+        };
 
         frame.fill_rectangle(
             Point::new(left, center_y - TRACK_H * self.scale / 2.0),
             Size::new(width, TRACK_H * self.scale),
-            theme::border(),
+            track,
         );
         let (fill_left, fill_right) = if x >= zero_x {
             (zero_x, x)
@@ -154,11 +168,11 @@ impl<Message> canvas::Program<Message> for PitchSlider<Message> {
         frame.fill_rectangle(
             Point::new(fill_left, center_y - TRACK_H * self.scale / 2.0),
             Size::new((fill_right - fill_left).max(1.0), TRACK_H * self.scale),
-            theme::ACCENT,
+            active,
         );
         frame.fill(
             &Path::circle(Point::new(x, center_y), HANDLE_R * self.scale),
-            Color::WHITE,
+            if self.enabled { Color::WHITE } else { theme::border() },
         );
         frame.stroke(
             &Path::circle(Point::new(x, center_y), HANDLE_R * self.scale),
@@ -174,6 +188,7 @@ pub fn pitch_slider(
     value: f32,
     scale: f32,
     range: (f32, f32),
+    enabled: bool,
     on_change: impl Fn(f32) -> crate::app::Message + 'static,
     on_reset: impl Fn() -> crate::app::Message + 'static,
 ) -> Element<'static, crate::app::Message> {
@@ -182,6 +197,7 @@ pub fn pitch_slider(
         range,
         step: 0.1,
         scale,
+        enabled,
         on_change: Box::new(on_change),
         on_reset: Box::new(on_reset),
     })

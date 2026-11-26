@@ -278,8 +278,23 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
     // A policy issued before the Pro Audio nodes existed (a fresh PipeWire,
     // a module reload) is held here and lands when the nodes appear.
     let mut pending_policy: Option<SchedPolicy> = None;
+    // The last policy, re-applied when the nodes are recreated (a WirePlumber
+    // restart or a recreated card loses the runtime props).
+    let mut last_policy: Option<SchedPolicy> = None;
+    let mut last_nodes: Option<(u32, u32)> = None;
 
     while !stop.load(Ordering::Relaxed) {
+        match pw_clock::fireface_pro_node_ids() {
+            Some(ids) => {
+                if last_nodes != Some(ids) {
+                    last_nodes = Some(ids);
+                    if let Some(policy) = last_policy {
+                        pending_policy = Some(policy);
+                    }
+                }
+            }
+            None => last_nodes = None,
+        }
         if let Some(policy) = pending_policy.take() {
             if let Some((out, inp)) = pw_clock::fireface_pro_node_ids() {
                 if pw_clock::set_sched_policy(out, &policy).is_ok() {
@@ -339,6 +354,7 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
                 }
             }
             Intent::SetSchedPolicy(policy) => {
+                last_policy = Some(policy);
                 if let Some((out, inp)) = pw_clock::fireface_pro_node_ids() {
                     if pw_clock::set_sched_policy(out, &policy).is_ok() {
                         let _ = pw_clock::set_sched_policy(inp, &policy);

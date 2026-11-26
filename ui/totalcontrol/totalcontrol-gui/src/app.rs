@@ -2569,9 +2569,6 @@ pub enum Message {
     /// Force PipeWire's graph rate (Hz), `0` = back to its default. See
     /// `totalcontrol_core::pw_clock`: system-wide, until PipeWire restarts.
     EngineRate(u32),
-    /// Select how the graph rate is chosen: `Auto` or a fixed rate (which
-    /// arrives through [`Message::EngineRate`]).
-    EngineRateMode(EngineRateMode),
     /// Force PipeWire's quantum (buffer size in samples), `0` = default.
     EngineQuantum(u32),
     /// Zero the transport-error display against the driver's current counters.
@@ -3159,12 +3156,12 @@ pub struct TotalControl {
     /// kept in the preferences and applied again at launch.
     pub engine_force_rate: u32,
     pub engine_force_quantum: u32,
-    /// How the graph rate is chosen: Auto (the graph conducts, the device
-    /// follows) or Fixed (the device-set rate is forced).
+    /// The retired playback-mode setting. It is kept for preferences
+    /// compatibility and ignored by the application.
     pub engine_rate_mode: EngineRateMode,
     /// The clock pitch last written to the device, and whether a scene
-    /// reapply may have changed it behind our back. The convenience path
-    /// forces the nominal clock; the Device path restores the saved pitch.
+    /// reapply may have changed it behind our back. The pitch is the user's
+    /// internal-clock setting; an external clock holds it nominal.
     pub pitch_clock_applied: Option<f32>,
     pub pitch_clock_dirty: bool,
     /// The user's pro pitch intent, owned by the GUI. A scene reapply clones
@@ -3879,10 +3876,26 @@ fn engine_intent(state: &TotalControl, intent: crate::audio_path_service::Intent
         .is_some_and(|svc| svc.send(intent))
 }
 
-/// The detected audio path, from the kernel PCM owner and TotalControl's rate
-/// mode. The owner is a kernel fact (the engine snapshot), never a setting.
+/// The detected audio path, from the kernel PCM owner. The owner is a kernel
+/// fact (the engine snapshot), never a setting.
 fn detected_path(state: &TotalControl) -> audio_path::AudioPath {
-    audio_path::classify(state.pcm_owner, state.engine_rate_mode, None)
+    audio_path::classify(state.pcm_owner, None)
+}
+
+/// The external-clock mismatch: the graph rate differs from the device's
+/// reported rate. Under an external clock the device rate is the authority;
+/// the warning is persistent while the two differ.
+fn external_clock_mismatch(state: &TotalControl) -> Option<(u32, u32)> {
+    if state.device.settings().clock_source == "Internal" {
+        return None;
+    }
+    let device = state.device.device_rate().filter(|r| *r > 0)?;
+    let graph = state
+        .card_stream
+        .map(|stream| stream.rate)
+        .or_else(|| state.engine.map(|clock| clock.effective_rate()))
+        .filter(|r| *r > 0)?;
+    (graph != device).then_some((graph, device))
 }
 
 /// Whether TotalControl may write the PipeWire graph: only when PipeWire owns
@@ -3892,41 +3905,18 @@ fn graph_writable(state: &TotalControl) -> bool {
     !detected_path(state).is_external()
 }
 
-/// Write the rate target off the UI thread. On the internal clock this is the
-/// graph default (`clock.rate`), which a conducting node's `node.force-rate`
-/// overrides. Under an external clock it is the global force that protects the
-/// device rate.
+/// Write the rate as the graph default (`clock.rate`), which a conducting
+/// node's `node.force-rate` overrides. Under an external clock this is the
+/// preferred default; TotalControl never writes a global force.
 fn write_rate(state: &TotalControl, rate: u32) {
-    if !graph_writable(state) {
-        return;
-    }
-    let external = state.device.settings().clock_source != "Internal";
-    if external {
-        if !engine_intent(state, crate::audio_path_service::Intent::ForceRate(rate)) {
-            if let Err(e) = pw_clock::force_rate(rate) {
-                log::warn!("Setting the PipeWire rate failed: {e}");
-            }
-        }
-    } else if !engine_intent(state, crate::audio_path_service::Intent::DefaultRate(rate)) {
-        if let Err(e) = pw_clock::set_default_rate(rate) {
-            log::warn!("Setting the PipeWire default rate failed: {e}");
-        }
-    }
+    write_default_rate(state, rate);
 }
 
-/// Write the quantum target off the UI thread. Same split as [`write_rate`].
+/// Write the quantum as the graph default (`clock.quantum`). A conducting
+/// node's `node.force-quantum` overrides it. Under an external clock this is
+/// the preferred default; TotalControl never writes a global force.
 fn write_quantum(state: &TotalControl, quantum: u32) {
-    if !graph_writable(state) {
-        return;
-    }
-    let external = state.device.settings().clock_source != "Internal";
-    if external {
-        if !engine_intent(state, crate::audio_path_service::Intent::ForceQuantum(quantum)) {
-            let _ = pw_clock::force_quantum(quantum);
-        }
-    } else if !engine_intent(state, crate::audio_path_service::Intent::DefaultQuantum(quantum)) {
-        let _ = pw_clock::set_default_quantum(quantum);
-    }
+    write_default_quantum(state, quantum);
 }
 
 /// Adopt the running stream's rate as the current/default. Used by the engine
@@ -4326,14 +4316,9 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         .unwrap_or_else(|| state.device.capture_scene());
     // The host scene deliberately does not let device-reported values
     // overwrite the saved mix.  The live rate and Dim amount are workspace
-    // settings, so take their current values at save time.  In Auto mode
-    // the workspace stores the graph's current rate, without turning it into
-    // the user's fixed-rate choice.
-    scene.settings.sample_rate = if state.engine_rate_mode == EngineRateMode::Fixed {
-        state.device.settings().sample_rate
-    } else {
-        current_graph_rate(state)
-    };
+    // settings, so take their current values at save time.  A workspace
+    // stores the graph's current rate.
+    scene.settings.sample_rate = current_graph_rate(state);
     scene.settings.pitch_percent = state.pro_pitch;
     scene.settings.dim_amount_db = state.control_room.main_dim_db;
     // The Control Room assignment is the source of truth for Main and
@@ -4565,11 +4550,6 @@ fn apply_workspace_state(
     // The Dim amount is both a Control Room preference and part of the
     // active workspace state.  Older files may only carry the preference.
     scene.settings.dim_amount_db = workspace.control_room.main_dim_db;
-    // A file's rate is only applied in fixed-rate mode.  Auto keeps the
-    // mode and rate it is already running at.
-    if state.engine_rate_mode != EngineRateMode::Fixed {
-        scene.settings.sample_rate = state.device.settings().sample_rate;
-    }
     scene
         .check_compatible(state.device.canonical_model())
         .map_err(|e| e.to_string())?;
@@ -4686,9 +4666,12 @@ fn apply_workspace_pfl(state: &mut TotalControl, workspace: &Workspace) -> Resul
 /// model/register; this also moves the PipeWire graph when the sound server
 /// owns the card, then schedules a scene reapply for the stream restart.
 fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
-    // A workspace stores its graph rate, but Auto keeps its current mode
-    // and must not be pinned to the file's value.
-    if state.engine_rate_mode != EngineRateMode::Fixed {
+    // The device rate is the external clock's under an external source; a
+    // running host owns the rate. A workspace load does not override either.
+    if state.device.settings().clock_source != "Internal" {
+        return;
+    }
+    if state.card_stream.is_some() || !matches!(state.pcm_owner, audio_path::PcmOwner::Idle) {
         return;
     }
     let rate = scene.settings.sample_rate;
@@ -5911,13 +5894,11 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     enforce_quantum_floor(state, rate);
 }
 
-/// Hold the device rate under an external clock source. On the internal clock
-/// the host stream owns the rate and this does nothing: TotalControl writes
-/// only the default `clock.rate`, and a client's `node.force-rate` wins.
-/// Slaved to an external clock, the device's reported rate is the authority;
-/// re-assert the global force when it diverges, bounded to one re-assert per
-/// settling window. A pending user selection owns its confirmation window and
-/// is left alone.
+/// Keep the device rate under an external clock source as the preferred graph
+/// default (`clock.rate`). On the internal clock the host stream owns the rate
+/// and this does nothing. The write is passive: it never forces the graph and
+/// never restarts a conducting client. A host that runs another rate produces
+/// the reported mismatch; the user sets the host rate.
 fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
     if state.device.is_mock()
         || !state.device.rate_follows_sound_server()
@@ -5926,46 +5907,29 @@ fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
     {
         return;
     }
-    // Slaved to an external clock, the device's reported rate is the authority
-    // so the readout and the force agree.
+    // Slaved to an external clock, the device's reported rate is the authority.
     if let Some(rate) = state.device.device_rate().filter(|r| *r > 0) {
         state.engine_force_rate = rate;
     }
     let Some(desired) = rate_authority_target(state, clock) else {
         return;
     };
-    state.rate_authority_reforce = Some(Instant::now());
     apply_engine_policy(state, desired);
     write_rate(state, desired);
     state.engine_force_rate = desired;
-    state.pending_device_rate = state
-        .card_stream
-        .is_some()
-        .then_some((desired, Instant::now()));
-    if let Some(e) = state.engine.as_mut() {
-        e.force_rate = desired;
-    }
-    // Re-asserting the force must also apply it: a restarted/idle graph will
-    // not pick up the metadata on its own.
-    force_engine_reprepare(state);
-    log::info!("rate-authority: re-asserted {desired} Hz");
+    log::info!("rate-authority: preferred graph default {desired} Hz");
 }
 
-/// The rate TotalControl must hold under an external clock source, or `None`
-/// when the host stream/default owns the rate. On the internal clock the host
-/// stream is the authority and this returns `None`. Kept separate from the
-/// write so it is testable without PipeWire.
+/// The preferred graph rate under an external clock source, or `None` when the
+/// internal clock or the current default already matches. Kept separate from
+/// the write so it is testable without PipeWire.
 fn rate_authority_target(state: &TotalControl, clock: Option<PwClock>) -> Option<u32> {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return None;
     }
     let mut facts = clock_facts(state);
     facts.clock = clock;
-    let pending = state.pending_device_rate.is_some();
-    let reforce_cooling = state
-        .rate_authority_reforce
-        .is_some_and(|at| at.elapsed() < Duration::from_secs(3));
-    facts.rate_authority_target(pending, reforce_cooling)
+    facts.rate_authority_target()
 }
 
 /// Replace `clock.allowed-rates` with the connected device's list, saving the
@@ -6222,7 +6186,6 @@ fn changes_host_settings(message: &Message) -> bool {
             | Message::SetSyncDirection(_)
             | Message::SetAlwaysInitDevice(_)
             | Message::EngineRate(_)
-            | Message::EngineRateMode(_)
             | Message::EngineQuantum(_)
             | Message::SelectDevice(_)
             | Message::WorkspaceSave
@@ -9590,7 +9553,6 @@ fn is_undoable(message: &Message) -> bool {
             | Message::PointerPressed
             | Message::FieldFocus(..)
             | Message::EngineRate(_)
-            | Message::EngineRateMode(_)
             | Message::EngineQuantum(_)
             | Message::EnginePoll
             | Message::EngineRead(..)
@@ -9803,9 +9765,7 @@ fn protocol_feature_allowed(state: &TotalControl, message: &Message) -> bool {
         Message::TalkbackChanged(_) => caps.talkback,
         Message::SpeakerB(..) => caps.speaker_b,
         Message::DimToggle => caps.dim,
-        Message::PitchChanged(_) => {
-            caps.pitch && state.engine_rate_mode == EngineRateMode::Fixed
-        }
+        Message::PitchChanged(_) => caps.pitch,
         Message::InputLinkChanged(_) => caps.input_link,
         Message::An12Changed(_) => caps.an12,
         _ => false,
@@ -9991,9 +9951,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::WorkspaceSaveAs
                 | Message::LoadSurroundWorkspace(_)
                 | Message::CloseWorkspace
-                // The rate mode is a host preference, not workspace state;
-                // changing it must not dirty an open workspace.
-                | Message::EngineRateMode(_)
         )
     {
         state.workspace_dirty = true;
@@ -11828,12 +11785,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_osc_bool(state, format!("/{kind}/{id}/stereo"), linked);
         }
         Message::PitchChanged(v) => {
-            // Pitch is a Device-path control on the internal clock; the
-            // convenience clock runs nominal and a slaved (external) clock
-            // must not be pitched. Ignore pitch moves outside that case (the
-            // slider is hidden there, but OSC/controllers may still send them).
+            // Pitch is a device-clock control on the internal clock; a slaved
+            // (external) clock must not be pitched. Ignore pitch moves outside
+            // that case (the slider is hidden there, but OSC/controllers may
+            // still send them).
             let internal = state.device.settings().clock_source == "Internal";
-            if state.engine_rate_mode == EngineRateMode::Fixed && internal {
+            if internal {
                 // The pitch envelope: above the transport ceiling the device
                 // cannot carry the clock; clamp to the slider's grid maximum.
                 let v = v.clamp(-5.0, pitch_slider_max(state));
@@ -12768,6 +12725,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::ClockSourceSelected(source) => {
+            // The clock source is a device setting, writable only while audio
+            // is stopped: no PCM owner and no host stream.
+            if !matches!(state.pcm_owner, audio_path::PcmOwner::Idle) || state.card_stream.is_some()
+            {
+                state.notice = Some((
+                    "Stop audio to change the clock source.".into(),
+                    Instant::now(),
+                ));
+                return Task::none();
+            }
             if let Err(e) = state.device.set_clock_source(&source) {
                 fail(state, "set_clock_source", &e);
             }
@@ -12777,19 +12744,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.pro_pitch = 0.0;
             state.pitch_clock_dirty = true;
             reconcile_device_pitch(state);
-            // Slaved to an external clock the device owns the rate: hold
-            // Fixed mode and follow the device's reported rate. The live
-            // reconcile tracks it once the unit locks to the new source.
+            // Slaved to an external clock the device owns the rate. Write the
+            // device's reported rate as the preferred graph default; never
+            // force the graph. The live reconcile tracks it once the unit
+            // locks to the new source.
             if source != "Internal"
                 && state.device.rate_follows_sound_server()
                 && !state.device.is_mock()
             {
-                state.engine_rate_mode = EngineRateMode::Fixed;
-                state.rate_authority_reforce = None;
                 apply_graph_rate(state, device_authority_rate(state), true);
-                // Apply the force and policy to the PCM now, not only when the
-                // reconcile next re-asserts; the device rate is re-tracked once
-                // the unit locks to the new source.
                 force_engine_reprepare(state);
             }
             notify_osc_raw(state, "/clock_source", vec![OscType::String(source)]);
@@ -12924,6 +12887,16 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
                 return Task::none();
             }
+            // Under an external clock the device rate is the authority. The
+            // rate picker is a filler; a request (OSC or controller) never
+            // writes the device clock.
+            if state.device.settings().clock_source != "Internal" {
+                state.notice = Some((
+                    "The rate is set by the external clock.".into(),
+                    Instant::now(),
+                ));
+                return Task::none();
+            }
             // A host stream owns the rate while it runs. Report the owner;
             // never write a competing request.
             if rate > 0 && (state.card_stream.is_some() || state.conductor.is_some()) {
@@ -12974,40 +12947,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 ));
             }
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(rate as i32)]);
-        }
-        Message::EngineRateMode(mode) => {
-            state.engine_rate_mode = mode;
-            state.rate_authority_reforce = None;
-            // The pitch belongs to professional mode; reset it on a mode
-            // change (a saved pitch is not restored).
-            state.pro_pitch = 0.0;
-            state.pitch_after_reprepare = None;
-            state.pitch_clock_dirty = true;
-            // Timer mode defaults to the safe quantum. A conductor's quantum
-            // still wins while it runs.
-            if mode == EngineRateMode::Auto && !state.device.is_mock() {
-                let floor = convenience_quantum_min(state);
-                if state.engine_force_quantum < floor {
-                    state.engine_force_quantum = floor;
-                    write_quantum(state, floor);
-                }
-            }
-            // Apply the scheduling policy and re-prepare so it lands now.
-            let rate = running_rate(state);
-            apply_engine_policy(state, rate);
-            let gen_before = state
-                .audio_path_service
-                .as_ref()
-                .map(|svc| svc.snapshot().reprepare_gen);
-            force_engine_reprepare(state);
-            let async_reprepare = gen_before.is_some()
-                && !state.device.is_mock()
-                && state.device.rate_follows_sound_server()
-                && graph_writable(state);
-            state.pitch_after_reprepare = if async_reprepare { gen_before } else { None };
-            if !async_reprepare {
-                reconcile_device_pitch(state);
-            }
         }
         Message::EngineQuantum(quantum) => {
             // Under an external owner the quantum is the owner's ALSA period,
@@ -13062,7 +13001,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     if quantum > 0 {
                         format!("Setting quantum to {quantum} samples \u{2014} applying\u{2026}")
                     } else {
-                        "Quantum set to Auto \u{2014} PipeWire chooses.".into()
+                        "Quantum reset to the safe default.".into()
                     },
                     Instant::now(),
                 ));
@@ -13267,9 +13206,18 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                             }
                         }
                     }
-                    let quantum = graph_quantum
-                        .or_else(|| clock.map(|c| c.effective_quantum()))
-                        .filter(|q| *q > 0);
+                    // A conductor or an external owner sets the quantum; adopt
+                    // it. A follower and TotalControl's own control capture
+                    // leave the user's stored quantum as the default.
+                    let host_sets_buffer = state.conductor.is_some()
+                        || detected_path(state).is_external();
+                    let quantum = if host_sets_buffer {
+                        graph_quantum
+                            .or_else(|| clock.map(|c| c.effective_quantum()))
+                            .filter(|q| *q > 0)
+                    } else {
+                        None
+                    };
                     let mut quantum_changed = false;
                     if let Some(quantum) = quantum {
                         if state.engine_force_quantum != quantum {
@@ -15656,7 +15604,6 @@ fn rate_caps(state: &TotalControl) -> RateCaps {
 /// from its collected facts; these accessors keep one implementation in core.
 fn clock_facts(state: &TotalControl) -> ClockFacts {
     ClockFacts {
-        mode: state.engine_rate_mode,
         force_rate: state.engine_force_rate,
         force_quantum: state.engine_force_quantum,
         clock: state.engine,
@@ -15817,26 +15764,24 @@ fn device_rates(state: &TotalControl) -> Vec<u32> {
     clock_facts(state).device_rates()
 }
 
-/// The convenience-path quantum minimum: the highest period floor across
-/// the device's supported rates. A quantum at or above it is achievable at
-/// every rate, so a graph-conducted rate switch never leaves an impossible
-/// quantum. Derived from the envelope (192 on the UCX), not hardcoded.
-fn convenience_quantum_min(state: &TotalControl) -> u32 {
-    clock_facts(state).convenience_quantum_min()
+/// The safe default quantum: the highest period floor across the device's
+/// supported rates. A quantum at or above it is achievable at every rate, so
+/// a rate switch never leaves an impossible default. Derived from the
+/// envelope (192 on the UCX), not hardcoded.
+fn safe_default_quantum(state: &TotalControl) -> u32 {
+    clock_facts(state).safe_default_quantum()
 }
 
-/// The lowest quantum the current mode allows at `rate`. The Device path
-/// uses the rate's period floor; the convenience path also holds the
-/// convenience minimum so the quantum is safe at every graph rate.
+/// The lowest quantum at `rate`: the rate's period floor. The safe default is
+/// a preference, not a lower bound.
 fn minimum_quantum(state: &TotalControl, rate: u32) -> u32 {
     clock_facts(state).minimum_quantum(rate)
 }
 
-/// Keep the quantum achievable at `rate`. A rate change can raise the
-/// period floor above the forced value; raise the force to the floor so the
-/// GUI never holds an impossible setting. The convenience path forces a
-/// quantum (no graph Auto): a zero force becomes the convenience minimum.
-/// The Device path leaves an Auto (0) quantum to the graph.
+/// Keep the quantum achievable at `rate` and, while no host stream runs, keep
+/// the graph default at the user's quantum. A rate change can raise the period
+/// floor above the chosen value; raise it to the floor so the GUI never holds
+/// an impossible setting. A zero value becomes the safe default quantum.
 fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() || rate == 0 {
         return;
@@ -15847,22 +15792,35 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
     let floor = minimum_quantum(state, rate);
     let current = state.engine_force_quantum;
     let target = if current == 0 {
-        if state.engine_rate_mode == EngineRateMode::Auto {
-            floor
-        } else {
-            return;
-        }
+        safe_default_quantum(state)
     } else if current < floor {
         floor
     } else {
-        return;
+        current
     };
-    state.engine_force_quantum = target;
-    if let Some(engine) = state.engine.as_mut() {
-        engine.quantum = target;
+    // Read the graph default before the optimistic state update below.
+    let default = state.engine.map(|clock| clock.effective_quantum()).unwrap_or(0);
+    let mut changed = target != current;
+    if changed {
+        state.engine_force_quantum = target;
+        if let Some(engine) = state.engine.as_mut() {
+            engine.quantum = target;
+        }
     }
-    write_quantum(state, target);
-    apply_engine_policy(state, rate);
+    // While no host sets the buffer, the stored quantum is the graph default.
+    // A stale probed value must not pin the cushion to an old quantum.
+    let host_active = state.card_stream.is_some() || state.conductor.is_some();
+    let recent_change = state
+        .quantum_change_at
+        .is_some_and(|at| at.elapsed() < Duration::from_secs(2));
+    if !host_active && default != target && !recent_change {
+        write_quantum(state, target);
+        state.quantum_change_at = Some(Instant::now());
+        changed = true;
+    }
+    if changed {
+        apply_engine_policy(state, rate);
+    }
 }
 
 /// Force the graph to apply the pending rate/quantum forces and scheduling
@@ -15916,11 +15874,7 @@ fn reconcile_device_pitch(state: &mut TotalControl) {
     // clock the device does not own. Hold nominal (0 %) under any external
     // source, in both rate-follow modes, and respect the external rate.
     let internal = state.device.settings().clock_source == "Internal";
-    let mut desired = if state.engine_rate_mode == EngineRateMode::Fixed && internal {
-        saved
-    } else {
-        0.0
-    };
+    let mut desired = if internal { saved } else { 0.0 };
     // A saved pitch above the running rate's transport ceiling clamps to the
     // slider's grid maximum; the stored setting follows so the display is the
     // truth. The driver clamps the DDS write to the same ceiling.
@@ -15985,28 +15939,6 @@ fn apply_engine_policy(state: &mut TotalControl, rate: u32) {
     }
 }
 
-const PLAYBACK_MODE_TIMER: &str = "Timer mode";
-
-/// The `Playback mode` checkbox: checked is timer mode with a safe quantum;
-/// unchecked is professional mode (IRQ scheduling and the period-aligned
-/// cushion). It selects the scheduling policy only; the host stream is the
-/// rate authority on every path.
-fn playback_mode_control(mode: EngineRateMode, scale: f32) -> Element<'static, Message> {
-    let timer = mode == EngineRateMode::Auto;
-    checkbox(timer)
-        .label(PLAYBACK_MODE_TIMER)
-        .on_toggle(move |on| {
-            Message::EngineRateMode(if on {
-                EngineRateMode::Auto
-            } else {
-                EngineRateMode::Fixed
-            })
-        })
-        .style(theme::checkbox)
-        .text_size(theme::TEXT_DIALOG * scale)
-        .into()
-}
-
 /// A read-only value in the secondary colour. The panel's visual language:
 /// read-only reports are grey; interactive controls (pickers, sliders,
 /// buttons) are primary.
@@ -16014,11 +15946,14 @@ fn readout(value: String, text_size: f32) -> Element<'static, Message> {
     text(value).color(theme::text_sec()).size(text_size).into()
 }
 
-/// A grayed read-only value in a picker slot under an external owner: the
-/// field shape stays, the value reads muted, no menu opens, and the tooltip
-/// names the owner ("Controlled by <owner>"). The owner sets the value while
-/// it holds the PCM; TotalControl reports it (gray-when-owned, GUI spec §3.3).
-fn owned_field(value: String, owner: &str, scale: f32, text_size: f32) -> Element<'static, Message> {
+/// A grayed read-only value in a picker slot: the field shape stays, the value
+/// reads muted, no menu opens, and the tooltip carries the reason.
+fn readonly_field(
+    value: String,
+    hint: &str,
+    scale: f32,
+    text_size: f32,
+) -> Element<'static, Message> {
     strip::hint(
         container(
             text(value)
@@ -16029,9 +15964,17 @@ fn owned_field(value: String, owner: &str, scale: f32, text_size: f32) -> Elemen
         .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
         .width(Length::Fill)
         .style(theme::grayed_field),
-        format!("Controlled by {owner}"),
+        hint.to_string(),
         scale,
     )
+}
+
+/// A grayed read-only value in a picker slot under an external owner: the
+/// field shape stays, the value reads muted, no menu opens, and the tooltip
+/// names the owner ("Controlled by <owner>"). The owner sets the value while
+/// it holds the PCM; TotalControl reports it (gray-when-owned, GUI spec §3.3).
+fn owned_field(value: String, owner: &str, scale: f32, text_size: f32) -> Element<'static, Message> {
+    readonly_field(value, &format!("Controlled by {owner}"), scale, text_size)
 }
 
 /// A sample rate as people say it: "48 kHz", "44.1 kHz", "176.4 kHz".
@@ -16074,11 +16017,7 @@ fn actual_device_rate(state: &TotalControl) -> Option<u32> {
             (r > 0).then_some(r)
         })?;
     let internal = state.device.settings().clock_source == "Internal";
-    let pitch = if state.engine_rate_mode == EngineRateMode::Fixed && internal {
-        state.pro_pitch
-    } else {
-        0.0
-    };
+    let pitch = if internal { state.pro_pitch } else { 0.0 };
     Some((base as f64 * (1.0 + pitch as f64 / 100.0)).round() as u32)
 }
 
@@ -16245,28 +16184,34 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
 
-    // Device-path controls (clock source, pitch, word clock) are shown on the
-    // internal clock when TotalControl is the device-clock authority: in Device
-    // mode, or under an external owner (JACK / direct ALSA), where the owner
-    // sets the rate but the device options remain TotalControl's. The
-    // convenience (PipeWire) path keeps them as fillers.
-    let device_controls =
-        audio_path::device_controls_visible(detected_path(state), state.engine_rate_mode);
+    // Device-path controls (clock source, pitch, word clock) are shown on
+    // every path; the clock source is active only while audio is stopped.
+    let device_controls = audio_path::device_controls_visible(detected_path(state));
     let mut body = column![section("DEVICE")];
-    // Clock source is a Device-path control. In convenience the row keeps its
-    // space as a nonvisible filler, like Pitch (GUI spec §4).
+    // The clock source is a device setting. It is read-only while a PCM owner
+    // or a stream is active; the row keeps its slot.
+    let audio_running = state.card_stream.is_some()
+        || !matches!(state.pcm_owner, audio_path::PcmOwner::Idle);
+    let clock_control: Element<'static, Message> = if audio_running {
+        readonly_field(
+            settings.clock_source.clone(),
+            "Stop audio to change the clock source.",
+            scale,
+            text_size,
+        )
+    } else {
+        field(pick_list(
+            settings.clock_sources.clone(),
+            Some(settings.clock_source.clone()),
+            Message::ClockSourceSelected,
+        ))
+        .into()
+    };
     if device_controls {
         body = body.push(
-            row![
-                caption("Clock source"),
-                field(pick_list(
-                    settings.clock_sources.clone(),
-                    Some(settings.clock_source.clone()),
-                    Message::ClockSourceSelected,
-                )),
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
+            row![caption("Clock source"), clock_control]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
         );
     } else {
         body = body.push(
@@ -16275,12 +16220,10 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 .height(Length::Fixed(30.0 * scale)),
         );
     }
-    // The device rate is a device fact. In Auto mode, or when the device is
-    // slaved to an external clock, it is a read-only readout of the rate the
-    // unit reports; otherwise it is an editable picker. The mode that drives
-    // it lives in the AUDIO ENGINE group, not here.
+    // The device rate is a device fact. Under an external owner or an external
+    // clock it is a read-only readout; otherwise it is an editable picker.
     let internal = settings.clock_source == "Internal";
-    let device_mode = state.engine_rate_mode == EngineRateMode::Fixed;
+    let device_mode = true;
     // Row 1: the nominal-rate picker. Active in Device mode on the internal
     // clock (the PipeWire force, or the server-free idle write while no owner
     // holds the PCM); grayed under an external owner, which sets the rate;
@@ -16376,38 +16319,39 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .width(Length::Fill),
     );
     if state.device.capabilities().pitch {
-        if device_controls && internal {
-            let value = state.pro_pitch;
-            body = body.push(
-                row![
-                    caption("Pitch"),
-                    crate::widgets::pitch_slider::pitch_slider(
-                        value,
-                        scale,
-                        (-5.0, pitch_slider_max(state)),
-                        Message::PitchChanged,
-                        || Message::PitchChanged(0.0),
-                    ),
-                    text(format!("{value:+.1} %"))
-                        .color(theme::text_sec())
-                        .size(text_size)
-                        .width(Length::Fixed(58.0 * scale)),
-                ]
-                .spacing(theme::SPACE_MD * scale)
-                .align_y(iced::Alignment::Center),
-            );
-        } else {
-            // Pitch is shown only in Device mode on the internal clock. In
-            // PipeWire (Auto) mode the clock runs nominal; under an external
-            // clock source the unit is slaved and pitch is not a control. The
-            // row keeps its space as a nonvisible filler so the card does not
-            // resize (GUI spec §4). Height matches the slider.
-            body = body.push(
-                iced::widget::Space::new()
-                    .width(Length::Fill)
-                    .height(Length::Fixed(24.0 * scale)),
-            );
-        }
+        // The pitch slider is always shown. It is active on the internal
+        // clock; under an external clock the unit is slaved, the slider is
+        // disabled at 0 % and the tooltip says why.
+        let value = if internal { state.pro_pitch } else { 0.0 };
+        let slider = crate::widgets::pitch_slider::pitch_slider(
+            value,
+            scale,
+            (-5.0, pitch_slider_max(state)),
+            internal,
+            Message::PitchChanged,
+            || Message::PitchChanged(0.0),
+        );
+        let slider = strip::hint(
+            slider,
+            if internal {
+                "Pitch"
+            } else {
+                "External clock: pitch is held at 0 %."
+            },
+            scale,
+        );
+        body = body.push(
+            row![
+                caption("Pitch"),
+                slider,
+                text(format!("{value:+.1} %"))
+                    .color(theme::text_sec())
+                    .size(text_size)
+                    .width(Length::Fixed(58.0 * scale)),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
     }
     if uc {
         // UC-only: the Gain tab's reference levels are one word (`0x17`).
@@ -16575,63 +16519,40 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // achievable latency is selectable. PipeWire takes quanta that are not
     // powers of two.
     const ALL_QUANTA: [u32; 11] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048];
-    let convenience = state.engine_rate_mode == EngineRateMode::Auto;
-    // The mode floor: the rate's period floor on the Device path, also the
-    // convenience minimum on the convenience path (safe at every graph rate).
-    let mode_floor = minimum_quantum(state, running_rate(state));
+    // The rate's period floor is the picker's lower bound. The safe default is
+    // a preference, not a bound.
+    let floor = minimum_quantum(state, running_rate(state));
     // The host policy's own bounds are part of the achievable set: an item
     // outside `[min-quantum, max-quantum]` could never be honoured.
     let (policy_min, policy_max) = state
         .engine
         .map(|engine| (engine.min_quantum, engine.max_quantum))
         .unwrap_or((0, 0));
-    let lower = mode_floor.max(policy_min);
+    let lower = floor.max(policy_min);
     let in_policy = |q: &u32| *q >= lower && (policy_max == 0 || *q <= policy_max);
     let mut quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(in_policy).collect();
-    if in_policy(&mode_floor) && !quanta.contains(&mode_floor) {
-        quanta.push(mode_floor);
+    if in_policy(&floor) && !quanta.contains(&floor) {
+        quanta.push(floor);
         quanta.sort_unstable();
     }
-    // "Auto" follows the graph (Device path only). Show the quantum the graph
-    // actually runs (the card period), not just the request: a stale or clamped
-    // force must not read as the running value. The convenience path forces a
-    // quantum at or above the convenience minimum and offers no Auto.
-    let actual_quantum = state
-        .graph_quantum
-        .or_else(|| state.card_stream.map(|c| c.period).filter(|p| *p > 0))
-        .unwrap_or_else(|| clock.map_or(0, |c| c.effective_quantum()));
-    let auto_label = if actual_quantum > 0 {
-        format!("Auto ({actual_quantum} samples)")
+    // The selected value is the user's setting; a zero value shows the safe
+    // default. A host stream makes the picker a grayed report of its period.
+    let shown = if state.engine_force_quantum > 0 {
+        state.engine_force_quantum
     } else {
-        "Auto".to_string()
+        safe_default_quantum(state)
     };
-    let quantum_opts: Vec<String> = if convenience {
-        quanta.iter().map(|q| format!("{q} samples")).collect()
-    } else {
-        std::iter::once(auto_label)
-            .chain(quanta.iter().map(|q| format!("{q} samples")))
-            .collect()
-    };
-    let force_q = clock
-        .map(|c| c.force_quantum)
-        .unwrap_or(0)
-        .max(state.engine_force_quantum);
-    let quantum_sel = if !convenience && force_q == 0 {
-        quantum_opts[0].clone()
-    } else {
-        // Show the requested quantum; the warning reports any divergence from
-        // the quantum the graph actually runs.
-        let shown = if convenience && force_q == 0 {
-            mode_floor
-        } else {
-            force_q
-        };
-        quantum_opts
-            .iter()
-            .find(|o| o.as_str() == format!("{shown} samples"))
-            .cloned()
-            .unwrap_or_else(|| format!("{shown} samples"))
-    };
+    let quantum_opts: Vec<String> = quanta.iter().map(|q| format!("{q} samples")).collect();
+    let quantum_sel = quantum_opts
+        .iter()
+        .find(|o| o.as_str() == format!("{shown} samples"))
+        .cloned()
+        .unwrap_or_else(|| {
+            quantum_opts
+                .first()
+                .cloned()
+                .unwrap_or_else(|| format!("{shown} samples"))
+        });
     let quantum_list = quantum_opts.clone();
     let quanta_for_pick = quanta.clone();
     // The selected value in the listbox is the pending indicator: orange
@@ -16644,13 +16565,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     };
     let quantum_pick = pick_list(quantum_opts, Some(quantum_sel), move |label| {
         let idx = quantum_list.iter().position(|l| *l == label).unwrap_or(0);
-        let q = if convenience {
-            quanta_for_pick.get(idx).copied().unwrap_or(0)
-        } else if idx == 0 {
-            0
-        } else {
-            quanta_for_pick.get(idx - 1).copied().unwrap_or(0)
-        };
+        let q = quanta_for_pick.get(idx).copied().unwrap_or(0);
         Message::EngineQuantum(q)
     })
     .style(quantum_style)
@@ -16660,24 +16575,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .width(Length::Fill);
 
     let mut body = column![heading];
-    // Playback mode selects the scheduling policy only. The host stream is
-    // the rate authority on every path; under an external owner the policy is
-    // the owner's, so the checkbox is a disabled report.
-    let playback_mode: Element<'static, Message> = if external_owner {
-        checkbox(state.engine_rate_mode == EngineRateMode::Auto)
-            .label(PLAYBACK_MODE_TIMER)
-            .style(theme::checkbox)
-            .text_size(text_size)
-            .into()
-    } else {
-        playback_mode_control(state.engine_rate_mode, scale)
-    };
-    body = body.push(
-        row![caption("Playback mode"), playback_mode]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
-    );
-    // The graph rate is reported in every mode: the host stream or the graph
+    // The graph rate is reported in every state: the host stream or the graph
     // default sets it.
     body = body.push(
         row![
@@ -16708,7 +16606,23 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
     );
-    // The quantum picker: TotalControl forces the graph quantum, except under
+    if let Some((graph, device)) = external_clock_mismatch(state) {
+        body = body.push(
+            row![
+                caption(""),
+                text(format!(
+                    "External clock: graph {} / device {} \u{2014} set the host to the device rate.",
+                    rate_label(graph),
+                    rate_label(device)
+                ))
+                .color(theme::ysim())
+                .size(theme::TEXT_SM * scale),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    }
+    // The quantum picker: TotalControl writes the graph default quantum, except under
     // an external owner, where the quantum is the owner's ALSA period — a
     // grayed read-only report naming the owner (gray-when-owned).
     let host_stream = state.card_stream.is_some() || state.conductor.is_some();
@@ -16758,7 +16672,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption(""),
-                text(format!("Zero-slack: pitch can silence or stutter below {need} samples"))
+                text(format!("Audio stream can stutter below {need} samples"))
                     .color(theme::ysim())
                     .size(theme::TEXT_SM * scale),
             ]
@@ -16766,14 +16680,10 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .align_y(iced::Alignment::Center),
         );
     }
-    // The RTL field is a labelled row like the others: the caption column
-    // carries `RTL`, the value column carries the total (`x.x ms`) with the
-    // formula wrapping below; convenience shows the same four-row slot blank.
-    // An external owner (JACK / direct ALSA) has no PipeWire graph term: the
-    // owner's ALSA period is the host-ring term, so the field is shown there
-    // too. The tooltip belongs only to the visible field: a hint on the blank
-    // filler would pop up over an invisible row and obscure the neighbouring
-    // controls.
+    // The output latency is a labelled row: the caption column carries
+    // `Output`, the value column carries the total (`x.x ms`) with the formula
+    // wrapping below. The input row follows it; it is not measured yet and
+    // shows `—` so the panel keeps a stable height.
     let rtl_clock = clock.unwrap_or(PwClock {
         rate: 0,
         quantum: 0,
@@ -16782,26 +16692,30 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         min_quantum: 0,
         max_quantum: 0,
     });
-    if state.engine_rate_mode == EngineRateMode::Fixed || external_owner {
-        body = body.push(
-            row![
-                caption("RTL"),
-                strip::hint(
-                    latency_readout(state, rtl_clock),
-                    "Round Trip Latency",
-                    scale,
-                ),
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Start),
-        );
-    } else {
-        body = body.push(
-            row![caption("RTL"), rtl_blank(scale)]
-                .spacing(theme::SPACE_MD * scale)
-                .align_y(iced::Alignment::Start),
-        );
-    }
+    body = body.push(
+        row![
+            caption("Input"),
+            strip::hint(
+                readout("\u{2014}".into(), text_size),
+                "Input latency is not measured yet.",
+                scale,
+            ),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
+    );
+    body = body.push(
+        row![
+            caption("Output"),
+            strip::hint(
+                latency_readout(state, rtl_clock),
+                "Output latency (host to analog output)",
+                scale,
+            ),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Start),
+    );
     // Transport diagnostics in three sections by reset behaviour:
     //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
     //  - This stream: per-run transport detail, cleared on stream restart
@@ -17109,14 +17023,10 @@ fn transport_delta(
     }
 }
 
-/// The RTL block: four lines — the value, then three formula lines. Both
-/// rate-follow modes reserve the same four lines so the settings card never
-/// resizes (GUI spec §4). `value_color` carries the pending colour for the
-/// ring fallback; the formula lines use the secondary colour.
-/// The RTL field is a fixed four-row slot in the value column: the caption
-/// column carries the `RTL` label, row 1 carries the total (`x.x ms`), and
-/// the formula wraps naturally in the three rows below. Both rate-follow
-/// modes reserve the same slot, so the card never resizes (GUI spec §4).
+/// The output-latency block: the value, then the formula lines. The slot keeps
+/// its height in every state so the settings card never resizes (GUI spec §4).
+/// `value_color` carries the pending colour for the ring fallback; the formula
+/// lines use the secondary colour.
 fn rtl_field(
     first_line: String,
     formula: String,
@@ -17145,24 +17055,18 @@ fn rtl_block(
     rtl_field(value, formula, value_color, scale)
 }
 
-/// The convenience-path filler: the same four-row slot, blank.
-fn rtl_blank(scale: f32) -> Element<'static, Message> {
-    rtl_field(" ".to_string(), " ".to_string(), theme::text_sec(), scale)
-}
-
-/// The latency readout. While the card plays, it uses the card's actual
-/// period and the live USB queue. The UC in PC mode uses its loopback
-/// calibration; the UCX, UC AP mode and uncalibrated UC rates use the model
-/// estimate. The convenience path shows no figure (a blank four-line filler).
+/// The latency readout: output latency on every path. While the card plays,
+/// the host term is the live `snd_pcm_delay` split into ring fill and in-flight
+/// queue. The UC in PC mode uses its loopback calibration; the UCX, UC AP mode
+/// and uncalibrated UC rates use the model estimate.
 fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let external = detected_path(state).is_external();
-    // A conducting PipeWire client sets the buffer the host queue reports;
-    // use the live delay for it exactly as for an external owner.
-    let live_owner = external || state.conductor.is_some();
-    if state.engine_rate_mode == EngineRateMode::Auto && !external {
-        return rtl_blank(scale);
-    }
+    let path = detected_path(state);
+    let external = path.is_external();
+    let host_label = match path {
+        audio_path::AudioPath::External(audio_path::ExternalOwner::Alsa) => "ring",
+        _ => "graph",
+    };
     // The host-ring term: the graph quantum on the PipeWire paths (the DAW
     // runs through the graph), the owner's ALSA period under an external
     // owner. The device terms (USB queue, lead, converter) are unchanged.
@@ -17181,22 +17085,39 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             } else {
                 theme::text_sec()
             };
-            // External owner (JACK / direct ALSA): the host-side term is the
-            // live snd_pcm_delay (ring fill + in-flight URBs), so the value
-            // tracks the owner's write-ahead (e.g. jackd's -n). The device lead
-            // and converter stay the model terms. The delay already covers the
-            // in-flight URBs, so the USB queue is not added a second time.
-            if live_owner {
-                if let Some(delay) = state.pcm_delay {
-                    let lead = 60; // UC/UCX device lead (see ucx_usb_frames)
-                    return rtl_live_block(
-                        delay,
+            // Live host term on every path: `snd_pcm_delay` is the ring fill
+            // plus the in-flight URBs. Split out the calibrated USB queue so
+            // each buffer is counted once.
+            if let Some(delay) = state.pcm_delay {
+                if let Some(queue) = state.driver_queue {
+                    let (usb, lead) = if state.device.is_uc_model() {
+                        uc_rtl_frames(card.rate, queue)
+                    } else {
+                        ucx_usb_frames(card.rate, queue)
+                    };
+                    let rtl = RtlEstimate {
+                        usb,
                         lead,
-                        converter_frames(card.rate),
-                        card.rate,
+                        converter: converter_frames(card.rate),
+                        graph: delay.saturating_sub(usb),
+                        rate: card.rate,
+                    };
+                    return rtl_block(
+                        rtl.summary(),
+                        rtl.breakdown_with(host_label),
+                        theme::text_sec(),
                         scale,
                     );
                 }
+                // No queue fact: the live delay includes the in-flight queue.
+                return rtl_live_block(
+                    delay,
+                    60, // UC/UCX device lead (see ucx_usb_frames)
+                    converter_frames(card.rate),
+                    card.rate,
+                    host_label,
+                    scale,
+                );
             }
             if state.device.is_uc_model() {
                 let measured = match state.device.personality_label() {
@@ -17209,7 +17130,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                     _ => None,
                 };
                 if let Some(rtl) = measured {
-                    return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
+                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
                 }
                 if let Some(queue) = state.driver_queue {
                     let (usb, lead) = uc_rtl_frames(card.rate, queue);
@@ -17220,7 +17141,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         graph: host_ring(card.period),
                         rate: card.rate,
                     };
-                    return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
+                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
                 }
                 return rtl_block(
                     ring_text(card.buffer, card.period, card.rate),
@@ -17239,7 +17160,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         graph: host_ring(card.period),
                         rate: card.rate,
                     };
-                    return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
+                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
                 }
                 return rtl_block(
                     ring_text(card.buffer, card.period, card.rate),
@@ -17287,7 +17208,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                     _ => None,
                 };
                 if let Some(rtl) = measured {
-                    return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
+                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
                 }
                 if let Some(queue) = state.driver_queue {
                     let (usb, lead) = uc_rtl_frames(rate, queue);
@@ -17298,7 +17219,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         graph: quantum,
                         rate,
                     };
-                    return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
+                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
                 }
                 return rtl_block(
                     ring_text(buffer, quantum, rate),
@@ -17317,7 +17238,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         graph: quantum,
                         rate,
                     };
-                    return rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale);
+                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
                 }
                 return rtl_block(
                     ring_text(buffer, quantum, rate),
@@ -17336,9 +17257,9 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
     }
 }
 
-/// Model-based round-trip estimate: USB queue, device lead, converter and
-/// one graph period.  Used for the UCX and for UC paths without a PC-mode
-/// loopback calibration.  The tolerance is the stated uncertainty of the
+/// Model-based output-latency estimate: USB queue, device lead, converter
+/// and the host buffer. Used for the UCX and for UC paths without a PC-mode
+/// loopback calibration. The tolerance is the stated uncertainty of the
 /// model (UC 1.5 ms, UCX 1.2 ms).
 struct RtlEstimate {
     usb: u32,
@@ -17353,30 +17274,33 @@ impl RtlEstimate {
         self.usb + self.lead + self.converter + self.graph
     }
 
-    /// One short value: the round trip in milliseconds.  The terms and the
-    /// calibration basis live in the manual (§14).
+    /// One short value: the output latency in milliseconds. The terms and
+    /// the calibration basis live in the manual (§14).
     fn summary(&self) -> String {
         format!("{:.1} ms", frames_ms(self.total(), self.rate))
     }
 
     /// The formula under the value, one wrapping line, milliseconds. The
-    /// graph term assumes the DAW runs through PipeWire (see the manual).
-    fn breakdown(&self) -> String {
+    /// host term's label names the authority: `graph` or `ring`.
+    fn breakdown_with(&self, host_label: &str) -> String {
         format!(
-            "{:.1} ms USB + {:.1} ms device lead + {:.1} ms converter + {:.1} ms graph",
+            "{:.1} ms USB + {:.1} ms device lead + {:.1} ms converter + {:.1} ms {host_label}",
             frames_ms(self.usb, self.rate),
             frames_ms(self.lead, self.rate),
             frames_ms(self.converter, self.rate),
             frames_ms(self.graph, self.rate)
         )
     }
+
+    fn breakdown(&self) -> String {
+        self.breakdown_with("graph")
+    }
 }
 
-/// Live round-trip estimate under a PCM owner (JACK / direct ALSA): the
-/// host-side term is the stream's `snd_pcm_delay` (ring fill + in-flight
-/// URBs), read from procfs, so it tracks the owner's write-ahead (for example
-/// jackd's `-n`). The device lead and converter are the model terms. The delay
-/// already covers the in-flight URBs, so the USB queue is not added again.
+/// Live output latency under a PCM owner: the host-side term is the stream's
+/// `snd_pcm_delay` (ring fill + in-flight URBs), so it tracks the owner's
+/// write-ahead. When the USB queue is known, it is split out of the delay and
+/// shown once; otherwise the delay is the host term on its own.
 fn rtl_live_frames(delay: u32, lead: u32, converter: u32) -> u32 {
     delay + lead + converter
 }
@@ -17386,12 +17310,13 @@ fn rtl_live_block(
     lead: u32,
     converter: u32,
     rate: u32,
+    host_label: &str,
     scale: f32,
 ) -> Element<'static, Message> {
     let total = rtl_live_frames(delay, lead, converter);
     let summary = format!("{:.1} ms", frames_ms(total, rate));
     let breakdown = format!(
-        "{:.1} ms host queue (live) + {:.1} ms device lead + {:.1} ms converter",
+        "{:.1} ms {host_label} (live) + {:.1} ms device lead + {:.1} ms converter",
         frames_ms(delay, rate),
         frames_ms(lead, rate),
         frames_ms(converter, rate)
@@ -17488,14 +17413,19 @@ impl MeasuredRtl {
     }
 
     /// The formula under the value, one wrapping line, milliseconds. The
-    /// measured device total includes the live USB queue.
-    fn breakdown(&self) -> String {
+    /// measured device total includes the live USB queue; the host term's
+    /// label names the authority.
+    fn breakdown_with(&self, host_label: &str) -> String {
         format!(
-            "{:.1} ms device (incl. {:.1} ms queue) + {:.1} ms graph",
+            "{:.1} ms device (incl. {:.1} ms queue) + {:.1} ms {host_label}",
             frames_ms(self.device, self.rate),
             frames_ms(self.live_queue, self.rate),
             frames_ms(self.graph, self.rate)
         )
+    }
+
+    fn breakdown(&self) -> String {
+        self.breakdown_with("graph")
     }
 }
 
@@ -23360,7 +23290,7 @@ mod tests {
         host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
         note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
-        convenience_quantum_min, minimum_quantum, reconcile_device_pitch,
+        safe_default_quantum, minimum_quantum, reconcile_device_pitch,
         power_sum_output_meters, quantum_pending, rate_authority_target,
         rtl_live_frames,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
@@ -26901,19 +26831,14 @@ mod tests {
     }
 
     #[test]
-    fn the_actual_device_rate_applies_pitch_only_in_device_mode_on_internal_clock() {
+    fn the_actual_device_rate_applies_pitch_only_on_the_internal_clock() {
         let mut state = new(true, None, None);
         state.device = DeviceHandle::open_mock_ucx();
         state.connected = true;
         state.pro_pitch = -0.1;
-        // Device mode on the internal clock: the pitch is on the clock.
-        state.engine_rate_mode = EngineRateMode::Fixed;
+        // The internal clock: the pitch is on the clock.
         assert_eq!(super::actual_device_rate(&state), Some(47_952));
-        // Convenience runs nominal even though a pro pitch is saved.
-        state.engine_rate_mode = EngineRateMode::Auto;
-        assert_eq!(super::actual_device_rate(&state), Some(48_000));
         // External clock: the unit is slaved, pitch does not take effect.
-        state.engine_rate_mode = EngineRateMode::Fixed;
         let _ = state.device.set_clock_source("Word Clock");
         assert_eq!(super::actual_device_rate(&state), Some(48_000));
     }
@@ -28175,7 +28100,7 @@ mod tests {
     #[test]
     fn a_workspace_captures_rate_pitch_dim_and_not_active_talkback() {
         let mut state = new(true, None, None);
-        state.engine_rate_mode = EngineRateMode::Fixed;
+        state.engine = None;
         state.device.settings_mut().sample_rate = 44_100;
         state.device.settings_mut().pitch_percent = 1.5;
         state.pro_pitch = 1.5;
@@ -28285,7 +28210,7 @@ mod tests {
     }
 
     #[test]
-    fn only_an_external_clock_reasserts_the_device_rate() {
+    fn the_external_clock_targets_the_preferred_graph_default() {
         let mut state = new(true, None, None);
         state.device = DeviceHandle::open_mock_ucx();
         attach_device_service(&mut state);
@@ -28299,7 +28224,6 @@ mod tests {
             snapshot, sender, bus,
         ));
 
-        state.engine_rate_mode = EngineRateMode::Fixed;
         state.engine_force_rate = 96_000;
         state.device.settings_mut().clock_source = "Internal".into();
         state.pending_device_rate = None;
@@ -28313,26 +28237,14 @@ mod tests {
             max_quantum: 2048,
             force_quantum: 0,
         };
-        // Internal clock: the host stream/default owns the rate. No re-assert.
+        // Internal clock: the host stream/default owns the rate.
         assert_eq!(rate_authority_target(&state, Some(cleared)), None);
-        // External clock: the device's readback is the authority; a cleared
-        // force is re-asserted to protect the device rate.
+        // External clock: the device readback is the preferred graph default.
         state.device.settings_mut().clock_source = "SPDIF".into();
         assert_eq!(rate_authority_target(&state, Some(cleared)), Some(96_000));
-        // The force already holds the authority: nothing to do.
-        let held = PwClock { force_rate: 96_000, ..cleared };
+        // The default already carries the authority: nothing to do.
+        let held = PwClock { rate: 96_000, ..cleared };
         assert_eq!(rate_authority_target(&state, Some(held)), None);
-        // A user selection in flight owns its confirmation window.
-        state.pending_device_rate = Some((96_000, Instant::now()));
-        assert_eq!(rate_authority_target(&state, Some(cleared)), None);
-        state.pending_device_rate = None;
-        // A re-assert still cooling down is not repeated.
-        state.rate_authority_reforce = Some(Instant::now());
-        assert_eq!(rate_authority_target(&state, Some(cleared)), None);
-        // The playback mode does not gate the external-clock protection.
-        state.rate_authority_reforce = None;
-        state.engine_rate_mode = EngineRateMode::Auto;
-        assert_eq!(rate_authority_target(&state, Some(cleared)), Some(96_000));
     }
 
     #[test]
@@ -28478,7 +28390,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sched_policy_follows_the_rate_authority() {
+    fn the_sched_policy_is_irq_with_the_cushion_on_every_path() {
         let mut state = new(true, None, None);
         state.driver_floor = Some(48);
         state.device_envelope = Some(totalcontrol_core::fireface::hwdep::RateEnvelope {
@@ -28490,8 +28402,6 @@ mod tests {
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 176_400, period_floor: 184, buffer_min: 5888 },
             ],
         });
-        // Device (Fixed): IRQ + per-rate aligned cushion, no start-delay.
-        state.engine_rate_mode = EngineRateMode::Fixed;
         state.engine_force_quantum = 48;
         let p = engine_sched_policy(&state, 48_000);
         assert!(p.disable_tsched);
@@ -28499,13 +28409,6 @@ mod tests {
         assert_eq!(p.start_delay, 0);
         state.engine_force_quantum = 184;
         assert_eq!(engine_sched_policy(&state, 176_400).headroom, 368);
-        // PipeWire (Auto): timer + fixed generous margin, rate-scaled start-delay.
-        state.engine_rate_mode = EngineRateMode::Auto;
-        let p = engine_sched_policy(&state, 48_000);
-        assert!(!p.disable_tsched);
-        assert_eq!(p.headroom, 336);
-        assert_eq!(p.start_delay, 144);
-        assert_eq!(engine_sched_policy(&state, 176_400).start_delay, 552);
     }
 
     #[test]
@@ -28529,17 +28432,16 @@ mod tests {
     }
 
     #[test]
-    fn pitch_is_a_device_path_control() {
+    fn pitch_is_a_device_clock_control() {
         let mut state = new(true, None, None);
         state.device = DeviceHandle::open_mock_ucx();
         state.connected = true;
-        // Convenience: pitch is rejected and the stored setting stays nominal.
-        state.engine_rate_mode = EngineRateMode::Auto;
+        // The internal clock: pitch reaches the device and is stored.
         let _ = update(&mut state, Message::PitchChanged(1.5));
-        assert_eq!(state.device.settings().pitch_percent, 0.0);
-        // Device: pitch reaches the device and is stored.
-        state.engine_rate_mode = EngineRateMode::Fixed;
-        let _ = update(&mut state, Message::PitchChanged(1.5));
+        assert_eq!(state.device.settings().pitch_percent, 1.5);
+        // An external clock: the move is rejected and the stored value stays.
+        state.device.settings_mut().clock_source = "Word Clock".into();
+        let _ = update(&mut state, Message::PitchChanged(2.0));
         assert_eq!(state.device.settings().pitch_percent, 1.5);
     }
 
@@ -28611,7 +28513,7 @@ mod tests {
     }
 
     #[test]
-    fn convenience_quantum_minimum_is_the_highest_rate_floor() {
+    fn safe_default_quantum_is_the_highest_rate_floor() {
         let mut state = new(true, None, None);
         state.device_envelope = Some(totalcontrol_core::fireface::hwdep::RateEnvelope {
             urb_frames: 48,
@@ -28623,32 +28525,29 @@ mod tests {
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 192_000, period_floor: 192, buffer_min: 1344 },
             ],
         });
-        assert_eq!(convenience_quantum_min(&state), 192);
-        // Convenience holds the minimum at every rate; Device uses the rate floor.
-        state.engine_rate_mode = EngineRateMode::Auto;
-        assert_eq!(minimum_quantum(&state, 48_000), 192);
-        assert_eq!(minimum_quantum(&state, 192_000), 192);
-        state.engine_rate_mode = EngineRateMode::Fixed;
+        assert_eq!(safe_default_quantum(&state), 192);
+        // The safe default is a preference; the picker's lower bound is the
+        // rate's own floor.
         assert_eq!(minimum_quantum(&state, 48_000), 48);
+        assert_eq!(minimum_quantum(&state, 192_000), 192);
     }
 
     #[test]
-    fn convenience_runs_nominal_clock_and_preserves_the_saved_pitch() {
+    fn pitch_runs_on_the_internal_clock_and_is_nominal_under_an_external_source() {
         let mut state = new(true, None, None);
         state.device = DeviceHandle::open_mock_ucx();
         state.connected = true;
-        state.engine_rate_mode = EngineRateMode::Fixed;
         let _ = update(&mut state, Message::PitchChanged(1.5));
         reconcile_device_pitch(&mut state);
         assert_eq!(state.pitch_clock_applied, Some(1.5));
-        // Convenience: the clock goes nominal, the saved pro pitch is untouched.
-        state.engine_rate_mode = EngineRateMode::Auto;
+        // An external clock: the clock goes nominal, the saved pitch stays.
+        let _ = state.device.set_clock_source("Word Clock");
         state.pitch_clock_dirty = true;
         reconcile_device_pitch(&mut state);
         assert_eq!(state.pitch_clock_applied, Some(0.0));
         assert_eq!(state.device.settings().pitch_percent, 1.5);
-        // Device: the saved pitch returns to the clock.
-        state.engine_rate_mode = EngineRateMode::Fixed;
+        // The internal clock: the saved pitch returns to the clock.
+        state.device.settings_mut().clock_source = "Internal".into();
         state.pitch_clock_dirty = true;
         reconcile_device_pitch(&mut state);
         assert_eq!(state.pitch_clock_applied, Some(1.5));
@@ -28770,17 +28669,16 @@ mod tests {
     }
 
     #[test]
-    fn entering_device_mode_resets_pitch_to_a_clean_slate() {
+    fn the_legacy_rate_mode_is_kept_but_is_not_ui_state() {
         let mut state = new(true, None, None);
-        state.device = DeviceHandle::open_mock_ucx();
-        state.connected = true;
-        state.engine_rate_mode = EngineRateMode::Auto;
-        state.pro_pitch = 2.0;
-        let _ = update(&mut state, Message::EngineRateMode(EngineRateMode::Fixed));
-        // A saved pitch is not restored on the mode change; the clock starts
-        // nominal and the user sets pitch from the slider afterwards.
-        assert_eq!(state.pro_pitch, 0.0);
-        assert_eq!(state.pitch_clock_applied, Some(0.0));
+        state.workspace_dirty = false;
+        state.engine_rate_mode = EngineRateMode::Fixed;
+        assert_eq!(
+            host_settings_of(&state).engine_rate_mode,
+            Some(EngineRateMode::Fixed)
+        );
+        assert!(state.undo_stack.is_empty(), "the mode is not a mix edit");
+        assert!(!state.workspace_dirty, "the mode is not a workspace edit");
     }
 
     #[test]
@@ -28808,37 +28706,17 @@ mod tests {
         let mut state = new(true, None, None);
         state.device = DeviceHandle::open_mock_ucx();
         state.connected = true;
-        state.engine_rate_mode = EngineRateMode::Auto;
+        // An external clock holds the pitch nominal.
+        state.device.settings_mut().clock_source = "Word Clock".into();
         state.pro_pitch = 1.5;
         state.pitch_clock_applied = Some(1.5);
         state.pitch_clock_dirty = true;
         state.pitch_after_reprepare = Some(5);
         state.reprepare_gen = 0; // no re-prepare has run
         reconcile_device_pitch(&mut state);
-        // Nominal is safe in any scheduling mode: it lands immediately.
+        // Nominal is safe in any scheduling state: it lands immediately.
         assert_eq!(state.pitch_clock_applied, Some(0.0));
         assert!(state.pitch_after_reprepare.is_none());
-    }
-
-    #[test]
-    fn the_rate_mode_is_remembered_without_becoming_mix_state() {
-        let mut state = new(true, None, None);
-        state.workspace_dirty = false;
-        let _ = update(&mut state, Message::EngineRateMode(EngineRateMode::Fixed));
-        assert_eq!(state.engine_rate_mode, EngineRateMode::Fixed);
-        assert_eq!(
-            host_settings_of(&state).engine_rate_mode,
-            Some(EngineRateMode::Fixed)
-        );
-        assert!(state.undo_stack.is_empty(), "the mode is not a mix edit");
-        assert!(!state.workspace_dirty, "the mode is not a workspace edit");
-
-        let _ = update(&mut state, Message::EngineRateMode(EngineRateMode::Auto));
-        assert_eq!(state.engine_rate_mode, EngineRateMode::Auto);
-        assert_eq!(
-            host_settings_of(&state).engine_rate_mode,
-            Some(EngineRateMode::Auto)
-        );
     }
 
     #[test]
@@ -28892,14 +28770,13 @@ mod tests {
         source.snapshot_names[2] = "Stereo".into();
         source.snapshots[2] = Some(source.device.capture_scene());
         source.talkback_on = true;
-        source.engine_rate_mode = EngineRateMode::Fixed;
+        source.engine = None;
         source.device.settings_mut().sample_rate = 44_100;
         source.device.settings_mut().pitch_percent = 1.5;
         source.pro_pitch = 1.5;
         let workspace = capture_workspace(&source);
 
         let mut target = new(true, None, None);
-        target.engine_rate_mode = EngineRateMode::Fixed;
         apply_workspace(&mut target, &workspace, PathBuf::from("/tmp/test.tcws")).unwrap();
         assert_eq!(target.view, View::Mixer);
         assert_eq!(

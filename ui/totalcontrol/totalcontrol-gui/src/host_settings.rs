@@ -168,6 +168,7 @@ pub struct HostSettings {
     #[serde(default, skip_serializing)]
     pub mackie: Option<crate::mackie::MackieConfig>,
     pub engine_force_rate: Option<u32>,
+    /// The legacy playback mode; read and ignored.
     pub engine_rate_mode: Option<EngineRateMode>,
     pub engine_force_quantum: Option<u32>,
     /// Consecutive full-scale samples that trigger OVR.  This is a global
