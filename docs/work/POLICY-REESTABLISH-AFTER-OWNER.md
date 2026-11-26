@@ -53,3 +53,18 @@ not the app's IRQ policy.
    leave must open at the pinned period. Add a host test for the decision table.
 5. Keep the C13 distinction: the fix is the policy re-establishment, not a new
    cushion multiplier.
+
+## Reproduction attempt (2026-11-26)
+
+With TC running and the player paused, the PCM was closed and both nodes held
+1024 / period-num 32 / headroom 2048. One direct-owner cycle with the merged
+cushion probe (5 s, no stall) opened and closed the PCM. After it, the nodes
+still held 1024 / period-num 32 / headroom 2048; the external-owner transition
+alone does **not** reproduce the fallback.
+
+The convenience state observed earlier is the `release_engine` policy
+(336/16), not the packaged WirePlumber fallback (IRQ/32/0). The trigger is
+therefore likely a release intent or a node recreation that outlives the GUI
+state, not the owner transition alone. Next: instrument `release_engine`,
+`Intent::Release` and the node-id change path, then reproduce with a
+WirePlumber restart or a second GUI/service transition.
