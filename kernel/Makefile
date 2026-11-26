@@ -30,6 +30,8 @@ test:
 	./test/cadence-test
 	$(CC) -std=c11 -Wall -Wextra -Werror -o test/pitch-envelope-test test/pitch-envelope-test.c -lm
 	./test/pitch-envelope-test
+	$(CC) -std=c11 -Wall -Wextra -Werror -o test/gate-split-test test/gate-split-test.c
+	./test/gate-split-test
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean

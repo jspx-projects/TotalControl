@@ -514,6 +514,15 @@ stream. The capture is held open until the device confirms the rate and
 quantum, then closed; the apply is a closed loop of write, activate, confirm and
 retry. The capture reads the inputs and injects nothing into the playback path.
 PipeWire owns the PCM and multiplexes the capture, so a DAW keeps its stream.
+The scheduling policy pins `api.alsa.period-size` to the running graph quantum
+on both Pro Audio nodes and sizes the cushion `H = 2·P` from that running
+value, not from the stored target. The ALSA node retains its last negotiated
+period as a node property; an unpinned or bumped period would override the
+graph quantum and run the PCM at the wrong period. The idle re-prepare pins the
+period before and after its quantum bump and confirms both directions.
+TotalControl never writes a global quantum force under a host stream: the
+stream owns the quantum, and the policy props land at the next natural
+re-prepare.
 
 The Pro Audio nodes suspend when idle, releasing the PCM. An external owner —
 jackd or a direct-ALSA DAW — can then open the device at its own rate and

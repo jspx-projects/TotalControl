@@ -82,6 +82,7 @@ All development switches use the `TOTALCONTROL_` prefix:
 | `ucx-dump-compare` example | Request the full dump and compare it with a saved scene |
 | `tools/fireface-hwdep.c` | Unified hwdep access: counters, words, `dump`, `loopback`, `loopback-setup` |
 | `tools/alsa-latency-probe.c` | PCM loopback measurement: impulse latency + `pattern` sample-exact mode |
+| `tools/alsa-cushion-probe.c` | Direct duplex ring-fill/stall probe; separate periods exercise the duplex gate |
 
 Protocol captures and measurements are evidence, not specifications. Record
 the device model, transport, firmware and rate with every capture.
@@ -98,6 +99,21 @@ for the tool list, build flags and runtime dependencies, and
 `tools/bench/RTL-MEASUREMENT.md` / `CHANNEL-NUMBERING.md` for the measurement
 method. Measurement data is not committed; the tools write to a directory you
 choose.
+
+### Cushion and gate probe
+
+`tools/alsa-cushion-probe.c` opens playback and capture directly, controls
+the playback **ring fill** (`appl_ptr - hw_ptr`), and injects a phase-
+controlled write stall. The ring fill cycles between `H` and `H + P`, so the
+worst-case cushion is `H`. Separate playback and capture periods exercise the
+driver's duplex gate. The tool prints the granted periods and the fill at the
+stall; the driver counters come from `ffuc-lab stats`.
+
+Build: `cc -O2 -o tools/alsa-cushion-probe tools/alsa-cushion-probe.c -lasound`.
+
+`scripts/cushion-matrix.sh [out.csv]` runs the stall-duration x write-phase x
+target-fill matrix and writes a CSV. It stops no server; stop PipeWire or let
+the Pro Audio nodes suspend before running.
 
 ## Loopback measurement (UCX)
 

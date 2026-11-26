@@ -337,8 +337,15 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
                             // The same transition as a deliberate policy
                             // change: the props land at a re-prepare,
                             // confirmed from the device, and the completion
-                            // feeds the pitch gate.
-                            let ok = pw_clock::capture_reprepare(card_id);
+                            // feeds the pitch gate. A host stream owns the
+                            // graph: never force a global quantum under it;
+                            // the props land at the next natural re-prepare.
+                            let host_running = snapshot.lock().unwrap().stream.is_some();
+                            let ok = host_running
+                                || pw_clock::capture_reprepare_with_period(
+                                    card_id,
+                                    Some(policy.period_size),
+                                );
                             let mut snap = snapshot.lock().unwrap();
                             snap.reprepare_gen += 1;
                             snap.reprepare_ok = ok;
@@ -426,9 +433,15 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
                 }
             }
             Intent::Reprepare => {
-                // Apply the forces even when the graph is idle: a brief capture
-                // activation, held until the device confirms the forced state.
-                let ok = pw_clock::capture_reprepare(card_id);
+                // Never force a global quantum under a host stream: the stream
+                // owns it, and a bump can leave its period behind. The policy
+                // props land at the next natural re-prepare.
+                let host_running = snapshot.lock().unwrap().stream.is_some();
+                let period = last_policy
+                    .map(|p| p.period_size)
+                    .filter(|p| *p > 0);
+                let ok = host_running
+                    || pw_clock::capture_reprepare_with_period(card_id, period);
                 if !ok {
                     log::warn!("capture re-prepare did not confirm the forced engine state");
                 }
@@ -478,6 +491,7 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
                         headroom: 336,
                         start_delay: 0,
                         period_num: 16,
+                        period_size: 0,
                     };
                     let _ = pw_clock::set_sched_policy(out, &convenience);
                     let _ = pw_clock::set_sched_policy(inp, &convenience);

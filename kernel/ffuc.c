@@ -21,6 +21,7 @@
 #include <sound/pcm_params.h>
 
 #include "ffuc.h"
+#include "ffuc-gate.h"
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
@@ -1423,6 +1424,18 @@ static void ffuc_period_elapsed(struct ffuc *chip, int dir)
 	spin_lock_irqsave(&chip->gate_lock, flags);
 	if (!p->running || !c->running) {
 		ffuc_signal_period(chip, p->running ? p : c);
+		spin_unlock_irqrestore(&chip->gate_lock, flags);
+		return;
+	}
+	/* Unequal periods have no common boundary: cross-gating would defer one
+	 * direction on every cycle and turn the gate into a source of late
+	 * writes. Signal each direction at its own boundary instead. */
+	if (!ffuc_gate_together(p->substream->runtime->period_size,
+				c->substream->runtime->period_size)) {
+		if (ffuc_pending(p))
+			ffuc_signal_period(chip, p);
+		if (ffuc_pending(c))
+			ffuc_signal_period(chip, c);
 		spin_unlock_irqrestore(&chip->gate_lock, flags);
 		return;
 	}
