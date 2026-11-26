@@ -98,6 +98,10 @@ pub enum Intent {
     Poll { probe_quantum: bool },
     ForceRate(u32),
     ForceQuantum(u32),
+    /// Set the graph default `clock.rate` / `clock.quantum` (the idle value;
+    /// a conducting node's force overrides it).
+    DefaultRate(u32),
+    DefaultQuantum(u32),
     /// Apply a scheduling policy to both Pro Audio nodes (the worker reads the
     /// node ids; no nodes is a no-op).
     SetSchedPolicy(SchedPolicy),
@@ -322,6 +326,16 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
             Intent::ForceQuantum(q) => {
                 if let Err(e) = pw_clock::force_quantum(q) {
                     log::warn!("Setting the PipeWire quantum failed: {e}");
+                }
+            }
+            Intent::DefaultRate(rate) => {
+                if let Err(e) = pw_clock::set_default_rate(rate) {
+                    log::warn!("Setting the PipeWire default rate failed: {e}");
+                }
+            }
+            Intent::DefaultQuantum(q) => {
+                if let Err(e) = pw_clock::set_default_quantum(q) {
+                    log::warn!("Setting the PipeWire default quantum failed: {e}");
                 }
             }
             Intent::SetSchedPolicy(policy) => {

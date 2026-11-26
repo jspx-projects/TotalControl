@@ -212,7 +212,7 @@ mixer scene, labels, groups, snapshots, layouts or window layout.
 | Active unit | Last selected unit key |
 | OSC | Enabled, dialect, ports and feedback destination address |
 | MIDI controllers | Enabled, debug log, per-device input/output enable and protocol, option values per protocol, key assignments per protocol |
-| Engine | Forced rate, quantum and rate mode (`Auto` is the default; `Device` forces the set rate; a retired `Follow` preference loads as `Auto`) |
+| Engine | Current rate and quantum, and the playback mode (timer is the default; professional uses IRQ scheduling). The current values are the last values a host stream ran at; a later launch reuses them and does not restore an older value. |
 | Meters | OVR full-scale sample count (global, 1–15, default 3) |
 | Startup | Session autostart (starts hidden in the tray) and keep in tray |
 | Files | Last workspace folder |

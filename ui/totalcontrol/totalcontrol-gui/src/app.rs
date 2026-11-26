@@ -35,7 +35,7 @@ use crate::widgets::knob::{knob, Knob};
 use crate::widgets::strip::{self, hint};
 use crate::workspaces::{self, Workspace, WorkspaceSnapshot, WorkspaceView};
 use totalcontrol_core::audio_path::{self, ClockFacts, RateCaps};
-use totalcontrol_core::pw_clock::{self, CardStream, PwClock};
+use totalcontrol_core::pw_clock::{self, CardStream, Conductor, PwClock};
 use totalcontrol_core::pw_meter;
 
 /// Strips redundant prefixes baked into a channel's stored name before it's
@@ -2579,14 +2579,16 @@ pub enum Message {
     /// Periodic re-read of the PipeWire clock (another app may change it).
     EnginePoll,
     /// The graph clock, the card's own open stream (`None` = idle), whether
-    /// a Fireface playback sink is running, the host sink's volume, and the
-    /// graph quantum the server runs (`pw-top`; `None` = not probed).
+    /// a Fireface playback sink is running, the host sink's volume, the
+    /// graph quantum the server runs (`pw-top`; `None` = not probed), and the
+    /// node that requests the graph rate/quantum (`None` = no conductor).
     EngineRead(
         Option<PwClock>,
         Option<CardStream>,
         bool,
         Option<(u32, f32)>,
         Option<u32>,
+        Option<Conductor>,
     ),
     /// Set the Fireface PipeWire sink to unity (0 dB, 100 %).
     HostVolumeUnity,
@@ -3144,6 +3146,10 @@ pub struct TotalControl {
     /// period cannot stand in for it: the batch rule and the driver floor
     /// let several quanta share one period.
     pub graph_quantum: Option<u32>,
+    /// The PipeWire node that requests the graph rate/quantum, when one does.
+    /// Its name is the owner report; its presence means the stream owns the
+    /// clock and TotalControl writes only the defaults.
+    pub conductor: Option<Conductor>,
     /// When the user last changed the quantum, for the transitory state.
     pub quantum_change_at: Option<Instant>,
     /// A refused request is re-forced once before the actual value is
@@ -3797,6 +3803,7 @@ pub fn new_with_device(
         field_opening: false,
         engine: simulated.then_some(SIMULATED_ENGINE),
         graph_quantum: None,
+        conductor: None,
         quantum_change_at: None,
         quantum_reforced: false,
         engine_force_rate: 0,
@@ -3885,26 +3892,61 @@ fn graph_writable(state: &TotalControl) -> bool {
     !detected_path(state).is_external()
 }
 
-/// Force the graph rate off the UI thread. The engine poll confirms the actual
-/// graph; the caller reflects the force optimistically until then.
-fn write_force_rate(state: &TotalControl, rate: u32) {
+/// Write the rate target off the UI thread. On the internal clock this is the
+/// graph default (`clock.rate`), which a conducting node's `node.force-rate`
+/// overrides. Under an external clock it is the global force that protects the
+/// device rate.
+fn write_rate(state: &TotalControl, rate: u32) {
     if !graph_writable(state) {
         return;
     }
-    if !engine_intent(state, crate::audio_path_service::Intent::ForceRate(rate)) {
-        if let Err(e) = pw_clock::force_rate(rate) {
-            log::warn!("Setting the PipeWire rate failed: {e}");
+    let external = state.device.settings().clock_source != "Internal";
+    if external {
+        if !engine_intent(state, crate::audio_path_service::Intent::ForceRate(rate)) {
+            if let Err(e) = pw_clock::force_rate(rate) {
+                log::warn!("Setting the PipeWire rate failed: {e}");
+            }
+        }
+    } else if !engine_intent(state, crate::audio_path_service::Intent::DefaultRate(rate)) {
+        if let Err(e) = pw_clock::set_default_rate(rate) {
+            log::warn!("Setting the PipeWire default rate failed: {e}");
         }
     }
 }
 
-/// Force the graph quantum off the UI thread.
-fn write_force_quantum(state: &TotalControl, quantum: u32) {
+/// Write the quantum target off the UI thread. Same split as [`write_rate`].
+fn write_quantum(state: &TotalControl, quantum: u32) {
     if !graph_writable(state) {
         return;
     }
-    if !engine_intent(state, crate::audio_path_service::Intent::ForceQuantum(quantum)) {
-        let _ = pw_clock::force_quantum(quantum);
+    let external = state.device.settings().clock_source != "Internal";
+    if external {
+        if !engine_intent(state, crate::audio_path_service::Intent::ForceQuantum(quantum)) {
+            let _ = pw_clock::force_quantum(quantum);
+        }
+    } else if !engine_intent(state, crate::audio_path_service::Intent::DefaultQuantum(quantum)) {
+        let _ = pw_clock::set_default_quantum(quantum);
+    }
+}
+
+/// Adopt the running stream's rate as the current/default. Used by the engine
+/// poll when the stream sets the rate; a later idle state and start reuse it.
+fn write_default_rate(state: &TotalControl, rate: u32) {
+    if !graph_writable(state) {
+        return;
+    }
+    if !engine_intent(state, crate::audio_path_service::Intent::DefaultRate(rate)) {
+        let _ = pw_clock::set_default_rate(rate);
+    }
+}
+
+/// Adopt the running stream's quantum as the current/default.
+fn write_default_quantum(state: &TotalControl, quantum: u32) {
+    if !graph_writable(state) {
+        return;
+    }
+    if !engine_intent(state, crate::audio_path_service::Intent::DefaultQuantum(quantum)) {
+        let _ = pw_clock::set_default_quantum(quantum);
     }
 }
 
@@ -4669,7 +4711,7 @@ fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
         return;
     }
     state.engine_force_rate = rate;
-    write_force_rate(state, rate);
+    write_rate(state, rate);
     state.device.set_meter_rate(rate);
     state.pending_device_rate = state
         .card_stream
@@ -5795,6 +5837,15 @@ fn external_owner_name(state: &TotalControl) -> String {
     })
 }
 
+/// The owner that sets the device/graph clock: a conducting PipeWire node
+/// when one exists, otherwise the external PCM owner (JACK / direct ALSA).
+fn clock_owner_name(state: &TotalControl) -> String {
+    if let Some(conductor) = state.conductor.as_ref() {
+        return conductor.name.clone();
+    }
+    external_owner_name(state)
+}
+
 /// The server-free idle device-rate write (the JACK / direct-ALSA pro path).
 /// No sound server and no PCM owner: the driver adopts the rate, commits it
 /// and confirms it from the state-word readback, then arms the scene reapply.
@@ -5811,9 +5862,12 @@ fn apply_idle_device_rate(state: &mut TotalControl, rate: u32) {
     state.pending_device_rate = None;
 }
 
-/// Force the PipeWire graph through the ordinary engine-rate path.  A
-/// runtime rate passes `remember = false`: it is not the user's fixed-rate
-/// preference.
+/// Set the graph rate through the ordinary engine-rate path.  A runtime rate
+/// passes `remember = false`: it is not the user's stored preference.
+///
+/// On the internal clock this writes the graph default `clock.rate`; a
+/// conductor's `node.force-rate` overrides it. Under an external clock it
+/// writes the global force that protects the device rate.
 ///
 /// The UC applies `0x12` writes to the running engine, so a rate change needs
 /// no scene shadow write, no capture-side suspend and no re-apply afterwards:
@@ -5831,10 +5885,10 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     if !state.device.rate_follows_sound_server() {
         return;
     }
-    // The cushion for the new rate lands before the force; the rate change
+    // The cushion for the new rate lands before the default; the rate change
     // re-prepares the PCM and picks it up (C1).
     apply_engine_policy(state, rate);
-    write_force_rate(state, rate);
+    write_rate(state, rate);
     if rate > 0 {
         state.device.set_meter_rate(rate);
         // Only wait for confirmation when a stream is open.  An idle card
@@ -5847,44 +5901,42 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     } else {
         state.pending_device_rate = None;
     }
-    // Reflect the force optimistically; the engine poll confirms the actual
-    // graph and the open stream from the kernel facts.
+    // Reflect the new default optimistically; the engine poll confirms the
+    // actual graph and the open stream from the kernel facts.
     if let Some(e) = state.engine.as_mut() {
-        e.force_rate = rate;
+        e.rate = rate;
     }
     // The new rate may carry a higher period floor; keep the forced quantum
     // achievable so a rate switch never leaves an impossible setting.
     enforce_quantum_floor(state, rate);
 }
 
-/// Hold the Fixed-mode rate authority. `clock.force-rate` is runtime
-/// metadata: a PipeWire restart clears it and another client can overwrite
-/// it. When the live force diverges from the device authority rate, re-assert
-/// it, bounded to one re-assert per settling window so a refused rate does not
-/// spin. Under an external clock the device's reported rate is the authority
-/// and is tracked here. A pending user selection owns its confirmation window
-/// and is left alone.
+/// Hold the device rate under an external clock source. On the internal clock
+/// the host stream owns the rate and this does nothing: TotalControl writes
+/// only the default `clock.rate`, and a client's `node.force-rate` wins.
+/// Slaved to an external clock, the device's reported rate is the authority;
+/// re-assert the global force when it diverges, bounded to one re-assert per
+/// settling window. A pending user selection owns its confirmation window and
+/// is left alone.
 fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
     if state.device.is_mock()
-        || state.engine_rate_mode != EngineRateMode::Fixed
         || !state.device.rate_follows_sound_server()
         || !graph_writable(state)
+        || state.device.settings().clock_source == "Internal"
     {
         return;
     }
-    // Slaved to an external clock, the device's reported rate becomes the
-    // fixed choice so the readout and the force agree.
-    if state.device.settings().clock_source != "Internal" {
-        if let Some(rate) = state.device.device_rate().filter(|r| *r > 0) {
-            state.engine_force_rate = rate;
-        }
+    // Slaved to an external clock, the device's reported rate is the authority
+    // so the readout and the force agree.
+    if let Some(rate) = state.device.device_rate().filter(|r| *r > 0) {
+        state.engine_force_rate = rate;
     }
     let Some(desired) = rate_authority_target(state, clock) else {
         return;
     };
     state.rate_authority_reforce = Some(Instant::now());
     apply_engine_policy(state, desired);
-    write_force_rate(state, desired);
+    write_rate(state, desired);
     state.engine_force_rate = desired;
     state.pending_device_rate = state
         .card_stream
@@ -5899,11 +5951,10 @@ fn reconcile_rate_authority(state: &mut TotalControl, clock: Option<PwClock>) {
     log::info!("rate-authority: re-asserted {desired} Hz");
 }
 
-/// The rate Fixed mode must re-assert, or `None` when the live force already
-/// holds the authority. Pure decision: a diverged force (a PipeWire restart
-/// cleared it, or another client wrote it) is re-asserted unless a user
-/// selection owns its confirmation window or a re-assert is still cooling
-/// down. Kept separate from the write so it is testable without PipeWire.
+/// The rate TotalControl must hold under an external clock source, or `None`
+/// when the host stream/default owns the rate. On the internal clock the host
+/// stream is the authority and this returns `None`. Kept separate from the
+/// write so it is testable without PipeWire.
 fn rate_authority_target(state: &TotalControl, clock: Option<PwClock>) -> Option<u32> {
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return None;
@@ -6040,47 +6091,31 @@ pub fn restore_engine(state: &mut TotalControl) {
         return;
     }
     apply_allowed_rates(state);
-    // The UC sample rate follows the host's stream, as it does on Windows:
-    // the device keeps its last rate while powered, but the host's remembered
-    // mode is what opens the next stream.
-    match state.engine_rate_mode {
-        EngineRateMode::Auto => {
-            if state.device.is_uc_model() {
-                state.pending_device_rate = None;
-            }
-            write_force_rate(state, 0);
-        }
-        EngineRateMode::Fixed => {
-            if state.device.is_uc_model() {
-                state.pending_device_rate = None;
-            }
-            // Device mode: the device's set rate is the boss, on startup too.
-            // Slaved to an external clock, the device's reported rate is the
-            // authority; on internal clock it is the stored fixed choice.
-            let rate = device_authority_rate(state);
-            state.engine_force_rate = rate;
-            state.rate_authority_reforce = None;
-            if rate > 0 {
-                write_force_rate(state, rate);
-                // The input capture PCM shares the device clock; release it
-                // so the kernel driver can move the card to the requested
-                // rate.
-                state.device.set_meter_rate(rate);
-            } else {
-                write_force_rate(state, 0);
-            }
-        }
+    // The host stream owns the rate. At startup the stored current rate is
+    // the default; a stream that is already running overrides it (the engine
+    // poll adopts its values). Under an external clock the device's readback
+    // is the authority.
+    if state.device.is_uc_model() {
+        state.pending_device_rate = None;
+    }
+    let rate = if state.device.settings().clock_source == "Internal" {
+        state.engine_force_rate
+    } else {
+        device_authority_rate(state)
+    };
+    state.rate_authority_reforce = None;
+    if rate > 0 {
+        state.engine_force_rate = rate;
+        write_rate(state, rate);
+        // The input capture PCM shares the device clock; release it so the
+        // kernel driver can move the card to the requested rate.
+        state.device.set_meter_rate(rate);
     }
     if state.engine_force_quantum > 0 {
-        write_force_quantum(state, state.engine_force_quantum);
-    } else {
-        // The preference says "no override": release any stale one a previous
-        // session or another tool left behind. A same-value force does not
-        // re-prepare, so this is a no-op when the graph already has no force.
-        write_force_quantum(state, 0);
+        write_quantum(state, state.engine_force_quantum);
     }
-    // Reflect the restored forces optimistically; the engine poll confirms the
-    // actual graph and the open stream from the kernel facts.
+    // The graph clock is filled by the engine poll; do not write a force
+    // optimistically. The defaults are the authority while idle.
     let engine = state.engine.get_or_insert(PwClock {
         rate: 0,
         quantum: 0,
@@ -6089,8 +6124,9 @@ pub fn restore_engine(state: &mut TotalControl) {
         min_quantum: 0,
         max_quantum: 0,
     });
-    engine.force_rate = state.engine_force_rate;
-    engine.force_quantum = state.engine_force_quantum;
+    if engine.rate == 0 {
+        engine.rate = rate;
+    }
     // The scene was just written, but at the rate the card had before the
     // stream opens.  The unit reloads its stored mixer when the stream starts
     // (the `#70` case), so queue the same full rewrite a runtime rate change
@@ -6110,9 +6146,12 @@ pub fn restore_engine(state: &mut TotalControl) {
     // A remembered quantum may sit below the floor of the rate the graph opens
     // at; raise it to the floor instead of forcing an impossible value.
     enforce_quantum_floor(state, running_rate(state));
-    // Apply the restored forces so the device starts at the remembered rate and
-    // quantum even when the graph is idle; metadata alone does not move it.
-    force_engine_reprepare(state);
+    // Apply the restored default so the device starts at the remembered rate
+    // and quantum even when the graph is idle; metadata alone does not move it.
+    // A conductor already owns the graph: adopt it and do not disturb it.
+    if state.conductor.is_none() {
+        force_engine_reprepare(state);
+    }
 }
 
 /// Writes the host settings if something changed (and a path is set).
@@ -12885,11 +12924,26 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
                 return Task::none();
             }
-            state.engine_rate_mode = if rate == 0 {
-                EngineRateMode::Auto
-            } else {
-                EngineRateMode::Fixed
-            };
+            // A host stream owns the rate while it runs. Report the owner;
+            // never write a competing request.
+            if rate > 0 && (state.card_stream.is_some() || state.conductor.is_some()) {
+                let owner = state
+                    .conductor
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .or_else(|| state.pcm_owner_comm.clone())
+                    .unwrap_or_else(|| "the host stream".into());
+                state.notice = Some((
+                    format!("The device rate is controlled by {owner}."),
+                    Instant::now(),
+                ));
+                return Task::none();
+            }
+            if rate == 0 {
+                // No rate request: the host stream and the graph default set
+                // the rate.
+                return Task::none();
+            }
             state.rate_authority_reforce = None;
             if state.transport_counters.is_some() {
                 begin_rate_switch_window(state);
@@ -12922,90 +12976,38 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(rate as i32)]);
         }
         Message::EngineRateMode(mode) => {
-            match mode {
-                EngineRateMode::Auto => {
-                    state.engine_rate_mode = EngineRateMode::Auto;
-                    state.rate_authority_reforce = None;
-                    // Clean slate: the convenience clock runs nominal. Reset the
-                    // pitch intent to 0 so a later return to Device starts fresh.
-                    // Nominal is safe in any scheduling mode, so no dependency.
-                    state.pro_pitch = 0.0;
-                    state.pitch_after_reprepare = None;
-                    state.pitch_clock_dirty = true;
-                    reconcile_device_pitch(state);
-                    // Fresh start on the convenience path: an idle device must
-                    // not inherit the Device-mode rate. Reset it to the graph's
-                    // default rate before the force is released, so the next
-                    // client opens at its native rate, and a client that adopts
-                    // the device rate (a Web Audio context) starts from the
-                    // default. With a stream open the graph keeps its rate (the
-                    // documented rule) and only the release runs.
-                    let idle = state.card_stream.is_none();
-                    let target = if idle {
-                        clock_facts(state).default_graph_rate()
-                    } else {
-                        running_rate(state)
-                    };
-                    if idle && !state.device.is_mock() && graph_writable(state) {
-                        write_force_rate(state, target);
-                        force_engine_reprepare(state);
-                    }
-                    log::info!(
-                        "rate-follows: PipeWire mode, idle={idle}, default target {target} Hz, force released"
-                    );
-                    apply_graph_rate(state, 0, false);
-                    // Convenience path: timer + fixed margin. Force the quantum
-                    // to the convenience minimum and re-prepare so the policy
-                    // lands now, not at the next natural stream transition.
-                    apply_engine_policy(state, target);
-                    enforce_quantum_floor(state, target);
-                    force_engine_reprepare(state);
-                    // Re-assert the pitch after the re-prepare, while the graph
-                    // is running: the device clock must be (re)written into a
-                    // running graph for the host fill to lock onto it. Writing it
-                    // only before the re-prepare leaves the tracking unlocked.
-                    state.pitch_clock_dirty = true;
-                }
-                EngineRateMode::Fixed => {
-                    state.engine_rate_mode = EngineRateMode::Fixed;
-                    state.rate_authority_reforce = None;
-                    // Clean slate: entering Device mode starts at nominal pitch.
-                    // A saved pitch is not restored — the user sets pitch from
-                    // the slider afterwards, so the clock precondition is always
-                    // known (0 %) at the transition.
-                    state.pro_pitch = 0.0;
-                    state.pitch_clock_dirty = true;
-                    // Land the IRQ policy and the rate force, then re-prepare.
-                    apply_graph_rate(state, device_authority_rate(state), true);
-                    // The pitched clock belongs only to an IRQ-scheduled graph.
-                    // Record the worker's re-prepare generation before issuing
-                    // the re-prepare, and defer the saved pitch until a newer
-                    // re-prepare confirms IRQ — the fresh-start precondition
-                    // (IRQ established before the pitched clock). The reconcile
-                    // writes the pitch once the dependency is satisfied.
-                    let gen_before = state
-                        .audio_path_service
-                        .as_ref()
-                        .map(|svc| svc.snapshot().reprepare_gen);
-                    force_engine_reprepare(state);
-                    state.pitch_clock_dirty = true;
-                    let async_reprepare = gen_before.is_some()
-                        && !state.device.is_mock()
-                        && state.device.rate_follows_sound_server()
-                        && graph_writable(state);
-                    state.pitch_after_reprepare = if async_reprepare { gen_before } else { None };
-                    if !async_reprepare {
-                        // The re-prepare ran synchronously (or none is needed):
-                        // IRQ is already in place, so reconcile the pitch now.
-                        reconcile_device_pitch(state);
-                    }
+            state.engine_rate_mode = mode;
+            state.rate_authority_reforce = None;
+            // The pitch belongs to professional mode; reset it on a mode
+            // change (a saved pitch is not restored).
+            state.pro_pitch = 0.0;
+            state.pitch_after_reprepare = None;
+            state.pitch_clock_dirty = true;
+            // Timer mode defaults to the safe quantum. A conductor's quantum
+            // still wins while it runs.
+            if mode == EngineRateMode::Auto && !state.device.is_mock() {
+                let floor = convenience_quantum_min(state);
+                if state.engine_force_quantum < floor {
+                    state.engine_force_quantum = floor;
+                    write_quantum(state, floor);
                 }
             }
-            let shown = state
-                .engine
-                .map(|e| e.effective_rate())
-                .unwrap_or(state.engine_force_rate);
-            notify_osc_raw(state, "/sample_rate", vec![OscType::Int(shown as i32)]);
+            // Apply the scheduling policy and re-prepare so it lands now.
+            let rate = running_rate(state);
+            apply_engine_policy(state, rate);
+            let gen_before = state
+                .audio_path_service
+                .as_ref()
+                .map(|svc| svc.snapshot().reprepare_gen);
+            force_engine_reprepare(state);
+            let async_reprepare = gen_before.is_some()
+                && !state.device.is_mock()
+                && state.device.rate_follows_sound_server()
+                && graph_writable(state);
+            state.pitch_after_reprepare = if async_reprepare { gen_before } else { None };
+            if !async_reprepare {
+                reconcile_device_pitch(state);
+            }
         }
         Message::EngineQuantum(quantum) => {
             // Under an external owner the quantum is the owner's ALSA period,
@@ -13022,6 +13024,22 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
                 return Task::none();
             }
+            // A host stream sets the quantum while it runs.
+            if state.card_stream.is_some() || state.conductor.is_some() {
+                let owner = state
+                    .conductor
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .or_else(|| state.pcm_owner_comm.clone())
+                    .unwrap_or_else(|| "the host stream".into());
+                if quantum > 0 {
+                    state.notice = Some((
+                        format!("The quantum is controlled by {owner}."),
+                        Instant::now(),
+                    ));
+                }
+                return Task::none();
+            }
             state.quantum_change_at = Some(Instant::now());
             state.quantum_reforced = false;
             if !state.device.is_mock() {
@@ -13033,7 +13051,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
             } else if state.device.rate_follows_sound_server() {
                 apply_engine_policy(state, running_rate(state));
-                write_force_quantum(state, quantum);
+                write_quantum(state, quantum);
                 if let Some(e) = state.engine.as_mut() {
                     e.force_quantum = quantum;
                 }
@@ -13073,6 +13091,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // change is being applied.
             let probe_quantum = !is_mock
                 && (state.show_device_panel
+                    || state.conductor.is_some()
                     || state.quantum_change_at.is_some_and(|at| {
                         Instant::now().duration_since(at) < Duration::from_secs(10)
                     }));
@@ -13109,6 +13128,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         sink_running,
                         state.host_volume,
                         state.graph_quantum,
+                        state.conductor.clone(),
                     ),
                 );
             }
@@ -13126,29 +13146,44 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         } else {
                             None
                         };
+                        let stream = pw_clock::card_stream(&card_id);
+                        let conductor = if follows && !is_mock {
+                            pw_clock::conductors().and_then(|list| {
+                                pw_clock::select_conductor(
+                                    &list,
+                                    stream.map(|s| s.rate).unwrap_or(0),
+                                    graph_quantum.unwrap_or(0),
+                                )
+                            })
+                        } else {
+                            None
+                        };
                         (
                             pw_clock::read(),
-                            pw_clock::card_stream(&card_id),
+                            stream,
                             sink_running,
                             host_volume,
                             graph_quantum,
+                            conductor,
                         )
                     })
                     .await
-                    .unwrap_or((None, None, false, None, None))
+                    .unwrap_or((None, None, false, None, None, None))
                 },
-                |(clock, stream, sink_running, host_volume, graph_quantum)| {
+                |(clock, stream, sink_running, host_volume, graph_quantum, conductor)| {
                     Message::EngineRead(
                         clock,
                         stream,
                         sink_running,
                         host_volume,
                         graph_quantum,
+                        conductor,
                     )
                 },
             );
         }
-        Message::EngineRead(clock, stream, sink_running, host_volume, graph_quantum) => {
+        Message::EngineRead(clock, stream, sink_running, host_volume, graph_quantum, conductor) => {
+            state.conductor = conductor;
             if let Some(quantum) = graph_quantum {
                 state.graph_quantum = Some(quantum);
             }
@@ -13182,6 +13217,18 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                     state.last_card_rate = Some(rate);
                 }
+                if rate_changed {
+                    // A conductor's rate change rewrites the device clock and
+                    // can reset the pitch. Re-apply it, clamped to the new
+                    // rate's envelope.
+                    let max = clock_facts(state).pitch_max_percent(
+                        new_rate.unwrap_or(state.engine_force_rate),
+                    );
+                    if state.pro_pitch > max {
+                        state.pro_pitch = max;
+                    }
+                    state.pitch_clock_dirty = true;
+                }
                 if rate_changed && state.last_card_rate.is_some() {
                     note_observed_rate_switch(state);
                 }
@@ -13207,6 +13254,37 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.last_sink_running = sink_running;
                 state.engine = clock;
                 state.card_stream = stream;
+                // The host stream owns the rate and quantum. Adopt its values
+                // as the current/default so the next idle state and start
+                // reuse the last value. TotalControl writes only the graph
+                // defaults; a conducting node's force wins over them.
+                if state.device.settings().clock_source == "Internal" {
+                    if let Some(rate) = stream.map(|s| s.rate).filter(|r| *r > 0) {
+                        if state.engine_force_rate != rate {
+                            state.engine_force_rate = rate;
+                            if graph_writable(state) {
+                                write_default_rate(state, rate);
+                            }
+                        }
+                    }
+                    let quantum = graph_quantum
+                        .or_else(|| clock.map(|c| c.effective_quantum()))
+                        .filter(|q| *q > 0);
+                    let mut quantum_changed = false;
+                    if let Some(quantum) = quantum {
+                        if state.engine_force_quantum != quantum {
+                            state.engine_force_quantum = quantum;
+                            quantum_changed = true;
+                            if graph_writable(state) {
+                                write_default_quantum(state, quantum);
+                            }
+                        }
+                    }
+                    if rate_changed || quantum_changed {
+                        // The cushion aligns to the stream's actual quantum.
+                        apply_engine_policy(state, running_rate(state));
+                    }
+                }
                 // While an external owner (JACK / direct ALSA) holds the PCM,
                 // the stored PipeWire mode must not determine the rate or
                 // quantum. Release the live overrides once on entry so the
@@ -15583,6 +15661,7 @@ fn clock_facts(state: &TotalControl) -> ClockFacts {
         force_quantum: state.engine_force_quantum,
         clock: state.engine,
         stream: state.card_stream,
+        conductor: state.conductor.clone(),
         graph_quantum: state.graph_quantum,
         device_rate: state.device.device_rate(),
         clock_source_external: state.device.settings().clock_source != "Internal",
@@ -15706,7 +15785,7 @@ fn reconcile_quantum(state: &mut TotalControl) {
     let waited = changed.elapsed();
     if !state.quantum_reforced && waited >= Duration::from_secs(3) {
         if !state.device.is_mock() {
-            write_force_quantum(state, force);
+            write_quantum(state, force);
             // Push the re-forced quantum too; metadata alone does not apply it
             // to an idle graph.
             force_engine_reprepare(state);
@@ -15716,7 +15795,7 @@ fn reconcile_quantum(state: &mut TotalControl) {
     }
     if state.quantum_reforced && waited >= Duration::from_secs(6) {
         if !state.device.is_mock() {
-            write_force_quantum(state, actual);
+            write_quantum(state, actual);
         }
         if let Some(engine) = state.engine.as_mut() {
             engine.force_quantum = actual;
@@ -15780,9 +15859,9 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
     };
     state.engine_force_quantum = target;
     if let Some(engine) = state.engine.as_mut() {
-        engine.force_quantum = target;
+        engine.quantum = target;
     }
-    write_force_quantum(state, target);
+    write_quantum(state, target);
     apply_engine_policy(state, rate);
 }
 
@@ -15906,28 +15985,26 @@ fn apply_engine_policy(state: &mut TotalControl, rate: u32) {
     }
 }
 
-const RATE_FOLLOW_DEVICE: &str = "Device";
-const RATE_FOLLOW_PIPEWIRE: &str = "PipeWire";
+const PLAYBACK_MODE_TIMER: &str = "Timer mode";
 
-/// The "Rate follows" control: who determines the graph (and thus device)
-/// rate. Device forces the device-set rate; PipeWire lets the graph conduct
-/// and the device follows it. The rate value itself is set in the DEVICE
-/// group's Sample rate picker (Device mode only). Two radio buttons keep the
-/// active authority visible at a glance.
-fn rate_follow_control(mode: EngineRateMode, scale: f32) -> Element<'static, Message> {
-    let text_size = theme::TEXT_DIALOG * scale;
-    let choice = |label: &'static str, value: EngineRateMode| {
-        radio(label, value, Some(mode), Message::EngineRateMode)
-            .size(16.0 * scale)
-            .text_size(text_size)
-    };
-    row![
-        choice(RATE_FOLLOW_PIPEWIRE, EngineRateMode::Auto),
-        choice(RATE_FOLLOW_DEVICE, EngineRateMode::Fixed),
-    ]
-    .spacing(theme::SPACE_LG * scale)
-    .align_y(iced::Alignment::Center)
-    .into()
+/// The `Playback mode` checkbox: checked is timer mode with a safe quantum;
+/// unchecked is professional mode (IRQ scheduling and the period-aligned
+/// cushion). It selects the scheduling policy only; the host stream is the
+/// rate authority on every path.
+fn playback_mode_control(mode: EngineRateMode, scale: f32) -> Element<'static, Message> {
+    let timer = mode == EngineRateMode::Auto;
+    checkbox(timer)
+        .label(PLAYBACK_MODE_TIMER)
+        .on_toggle(move |on| {
+            Message::EngineRateMode(if on {
+                EngineRateMode::Auto
+            } else {
+                EngineRateMode::Fixed
+            })
+        })
+        .style(theme::checkbox)
+        .text_size(theme::TEXT_DIALOG * scale)
+        .into()
 }
 
 /// A read-only value in the secondary colour. The panel's visual language:
@@ -16212,7 +16289,11 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let rate_picker = if state.device.is_mock() {
         audio_path::PickerState::Active
     } else {
-        audio_path::rate_picker_state(detected_path(state), state.engine_rate_mode, !internal)
+        audio_path::rate_picker_state(
+            detected_path(state),
+            !internal,
+            state.card_stream.is_some() || state.conductor.is_some(),
+        )
     };
     match rate_picker {
         audio_path::PickerState::Active => {
@@ -16238,7 +16319,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                         caption("Sample rate"),
                         owned_field(
                             rate_label(owned_rate),
-                            &external_owner_name(state),
+                            &clock_owner_name(state),
                             scale,
                             text_size,
                         ),
@@ -16260,8 +16341,8 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         }
     }
     // Row 2: the current (actual) device clock, read-only. Always shown, so the
-    // displayed rate is the truth: the nominal rate with pitch applied in Device
-    // mode, the conducted/reported rate otherwise (principle 1).
+    // displayed rate is the truth: the nominal rate with pitch applied in
+    // professional mode, the conducted/reported rate otherwise.
     let current_text = actual_device_rate(state)
         .map(hz_label)
         .unwrap_or_else(|| "\u{2014}".into());
@@ -16270,7 +16351,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     } else if detected_path(state).is_external() {
         "Reported by the device \u{2014} set by the running owner."
     } else if !device_mode {
-        "Reported by the device \u{2014} follows the PipeWire graph."
+        "Reported by the device \u{2014} follows the host stream."
     } else {
         "The device's actual clock \u{2014} nominal rate with pitch applied."
     };
@@ -16448,18 +16529,19 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
-    let internal = state.device.settings().clock_source == "Internal";
     let external_owner = detected_path(state).is_external();
     let clock = state.engine;
-    let heading_label = if external_owner {
+    let heading_label: String = if external_owner {
         match state.pcm_owner {
-            audio_path::PcmOwner::Jack => "AUDIO ENGINE \u{00b7} JACK",
-            _ => "AUDIO ENGINE \u{00b7} ALSA",
+            audio_path::PcmOwner::Jack => "AUDIO ENGINE \u{00b7} JACK".to_string(),
+            _ => "AUDIO ENGINE \u{00b7} ALSA".to_string(),
         }
+    } else if let Some(conductor) = state.conductor.as_ref() {
+        format!("AUDIO ENGINE \u{00b7} {}", conductor.name)
     } else if state.device.is_mock() {
-        "AUDIO ENGINE \u{00b7} PIPEWIRE (SIMULATED)"
+        "AUDIO ENGINE \u{00b7} PIPEWIRE (SIMULATED)".to_string()
     } else {
-        "AUDIO ENGINE \u{00b7} PIPEWIRE"
+        "AUDIO ENGINE \u{00b7} PIPEWIRE".to_string()
     };
     let heading = row![
         text(heading_label).color(theme::text_sec()).size(text_size),
@@ -16472,7 +16554,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // (JACK / direct ALSA) the rate and period come from the kernel and the
     // owner, not from the graph. Only a serverless, owner-less device falls
     // back to the notice.
-    if clock.is_none() && !external_owner {
+    if clock.is_none() && !external_owner && state.conductor.is_none() {
         return column![
             heading,
             text(
@@ -16530,7 +16612,10 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .chain(quanta.iter().map(|q| format!("{q} samples")))
             .collect()
     };
-    let force_q = clock.map_or(0, |c| c.force_quantum);
+    let force_q = clock
+        .map(|c| c.force_quantum)
+        .unwrap_or(0)
+        .max(state.engine_force_quantum);
     let quantum_sel = if !convenience && force_q == 0 {
         quantum_opts[0].clone()
     } else {
@@ -16575,58 +16660,25 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     .width(Length::Fill);
 
     let mut body = column![heading];
-    // The mode is ours to set only when the device runs on its internal clock
-    // and no external process owns the PCM. Slaved to an external clock, the
-    // rate is determined by the device; under JACK or a direct-ALSA DAW, the
-    // owner determines it and TotalControl only reports it.
-    if external_owner {
-        let owner_label = match state.pcm_owner {
-            audio_path::PcmOwner::Jack => "JACK",
-            _ => "ALSA",
-        };
-        body = body.push(
-            row![
-                caption("Rate follows"),
-                strip::hint(
-                    text(owner_label)
-                        .color(theme::text_sec())
-                        .size(text_size)
-                        .width(Length::Fill),
-                    "Another process owns the device clock.",
-                    scale,
-                ),
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
-        );
-    } else if internal {
-        body = body.push(
-            row![
-                caption("Rate follows"),
-                rate_follow_control(state.engine_rate_mode, scale)
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
-        );
+    // Playback mode selects the scheduling policy only. The host stream is
+    // the rate authority on every path; under an external owner the policy is
+    // the owner's, so the checkbox is a disabled report.
+    let playback_mode: Element<'static, Message> = if external_owner {
+        checkbox(state.engine_rate_mode == EngineRateMode::Auto)
+            .label(PLAYBACK_MODE_TIMER)
+            .style(theme::checkbox)
+            .text_size(text_size)
+            .into()
     } else {
-        body = body.push(
-            row![
-                caption("Rate follows"),
-                strip::hint(
-                    text("Device")
-                        .color(theme::text_sec())
-                        .size(text_size)
-                        .width(Length::Fill),
-                    "Rate follows the external clock source.",
-                    scale,
-                ),
-            ]
+        playback_mode_control(state.engine_rate_mode, scale)
+    };
+    body = body.push(
+        row![caption("Playback mode"), playback_mode]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
-        );
-    }
-    // The graph rate is reported in every mode: Auto may move it without
-    // there being a fixed choice to show in the picker.
+    );
+    // The graph rate is reported in every mode: the host stream or the graph
+    // default sets it.
     body = body.push(
         row![
             caption("Graph"),
@@ -16659,15 +16711,30 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     // The quantum picker: TotalControl forces the graph quantum, except under
     // an external owner, where the quantum is the owner's ALSA period — a
     // grayed read-only report naming the owner (gray-when-owned).
+    let host_stream = state.card_stream.is_some() || state.conductor.is_some();
     let quantum_control: Element<'static, Message> =
-        if audio_path::quantum_picker_state(detected_path(state)) == audio_path::PickerState::Grayed
+        if audio_path::quantum_picker_state(detected_path(state), host_stream)
+            == audio_path::PickerState::Grayed
         {
-            let period = state.card_stream.map(|s| s.period).filter(|p| *p > 0);
-            owned_field(
-                period
+            // Under an external owner the quantum is the owner's ALSA period;
+            // under a PipeWire conductor it is the graph quantum the stream
+            // runs at.
+            let value = if external_owner {
+                state
+                    .card_stream
+                    .map(|s| s.period)
+                    .filter(|p| *p > 0)
                     .map(|p| format!("{p} samples"))
-                    .unwrap_or_else(|| "\u{2014}".into()),
-                &external_owner_name(state),
+            } else {
+                state
+                    .graph_quantum
+                    .or_else(|| clock.map(|c| c.effective_quantum()))
+                    .filter(|q| *q > 0)
+                    .map(|q| format!("{q} samples"))
+            };
+            owned_field(
+                value.unwrap_or_else(|| "\u{2014}".into()),
+                &clock_owner_name(state),
                 scale,
                 text_size,
             )
@@ -17090,6 +17157,9 @@ fn rtl_blank(scale: f32) -> Element<'static, Message> {
 fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let external = detected_path(state).is_external();
+    // A conducting PipeWire client sets the buffer the host queue reports;
+    // use the live delay for it exactly as for an external owner.
+    let live_owner = external || state.conductor.is_some();
     if state.engine_rate_mode == EngineRateMode::Auto && !external {
         return rtl_blank(scale);
     }
@@ -17116,7 +17186,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             // tracks the owner's write-ahead (e.g. jackd's -n). The device lead
             // and converter stay the model terms. The delay already covers the
             // in-flight URBs, so the USB queue is not added a second time.
-            if external {
+            if live_owner {
                 if let Some(delay) = state.pcm_delay {
                     let lead = 60; // UC/UCX device lead (see ucx_usb_frames)
                     return rtl_live_block(
@@ -23277,7 +23347,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::{
-        actual_graph_quantum, any_channel_muted, any_channel_soloed,
+        any_channel_muted, any_channel_soloed,
         apply_control_room_assignments, apply_host_settings,
         apply_pending_resize, apply_startup_sync, apply_workspace, apply_workspace_gui,
         attach_device_service, capture_workspace, channel_is_muted, channel_is_soloed,
@@ -23302,7 +23372,7 @@ mod tests {
         PwClock, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
         TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,
         FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H,
-        FX_W, MAIN_DEST, METER_RELEASE_DB_S, SPEAKER_B_DEST, UC_AP_MEASUREMENTS, UC_PC_MEASUREMENTS, ZOOM_STEP,
+        FX_W, MAIN_DEST, METER_RELEASE_DB_S, UC_AP_MEASUREMENTS, UC_PC_MEASUREMENTS, ZOOM_STEP,
     };
     use crate::osc::OscOutbound;
     use crate::sidebar;
@@ -24731,7 +24801,7 @@ mod tests {
             format: totalcontrol_core::pw_clock::PcmFormat::S32Le,
         };
         state.card_stream = Some(stream);
-        let _ = update(&mut state, Message::EngineRead(None, Some(stream), true, None, None));
+        let _ = update(&mut state, Message::EngineRead(None, Some(stream), true, None, None, None));
         assert_eq!(state.audio_perf_status, Status::Unavailable);
     }
 
@@ -26786,7 +26856,7 @@ mod tests {
     }
 
     #[test]
-    fn the_reported_graph_rate_prefers_the_forced_value_then_the_card() {
+    fn the_reported_graph_rate_prefers_the_card_then_the_graph() {
         let mut state = new(true, None, None);
         state.engine = Some(PwClock {
             rate: 48_000,
@@ -26805,7 +26875,11 @@ mod tests {
             format: totalcontrol_core::pw_clock::PcmFormat::S32Le,
         });
         assert_eq!(super::current_graph_rate(&state), 44_100);
+        // The running stream wins over a live force.
         state.engine.as_mut().unwrap().force_rate = 96_000;
+        assert_eq!(super::current_graph_rate(&state), 44_100);
+        // With no stream, the graph force is the reported rate.
+        state.card_stream = None;
         assert_eq!(super::current_graph_rate(&state), 96_000);
     }
 
@@ -27017,7 +27091,7 @@ mod tests {
         // Background polls do not count as activity.
         state.last_activity = Instant::now() - Duration::from_secs(10);
         let _ = update(&mut state, Message::EnginePoll);
-        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None));
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None, None));
         assert_eq!(tick_interval(&state), TICK_IDLE);
 
         // A pending window resize and a running collapse animation keep it
@@ -28166,7 +28240,7 @@ mod tests {
             channels: 18,
             format: totalcontrol_core::pw_clock::PcmFormat::S32Le,
         };
-        let _ = update(&mut state, Message::EngineRead(None, Some(stream), false, None, None));
+        let _ = update(&mut state, Message::EngineRead(None, Some(stream), false, None, None, None));
 
         assert_eq!(
             state.device.settings().sample_rate, 96_000,
@@ -28211,7 +28285,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_mode_reasserts_its_rate_after_the_force_is_cleared() {
+    fn only_an_external_clock_reasserts_the_device_rate() {
         let mut state = new(true, None, None);
         state.device = DeviceHandle::open_mock_ucx();
         attach_device_service(&mut state);
@@ -28239,7 +28313,11 @@ mod tests {
             max_quantum: 2048,
             force_quantum: 0,
         };
-        // A PipeWire restart cleared the force: Fixed mode re-asserts its rate.
+        // Internal clock: the host stream/default owns the rate. No re-assert.
+        assert_eq!(rate_authority_target(&state, Some(cleared)), None);
+        // External clock: the device's readback is the authority; a cleared
+        // force is re-asserted to protect the device rate.
+        state.device.settings_mut().clock_source = "SPDIF".into();
         assert_eq!(rate_authority_target(&state, Some(cleared)), Some(96_000));
         // The force already holds the authority: nothing to do.
         let held = PwClock { force_rate: 96_000, ..cleared };
@@ -28251,10 +28329,10 @@ mod tests {
         // A re-assert still cooling down is not repeated.
         state.rate_authority_reforce = Some(Instant::now());
         assert_eq!(rate_authority_target(&state, Some(cleared)), None);
-        // Auto mode never re-asserts a force.
+        // The playback mode does not gate the external-clock protection.
         state.rate_authority_reforce = None;
         state.engine_rate_mode = EngineRateMode::Auto;
-        assert_eq!(rate_authority_target(&state, Some(cleared)), None);
+        assert_eq!(rate_authority_target(&state, Some(cleared)), Some(96_000));
     }
 
     #[test]
@@ -28339,13 +28417,13 @@ mod tests {
         state.engine = None;
         // jackd takes the PCM: the stored mode must relinquish, not drive.
         state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::Jack;
-        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None));
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None, None));
         assert!(state.external_owner_active);
         assert!(state.pending_device_rate.is_none());
         assert!(state.quantum_change_at.is_none());
         // The owner leaves: the flag clears so the stored mode can re-apply.
         state.pcm_owner = totalcontrol_core::audio_path::PcmOwner::Idle;
-        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None));
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None, None, None));
         assert!(!state.external_owner_active);
     }
 

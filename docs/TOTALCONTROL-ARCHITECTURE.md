@@ -466,8 +466,8 @@ detected from kernel facts, never configured:
 
 | Path | PCM owner | Rate authority |
 |---|---|---|
-| PipeWire | `pipewire` | TotalControl (Device) or the graph (PipeWire) |
-| JACK | `jackd` / `jackdbus` | the JACK server / DAW |
+| PipeWire | `pipewire` | the host stream (a PipeWire client); TotalControl sets the defaults while no stream runs |
+| JACK | `jackd` / `jackdbus` | the JACK server / client |
 | direct ALSA | a DAW opening `hw:` | the DAW |
 
 The PCM owner is read from `/proc/asound/<card>/pcm0p/sub0/status` (`owner_pid`
@@ -488,27 +488,29 @@ owner TotalControl reads the rate and writes nothing to the clock; the mixer
 scene is reapplied from the engine-run epoch (`run_seq`), server-free, on every
 path.
 
-The host clock source has one owner. The engine poll reads the graph clock
+The host stream has the rate authority. The engine poll reads the graph clock
 metadata (`clock.rate`, `clock.quantum`, the forced values and the
-`min-quantum`/`max-quantum` policy bounds) and, while the device panel shows
-the quantum or a change is being applied, the graph quantum the server
-actually runs (`pw-top`). The graph quantum is the only truthful confirmation
-of a quantum change: the ALSA period is a different quantity (the batch rule
-and the driver floor let several quanta share one period). TotalControl is the
-authority for the quantum and the rate: the user's value is forced, a refused
-quantum request is forced once more, and if the host still runs another value
-the actual value is adopted with a notice. The quantum picker offers the
-driver floor intersected with the host policy bounds, so an entry it shows can
-be honoured.
+`min-quantum`/`max-quantum` policy bounds), the node props that name the
+conductor (`node.force-rate`, `node.force-quantum`, `node.lock-rate`,
+`node.lock-quantum`) and, while a change is being applied, the graph quantum the
+server actually runs (`pw-top`). A PipeWire client that sets a node force or
+lock overrides the graph defaults; TotalControl writes only `clock.rate` /
+`clock.quantum` while no stream runs and adopts the running values. It never
+writes a global `clock.force-rate` / `clock.force-quantum` while a stream runs:
+the global force clears the client's node lock in the PipeWire graph. The
+global force is used only under an external clock, where the device must win.
+The conducting node's name is the owner. The device keeps the last rate and
+quantum after the stream stops; TotalControl does not restore an older value.
+The quantum picker offers the driver floor intersected with the host policy
+bounds, so an entry it shows can be honoured.
 
-A forced rate or quantum applies even when the graph is idle. A suspended node
-does not act on the force metadata, because the graph re-prepares only while a
-stream runs. TotalControl applies the force by activating the graph with a brief
-capture stream. The capture is held open until the device confirms the forced
-rate and quantum, then closed; the apply is a closed loop of force, activate,
-confirm and retry. The capture reads the inputs and injects nothing into the
-playback path. PipeWire owns the PCM and multiplexes the capture, so a DAW keeps
-its stream.
+An idle default applies even when the graph is idle. A suspended node does not
+act on the metadata, because the graph re-prepares only while a stream runs.
+TotalControl applies the default by activating the graph with a brief capture
+stream. The capture is held open until the device confirms the rate and
+quantum, then closed; the apply is a closed loop of write, activate, confirm and
+retry. The capture reads the inputs and injects nothing into the playback path.
+PipeWire owns the PCM and multiplexes the capture, so a DAW keeps its stream.
 
 The Pro Audio nodes suspend when idle, releasing the PCM. An external owner —
 jackd or a direct-ALSA DAW — can then open the device at its own rate and
