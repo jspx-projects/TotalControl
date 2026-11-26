@@ -1,10 +1,11 @@
 # Period lock and re-prepare
 
-Status: implementation in progress on `fix/period-lock-and-reprepare`. The
-period pin, the two-direction re-prepare confirmation and the gate split are
-desk-verified on the UCX with PipeWire 1.6.11 and the checkout driver. The
-cushion multiplier is under test; H=2P does not pass the 50 ms worst-case
-matrix. The specification changes are in `TOTALCONTROL-GUI-SPEC.md`,
+Status: the period pin, the two-direction re-prepare confirmation and the gate
+split are desk-verified on the UCX with PipeWire 1.6.11 and the checkout
+driver. The cushion stays at H=2P (user decision, 2026-11-26). The measured
+limit is recorded below: a production supply stall above 46.7 ms at P=1024 can
+still underrun at the minimum fill; that host stall is the open B5 item. The
+specification changes are in `TOTALCONTROL-GUI-SPEC.md`,
 `TOTALCONTROL-STATE-SPEC.md`, `TOTALCONTROL-ARCHITECTURE.md` and
 `DRIVER-DESIGN.md`.
 
@@ -58,7 +59,8 @@ matrix. The specification changes are in `TOTALCONTROL-GUI-SPEC.md`,
 - The idle re-prepare pins the target period before and after the bump and
   confirms playback and capture independently.
 - `cushion_period` uses the running graph quantum (then the running PCM period)
-  while a host stream is active; the stored target is the idle value.
+  while a host stream is active; the stored target is the idle value. The
+  cushion multiplier remains H=2P.
 - A global quantum force is not issued while a host stream or conductor owns
   the graph; the policy props land at the next natural re-prepare.
 - The driver signals each direction at its own boundary when the two ALSA
@@ -66,8 +68,10 @@ matrix. The specification changes are in `TOTALCONTROL-GUI-SPEC.md`,
 
 ## Cases where it can still fail
 
-- The margin is finite. At 1024 the intended `H=2·P` margin is about 69 ms; a
-  host stall longer than that still underruns. At 128 it is about 9 ms.
+- The margin is finite. At 1024 the H=2P worst-case margin is 46.7 ms; a host
+  stall longer than that at the minimum fill still underruns. The production
+  run recorded 54 ms and a 65 ms startup stall. At 128 the worst case is 5.8 ms
+  (11.6 ms with H=4P).
 - A host that changes its quantum without a re-prepare can leave the PCM at the
   previous period until the next transition; the policy cannot force it without
   overriding the host.
@@ -147,5 +151,5 @@ above the minimum fill; the phase is not established. The 102 ms
 plus the probe's post-stall wake, not a host stall.
 
 At 1024, the worst-case margins are 46.7 ms for 2P, 69.9 ms for 3P and 93.1 ms
-for 4P. The multiplier is a latency/stability policy choice; the period and
-gate fixes are independent of it.
+for 4P. The shipped policy is H=2P; H=3P and H=4P are recorded alternatives,
+not shipped. The remaining production supply stall is the B5 item.
