@@ -140,8 +140,9 @@ matters. H=2P's worst fill (2058 frames, 46.7 ms) failed at 50 ms. H=3P's worst
 fill (3082 frames, 69.9 ms) passed 50, 60 and 70 ms and failed 80 ms at the
 minimum phase. H=4P's worst fill (4105 frames, 93.1 ms) passed 50-80 ms.
 
-The production 54 ms stall is covered at H=3P only if it starts at or above
-the minimum fill. The phase of that stall is not established. The 102 ms
+The production run recorded a 54 ms stall earlier and a 65 ms startup stall on
+the current build. H=3P (69.9 ms worst) covers both only if they start at or
+above the minimum fill; the phase is not established. The 102 ms
 `ring_max_stall_ns` in the driver after the matrix is the 80 ms injected stall
 plus the probe's post-stall wake, not a host stall.
 
