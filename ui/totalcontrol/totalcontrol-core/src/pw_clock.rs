@@ -283,6 +283,18 @@ pub fn force_quantum(quantum: u32) -> Result<(), String> {
     set("clock.force-quantum", quantum)
 }
 
+/// Sets the graph's default rate (`clock.rate`). A conducting node's
+/// `node.force-rate` overrides it; TotalControl uses this for the idle value.
+pub fn set_default_rate(rate: u32) -> Result<(), String> {
+    set("clock.rate", rate)
+}
+
+/// Sets the graph's default quantum (`clock.quantum`). A conducting node's
+/// `node.force-quantum` overrides it.
+pub fn set_default_quantum(quantum: u32) -> Result<(), String> {
+    set("clock.quantum", quantum)
+}
+
 fn set(key: &str, value: u32) -> Result<(), String> {
     set_value(key, &value.to_string())
 }
@@ -742,6 +754,104 @@ pub fn parse_pro_node_ids(json: &str) -> Option<(u32, u32)> {
         }
     }
     Some((output?, input?))
+}
+
+/// A PipeWire node that requests a graph rate or quantum. A pro-audio client
+/// (a DAW's PipeWire backend, a JACK client) sets these props on its own node;
+/// the graph lets the newest request win. `node.name` names the owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conductor {
+    pub node_id: u32,
+    pub name: String,
+    pub force_rate: u32,
+    pub force_quantum: u32,
+    pub lock_rate: bool,
+    pub lock_quantum: bool,
+}
+
+impl Conductor {
+    pub fn forces_rate(&self) -> bool {
+        self.force_rate > 0
+    }
+
+    pub fn forces_quantum(&self) -> bool {
+        self.force_quantum > 0
+    }
+
+    pub fn locks(&self) -> bool {
+        self.lock_rate || self.lock_quantum
+    }
+}
+
+/// The nodes that request a graph rate/quantum, from `pw-dump`. `None` when
+/// PipeWire is absent.
+pub fn conductors() -> Option<Vec<Conductor>> {
+    let out = pw_output(Command::new("pw-dump").stdin(Stdio::null()))?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_conductors(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Pure parser for [`conductors`]. A node is included when it carries a force
+/// or a lock.
+pub fn parse_conductors(json: &str) -> Option<Vec<Conductor>> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut out = Vec::new();
+    for obj in value.as_array()? {
+        let Some(props) = obj.get("info").and_then(|info| info.get("props")) else {
+            continue;
+        };
+        if !props.is_object() {
+            continue;
+        }
+        let force_rate = props
+            .get("node.force-rate")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        let force_quantum = props
+            .get("node.force-quantum")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        let lock_rate = props
+            .get("node.lock-rate")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let lock_quantum = props
+            .get("node.lock-quantum")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if force_rate == 0 && force_quantum == 0 && !lock_rate && !lock_quantum {
+            continue;
+        }
+        let name = props
+            .get("node.name")
+            .and_then(|v| v.as_str())
+            .or_else(|| props.get("application.name").and_then(|v| v.as_str()))
+            .or_else(|| props.get("node.description").and_then(|v| v.as_str()))
+            .unwrap_or("a PipeWire client")
+            .to_string();
+        out.push(Conductor {
+            node_id: obj.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            name,
+            force_rate,
+            force_quantum,
+            lock_rate,
+            lock_quantum,
+        });
+    }
+    Some(out)
+}
+
+/// The conductor that matches the running rate/quantum, else the first node
+/// with a force, else the first node with a lock. `None` when no node
+/// conducts.
+pub fn select_conductor(list: &[Conductor], rate: u32, quantum: u32) -> Option<Conductor> {
+    list.iter()
+        .find(|c| (rate > 0 && c.force_rate == rate) || (quantum > 0 && c.force_quantum == quantum))
+        .or_else(|| list.iter().find(|c| c.forces_rate() || c.forces_quantum()))
+        .or_else(|| list.first())
+        .cloned()
 }
 
 /// The node's `api.alsa.headroom` as its Props parameter reports it.
