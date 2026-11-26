@@ -77,6 +77,9 @@ in `TOTALCONTROL-GUI-SPEC.md`, `TOTALCONTROL-STATE-SPEC.md`,
   problem.
 - A period change at a different rate must be re-derived from that rate's floor;
   a pin carried across a rate change can be below the new floor.
+- Not established: the phase and distribution of the production supply stall
+  under each cushion; the long-run underrun rate under the new policy; whether
+  TotalMix or another control application adds stalls.
 
 ## Why playback became 127 while capture stayed 128
 
@@ -129,10 +132,16 @@ the driver counted an underrun and starved URBs.
 | 5120 | 4096 | 4105 (93.1 ms) | pass | pass | pass | pass |
 
 The maximum-fill phase of 3072 passes 50 ms and fails 60 ms; the post-stall
-wake latency is part of the supply gap. `H=2P` therefore does not cover the
-observed 54 ms stall at the minimum phase. `H=3P` covers 50/60/70 ms and the
-observed 54 ms; `H=4P` covers the full 50-80 ms range.
+wake latency is part of the supply gap. The worst fill is the margin that
+matters. H=2P's worst fill (2058 frames, 46.7 ms) failed at 50 ms. H=3P's worst
+fill (3082 frames, 69.9 ms) passed 50, 60 and 70 ms and failed 80 ms at the
+minimum phase. H=4P's worst fill (4105 frames, 93.1 ms) passed 50-80 ms.
 
-The cushion multiplier is a latency/stability policy decision: at 1024,
-`H=2P` is 46.7 ms worst, `H=3P` 69.9 ms, `H=4P` 93.1 ms. The period/gate fixes
-are independent of the choice.
+The production 54 ms stall is covered at H=3P only if it starts at or above
+the minimum fill. The phase of that stall is not established. The 102 ms
+`ring_max_stall_ns` in the driver after the matrix is the 80 ms injected stall
+plus the probe's post-stall wake, not a host stall.
+
+At 1024, the worst-case margins are 46.7 ms for 2P, 69.9 ms for 3P and 93.1 ms
+for 4P. The multiplier is a latency/stability policy choice; the period and
+gate fixes are independent of it.
