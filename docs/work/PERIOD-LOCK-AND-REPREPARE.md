@@ -18,8 +18,10 @@ in `TOTALCONTROL-GUI-SPEC.md`, `TOTALCONTROL-STATE-SPEC.md`,
   bumped period (and sometimes only one direction) behind.
 - The duplex gate can align two directions only at a common period boundary.
   Unequal periods have none.
-- The cushion is `H = 2·P` and the IRQ ring margin is `period + headroom`.
-  While a host stream runs, `P` is the graph's running quantum, not the stored
+- The ALSA ring fill cycles between `H` and `H + P`; the worst-case margin is
+  `H`, not `H + P`. `snd_pcm_delay` includes the driver's in-flight queue and
+  must not be used as the ring margin.
+- While a host stream runs, `P` is the graph's running quantum, not the stored
   target.
 
 ## Verified evidence
@@ -75,3 +77,62 @@ in `TOTALCONTROL-GUI-SPEC.md`, `TOTALCONTROL-STATE-SPEC.md`,
   problem.
 - A period change at a different rate must be re-derived from that rate's floor;
   a pin carried across a rate change can be below the new floor.
+
+## Why playback became 127 while capture stayed 128
+
+The two Pro Audio directions are separate ALSA PCMs, `pcm0p` and `pcm0c`,
+opened by separate PipeWire nodes. The graph quantum is common, but the ALSA
+period is negotiated per node and cached as `api.alsa.period-size`.
+
+The idle re-prepare forced `Q-1 = 127` and then restored the force to `0`.
+Playback re-prepared at the bump and kept 127. Capture did not take the bump:
+it either did not re-prepare before the restore or reopened at 128. The two
+nodes' cached periods then disagreed.
+
+The driver's period gate needs a common boundary. The playback boundaries are
+multiples of 127, the capture boundaries multiples of 128; the first common
+one is 16256 frames, about 369 ms away. The gate withholds the playback wake
+until the capture boundary, and the two-deferral release fires long before the
+common boundary. The wake is therefore late on most cycles, and the PipeWire
+ALSA node writes one period only when that wake arrives.
+
+The fix:
+
+- The policy pins `api.alsa.period-size` to the running graph quantum on both
+  nodes, so both negotiate the same period.
+- The idle re-prepare pins the target before and after the bump and confirms
+  playback and capture independently. A failed restore leaves the intended
+  period, not the bump.
+- TotalControl does not force a global quantum under a host stream, so the bump
+  cannot run while a stream owns the graph.
+- If a host still opens unequal periods, the driver signals each direction at
+  its own boundary, so the gate cannot add a second delay.
+
+Pointers: `DRIVER-DESIGN.md` §4.2 (Period signalling gate) and §14.1.6 (the
+invariant list); `TOTALCONTROL-GUI-SPEC.md` (quantum confirmation);
+`TOTALCONTROL-ARCHITECTURE.md` §10 (host authority); 
+`C1-DYNAMIC-CUSHION-DESIGN.md` (cushion mechanism); this note.
+
+
+## Cushion matrix (2026-11-26)
+
+Direct duplex, 44.1 kHz, period 1024, equal periods. `target fill` is the
+controlled ring fill; the fill cycles between `target - P` (worst case) and
+`target` (after a write). Each cell is two trials in each phase; "fail" means
+the driver counted an underrun and starved URBs.
+
+| Target fill | H | Worst fill | 50 ms | 60 ms | 70 ms | 80 ms |
+|---|---:|---:|---|---|---|---|
+| 1280 | 256 | 266 (6.0 ms) | fail | fail | fail | fail |
+| 3072 | 2048 | 2058 (46.7 ms) | fail | fail | fail | fail |
+| 4096 | 3072 | 3082 (69.9 ms) | pass | pass | pass | fail at the minimum phase |
+| 5120 | 4096 | 4105 (93.1 ms) | pass | pass | pass | pass |
+
+The maximum-fill phase of 3072 passes 50 ms and fails 60 ms; the post-stall
+wake latency is part of the supply gap. `H=2P` therefore does not cover the
+observed 54 ms stall at the minimum phase. `H=3P` covers 50/60/70 ms and the
+observed 54 ms; `H=4P` covers the full 50-80 ms range.
+
+The cushion multiplier is a latency/stability policy decision: at 1024,
+`H=2P` is 46.7 ms worst, `H=3P` 69.9 ms, `H=4P` 93.1 ms. The period/gate fixes
+are independent of the choice.
