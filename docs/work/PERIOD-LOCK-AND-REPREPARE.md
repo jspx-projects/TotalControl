@@ -153,3 +153,17 @@ plus the probe's post-stall wake, not a host stall.
 At 1024, the worst-case margins are 46.7 ms for 2P, 69.9 ms for 3P and 93.1 ms
 for 4P. The shipped policy is H=2P; H=3P and H=4P are recorded alternatives,
 not shipped. The remaining production supply stall is the B5 item.
+
+## Observed fallback after a transient direct-ALSA owner (open)
+
+A direct probe briefly owned the PCM during the matrix. After the probe, the
+running TotalControl stayed on the convenience policy instead of restoring the
+IRQ/H=2P policy: period 256, period-num 16, headroom 592, graph 512. That path
+ran while the player was resumed and underran (+20 `out_underruns`,
+`ring_starved 6`, `gate overdue 91`). A GUI restart restored
+period 1024 / period-num 32 / headroom 2048 / IRQ, after which the ring stayed
+at `ring_min 1025`, `ring_starved 0`, `gate overdue 0`.
+
+This is the policy re-establishment defect tracked as C13 residual (b), not the
+period/rule defect. It is not fixed here. It is recorded because the fallback
+is a separate path that can underrun even when the H=2P path is clean.
