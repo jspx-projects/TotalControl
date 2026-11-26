@@ -3149,6 +3149,9 @@ pub struct TotalControl {
     pub conductor: Option<Conductor>,
     /// When the user last changed the quantum, for the transitory state.
     pub quantum_change_at: Option<Instant>,
+    /// When the idle graph default was last attempted. Backs off a failed
+    /// `clock.quantum` write while PipeWire is absent; never blocks the UI.
+    pub quantum_default_at: Option<Instant>,
     /// A refused request is re-forced once before the actual value is
     /// adopted with a notice.
     pub quantum_reforced: bool,
@@ -3802,6 +3805,7 @@ pub fn new_with_device(
         graph_quantum: None,
         conductor: None,
         quantum_change_at: None,
+        quantum_default_at: None,
         quantum_reforced: false,
         engine_force_rate: 0,
         engine_force_quantum: 0,
@@ -3867,13 +3871,16 @@ pub(crate) fn maybe_attach_audio_path_service(state: &mut TotalControl) {
     state.audio_path_service = Some(crate::audio_path_service::AudioPathService::spawn(card_id));
 }
 
-/// Queue an engine intent on the audio-path service. Returns false when there
-/// is no service (the mock, or before attach), so the caller can fall back.
+/// Queue an engine intent on the audio-path service without blocking. Returns
+/// false only when there is no service (the mock, or before attach), so the
+/// caller can fall back. With a service present the UI never waits.
 fn engine_intent(state: &TotalControl, intent: crate::audio_path_service::Intent) -> bool {
-    state
-        .audio_path_service
-        .as_ref()
-        .is_some_and(|svc| svc.send(intent))
+    if let Some(service) = state.audio_path_service.as_ref() {
+        let _ = service.send(intent);
+        true
+    } else {
+        false
+    }
 }
 
 /// The detected audio path, from the kernel PCM owner. The owner is a kernel
@@ -12980,6 +12987,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 return Task::none();
             }
             state.quantum_change_at = Some(Instant::now());
+            state.quantum_default_at = Some(Instant::now());
             state.quantum_reforced = false;
             if !state.device.is_mock() {
                 state.engine_force_quantum = quantum;
@@ -15808,14 +15816,14 @@ fn enforce_quantum_floor(state: &mut TotalControl, rate: u32) {
         }
     }
     // While no host sets the buffer, the stored quantum is the graph default.
-    // A stale probed value must not pin the cushion to an old quantum.
+    // A stalled PipeWire must not flood the worker: retry at most every 5 s.
     let host_active = state.card_stream.is_some() || state.conductor.is_some();
-    let recent_change = state
-        .quantum_change_at
-        .is_some_and(|at| at.elapsed() < Duration::from_secs(2));
-    if !host_active && default != target && !recent_change {
+    let recent_default = state
+        .quantum_default_at
+        .is_some_and(|at| at.elapsed() < Duration::from_secs(5));
+    if !host_active && default != target && !recent_default {
         write_quantum(state, target);
-        state.quantum_change_at = Some(Instant::now());
+        state.quantum_default_at = Some(Instant::now());
         changed = true;
     }
     if changed {

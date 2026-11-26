@@ -83,9 +83,10 @@ pub enum Command {
 }
 
 /// The bounded, coalescing command inbox (C1). Latest-value commands
-/// (volume, mute, scene) replace their pending predecessor; other
-/// commands queue in order. Senders block while the inbox is full
-/// (backpressure). Stop preempts the queue through a flag.
+/// (volume, mute, scene) replace their pending predecessor; other commands
+/// queue in order. Writes never block the GUI thread: when the queue is full
+/// the oldest command is dropped so the latest state survives. Stop preempts
+/// the queue through a flag.
 pub struct CommandInbox {
     queue: Mutex<VecDeque<Command>>,
     cv: Condvar,
@@ -123,11 +124,11 @@ impl CommandInbox {
             self.cv.notify_one();
             return true;
         }
+        // The producer is the GUI thread: never wait. Dropping the oldest
+        // command keeps the GUI responsive; the device service drains at its
+        // own pace.
         while q.len() >= COMMAND_CAP {
-            if self.stop.load(Ordering::Relaxed) {
-                return false;
-            }
-            q = self.cv.wait(q).unwrap();
+            q.pop_front();
         }
         q.push_back(command);
         self.cv.notify_one();
@@ -1977,6 +1978,28 @@ mod tests {
     }
 
     #[test]
+    fn the_command_inbox_never_blocks_and_keeps_the_latest_volume() {
+        let inbox = CommandInbox::new();
+        let start = Instant::now();
+        for i in 0..10_000 {
+            assert!(inbox.send(Command::SetVolume(ChannelId::Input(0), 0, i as f32)));
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "sending from the GUI thread never waits"
+        );
+        let q = inbox.queue.lock().unwrap();
+        assert!(q.len() <= COMMAND_CAP);
+        assert_eq!(
+            q.iter().filter(|c| matches!(c, Command::SetVolume(..))).count(),
+            1
+        );
+        assert!(q
+            .iter()
+            .any(|c| matches!(c, Command::SetVolume(_, _, v) if *v == 9_999.0)));
+    }
+
+    #[test]
     fn the_mirror_uses_the_ucx_matrix_block_order() {
         // UCX internal output order: Phones, AN1/2, AN3/4, AN5/6...
         // Display/DSP order: AN1/2, AN3/4, AN5/6, Phones...
@@ -2174,20 +2197,19 @@ mod tests {
     }
 
     #[test]
-    fn the_inbox_backpressures_when_full() {
-        let inbox = Arc::new(CommandInbox::new());
+    fn the_inbox_never_blocks_when_full() {
+        let inbox = CommandInbox::new();
         for _ in 0..COMMAND_CAP {
             assert!(inbox.send(Command::Run(Box::new(|_| {}))));
         }
         assert_eq!(inbox.len(), COMMAND_CAP);
-        let sender = Arc::clone(&inbox);
-        std::thread::scope(|s| {
-            let h = s.spawn(move || sender.send(Command::Run(Box::new(|_| {}))));
-            thread::sleep(Duration::from_millis(50));
-            assert!(!h.is_finished(), "the sender waits while the inbox is full");
-            inbox.drain();
-            assert!(h.join().unwrap(), "the sender proceeds once space frees");
-        });
+        let start = Instant::now();
+        assert!(inbox.send(Command::Run(Box::new(|_| {}))));
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "the GUI sender never waits"
+        );
+        assert_eq!(inbox.len(), COMMAND_CAP, "the oldest command is dropped");
     }
 
     /// Bench evidence for the audit claim "a stalled control path drops
