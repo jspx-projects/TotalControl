@@ -517,7 +517,8 @@ jackd or a direct-ALSA DAW — can then open the device at its own rate and
 TotalControl follows it (adopt and reflect). While a graph runs, the D-Bus
 device reservation is the graceful handover path (jackdbus); a plain jackd or
 direct-ALSA DAW is met with the kernel's exclusive open until the device is
-freed.
+freed. Each Pro Audio node advertises `audio.allowed-rates` with the device's
+nine rates, so a DAW's device rate list shows the rates the interface runs.
 
 A reconnect (the unit reappears after a module reload or re-enumeration) runs
 the same engine restore as a fresh start: the scheduling policy, the adopted
