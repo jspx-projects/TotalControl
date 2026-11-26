@@ -25,9 +25,11 @@ use std::time::{Duration, Instant};
 /// treated as absent.
 const PW_TOOL_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Run a PipeWire tool with a timeout, draining stdout/stderr in threads so a
-/// large output (pw-dump) cannot fill the pipe and deadlock the child.
-/// `None` on spawn failure or timeout.
+/// Run a PipeWire tool with a bounded timeout, draining stdout/stderr in
+/// threads so a large output (pw-dump) cannot fill the pipe and deadlock the
+/// child. The readers are waited on with a deadline too: a descendant that
+/// keeps the pipe open must not hold the worker. `None` on spawn failure,
+/// timeout or incomplete output.
 fn run_timeout(cmd: &mut Command, timeout: Duration) -> Option<Output> {
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -36,42 +38,48 @@ fn run_timeout(cmd: &mut Command, timeout: Duration) -> Option<Output> {
         .ok()?;
     let mut so = child.stdout.take()?;
     let mut se = child.stderr.take()?;
-    let oh = std::thread::spawn(move || {
+    let (otx, orx) = std::sync::mpsc::channel();
+    let (etx, erx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut b = Vec::new();
         let _ = so.read_to_end(&mut b);
-        b
+        let _ = otx.send(b);
     });
-    let eh = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut b = Vec::new();
         let _ = se.read_to_end(&mut b);
-        b
+        let _ = etx.send(b);
     });
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
-            Ok(Some(s)) => break s,
+            Ok(Some(s)) => break Some(s),
             Ok(None) if start.elapsed() < timeout => {
                 std::thread::sleep(Duration::from_millis(10));
             }
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = oh.join();
-                let _ = eh.join();
-                return None;
+                break None;
             }
             Err(_) => {
-                let _ = oh.join();
-                let _ = eh.join();
-                return None;
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
             }
         }
     };
-    Some(Output {
-        status,
-        stdout: oh.join().unwrap_or_default(),
-        stderr: eh.join().unwrap_or_default(),
-    })
+    let status = status?;
+    // A reader can stay blocked if a descendant inherited the output pipe.
+    // Use one deadline for both readers and never join them.
+    let deadline = start + timeout + Duration::from_millis(250);
+    let stdout = orx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .ok()?;
+    let stderr = erx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .ok()?;
+    Some(Output { status, stdout, stderr })
 }
 
 /// A PipeWire tool call with the standard timeout.
@@ -957,6 +965,36 @@ update: id:0 key:'clock.max-quantum' value:'2048' type:''
 update: id:0 key:'clock.force-quantum' value:'0' type:''
 update: id:0 key:'clock.force-rate' value:'0' type:''
 ";
+
+    #[test]
+    fn run_timeout_bounds_a_hung_child() {
+        let start = Instant::now();
+        let out = run_timeout(
+            Command::new("sh").args(["-c", "sleep 5"]),
+            Duration::from_millis(100),
+        );
+        assert!(out.is_none(), "the hung child is a timeout");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the call returns near its deadline"
+        );
+    }
+
+    #[test]
+    fn run_timeout_bounds_a_reader_with_an_open_pipe() {
+        // The shell exits but the background sleep inherits the output pipe.
+        // The reader must not hold the call past its deadline.
+        let start = Instant::now();
+        let out = run_timeout(
+            Command::new("sh").args(["-c", "sleep 2 & echo ok"]),
+            Duration::from_millis(200),
+        );
+        assert!(out.is_none(), "incomplete output is a timeout");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the reader wait is bounded"
+        );
+    }
 
     #[test]
     fn parses_real_pw_metadata_output() {

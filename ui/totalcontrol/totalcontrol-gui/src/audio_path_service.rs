@@ -120,9 +120,10 @@ pub enum Intent {
     SetSinkUnity,
 }
 
-/// The bounded intent inbox. Writes queue in order (a policy must land before
-/// the force that follows it); a pending `Poll` is coalesced to the latest, so
-/// a stalled worker does not accumulate a backlog of reads.
+/// The bounded intent inbox. Writes never block the caller (the GUI thread):
+/// a later intent of the same kind replaces the pending one, and when the
+/// queue is full the oldest intent is dropped so the latest state survives.
+/// The worker drains the queue.
 struct IntentInbox {
     queue: Mutex<VecDeque<Intent>>,
     cv: Condvar,
@@ -130,6 +131,25 @@ struct IntentInbox {
 }
 
 const INTENT_CAP: usize = 64;
+
+/// Whether two intents are the same kind and therefore replace each other.
+/// The worker only needs the latest value of each kind.
+fn same_intent_kind(a: &Intent, b: &Intent) -> bool {
+    matches!(
+        (a, b),
+        (Intent::Poll { .. }, Intent::Poll { .. })
+            | (Intent::ForceRate(_), Intent::ForceRate(_))
+            | (Intent::ForceQuantum(_), Intent::ForceQuantum(_))
+            | (Intent::DefaultRate(_), Intent::DefaultRate(_))
+            | (Intent::DefaultQuantum(_), Intent::DefaultQuantum(_))
+            | (Intent::SetSchedPolicy(_), Intent::SetSchedPolicy(_))
+            | (Intent::Reprepare, Intent::Reprepare)
+            | (Intent::ApplyAllowedRates(_), Intent::ApplyAllowedRates(_))
+            | (Intent::RestoreAllowedRates, Intent::RestoreAllowedRates)
+            | (Intent::Release, Intent::Release)
+            | (Intent::SetSinkUnity, Intent::SetSinkUnity)
+    )
+}
 
 impl IntentInbox {
     fn new() -> Self {
@@ -141,18 +161,15 @@ impl IntentInbox {
             return false;
         }
         let mut q = self.queue.lock().unwrap();
-        if matches!(intent, Intent::Poll { .. }) {
-            if let Some(pos) = q.iter().position(|i| matches!(i, Intent::Poll { .. })) {
-                q[pos] = intent;
-                self.cv.notify_one();
-                return true;
-            }
+        if let Some(pos) = q.iter().position(|queued| same_intent_kind(queued, &intent)) {
+            q[pos] = intent;
+            self.cv.notify_one();
+            return true;
         }
+        // The producer is the GUI thread: never wait. Dropping the oldest
+        // intent keeps the latest state and lets the worker drain at its pace.
         while q.len() >= INTENT_CAP {
-            if self.stop.load(Ordering::Relaxed) {
-                return false;
-            }
-            q = self.cv.wait(q).unwrap();
+            q.pop_front();
         }
         q.push_back(intent);
         self.cv.notify_one();
@@ -217,7 +234,8 @@ impl AudioPathService {
         self.snapshot.lock().unwrap().clone()
     }
 
-    /// Queue an engine intent. Returns false once the service has stopped.
+    /// Queue an engine intent without blocking the GUI thread. Returns false
+    /// only once the service has stopped.
     pub fn send(&self, intent: Intent) -> bool {
         self.inbox.send(intent)
     }
@@ -279,38 +297,67 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
     // a module reload) is held here and lands when the nodes appear.
     let mut pending_policy: Option<SchedPolicy> = None;
     // The last policy, re-applied when the nodes are recreated (a WirePlumber
-    // restart or a recreated card loses the runtime props).
+    // restart or a recreated card loses the runtime props). The node check is
+    // throttled: `pw-dump` is expensive and must not run every loop.
     let mut last_policy: Option<SchedPolicy> = None;
     let mut last_nodes: Option<(u32, u32)> = None;
+    let mut last_node_check: Option<Instant> = None;
+    let mut policy_retry_at: Option<Instant> = None;
+    let mut policy_warned = false;
 
     while !stop.load(Ordering::Relaxed) {
-        match pw_clock::fireface_pro_node_ids() {
-            Some(ids) => {
-                if last_nodes != Some(ids) {
-                    last_nodes = Some(ids);
-                    if let Some(policy) = last_policy {
-                        pending_policy = Some(policy);
+        let now = Instant::now();
+        let node_check_due = last_node_check
+            .map_or(true, |at| now.duration_since(at) >= Duration::from_secs(1));
+        if node_check_due {
+            last_node_check = Some(now);
+            match pw_clock::fireface_pro_node_ids() {
+                Some(ids) => {
+                    if last_nodes != Some(ids) {
+                        last_nodes = Some(ids);
+                        if let Some(policy) = last_policy {
+                            pending_policy = Some(policy);
+                            policy_retry_at = None;
+                        }
                     }
                 }
+                None => last_nodes = None,
             }
-            None => last_nodes = None,
         }
-        if let Some(policy) = pending_policy.take() {
-            if let Some((out, inp)) = pw_clock::fireface_pro_node_ids() {
-                if pw_clock::set_sched_policy(out, &policy).is_ok() {
-                    let _ = pw_clock::set_sched_policy(inp, &policy);
-                    // The same transition as a deliberate policy change:
-                    // the props land at a re-prepare, confirmed from the
-                    // device, and the completion feeds the pitch gate.
-                    let ok = pw_clock::capture_reprepare(card_id);
-                    let mut snap = snapshot.lock().unwrap();
-                    snap.reprepare_gen += 1;
-                    snap.reprepare_ok = ok;
-                } else {
-                    pending_policy = Some(policy);
+        let policy_due = policy_retry_at.map_or(true, |at| Instant::now() >= at);
+        if policy_due {
+            if let Some(policy) = pending_policy.take() {
+                match pw_clock::fireface_pro_node_ids() {
+                    Some((out, inp)) => {
+                        let out_ok = pw_clock::set_sched_policy(out, &policy).is_ok();
+                        let in_ok = out_ok && pw_clock::set_sched_policy(inp, &policy).is_ok();
+                        if out_ok && in_ok {
+                            policy_retry_at = None;
+                            policy_warned = false;
+                            // The same transition as a deliberate policy
+                            // change: the props land at a re-prepare,
+                            // confirmed from the device, and the completion
+                            // feeds the pitch gate.
+                            let ok = pw_clock::capture_reprepare(card_id);
+                            let mut snap = snapshot.lock().unwrap();
+                            snap.reprepare_gen += 1;
+                            snap.reprepare_ok = ok;
+                        } else {
+                            if !policy_warned {
+                                log::warn!(
+                                    "scheduling policy did not apply; retrying when the graph is ready"
+                                );
+                                policy_warned = true;
+                            }
+                            pending_policy = Some(policy);
+                            policy_retry_at = Some(Instant::now() + Duration::from_secs(5));
+                        }
+                    }
+                    None => {
+                        pending_policy = Some(policy);
+                        policy_retry_at = Some(Instant::now() + Duration::from_secs(5));
+                    }
                 }
-            } else {
-                pending_policy = Some(policy);
             }
         }
         let Some(intent) = inbox.recv_timeout(Duration::from_millis(250)) else {
@@ -355,11 +402,23 @@ fn run_pw_worker(inbox: &Arc<IntentInbox>, snapshot: &Arc<Mutex<EngineSnapshot>>
             }
             Intent::SetSchedPolicy(policy) => {
                 last_policy = Some(policy);
+                policy_retry_at = None;
                 if let Some((out, inp)) = pw_clock::fireface_pro_node_ids() {
-                    if pw_clock::set_sched_policy(out, &policy).is_ok() {
-                        let _ = pw_clock::set_sched_policy(inp, &policy);
+                    let out_ok = pw_clock::set_sched_policy(out, &policy).is_ok();
+                    let in_ok = out_ok && pw_clock::set_sched_policy(inp, &policy).is_ok();
+                    if out_ok && in_ok {
+                        pending_policy = None;
+                        policy_warned = false;
+                    } else {
+                        if !policy_warned {
+                            log::warn!(
+                                "scheduling policy did not apply; retrying when the graph is ready"
+                            );
+                            policy_warned = true;
+                        }
+                        pending_policy = Some(policy);
+                        policy_retry_at = Some(Instant::now() + Duration::from_secs(5));
                     }
-                    pending_policy = None;
                 } else {
                     // The nodes do not exist yet; the loop applies the
                     // policy when they appear.
@@ -461,6 +520,35 @@ mod tests {
         assert!(matches!(b, Intent::Poll { probe_quantum: true }));
         assert!(matches!(c, Intent::ForceQuantum(128)));
         assert!(inbox.recv_timeout(Duration::from_millis(10)).is_none());
+    }
+
+    #[test]
+    fn the_inbox_never_blocks_and_keeps_the_latest_of_each_kind() {
+        let inbox = IntentInbox::new();
+        let start = std::time::Instant::now();
+        for i in 0..10_000 {
+            assert!(inbox.send(Intent::DefaultRate(48_000 + i)));
+        }
+        for i in 0..10_000 {
+            assert!(inbox.send(Intent::DefaultQuantum(64 + i)));
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "sending from the GUI thread never waits"
+        );
+        let q = inbox.queue.lock().unwrap();
+        assert!(q.len() <= INTENT_CAP);
+        assert_eq!(
+            q.iter().filter(|i| matches!(i, Intent::DefaultRate(_))).count(),
+            1
+        );
+        assert_eq!(
+            q.iter().filter(|i| matches!(i, Intent::DefaultQuantum(_))).count(),
+            1
+        );
+        assert!(q
+            .iter()
+            .any(|i| matches!(i, Intent::DefaultRate(r) if *r == 57_999)));
     }
 
     #[test]

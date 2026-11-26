@@ -483,7 +483,10 @@ collector reads procfs on a fast cadence, never blocked by a server call, and a
 PipeWire worker executes the engine intents and the graph reads, each bounded by
 a timeout. Both publish one latest-value engine snapshot; the GUI reads it on
 its own cadence and issues intents only. No sound-server call runs on the UI
-thread, and the kernel facts stay live when PipeWire stalls. Under an external
+thread, and the kernel facts stay live when PipeWire stalls. The engine and
+device queues never block the UI thread: a full queue coalesces to the latest
+value and drops the oldest intent, and a stalled worker command is bounded and
+retried with a backoff. Under an external
 owner TotalControl reads the rate and writes nothing to the clock; the mixer
 scene is reapplied from the engine-run epoch (`run_seq`), server-free, on every
 path.
