@@ -118,11 +118,10 @@ pub struct Prefs {
     /// TotalMix's "Show Names": display the original names even where the
     /// user renamed a channel.
     pub show_original_names: bool,
-    /// The PipeWire rate / buffer size forced from the Settings panel
-    /// (`0` = PipeWire's own), applied again at launch.
+    /// The PipeWire rate / buffer size stored from the Settings panel
+    /// (`0` = the graph default), applied again at launch.
     pub engine_force_rate: Option<u32>,
-    /// How the graph rate is chosen.  Missing in older files: a non-zero
-    /// `engine_force_rate` means a fixed rate, otherwise Auto.
+    /// The retired playback mode. Missing in older files; read and ignored.
     #[serde(default)]
     pub engine_rate_mode: Option<crate::app::EngineRateMode>,
     /// Logical size of the window at the last close.

@@ -275,10 +275,9 @@ without a seat (remote or headless) the `audio` group is the fallback. The
 manual commands below do the same without the application.
 
 At the smallest quanta the host's power management decides how quickly the
-audio thread wakes. In timer mode the thread sleeps between graph cycles; a
-CPU that enters a deep idle state pays the exit on every wake. On our desk,
-limiting the idle states dropped the audio thread's runnable-wait from about
-43 to about 15 ms/s. Options, in order of effect:
+audio thread wakes. A CPU that enters a deep idle state pays the exit on every
+wake. On our desk, limiting the idle states dropped the audio thread's
+runnable-wait from about 43 to about 15 ms/s. Options, in order of effect:
 
 - Limit the idle states of the audio CPUs, persistently:
   `sudo cpupower idle-set -D 1`, or add the kernel arguments
@@ -335,8 +334,10 @@ setting from the unit when it connects.
 
 The panel separates what the device owns from what the host engine drives. In
 the device group, `Clock source` picks one of the unit's own clock options
-(Internal, SPDIF coax., Optical, Word clock). `Sample rate` is the nominal-rate
-picker. While nothing is playing you can set the rate, and the device keeps it.
+(Internal, SPDIF coax., Optical, Word clock). Change the clock source only
+while audio is stopped; while a stream runs, the row is a read-only report of
+the actual source. `Sample rate` is the nominal-rate picker. While nothing is
+playing you can set the rate, and the device keeps it.
 When an audio stream runs — a PipeWire client, `jackd`, or a DAW opening the
 device directly — the picker stays visible but grayed: it shows the rate the
 device is actually running, you cannot change it there, and its tooltip names
@@ -351,14 +352,9 @@ the nominal rate with your pitch applied; otherwise it is the rate the unit
 reports. The picker always shows the nominal rate in use, and `Current rate`
 always shows the truth, so a pitched clock is displayed correctly.
 
-The engine `Playback mode` checkbox chooses the scheduling policy, not the
-rate:
-
-- **Checked — timer mode.** Timer scheduling with a fixed generous margin and
-  a safe default quantum. This is the convenience path for listening and video.
-- **Unchecked — professional mode.** IRQ scheduling with a period-aligned
-  safety cushion. This is the pro-audio path with the lowest stable PipeWire
-  latency.
+TotalControl has one playback policy: interrupt scheduling with a period-aligned
+safety cushion. There is no scheduling mode to choose. The quantum is the buffer
+control.
 
 The host stream is the rate authority on every path: a PipeWire client, a JACK
 client or a direct-ALSA DAW sets the rate, and the quantum where it supports it.
@@ -372,17 +368,14 @@ properties is the conductor. A client that only follows the graph runs at the
 graph's current rate; a second stream at another rate is resampled, because the
 device has one clock.
 
-Toggling `Playback mode` takes effect immediately and briefly restarts the
-stream, so the player may stop. This guarantees the mode shown is the mode the
-device is actually running.
-
-**Which mode to use.** Professional mode is for DAW work: IRQ scheduling and the
-cushion give the lowest stable PipeWire latency, and the host stream still sets
-the rate. Timer mode is the convenience default for listening and video; the
-rate is set by the same host stream, and the difference is scheduling and
-latency. For the lowest latency use JACK rather than PipeWire — JACK opens the
-device directly and is not part of this graph, so the PipeWire scheduling and
-cushion do not apply to it (see [Latency](#14-latency)).
+**Choosing the quantum.** A larger quantum raises the period, the period-aligned
+cushion and the queued audio. It gives more margin against scheduling jitter and
+host stalls at the cost of latency. For listening or video where uninterrupted
+playback matters more than latency, choose a larger value — for example 256 or
+512 at 48 kHz. For DAW monitoring choose a small value near the rate floor. For
+the lowest latency use JACK, which opens the device directly and does not use
+the PipeWire scheduling or cushion (see [Latency](#14-latency)). A host stream
+that sets the buffer wins; the quantum picker then reports that value.
 
 The device has one clock, so the graph has one rate. While a stream is already
 playing, a new stream at a different rate is resampled to the graph rate — two
@@ -401,19 +394,17 @@ host stream -> device rate -> graph rate + quantum
 
 The device clock and the stream run at the same nominal rate. While no stream
 runs, the pickers set the graph defaults and the device keeps the last value
-after a stream stops. The quantum picker offers only quanta at or above the
-running rate's period floor
-(one URB), so an impossible quantum cannot be selected. A quantum at the
-floor is the zero-slack corner: clean at nominal speed, but varispeed needs
-one period of slack at any rate (section 14). In timer mode the picker also
-holds a convenience minimum — the highest period floor across the
-device's rates — and offers no Auto: the quantum defaults to at least that
-minimum so it stays achievable when the graph changes rate. While a stream
-runs, the picker is a grayed report of the stream's quantum. The panel warns
-when the selected quantum is below twice the rate floor,
-and applying pitch there raises a notice to double the quantum: pitched
-playback can silence or stutter below one period of slack (section 14). The `Sample rate`
-row shows the device rate, and the `Graph` row shows the graph rate that follows it.
+after a stream stops. The quantum picker offers every quantum at or above the
+running rate's period floor (one URB), plus the exact floor. The safe default —
+the highest period floor across the device's rates — applies when no quantum is
+stored; a chosen quantum may be lower, down to the floor. A quantum at the floor
+is the zero-slack corner: clean at nominal speed, but varispeed needs one period
+of slack at any rate (section 14). While a stream runs, the picker is a grayed
+report of the stream's quantum. The panel shows "Audio stream can stutter
+below N samples." when the selected quantum is below twice the rate floor,
+where N is twice the rate floor; applying pitch there raises a notice to
+double the quantum. The `Sample rate` row shows the device rate, and the `Graph` row
+shows the graph rate that follows it.
 
 Rate and quantum changes apply whether or not audio is playing. While a stream
 plays, the change applies over a few seconds and the player keeps running. When
@@ -425,15 +416,16 @@ requested. The `Sample rate` row confirms against the rate the unit itself
 reports; the `Graph` row confirms against the running stream; the quantum
 listbox's selected value is orange until the graph runs at the requested
 quantum and then returns to its normal colour. There is no separate "applying"
-message to wait on. The graph quantum is one ALSA period in polled scheduling
-and two periods under timer scheduling, so a request of 128 is confirmed when
-the card runs 64-frame periods.
+message to wait on. The graph quantum is one ALSA period under interrupt
+scheduling, so a request of 128 is confirmed when the card runs 128-frame
+periods.
 
 When the device is slaved to an external clock, the rate is determined by the
-device and the rate picker is a grayed report. TotalControl follows the
-rate the unit reports at the selected clock input and holds the graph to it,
-so a DAW and every application run at the external clock's rate. This is the
-one case where TotalControl keeps a graph-wide rate override.
+device and the rate picker is a grayed report. TotalControl writes the rate the
+unit reports at the selected clock input as the preferred graph default, never
+as a force, so a DAW and every application start at the external rate. If a host
+runs another rate, a persistent warning names both rates; set the host's rate to
+the external rate in that host.
 
 When another process owns the device — `jackd` (JACK) or a DAW opening the card
 directly (ALSA) — TotalControl detects the owner from the kernel and steps
@@ -449,8 +441,8 @@ device moves to that rate and TotalControl reports it (the device follows the
 DAW, so nothing is resampled). This is why you set the rate in your DAW for
 direct-ALSA work, and in `jackd` for JACK work.
 
-**Setting the rate while idle.** With no owner holding the device, the Device
-mode `Sample rate` picker is active and writes the device clock directly — no
+**Setting the rate while idle.** With no owner holding the device, the
+`Sample rate` picker is active and writes the device clock directly — no
 sound server is needed. Use it to preset the rate before you start `jackd` or
 the DAW. The device confirms the rate from its own clock readback.
 
@@ -506,39 +498,34 @@ rate; the driver counts a sustained `rate mismatch` (Diagnostics → Session) an
 the audio is not clean. If the external source changes rate mid-session, restart
 jackd at the new rate. Pitch is held at 0 % under an external clock.
 
-The `Graph` line always shows the rate the card is running at, in every mode.
+The `Graph` line always shows the rate the card is running at, in every state.
 A rate change while no stream runs is a runtime change, so it does not add an undo
-step or mark the workspace dirty. The playback mode is remembered in the
-application preferences, not in a workspace.
+step or mark the workspace dirty. The quantum is remembered in the application
+preferences, not in a workspace.
 
 The `Pitch` slider changes the speed and pitch of the whole interface from
 -5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Hold Shift for 0.01 % steps.
 Double-click the slider to return to 0.0 %. Pitch is written to the device
-as soon as it changes. Right after switching to professional mode, the clock write
-waits until the scheduling change has applied, so the interface never runs a
-pitched clock on the convenience scheduling. The positive end depends on the
+as soon as it changes. Right after a rate or quantum change, the clock write
+waits until the IRQ policy has applied. The positive end depends on the
 sample rate: the interface's USB transport carries the pitched clock only up
 to a per-rate ceiling, and at 192 kHz the slider ends at +4.1 % (the ceiling
 is +4.17 %). Every other rate offers the full +5.0 %. A pitch saved at a lower
 rate clamps to the ceiling when you switch to 192 kHz.
 
 Pitch is a device-clock control on the internal clock, so it behaves the same
-on every audio path. The slider is shown only when `Playback mode` is
-professional (unchecked) **and** `Clock source` is Internal, and under an
-external PCM owner (JACK / direct ALSA). In timer mode the slider is hidden (its
-row keeps its space) and the interface runs at its nominal clock — a pitched
-clock cannot be tracked by the
-convenience timer scheduling. Under an external clock source (SPDIF, Optical/
-ADAT, Word Clock) the interface is slaved to that clock: the slider is hidden,
-pitch is held at 0 %, and the externally applied rate is respected. A
-conducting PipeWire client sets the nominal rate; the device clock carries the
-pitch, and TotalControl re-applies it after a client rate change, clamped to the
-new rate's ceiling.
+on every audio path. The slider is shown when `Clock source` is Internal. Under
+an external clock source (SPDIF, Optical/ADAT, Word Clock) the interface is
+slaved to that clock: the slider is shown disabled at 0 % with a tooltip, pitch
+is held at 0 %, and the externally applied rate is respected. A conducting
+PipeWire client sets the nominal rate; the device clock carries the pitch, and
+TotalControl re-applies it after a client rate change, clamped to the new
+rate's ceiling.
 
 Pitch always starts from a clean slate (0 %). Changing the clock source,
-switching `Playback mode` (either direction), starting TotalControl, or loading
-a workspace resets pitch to 0 %. A saved pitch is not restored automatically;
-set it again from the slider after the change.
+starting TotalControl, or loading a workspace resets pitch to 0 %. A saved
+pitch is not restored automatically; set it again from the slider after the
+change.
 
 ### About dialog
 
@@ -1541,94 +1528,69 @@ groups with the stored ones.
 
 ## 14. Latency
 
-The Audio Configuration panel shows the round-trip latency in the `RTL` row
-(hover for "Round Trip Latency"): the value as `x.x ms` on the first line, and
-on the next three its contributions in milliseconds — the host queue, device
-lead and converter. The host term is the live stream queue (`host queue (live)`)
-when a stream runs, and the graph quantum (`graph`) while nothing is playing.
-The RTL block is shown in professional mode and under an external owner; in
-timer mode its four lines stay empty and the panel keeps the same height. Under
-JACK, a direct-ALSA DAW or a PipeWire conductor the figure includes the device
-lead and converters that the client's own latency display may omit. The
-**Quantum** picker sets the graph period in samples while nothing is playing.
-In timer mode it offers the convenience minimum (the highest period floor across
-the device's rates) as the default. Choose a specific value from the list to set
-it yourself; the list offers only quanta at or above the current rate's period
-floor, plus the exact floor for the lowest achievable latency. While a stream
-runs the quantum is the stream's: the picker is a grayed report of the actual
-value, and the client that sets the quantum is the same one that sets the rate.
+The Audio Configuration panel shows the `Input` row first: it reads `—` until
+the capture chain is measured. The **output latency** follows in the `Output`
+row (hover for "Output latency (host to analog output)"): the value as `x.x ms`
+on the first line, and below it the contributions in milliseconds — the host
+term, the USB queue, the device lead and the converter. The output row is
+shown on every path. Under JACK, a direct-ALSA DAW or a PipeWire conductor the
+figure includes the device lead and converters that the client's own latency
+display may omit. The **Quantum** picker sets the host buffer in samples while
+no stream runs. The safe default is the highest period floor across the
+device's rates. Choose a specific value from the list; the list offers every
+quantum at or above the current rate's period floor, plus the exact floor.
+While a stream runs the picker is a grayed report of the actual value.
 
-The PipeWire value is the host round trip:
+The output latency is:
 
 ```text
-RTL = USB queue + device lead + converter delay + one graph period
+output latency = host term + USB queue + device lead + converter delay
 ```
 
-Under an external owner (JACK / direct ALSA) the host term is the live stream
-queue — the ring fill plus the in-flight URBs, read from the kernel — so the
-number follows the owner's actual write-ahead:
-
-```text
-RTL = host queue (live) + device lead + converter delay
-```
+The host term is `snd_pcm_delay` minus the in-flight queue while a stream runs,
+so the USB queue is counted once, and the graph quantum while nothing is
+playing. The term is labelled `graph` on the PipeWire and JACK paths and `ring`
+on the direct-ALSA path. At 48 kHz with a 128-frame period the terms are 128 +
+144 + 60 + 13 = 345 frames = **7.2 ms**.
 
 The USB queue is the driver's in-flight URBs (three URBs at the standard
 setting) while nothing is playing; when a stream runs it is already inside the
 live host queue and is not counted again. The device lead is the margin the
-unit holds ahead of its converters, the converter delay is the interface's
-conversion time, and the graph period is one PipeWire cycle (two ALSA periods
-under timer scheduling). Because the host queue is live when a stream runs, a
-larger `jackd -n` (more periods) shows as more latency and a smaller
-`-n` as less; TotalControl does not assume a fixed buffer. The host queue is
-read live; the device lead and converter are model terms, so treat the total as
-the host-side budget.
+unit holds ahead of its converters, and the converter delay is the interface's
+conversion time. Because the host queue is live when a stream runs, a larger
+`jackd -n` (more periods) shows as more latency and a smaller `-n` as less;
+TotalControl does not assume a fixed buffer. The host queue is read live; the
+device lead and converter are model terms, so treat the total as the host-side
+budget.
 
 The UC device side is measured by loopback (output 5 to input 5) for both
 personalities at 32, 44.1, 48, 96 and 192 kHz; the display applies the live
-queue and adds the current graph period. Other rates, and the UCX, use the
-model with the same terms. Treat the number as the host-side budget for
-round trips; an acoustic measurement adds the room and monitoring path.
+queue and the host term. Other rates, and the UCX, use the model with the same
+terms. Treat the number as the host-side output budget; an acoustic
+measurement adds the room and monitoring path.
 
 On the UC the device part is a loopback calibration taken at 32, 44.1, 48,
 96 and 192 kHz in both PC and AP modes. The display says **measured PC** or
-**measured AP** and applies the live USB queue and the current graph
-period. If a driver change alters the USB queue, the calibration is
-adjusted by the queue difference without another cable measurement. Rates
-outside the calibrated set use the model estimate. A different firmware or
-device path needs a new calibration.
+**measured AP** and applies the live USB queue and the host term. If a driver
+change alters the USB queue, the calibration is adjusted by the queue
+difference without another cable measurement. Rates outside the calibrated set
+use the model estimate. A different firmware or device path needs a new
+calibration.
 
-### Scheduling mode — the three paths
+### Playback policy
 
-TotalControl offers three audio paths. Pick the one that matches the job;
-the `Playback mode` checkbox selects between the first two.
-
-| Path | Playback mode | Scheduling | Margin | Use it for |
-|---|---|---|---|---|
-| **Pro audio** | unchecked | IRQ + cushion | two periods, aligned to the rate | DAW work, predictable low latency |
-| **Convenience** | checked | timer + fixed margin | generous, DLL-held | listening, video |
-| **Lowest latency** | — (JACK) | direct | just-in-time | the latency floor; JACK opens the device directly |
-
-**Pro audio (`Playback mode` unchecked).** The host stream sets the rate; the
-device follows it. The graph runs on the device's period interrupts (IRQ mode)
-and TotalControl holds a **scheduling cushion** of two periods, aligned to the
-rate. The cushion keeps the playback ring fed across the write rhythm at the
+TotalControl uses one playback policy: interrupt scheduling with a
+period-aligned cushion of two periods. The cushion keeps the ring fed at the
 fractional rates (44.1/88.2/176.4 kHz), where a smaller or misaligned cushion
-drops out under load. It costs up to about two quanta of extra round-trip latency
-(about 2 ms at the 48-frame floor). It is placed *before* each rate/quantum
-change, so it is always in step with the device. **For DAW work, use this
-path**; the DAW sets the rate and TotalControl follows it.
+drops out under load. It costs about two quanta of extra latency (about 2 ms
+at the 48-frame floor) and is placed before each rate and quantum change.
 
-**Convenience (`Playback mode` checked).** The host stream sets the rate on
-this path too. It uses **timer mode** with a fixed generous margin that the
-server's delay-locked loop holds steady — safe at every rate, with no per-rate
-adjustment. It costs a few milliseconds of latency, which does not matter for
-listening or video. In this mode the RTL block is empty, the Pitch slider is
-hidden and the clock runs nominal, and the quantum defaults to the convenience
-minimum; a stream that sets its own quantum wins over the default.
-
-**Lowest latency (JACK).** For the lowest latency use JACK rather than PipeWire.
-JACK opens the device directly and fills the ring just-in-time; it is not part of
-the PipeWire graph, so the PipeWire scheduling and cushion do not apply to it.
+The host stream sets the rate and the buffer where it supports it; TotalControl
+follows and names the owner. The quantum is the smooth-playback control: a
+larger quantum raises the cushion and the queued audio, trading latency for
+margin. A host that sets the buffer wins. For the lowest latency use JACK: it
+opens the device directly and fills the ring just-in-time, so the PipeWire
+policy does not apply.
 
 The startup mute window below applies in every path.
 
@@ -1936,13 +1898,10 @@ fill costs no extra latency margin. The driver's startup prefill gate mutes
 the outputs from trigger until delivery is stable, so the smallest fill
 starts clean (see [section 14](#14-latency)).
 
-Timer scheduling (`api.alsa.disable-tsched = false`) is the desktop-convenience
-alternative. PipeWire then wakes on its own timer and a delay-locked loop
-holds the queued level at a target. Its node resampler absorbs mixed-rate
-graphs and its graph quantum is independent of the device period, which
-helps heavy processing at large quanta. To avoid late dropouts at 96/192 kHz
-it needs a rate-scaled `api.alsa.start-delay` of about three URBs, which adds
-steady latency; IRQ mode is preferred for low-latency work.
+Timer scheduling is retained as an internal fallback for diagnosis; it is not
+a user setting. It wakes PipeWire on its own timer, lets a delay-locked loop
+hold the queued level, and needs a rate-scaled `api.alsa.start-delay` of about
+three URBs. Interrupt scheduling is the shipped policy.
 
 At 96 kHz and 192 kHz use at least two milliseconds of quantum for
 low-latency recording: 192 frames at 96 kHz, 384 at 192 kHz. The period

@@ -24,17 +24,16 @@
 
 use crate::pw_clock::{CardStream, Conductor, PwClock, SchedPolicy, DEVICE_SAMPLE_RATES};
 
-/// How the graph rate is chosen when PipeWire owns the path. `Auto` lets the
-/// graph conduct and the device follows it; `Fixed` forces the device-set rate.
-/// This is TotalControl's own authority setting, independent of the detected
-/// path: under an external owner it is a read-only report.
+/// The retired playback-mode setting. It is read from older preferences and
+/// written back unchanged. The application ignores it and always applies
+/// interrupt scheduling with the period-aligned cushion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum EngineRateMode {
-    /// PipeWire decides (`clock.force-rate = 0`).
+    /// The legacy convenience setting; ignored.
     #[default]
     #[serde(alias = "Follow")]
     Auto,
-    /// Force the rate stored in the host's fixed-rate preference.
+    /// The legacy fixed-rate setting; ignored.
     Fixed,
 }
 
@@ -84,12 +83,9 @@ pub enum ExternalOwner {
 /// The detected audio path with TotalControl's authority on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioPath {
-    /// PipeWire owns the PCM; TotalControl forces the device-set rate (the
-    /// Device pro path: IRQ scheduling + the period-aligned cushion).
-    PwDevice,
-    /// PipeWire owns the PCM; the graph conducts the rate (the convenience
-    /// path: timer scheduling + a fixed generous margin).
-    PwFollow,
+    /// PipeWire owns the PCM. The host stream and the graph default apply;
+    /// TotalControl always uses interrupt scheduling with the cushion.
+    PipeWire,
     /// JACK or a direct-ALSA DAW owns the PCM; TotalControl reads the rate and
     /// writes nothing to the clock.
     External(ExternalOwner),
@@ -99,9 +95,9 @@ pub enum AudioPath {
 }
 
 impl AudioPath {
-    /// Whether PipeWire owns the PCM (either authority sub-mode).
+    /// Whether PipeWire owns the PCM.
     pub fn is_pipewire(self) -> bool {
-        matches!(self, AudioPath::PwDevice | AudioPath::PwFollow)
+        matches!(self, AudioPath::PipeWire)
     }
 
     /// Whether an external process (JACK or a DAW) owns the PCM.
@@ -110,29 +106,21 @@ impl AudioPath {
     }
 }
 
-/// Classify the path from the PCM owner, TotalControl's rate mode and (for the
-/// defensive unknown-owner case) whether the graph has Pro Audio nodes. Pure:
-/// the pipewire-jack trap classifies as PipeWire because the owner is PipeWire,
-/// regardless of the DAW's own "JACK" label.
-pub fn classify(
-    owner: PcmOwner,
-    mode: EngineRateMode,
-    pro_nodes_present: Option<bool>,
-) -> AudioPath {
-    let pw = || match mode {
-        EngineRateMode::Fixed => AudioPath::PwDevice,
-        EngineRateMode::Auto => AudioPath::PwFollow,
-    };
+/// Classify the path from the PCM owner and (for the defensive unknown-owner
+/// case) whether the graph has Pro Audio nodes. Pure: the pipewire-jack trap
+/// classifies as PipeWire because the owner is PipeWire, regardless of the
+/// DAW's own "JACK" label.
+pub fn classify(owner: PcmOwner, pro_nodes_present: Option<bool>) -> AudioPath {
     match owner {
         PcmOwner::Idle => AudioPath::Idle,
-        PcmOwner::PipeWire => pw(),
+        PcmOwner::PipeWire => AudioPath::PipeWire,
         PcmOwner::Jack => AudioPath::External(ExternalOwner::Jack),
         PcmOwner::DirectAlsa => AudioPath::External(ExternalOwner::Alsa),
         // Defensive fallback: Pro Audio nodes present → PipeWire; PCM open but
         // no nodes → an external owner (JACK-or-ALSA, indistinguishable, one
         // behaviour). The degradation is cosmetic, not behavioural.
         PcmOwner::Unknown => match pro_nodes_present {
-            Some(true) => pw(),
+            Some(true) => AudioPath::PipeWire,
             _ => AudioPath::External(ExternalOwner::Alsa),
         },
     }
@@ -183,12 +171,10 @@ pub fn quantum_picker_state(path: AudioPath, host_stream: bool) -> PickerState {
 }
 
 /// Whether the DEVICE group's device-path controls (clock source, pitch,
-/// word clock) are shown. They are shown in professional mode, and under an
-/// external owner (JACK / direct ALSA) — the owner sets the rate, but the
-/// device options remain TotalControl's. Timer mode keeps them as nonvisible
-/// fillers.
-pub fn device_controls_visible(path: AudioPath, mode: EngineRateMode) -> bool {
-    mode == EngineRateMode::Fixed || path.is_external()
+/// word clock) are shown. They are shown on every path; the clock-source
+/// picker is active only while audio is stopped.
+pub fn device_controls_visible(_path: AudioPath) -> bool {
+    true
 }
 
 /// The device's achievable rate/quantum envelope, device-agnostic. The driver
@@ -241,10 +227,8 @@ impl RateCaps {
 /// fact; every decision derives from this, never re-reads the world.
 #[derive(Debug, Clone)]
 pub struct ClockFacts {
-    /// TotalControl's rate-authority setting.
-    pub mode: EngineRateMode,
-    /// The rate / quantum TotalControl forces (`0` = no override), kept in the
-    /// host preferences and re-applied at launch.
+    /// The rate / quantum TotalControl writes as the current/default (`0` =
+    /// no override), kept in the host preferences and re-applied at launch.
     pub force_rate: u32,
     pub force_quantum: u32,
     /// The live PipeWire graph clock, when readable.
@@ -304,11 +288,10 @@ impl ClockFacts {
         self.caps.period_floor(rate)
     }
 
-    /// The convenience-path quantum minimum: the highest period floor across
-    /// the device's supported rates. A quantum at or above it is achievable at
-    /// every rate, so a graph-conducted rate switch never leaves an impossible
-    /// quantum.
-    pub fn convenience_quantum_min(&self) -> u32 {
+    /// The safe default quantum: the highest period floor across the device's
+    /// supported rates. A quantum at or above it is achievable at every rate,
+    /// so a rate switch never leaves an impossible default.
+    pub fn safe_default_quantum(&self) -> u32 {
         self.device_rates()
             .iter()
             .map(|r| self.quantum_floor(*r))
@@ -356,16 +339,10 @@ impl ClockFacts {
         q > 0 && q < 2 * self.quantum_floor(rate)
     }
 
-    /// The lowest quantum the current mode allows at `rate`. The Device path
-    /// uses the rate's period floor; the convenience path also holds the
-    /// convenience minimum so the quantum is safe at every graph rate.
+    /// The lowest quantum at `rate`: the rate's period floor. The safe default
+    /// is a preference, not a lower bound.
     pub fn minimum_quantum(&self, rate: u32) -> u32 {
-        let floor = self.quantum_floor(rate);
-        if self.mode == EngineRateMode::Auto {
-            floor.max(self.convenience_quantum_min())
-        } else {
-            floor
-        }
+        self.quantum_floor(rate)
     }
 
     /// The graph rate as it stands: the open card stream (the running truth),
@@ -430,55 +407,52 @@ impl ClockFacts {
             .unwrap_or(self.device_set_rate)
     }
 
-    /// The period the scheduling cushion aligns to: the graph quantum the
-    /// server actually runs, else the default/current quantum, raised to the
-    /// rate's floor.
+    /// The period the scheduling cushion aligns to: the user's target quantum
+    /// (the value the PCM will re-prepare at), else the graph quantum the
+    /// server runs, else the default/current quantum, raised to the rate's
+    /// floor. A stale probed quantum never overrides the target.
     pub fn cushion_period(&self, rate: u32) -> u32 {
-        let quantum = self
-            .graph_quantum
-            .or_else(|| (self.force_quantum > 0).then_some(self.force_quantum))
+        let quantum = (self.force_quantum > 0)
+            .then_some(self.force_quantum)
+            .or(self.graph_quantum)
             .or_else(|| self.clock.map(|c| c.effective_quantum()))
             .unwrap_or(0);
         quantum.max(self.quantum_floor(rate)).max(1)
     }
 
-    /// The scheduling policy for the playback mode (the three-tier model).
-    /// Professional (Fixed) is the pro path: IRQ scheduling + a period-aligned
+    /// The scheduling policy: interrupt scheduling with the period-aligned
     /// cushion `H = 2·P`, placed before each deliberate rate/quantum change.
-    /// Timer (Auto) is the convenience path: timer scheduling + a fixed
-    /// generous margin the DLL servos — safe at every rate without tracking the
-    /// graph-conducted rate. An external owner opens the PCM directly and uses
-    /// neither (the caller applies no policy there).
+    /// This is the only policy the application applies.
     pub fn sched_policy(&self, rate: u32) -> SchedPolicy {
-        if self.mode == EngineRateMode::Fixed {
-            SchedPolicy {
-                disable_tsched: true,
-                headroom: cushion_headroom(self.cushion_period(rate)),
-                start_delay: 0,
-                period_num: 32,
-            }
-        } else {
-            SchedPolicy {
-                disable_tsched: false,
-                headroom: 336,
-                start_delay: 3 * self.quantum_floor(rate),
-                period_num: 16,
-            }
+        SchedPolicy {
+            disable_tsched: true,
+            headroom: cushion_headroom(self.cushion_period(rate)),
+            start_delay: 0,
+            period_num: 32,
         }
     }
 
-    /// The rate TotalControl must hold under an external clock source, or
-    /// `None` when the stream/default owns the rate. On the internal clock the
-    /// host stream is the authority; TotalControl does not re-assert a force.
-    pub fn rate_authority_target(&self, pending: bool, reforce_cooling: bool) -> Option<u32> {
+    /// The timer fallback, retained for an evidence-driven return. It is not
+    /// applied by the application and has no user control.
+    #[allow(dead_code)]
+    pub fn timer_sched_policy(&self, rate: u32) -> SchedPolicy {
+        SchedPolicy {
+            disable_tsched: false,
+            headroom: 336,
+            start_delay: 3 * self.quantum_floor(rate),
+            period_num: 16,
+        }
+    }
+
+    /// The preferred graph rate under an external clock source, or `None`
+    /// when the internal clock or the default already matches. TotalControl
+    /// writes this as `clock.rate`; it never forces it.
+    pub fn rate_authority_target(&self) -> Option<u32> {
         if !self.clock_source_external {
             return None;
         }
         let desired = self.device_authority_rate();
-        if desired == 0 || self.clock.map(|c| c.force_rate).unwrap_or(0) == desired {
-            return None;
-        }
-        if pending || reforce_cooling {
+        if desired == 0 || self.clock.map(|c| c.rate).unwrap_or(0) == desired {
             return None;
         }
         Some(desired)
@@ -534,9 +508,8 @@ mod tests {
         .with_iso(true)
     }
 
-    fn facts(mode: EngineRateMode) -> ClockFacts {
+    fn facts() -> ClockFacts {
         ClockFacts {
-            mode,
             force_rate: 0,
             force_quantum: 0,
             clock: None,
@@ -563,48 +536,38 @@ mod tests {
     }
 
     #[test]
-    fn pipewire_owner_splits_by_authority_mode() {
-        assert_eq!(
-            classify(PcmOwner::PipeWire, EngineRateMode::Fixed, None),
-            AudioPath::PwDevice
-        );
-        assert_eq!(
-            classify(PcmOwner::PipeWire, EngineRateMode::Auto, None),
-            AudioPath::PwFollow
-        );
+    fn pipewire_owner_classifies_as_pipewire() {
+        assert_eq!(classify(PcmOwner::PipeWire, None), AudioPath::PipeWire);
     }
 
     #[test]
     fn external_owners_are_read_only_paths() {
         assert_eq!(
-            classify(PcmOwner::Jack, EngineRateMode::Fixed, None),
+            classify(PcmOwner::Jack, None),
             AudioPath::External(ExternalOwner::Jack)
         );
         assert_eq!(
-            classify(PcmOwner::DirectAlsa, EngineRateMode::Auto, None),
+            classify(PcmOwner::DirectAlsa, None),
             AudioPath::External(ExternalOwner::Alsa)
         );
-        assert_eq!(classify(PcmOwner::Idle, EngineRateMode::Fixed, None), AudioPath::Idle);
+        assert_eq!(classify(PcmOwner::Idle, None), AudioPath::Idle);
     }
 
     #[test]
     fn the_pipewire_jack_trap_classifies_as_pipewire() {
         // The DAW calls itself "JACK" but runs on PipeWire's emulation, so the
         // PCM owner is pipewire. Ownership, not the server's presence, decides.
-        let path = classify(PcmOwner::PipeWire, EngineRateMode::Auto, Some(true));
-        assert_eq!(path, AudioPath::PwFollow);
+        let path = classify(PcmOwner::PipeWire, Some(true));
+        assert_eq!(path, AudioPath::PipeWire);
         assert!(path.is_pipewire());
         assert!(!path.is_external());
     }
 
     #[test]
     fn unknown_owner_falls_back_to_the_pro_nodes() {
-        assert_eq!(
-            classify(PcmOwner::Unknown, EngineRateMode::Fixed, Some(true)),
-            AudioPath::PwDevice
-        );
-        assert!(classify(PcmOwner::Unknown, EngineRateMode::Auto, Some(false)).is_external());
-        assert!(classify(PcmOwner::Unknown, EngineRateMode::Auto, None).is_external());
+        assert_eq!(classify(PcmOwner::Unknown, Some(true)), AudioPath::PipeWire);
+        assert!(classify(PcmOwner::Unknown, Some(false)).is_external());
+        assert!(classify(PcmOwner::Unknown, None).is_external());
     }
 
     // ── Picker state (gray-when-owned) ──────────────────────────────
@@ -612,11 +575,11 @@ mod tests {
     #[test]
     fn rate_picker_is_active_while_no_stream_runs() {
         assert_eq!(
-            rate_picker_state(AudioPath::PwDevice, false, false),
+            rate_picker_state(AudioPath::PipeWire, false, false),
             PickerState::Active
         );
         assert_eq!(
-            rate_picker_state(AudioPath::PwFollow, false, false),
+            rate_picker_state(AudioPath::PipeWire, false, false),
             PickerState::Active
         );
         assert_eq!(rate_picker_state(AudioPath::Idle, false, false), PickerState::Active);
@@ -626,7 +589,7 @@ mod tests {
     fn rate_picker_is_grayed_under_a_stream_or_an_external_owner() {
         // A host stream sets the rate; the picker reports it.
         assert_eq!(
-            rate_picker_state(AudioPath::PwDevice, false, true),
+            rate_picker_state(AudioPath::PipeWire, false, true),
             PickerState::Grayed
         );
         assert_eq!(
@@ -642,7 +605,7 @@ mod tests {
     #[test]
     fn rate_picker_is_a_filler_under_an_external_clock() {
         assert_eq!(
-            rate_picker_state(AudioPath::PwDevice, true, false),
+            rate_picker_state(AudioPath::PipeWire, true, false),
             PickerState::Filler
         );
         assert_eq!(
@@ -661,28 +624,23 @@ mod tests {
             quantum_picker_state(AudioPath::External(ExternalOwner::Alsa), false),
             PickerState::Grayed
         );
-        assert_eq!(quantum_picker_state(AudioPath::PwDevice, true), PickerState::Grayed);
-        assert_eq!(quantum_picker_state(AudioPath::PwDevice, false), PickerState::Active);
-        assert_eq!(quantum_picker_state(AudioPath::PwFollow, false), PickerState::Active);
+        assert_eq!(quantum_picker_state(AudioPath::PipeWire, true), PickerState::Grayed);
+        assert_eq!(quantum_picker_state(AudioPath::PipeWire, false), PickerState::Active);
+        assert_eq!(quantum_picker_state(AudioPath::PipeWire, false), PickerState::Active);
         assert_eq!(quantum_picker_state(AudioPath::Idle, false), PickerState::Active);
     }
 
     #[test]
-    fn device_controls_show_in_device_mode_and_under_an_owner() {
-        // Device mode shows the device-path controls (clock source, pitch).
-        assert!(device_controls_visible(AudioPath::PwDevice, EngineRateMode::Fixed));
-        assert!(device_controls_visible(AudioPath::Idle, EngineRateMode::Fixed));
-        // Convenience (PipeWire) hides them as fillers.
-        assert!(!device_controls_visible(AudioPath::PwFollow, EngineRateMode::Auto));
-        assert!(!device_controls_visible(AudioPath::Idle, EngineRateMode::Auto));
-        // An external owner shows them regardless of the stored PipeWire mode,
-        // so JACK and ALSA render the same device section as Device mode.
+    fn device_controls_are_shown_on_every_path() {
+        // The clock source and word-clock rows are always present; the clock
+        // source is active only while audio is stopped.
+        assert!(device_controls_visible(AudioPath::PipeWire));
+        assert!(device_controls_visible(AudioPath::Idle));
         for path in [
             AudioPath::External(ExternalOwner::Jack),
             AudioPath::External(ExternalOwner::Alsa),
         ] {
-            assert!(device_controls_visible(path, EngineRateMode::Fixed));
-            assert!(device_controls_visible(path, EngineRateMode::Auto));
+            assert!(device_controls_visible(path));
         }
     }
 
@@ -690,7 +648,7 @@ mod tests {
 
     #[test]
     fn quantum_floor_comes_from_the_envelope() {
-        let f = facts(EngineRateMode::Fixed);
+        let f = facts();
         assert_eq!(f.quantum_floor(48_000), 48);
         assert_eq!(f.quantum_floor(176_400), 184);
         assert_eq!(f.quantum_floor(192_000), 192);
@@ -699,20 +657,18 @@ mod tests {
     }
 
     #[test]
-    fn convenience_minimum_is_the_highest_floor() {
-        let f = facts(EngineRateMode::Auto);
-        assert_eq!(f.convenience_quantum_min(), 192);
-        // The convenience path holds the minimum at every rate.
-        assert_eq!(f.minimum_quantum(48_000), 192);
+    fn safe_default_is_the_highest_floor_and_the_minimum_is_the_rate_floor() {
+        let f = facts();
+        assert_eq!(f.safe_default_quantum(), 192);
+        // The safe default is a preference; the picker's lower bound is the
+        // rate's own floor.
+        assert_eq!(f.minimum_quantum(48_000), 48);
         assert_eq!(f.minimum_quantum(192_000), 192);
-        // The Device path uses only the rate's own floor.
-        let d = facts(EngineRateMode::Fixed);
-        assert_eq!(d.minimum_quantum(48_000), 48);
     }
 
     #[test]
     fn pitch_envelope_is_the_transport_capacity() {
-        let f = facts(EngineRateMode::Fixed);
+        let f = facts();
         // Every rate whose +5% clock fits the band capacity keeps the full
         // range: 1x 56000, 2x 104000, 4x 200000 frames/s.
         for rate in [32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 128_000, 176_400] {
@@ -737,7 +693,7 @@ mod tests {
 
     #[test]
     fn zero_slack_is_below_twice_the_floor() {
-        let mut f = facts(EngineRateMode::Fixed);
+        let mut f = facts();
         // 48k floor 48: the floor itself is zero-slack, 96 is safe.
         f.force_quantum = 48;
         assert!(f.zero_slack(48_000));
@@ -758,7 +714,7 @@ mod tests {
 
     #[test]
     fn default_graph_rate_is_the_configured_clock_rate() {
-        let mut f = facts(EngineRateMode::Auto);
+        let mut f = facts();
         // No engine snapshot: the canonical 48 kHz default.
         assert_eq!(f.default_graph_rate(), 48_000);
         f.clock = Some(PwClock {
@@ -786,7 +742,7 @@ mod tests {
 
     #[test]
     fn device_policy_is_irq_plus_aligned_cushion() {
-        let mut f = facts(EngineRateMode::Fixed);
+        let mut f = facts();
         f.force_quantum = 96;
         let p = f.sched_policy(48_000);
         assert!(p.disable_tsched);
@@ -798,27 +754,32 @@ mod tests {
     }
 
     #[test]
-    fn convenience_policy_is_timer_plus_fixed_margin() {
-        let f = facts(EngineRateMode::Auto);
-        let p = f.sched_policy(48_000);
+    fn timer_fallback_is_retained_but_not_the_app_policy() {
+        let f = facts();
+        let p = f.timer_sched_policy(48_000);
         assert!(!p.disable_tsched);
         assert_eq!(p.headroom, 336);
         assert_eq!(p.start_delay, 144); // 3·floor(48k) = 3·48
         assert_eq!(p.period_num, 16);
-        assert_eq!(f.sched_policy(176_400).start_delay, 552); // 3·184
+        assert_eq!(f.timer_sched_policy(176_400).start_delay, 552); // 3·184
+        // The application always applies the IRQ cushion.
+        assert!(f.sched_policy(48_000).disable_tsched);
     }
 
     #[test]
     fn cushion_targets_the_forced_quantum_before_the_transition() {
-        let mut f = facts(EngineRateMode::Fixed);
+        let mut f = facts();
         f.force_quantum = 96;
-        // The running stream still holds the old period; the cushion aligns to
-        // the target quantum the PCM will re-prepare at, not the live period.
+        // A stale probed graph quantum must not override the target the PCM
+        // will re-prepare at.
+        f.graph_quantum = Some(64);
         f.stream = Some(CardStream { rate: 48_000, period: 48, buffer: 2048, channels: 18, format: PcmFormat::S32Le });
         assert_eq!(f.cushion_period(48_000), 96);
         assert_eq!(f.sched_policy(48_000).headroom, 192);
-        // Without a force, the graph quantum raised to the floor is the target.
+        // Without a target, the graph quantum raised to the floor is the
+        // period.
         f.force_quantum = 0;
+        f.graph_quantum = None;
         assert_eq!(f.cushion_period(48_000), 48);
     }
 
@@ -826,7 +787,7 @@ mod tests {
 
     #[test]
     fn device_authority_prefers_the_external_readback() {
-        let mut f = facts(EngineRateMode::Fixed);
+        let mut f = facts();
         f.force_rate = 48_000;
         f.clock_source_external = true;
         f.device_rate = Some(96_000);
@@ -837,30 +798,28 @@ mod tests {
     }
 
     #[test]
-    fn rate_authority_reasserts_only_under_an_external_clock() {
-        let mut f = facts(EngineRateMode::Fixed);
+    fn the_external_clock_targets_the_preferred_graph_default() {
+        let mut f = facts();
         f.force_rate = 48_000;
         f.clock = Some(PwClock {
             rate: 48_000, quantum: 256, force_rate: 0, force_quantum: 0,
             min_quantum: 0, max_quantum: 0,
         });
-        // Internal clock: the host stream/default owns the rate. No re-assert.
-        assert_eq!(f.rate_authority_target(false, false), None);
-        // External clock: the device's readback wins; a cleared force is
-        // re-asserted to protect the device rate.
+        // Internal clock: the host stream/default owns the rate.
+        assert_eq!(f.rate_authority_target(), None);
+        // External clock: the device readback is the preferred default.
         f.clock_source_external = true;
         f.device_rate = Some(48_000);
-        assert_eq!(f.rate_authority_target(false, false), Some(48_000));
-        f.clock.as_mut().unwrap().force_rate = 48_000;
-        assert_eq!(f.rate_authority_target(false, false), None);
-        f.clock.as_mut().unwrap().force_rate = 0;
-        assert_eq!(f.rate_authority_target(true, false), None);
-        assert_eq!(f.rate_authority_target(false, true), None);
+        assert_eq!(f.rate_authority_target(), None); // default already matches
+        f.device_rate = Some(96_000);
+        assert_eq!(f.rate_authority_target(), Some(96_000));
+        f.clock.as_mut().unwrap().rate = 96_000;
+        assert_eq!(f.rate_authority_target(), None);
     }
 
     #[test]
     fn running_rate_prefers_the_stream_then_the_graph_then_the_stored_rate() {
-        let mut f = facts(EngineRateMode::Auto);
+        let mut f = facts();
         f.device_set_rate = 44_100;
         assert_eq!(f.running_rate(), 44_100); // the device set rate
         f.clock = Some(PwClock {
@@ -882,7 +841,7 @@ mod tests {
 
     #[test]
     fn tc_writes_the_clock_only_when_idle_and_unconducted() {
-        let mut f = facts(EngineRateMode::Fixed);
+        let mut f = facts();
         assert!(f.tc_may_write_clock());
         f.stream = Some(CardStream { rate: 48_000, period: 48, buffer: 1024, channels: 18, format: PcmFormat::S32Le });
         assert!(!f.tc_may_write_clock());
