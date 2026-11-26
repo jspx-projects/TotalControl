@@ -592,10 +592,16 @@ margin that precedes the first URB at an engine restart.
 A period signal announces one completed period. A direction is signalled
 only when its period index advanced (`delta_zero` counts violations).
 
-In duplex, the wake is withheld until both running directions have completed
-a period, so the follower's pointer is current when the reader wakes. A
-direction whose wake has been withheld twice signals alone, releasing the
-other direction. Single-direction operation signals at its own boundary.
+In duplex with equal ALSA periods, the wake is withheld until both running
+directions have completed a period, so the follower's pointer is current when
+the reader wakes. A direction whose wake has been withheld twice signals
+alone, releasing the other direction. Single-direction operation signals at
+its own boundary.
+
+The gate applies only when both directions have the same ALSA period. Unequal
+periods have no common boundary, so cross-gating would withhold one direction
+on every cycle and turn the gate into a source of late writes. Each direction
+is then signalled at its own boundary, like single-direction operation.
 
 The two directions' completions can run concurrently on different CPUs.
 `gate_lock` serializes the gate decision and its deferral counters; the
@@ -604,7 +610,7 @@ stream lock inside the signal nests under it.
 Counters: `signal_deferred`, `signal_overdue`, `max_pending`, `delta_zero`,
 `hw_ptr_mismatch`.
 
-The gate adds at most about one URB of latency at any period size. It is a
+The gate adds at most about one URB of latency at equal periods. It is a
 correctness mechanism.
 
 ### 4.3 ISO implicit feedback (AP mode)
@@ -1380,9 +1386,10 @@ The reasons behind the design, kept separate from the model itself.
    the device-time stays one scene's worth of pacing and the queue holds
    scenes, not fragments.
 6. **The duplex period gate (§4.2).** The follower's pointer must be
-   current when the reader wakes; signalling both directions together at
-   the later boundary guarantees that, and the two-deferral release
-   bounds the added latency to about one URB.
+   current when the reader wakes; with equal periods, signalling both
+   directions together at the later boundary guarantees that, and the
+   two-deferral release bounds the added latency to about one URB. Unequal
+   periods are signalled independently.
 7. **One shared worker, per-backend sinks.** Orchestration (ordering,
    coalescing, pacing, backpressure) is device-independent; only the
    I/O surface differs. Sharing the worker across the Fireface and
