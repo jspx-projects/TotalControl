@@ -184,18 +184,18 @@ unsigned int ff_rate_family(unsigned int rate);
 
 /* Internal transport capabilities: behaviour, not model names.  Phase 1 of
  * the driver refactor moves the remaining model checks here. */
-#define FF_CAP_MUTE_MASK_18BIT		BIT(0)	/* 18-bit mute mask packing */
-#define FF_CAP_MUTE_ON_STOP		BIT(1)	/* mute outputs on engine stop */
-#define FF_CAP_SKIP_SAME_ALT		BIT(2)	/* skip SET_INTERFACE on same alt */
-#define FF_CAP_SESSION_BEFORE_URBS	BIT(3)	/* session words before URBs */
-#define FF_CAP_SESSION_ON_RATE_CHANGE	BIT(4)	/* arm session words on rate change */
-#define FF_CAP_FRAME_LEAD		BIT(5)	/* per-frame lead words */
-#define FF_CAP_STATUS_RUNNING_ONLY	BIT(6)	/* status ticker only while running */
-#define FF_CAP_KILL_BOTH		BIT(7)	/* kill both URB sets on stop */
-#define FF_CAP_FIXED_URB		BIT(8)	/* fixed URB frames, no band shift */
-#define FF_CAP_LEAD_HORIZON		BIT(9)	/* lead horizon in buffer minimum */
-#define FF_CAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
-#define FF_CAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
+#define FF_TCAP_MUTE_MASK_18BIT		BIT(0)	/* 18-bit mute mask packing */
+#define FF_TCAP_MUTE_ON_STOP		BIT(1)	/* mute outputs on engine stop */
+#define FF_TCAP_SKIP_SAME_ALT		BIT(2)	/* skip SET_INTERFACE on same alt */
+#define FF_TCAP_SESSION_BEFORE_URBS	BIT(3)	/* session words before URBs */
+#define FF_TCAP_SESSION_ON_RATE_CHANGE	BIT(4)	/* arm session words on rate change */
+#define FF_TCAP_FRAME_LEAD		BIT(5)	/* per-frame lead words */
+#define FF_TCAP_STATUS_RUNNING_ONLY	BIT(6)	/* status ticker only while running */
+#define FF_TCAP_KILL_BOTH		BIT(7)	/* kill both URB sets on stop */
+#define FF_TCAP_FIXED_URB		BIT(8)	/* fixed URB frames, no band shift */
+#define FF_TCAP_LEAD_HORIZON		BIT(9)	/* lead horizon in buffer minimum */
+#define FF_TCAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
+#define FF_TCAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
 
 struct ff;
 
@@ -330,8 +330,7 @@ struct ff_device_desc {
 	u8 iface;
 	u8 transport;			/* enum ff_transport */
 	u32 quirks;
-	u32 caps;			/* FF_CAP_* transport capabilities */
-	u32 model;			/* enum ff_model */
+	u32 caps;			/* FF_TCAP_* transport capabilities */
 	const struct ff_mode *modes;
 	unsigned int n_modes;
 	u8 audio_iface;
@@ -394,9 +393,8 @@ struct ff {
 	struct snd_hwdep *hwdep;
 
 	const struct ff_device_desc *desc;
-	unsigned int model;
 	bool iso;
-	u32 caps;			/* FF_CAP_* transport capabilities */
+	u32 caps;			/* FF_TCAP_* transport capabilities */
 	unsigned int audio_iface;
 	unsigned int cur_alt;		/* current streaming alternate setting */
 	u8 out_ep, in_ep;

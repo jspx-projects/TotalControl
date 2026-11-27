@@ -168,7 +168,7 @@ static int ff_hwdep_release(struct snd_hwdep *hwdep, struct file *file)
 		unsigned long flags;
 
 		ff_transport_stop(chip);
-		if (chip->caps & FF_CAP_METER_PAIR) {
+		if (chip->caps & FF_TCAP_METER_PAIR) {
 			/* Unread events are stale for the next reader. */
 			spin_lock_irqsave(&chip->event_lock, flags);
 			kfifo_reset(&chip->event_fifo);
@@ -185,7 +185,8 @@ static int ff_hwdep_info(struct ff *chip,
 			   struct ff_hwdep_info __user *arg)
 {
 	struct ff_hwdep_info info;
-	u32 caps = FF_CAP_VENDOR | FF_CAP_PCM;
+	u32 caps = FF_CAP_VENDOR | FF_CAP_PCM |
+		   FF_CAP_SNAPSHOT | FF_CAP_DIAGNOSTICS;
 
 	if (chip->desc->state_out_ep)
 		caps |= FF_CAP_WORDS;
@@ -196,9 +197,8 @@ static int ff_hwdep_info(struct ff *chip,
 
 	memset(&info, 0, sizeof(info));
 	info.abi = FF_ABI_VERSION;
-	info.model = chip->model;
-	info.transport = chip->iso ? FF_XPORT_ISO : FF_XPORT_INTERRUPT;
 	info.caps = caps;
+	info.transport = chip->iso ? FF_XPORT_ISO : FF_XPORT_INTERRUPT;
 	info.channels = chip->desc->max_channels;
 	info.inputs = chip->desc->max_channels;
 	info.outputs = ff_desc_playback(chip->desc);
@@ -213,7 +213,9 @@ static int ff_hwdep_info(struct ff *chip,
 	info.firmware = chip->firmware;
 	info.card = chip->card->number;
 	info.pcm_device = 0;
-	strscpy(info.name, chip->desc->name, sizeof(info.name));
+	info.vendor = chip->desc->vendor;
+	info.product = chip->desc->product;
+	info.bcd_device = le16_to_cpu(chip->dev->descriptor.bcdDevice);
 	strscpy(info.serial, chip->serial, sizeof(info.serial));
 
 	if (copy_to_user(arg, &info, sizeof(info)))
@@ -300,33 +302,82 @@ static int ff_hwdep_words(struct ff *chip,
 	return ff_reg_send(chip, w.words, w.count);
 }
 
-/* The device timestamp: a snapshot of the Stage 1 state under fb_lock. */
-static int ff_hwdep_clock(struct ff *chip,
-			    struct ff_hwdep_clock __user *arg)
+/* Live snapshot: queue state for both directions and the device clock in
+ * one sample.  The caller sets `size`; the driver fills up to that size. */
+static int ff_hwdep_snapshot(struct ff *chip,
+			     struct ff_hwdep_snapshot __user *arg)
 {
-	struct ff_hwdep_clock c;
+	struct ff_hwdep_snapshot s;
 	unsigned long flags;
+	u32 size;
+	int dir;
 
+	if (copy_from_user(&size, &arg->size, sizeof(size)))
+		return -EFAULT;
+	if (size < sizeof(s.abi) + sizeof(s.size))
+		return -EINVAL;
+	if (size > sizeof(s))
+		size = sizeof(s);
+
+	memset(&s, 0, sizeof(s));
+	s.abi = FF_ABI_VERSION;
+	s.size = sizeof(s);
+	s.run_seq = chip->run_seq;
+	s.rate = chip->rate;
 	spin_lock_irqsave(&chip->fb_lock, flags);
-	c.timestamp_ns = chip->ts_ns;
-	c.timestamp_pos = chip->ts_pos;
-	c.timestamp_phase = chip->ts_phase;
-	c.rate_meas = chip->ts_rate_meas;
-	c.anchor_ns = chip->ts_anchor_ns;
-	c.frames = chip->ts_frames;
-	c.wrap = ff_iso_wrap(chip);
-	c.reserved = 0;
+	s.timestamp_ns = chip->ts_ns;
+	s.timestamp_pos = chip->ts_pos;
+	s.timestamp_phase = chip->ts_phase;
+	s.rate_meas = chip->ts_rate_meas;
+	s.anchor_ns = chip->ts_anchor_ns;
+	s.frames = chip->ts_frames;
+	s.wrap = ff_iso_wrap(chip);
 	spin_unlock_irqrestore(&chip->fb_lock, flags);
 
-	if (copy_to_user(arg, &c, sizeof(c)))
+	for (dir = 0; dir < 2; dir++) {
+		struct ff_hwdep_stream *st = dir ? &s.in : &s.out;
+		struct ff_stream *fs = &chip->streams[dir];
+		struct snd_pcm_substream *subs = fs->substream;
+		struct snd_pcm_runtime *rt;
+		u64 boundary;
+
+		if (!subs || !(rt = subs->runtime))
+			continue;
+		st->present = 1;
+		st->state = rt->status->state;
+		st->appl_ptr = READ_ONCE(rt->control->appl_ptr);
+		st->hw_ptr = fs->hw_ptr;
+		st->period = rt->period_size;
+		st->buffer = rt->buffer_size;
+		boundary = rt->boundary;
+		if (dir == SNDRV_PCM_STREAM_PLAYBACK)
+			st->fill = (st->appl_ptr + boundary - st->hw_ptr) %
+				   boundary;
+		else
+			st->fill = (st->hw_ptr + boundary - st->appl_ptr) %
+				   boundary;
+		if (st->fill > st->buffer)
+			st->fill = st->buffer;
+		st->inflight = atomic_read(&fs->inflight);
+		st->delay = st->fill + st->inflight;
+		st->urb_frames = chip->urb_frames;
+		st->nurbs = chip->nurbs;
+		st->iso_packets = chip->iso_packets;
+		st->device_pos = dir == SNDRV_PCM_STREAM_CAPTURE ?
+				 chip->in_end : fs->pos[0];
+		st->xruns = dir == SNDRV_PCM_STREAM_CAPTURE ?
+			    atomic_read(&chip->in_overruns) :
+			    atomic_read(&chip->out_underruns);
+	}
+	if (copy_to_user(arg, &s, size))
 		return -EFAULT;
 	return 0;
 }
 
-static int ff_hwdep_counters(struct ff *chip,
-			       struct ff_hwdep_counters __user *arg)
+static int ff_hwdep_diagnostics(struct ff *chip,
+				  struct ff_hwdep_diagnostics __user *arg)
 {
-	struct ff_hwdep_counters c;
+	struct ff_hwdep_diagnostics c;
 
 	memset(&c, 0, sizeof(c));
 	c.out_urbs = atomic_read(&chip->out_urbs);
@@ -361,6 +412,21 @@ static int ff_hwdep_counters(struct ff *chip,
 	c.hw_ptr_mismatch = atomic_read(&chip->hw_ptr_mismatch);
 	c.delta_zero = atomic_read(&chip->delta_zero);
 	c.run_seq = chip->run_seq;
+	c.ring_min_filled = chip->ring_min_filled;
+	c.ring_missed = atomic_read(&chip->ring_missed);
+	c.ring_starved = atomic_read(&chip->ring_starved);
+	c.ring_max_stall_ns = chip->ring_max_stall_ns;
+	c.gate_deferred = atomic_read(&chip->signal_deferred);
+	c.gate_overdue = atomic_read(&chip->signal_overdue);
+	c.gate_max_pending = READ_ONCE(chip->max_pending);
+	c.out_lag_min = chip->out_lag_min;
+	c.out_lag_max = chip->out_lag_max;
+	c.out_prefills = atomic_read(&chip->out_prefills);
+	c.out_prefill_timeouts = atomic_read(&chip->out_prefill_timeouts);
+	c.meter_paused = chip->meter_paused;
+	c.meter_pairs = chip->meter_pairs;
+	c.meter_realigns = chip->meter_realigns;
+	c.in_total = chip->in_total;
 	if (copy_to_user(arg, &c, sizeof(c)))
 		return -EFAULT;
 	return 0;
@@ -401,10 +467,10 @@ static int ff_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
 		return ff_hwdep_vendor(chip, (void __user *)arg);
 	case FF_HWDEP_IOCTL_WRITE_WORDS:
 		return ff_hwdep_words(chip, (void __user *)arg);
-	case FF_HWDEP_IOCTL_COUNTERS:
-		return ff_hwdep_counters(chip, (void __user *)arg);
-	case FF_HWDEP_IOCTL_CLOCK:
-		return ff_hwdep_clock(chip, (void __user *)arg);
+	case FF_HWDEP_IOCTL_DIAGNOSTICS:
+		return ff_hwdep_diagnostics(chip, (void __user *)arg);
+	case FF_HWDEP_IOCTL_SNAPSHOT:
+		return ff_hwdep_snapshot(chip, (void __user *)arg);
 	case FF_HWDEP_IOCTL_SET_RATE:
 		return ff_hwdep_set_rate(chip, (void __user *)arg);
 	case FF_HWDEP_IOCTL_ENVELOPE: {
@@ -498,7 +564,7 @@ static void ff_meter_complete(struct urb *urb)
 
 	atomic_inc(&chip->meter_urbs);
 	if (urb->status == 0 && chip->desc &&
-	    (chip->caps & FF_CAP_METER_PAIR) &&
+	    (chip->caps & FF_TCAP_METER_PAIR) &&
 	    urb->actual_length == chip->desc->meter_len &&
 	    2 * chip->desc->meter_len <= FF_EVENT_MAX) {
 		unsigned int len = chip->desc->meter_len;
@@ -526,7 +592,7 @@ static void ff_meter_complete(struct urb *urb)
 			break;
 		}
 	} else if (urb->status == 0 && urb->actual_length >= 4 &&
-		   !(chip->caps & FF_CAP_METER_PAIR)) {
+		   !(chip->caps & FF_TCAP_METER_PAIR)) {
 		/* Self-describing packet devices (UCX, Babyface) pass each
 		 * packet through unchanged. */
 		ff_event_put(chip, FF_EV_METER, urb->transfer_buffer,
@@ -713,7 +779,7 @@ int ff_transport_start(struct ff *chip)
 	if (chip->state_active)
 		return 0;
 	chip->state_active = true;
-	if (chip->caps & FF_CAP_METER_PAIR) {
+	if (chip->caps & FF_TCAP_METER_PAIR) {
 		chip->meter_pair_len = 0;
 		WRITE_ONCE(chip->meter_paused, false);
 	}
@@ -722,7 +788,7 @@ int ff_transport_start(struct ff *chip)
 	 * Keep the meter URB running for both models; PCM capture remains
 	 * owned by the ALSA/PipeWire stream.
 	 */
-	if (chip->caps & FF_CAP_METER_PAIR) {
+	if (chip->caps & FF_TCAP_METER_PAIR) {
 		ret = ff_meter_submit(chip);
 		if (ret < 0 && ret != -EALREADY)
 			dev_dbg(&chip->dev->dev, "UC meter URB submit: %d\n", ret);
@@ -754,7 +820,7 @@ void ff_transport_stop(struct ff *chip)
 	 * session.  Consume the partner page and discard the pair.
 	 */
 	if (chip->meter_pair_len && chip->desc &&
-	    (chip->caps & FF_CAP_METER_PAIR) &&
+	    (chip->caps & FF_TCAP_METER_PAIR) &&
 	    !READ_ONCE(chip->disconnected)) {
 		u8 buf[FF_METER_PAIR_MAX];
 		int actual = 0;

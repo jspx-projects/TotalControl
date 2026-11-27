@@ -188,7 +188,7 @@ static unsigned int ff_urb_frames(struct ff *chip, unsigned int rate)
 	if (chip->iso)
 		return chip->iso_packets * DIV_ROUND_UP(rate, 8000);
 	/* The Windows IF5 driver uses one fixed URB size at every rate. */
-	if (chip->caps & FF_CAP_FIXED_URB)
+	if (chip->caps & FF_TCAP_FIXED_URB)
 		return chip->base_urb_frames;
 	return chip->base_urb_frames << ff_mode_index(rate);
 }
@@ -526,7 +526,7 @@ static int ff_playback_mask(struct ff *chip, bool mute,
 	u32 mask;
 	u16 idx, val;
 
-	if (chip->caps & FF_CAP_MUTE_MASK_18BIT) {
+	if (chip->caps & FF_TCAP_MUTE_MASK_18BIT) {
 		/* The Babyface-classic reads an 18-bit mask packed like a
 		 * 0x12 level: channel n is bit n, wValue = mask >> 2,
 		 * wIndex bits 14-15 = mask bits 0-1.  The vendor driver
@@ -749,7 +749,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.iface = 0,
 		.transport = FF_XPORT_INTERRUPT,
 		.quirks = FF_QUIRK_STATUS_LATCH | FF_QUIRK_WIN_SESSION,
-		.model = FF_MODEL_UC,
 		.modes = ff_pc_modes,
 		.n_modes = ARRAY_SIZE(ff_pc_modes),
 		.audio_iface = 0,
@@ -780,7 +779,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FF_MODEL_UC,
 		.modes = ff_mac_modes,
 		.n_modes = ARRAY_SIZE(ff_mac_modes),
 		.audio_iface = 0,
@@ -808,7 +806,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FF_MODEL_UC,
 		.modes = ff_mac_modes,
 		.n_modes = ARRAY_SIZE(ff_mac_modes),
 		.audio_iface = 0,
@@ -836,7 +833,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FF_MODEL_UCX,
 		.modes = ff_ucx_modes,
 		.n_modes = ARRAY_SIZE(ff_ucx_modes),
 		.audio_iface = 0,
@@ -869,7 +865,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.quirks = FF_QUIRK_ALT_RESELECT |
 			  FF_QUIRK_IF5_PRE_START |
 			  FF_QUIRK_IF5_PLAYBACK_MASK,
-		.model = FF_MODEL_UCX,
 		.modes = ff_ucx_if5_modes,
 		.n_modes = ARRAY_SIZE(ff_ucx_if5_modes),
 		.audio_iface = 5,
@@ -900,7 +895,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FF_MODEL_UCX,
 		.modes = ff_ucx_modes,
 		.n_modes = ARRAY_SIZE(ff_ucx_modes),
 		.audio_iface = 0,
@@ -933,7 +927,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.quirks = FF_QUIRK_ALT_RESELECT |
 			  FF_QUIRK_IF5_PRE_START |
 			  FF_QUIRK_IF5_PLAYBACK_MASK,
-		.model = FF_MODEL_UCX,
 		.modes = ff_ucx_if5_modes,
 		.n_modes = ARRAY_SIZE(ff_ucx_if5_modes),
 		.audio_iface = 5,
@@ -970,7 +963,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FF_MODEL_BABYFACE_CLASSIC,
 		.modes = ff_babyface_classic_modes,
 		.n_modes = ARRAY_SIZE(ff_babyface_classic_modes),
 		.audio_iface = 0,
@@ -1001,7 +993,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.quirks = FF_QUIRK_STATUS_LATCH |
 			  FF_QUIRK_ALT_RESELECT |
 			  FF_QUIRK_WIN_SESSION,
-		.model = FF_MODEL_UC,
 		.modes = ff_pc_modes,
 		.n_modes = ARRAY_SIZE(ff_pc_modes),
 		.audio_iface = 0,
@@ -2266,7 +2257,7 @@ static void ff_iso_playback_fill(struct ff_ep *ep, struct urb *urb)
 		if (frames[i]) {
 			u32 base = s->out_counter;
 
-			if (chip->caps & FF_CAP_FRAME_LEAD) {
+			if (chip->caps & FF_TCAP_FRAME_LEAD) {
 				for (f = 0; f < frames[i]; f++)
 					dst[f * fwords] = cpu_to_le32(
 						(base + f) %
@@ -2720,7 +2711,7 @@ static void ff_status_complete(struct urb *urb)
 resubmit:
 	/* The UC keeps the ticker open all the time (front-panel events);
 	 * the UCX IF5 endpoint only reports stream-period ticks. */
-	if ((chip->caps & FF_CAP_STATUS_RUNNING_ONLY) &&
+	if ((chip->caps & FF_TCAP_STATUS_RUNNING_ONLY) &&
 	    !READ_ONCE(chip->engine_running))
 		return;
 	ret = ff_status_submit(chip);
@@ -2768,11 +2759,11 @@ static void ff_engine_stop(struct ff *chip)
 	if (!READ_ONCE(chip->disconnected)) {
 		chip->desc->ops->stream_stop(chip, ff_mode_channels(chip,
 								     chip->rate));
-		if (chip->caps & FF_CAP_MUTE_ON_STOP)
+		if (chip->caps & FF_TCAP_MUTE_ON_STOP)
 			chip->desc->ops->hw_mute(chip, true);
 	}
 	WRITE_ONCE(chip->engine_running, false);
-	ff_kill_urbs(chip, chip->caps & FF_CAP_KILL_BOTH);
+	ff_kill_urbs(chip, chip->caps & FF_TCAP_KILL_BOTH);
 	/* The kill is synchronous: every in-flight frame has been
 	 * subtracted by its completion.  Rebase the counter for the next
 	 * engine run. */
@@ -2789,7 +2780,7 @@ static void ff_int_setup_urbs(struct ff *chip, unsigned int bytes)
 	int dir, e, i;
 
 	/* The Windows IF5 receive path always uses full 1024-frame URBs. */
-	if (chip->caps & FF_CAP_FIXED_URB)
+	if (chip->caps & FF_TCAP_FIXED_URB)
 		in_bytes = chip->base_urb_frames * ff_max_words(chip) *
 			   FF_SAMPLE_BYTES;
 
@@ -3015,7 +3006,7 @@ static int ff_engine_commit_rate(struct ff *chip)
 	 * after the session words and leaves both directions silent.  Only
 	 * program a genuinely different alt (2x/4x, or first start). */
 	{
-		bool skip_alt = (chip->caps & FF_CAP_SKIP_SAME_ALT) &&
+		bool skip_alt = (chip->caps & FF_TCAP_SKIP_SAME_ALT) &&
 				chip->uc_session &&
 				chip->cur_alt == m->alt;
 
@@ -3094,7 +3085,7 @@ static int ff_engine_start(struct ff *chip)
 	 * already running leaves the stream alive with silence in both
 	 * directions.  The later stream_start call is a no-op for the UC once
 	 * session_reopen has been cleared. */
-	if ((chip->caps & FF_CAP_SESSION_BEFORE_URBS) && chip->uc_session) {
+	if ((chip->caps & FF_TCAP_SESSION_BEFORE_URBS) && chip->uc_session) {
 		/* Windows leaves seconds between a stream close and the next
 		 * open (A2b: 6.64 -> 10.87).  A back-to-back reopen after the
 		 * 0x13 close leaves the UC silent even when the rate did not
@@ -3162,7 +3153,7 @@ static int ff_engine_start(struct ff *chip)
 
 	/* The UC already sent its session-open trio before the URBs.  The
 	 * UCX still needs its stream_start after the URBs are submitted. */
-	if (!(chip->caps & FF_CAP_SESSION_BEFORE_URBS)) {
+	if (!(chip->caps & FF_TCAP_SESSION_BEFORE_URBS)) {
 		ret = chip->desc->ops->stream_start(
 			chip, ff_mode_channels(chip, chip->rate));
 		if (ret < 0)
@@ -3198,7 +3189,7 @@ static int ff_engine_start(struct ff *chip)
 error:
 	dev_err(&chip->dev->dev, "failed to start streaming: %d\n", ret);
 	WRITE_ONCE(chip->engine_running, false);
-	ff_kill_urbs(chip, chip->caps & FF_CAP_KILL_BOTH);
+	ff_kill_urbs(chip, chip->caps & FF_TCAP_KILL_BOTH);
 	return ret;
 }
 
@@ -3342,7 +3333,7 @@ static unsigned int ff_buffer_min(struct ff *chip, unsigned int rate)
 	unsigned int urb = ff_urb_frames(chip, rate);
 	unsigned int min = (chip->nurbs + 2) * urb;
 
-	if (chip->caps & FF_CAP_LEAD_HORIZON) {
+	if (chip->caps & FF_TCAP_LEAD_HORIZON) {
 		unsigned int fb_delay = (chip->nurbs + 1) * chip->iso_packets;
 		unsigned int lead = DIV_ROUND_CLOSEST(fb_delay * rate, 8000) + 60;
 
@@ -3380,6 +3371,10 @@ void ff_query_envelope(struct ff *chip, struct ff_hwdep_envelope *env)
 	env->urb_frames = chip->base_urb_frames;
 	env->nurbs = chip->nurbs;
 	env->iso = chip->iso ? 1 : 0;
+	env->iso_packets = chip->iso_packets;
+	env->fb_delay = chip->fb_delay;
+	env->out_lead = chip->out_lead;
+	env->lead_bias = chip->mode ? 2 * chip->mode->max_frames - 2 : 0;
 	for (i = 0; i < ARRAY_SIZE(ff_rates) && n < FF_HWDEP_MAX_RATES; i++) {
 		unsigned int rate = ff_rates[i];
 
@@ -3462,7 +3457,7 @@ int ff_set_rate_idle(struct ff *chip, unsigned int rate,
 	 * was already sent when the stream stopped (or there was no session).
 	 * UC session behaviour on a host-initiated idle rate change is a
 	 * needs-hardware item; this mirrors the verified hw_params flow. */
-	if (chip->caps & FF_CAP_SESSION_ON_RATE_CHANGE) {
+	if (chip->caps & FF_TCAP_SESSION_ON_RATE_CHANGE) {
 		chip->session_reopen = true;
 		chip->uc_session = true;
 	}
@@ -3566,7 +3561,7 @@ static int ff_pcm_hw_params(struct snd_pcm_substream *subs,
 		 * between the last tone packet and the rate write); from then
 		 * on every UC stop/open gets the session words. */
 		ff_engine_stop(chip);
-		if (chip->caps & FF_CAP_SESSION_ON_RATE_CHANGE) {
+		if (chip->caps & FF_TCAP_SESSION_ON_RATE_CHANGE) {
 			chip->session_reopen = true;
 			chip->uc_session = true;
 		}
@@ -4006,35 +4001,40 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 {
 	u32 caps = 0;
 
-	switch (d->model) {
-	case FF_MODEL_UC:
-		caps |= FF_CAP_SKIP_SAME_ALT |
-			FF_CAP_SESSION_BEFORE_URBS |
-			FF_CAP_SESSION_ON_RATE_CHANGE |
-			FF_CAP_METER_PAIR;
+	switch (d->product) {
+	case FF_PRODUCT_UC_PC:
+	case FF_PRODUCT_UC_MAC:
+	case FF_PRODUCT_UC_WIN_RME:
+		caps |= FF_TCAP_SKIP_SAME_ALT |
+			FF_TCAP_SESSION_BEFORE_URBS |
+			FF_TCAP_SESSION_ON_RATE_CHANGE |
+			FF_TCAP_METER_PAIR;
+		if (d->transport == FF_XPORT_ISO)
+			caps |= FF_TCAP_KILL_BOTH;
 		break;
-	case FF_MODEL_UCX:
-		caps |= FF_CAP_MUTE_ON_STOP |
-			FF_CAP_FRAME_LEAD |
-			FF_CAP_STATUS_RUNNING_ONLY |
-			FF_CAP_LEAD_HORIZON;
+	case FF_PRODUCT_UCX:
+		caps |= FF_TCAP_MUTE_ON_STOP |
+			FF_TCAP_FRAME_LEAD |
+			FF_TCAP_STATUS_RUNNING_ONLY |
+			FF_TCAP_LEAD_HORIZON |
+			FF_TCAP_KILL_BOTH;
 		if (d->transport == FF_XPORT_INTERRUPT)
-			caps |= FF_CAP_FIXED_URB | FF_CAP_IF5_SELECT;
+			caps |= FF_TCAP_FIXED_URB | FF_TCAP_IF5_SELECT;
 		break;
-	case FF_MODEL_BABYFACE_CLASSIC:
-		caps |= FF_CAP_MUTE_ON_STOP |
-			FF_CAP_FRAME_LEAD |
-			FF_CAP_STATUS_RUNNING_ONLY |
-			FF_CAP_LEAD_HORIZON |
-			FF_CAP_MUTE_MASK_18BIT;
+	case FF_PRODUCT_BABYFACE_CLASSIC:
+		caps |= FF_TCAP_MUTE_ON_STOP |
+			FF_TCAP_FRAME_LEAD |
+			FF_TCAP_STATUS_RUNNING_ONLY |
+			FF_TCAP_LEAD_HORIZON |
+			FF_TCAP_MUTE_MASK_18BIT |
+			FF_TCAP_KILL_BOTH;
 		break;
 	default:
 		break;
 	}
-	if (d->transport == FF_XPORT_ISO || (caps & FF_CAP_FRAME_LEAD))
-		caps |= FF_CAP_KILL_BOTH;
 	return caps;
 }
+
 
 static int ff_probe(struct usb_interface *intf,
 		      const struct usb_device_id *usb_id)
@@ -4062,7 +4062,7 @@ static int ff_probe(struct usb_interface *intf,
 		return -ENODEV;
 
 	/* One card per physical UCX: bind either IF0 or IF5, never both. */
-	if (caps & FF_CAP_IF5_SELECT &&
+	if (caps & FF_TCAP_IF5_SELECT &&
 	    ((ucx_if5 && desc->transport != FF_XPORT_INTERRUPT) ||
 	     (!ucx_if5 && desc->transport != FF_XPORT_ISO)))
 		return -ENODEV;
@@ -4088,7 +4088,6 @@ static int ff_probe(struct usb_interface *intf,
 	chip->dev = usb_get_dev(dev);
 	chip->intf = intf;
 	chip->desc = desc;
-	chip->model = desc->model;
 	chip->iso = desc->transport == FF_XPORT_ISO;
 	chip->caps = caps;
 	chip->dev_idx = dev_idx;
@@ -4130,8 +4129,8 @@ static int ff_probe(struct usb_interface *intf,
 
 	chip->nurbs = clamp(nurbs, 2u, (unsigned int)FF_MAX_URBS);
 	chip->base_urb_frames = clamp(round_up(
-		(chip->caps & FF_CAP_FIXED_URB) ? ucx_if5_frames : urb_frames, 8),
-		8u, (chip->caps & FF_CAP_FIXED_URB) ? 1024u : 256u);
+		(chip->caps & FF_TCAP_FIXED_URB) ? ucx_if5_frames : urb_frames, 8),
+		8u, (chip->caps & FF_TCAP_FIXED_URB) ? 1024u : 256u);
 	if (chip->nurbs * chip->base_urb_frames < FF_MIN_QUEUE_FRAMES) {
 		chip->nurbs = DIV_ROUND_UP(FF_MIN_QUEUE_FRAMES,
 					   chip->base_urb_frames);
@@ -4152,7 +4151,7 @@ static int ff_probe(struct usb_interface *intf,
 		 * frame count times 18 words, at 2x twice as many frames times
 		 * 14 words, and so on. */
 		for (i = 0; i < chip->desc->n_modes; i++) {
-			unsigned int frames = (chip->caps & FF_CAP_FIXED_URB) ?
+			unsigned int frames = (chip->caps & FF_TCAP_FIXED_URB) ?
 				chip->base_urb_frames :
 				chip->base_urb_frames << i;
 
@@ -4358,7 +4357,7 @@ static int ff_resume_common(struct usb_interface *intf, bool reset)
 		 * state.  Force the next engine start to select the alternate
 		 * setting and, on the UC, replay the session-open sequence.
 		 */
-		if (chip->caps & FF_CAP_SESSION_ON_RATE_CHANGE) {
+		if (chip->caps & FF_TCAP_SESSION_ON_RATE_CHANGE) {
 			chip->uc_session = true;
 			chip->session_reopen = true;
 		}
