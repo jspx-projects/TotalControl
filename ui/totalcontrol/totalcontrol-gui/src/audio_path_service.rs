@@ -4,9 +4,11 @@
 //!
 //! Two independent loops publish into one latest-value [`EngineSnapshot`]:
 //!
-//! - a **kernel-fact collector** reads the PCM owner, `hw_params` and the ALSA
-//!   delay from procfs on a fast cadence. These are short kernel reads, never a
-//!   server call, so they continue while PipeWire is stuck;
+//! - a **kernel-fact collector** reads the PCM owner and `hw_params` from
+//!   procfs and the live queue/clock from the driver `SNAPSHOT` on a fast
+//!   cadence. These are short kernel reads, never a server call, so they
+//!   continue while PipeWire is stuck; procfs remains the fallback when the
+//!   driver does not provide a snapshot;
 //! - a **PipeWire worker** executes engine intents (force rate/quantum, set the
 //!   scheduling policy, re-prepare, allowed-rates, sink volume) and the graph
 //!   reads. Every call is bounded by the `pw_clock` timeout; a stall delays only

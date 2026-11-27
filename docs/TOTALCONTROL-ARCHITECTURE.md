@@ -472,14 +472,17 @@ detected from kernel facts, never configured:
 
 The PCM owner is read from `/proc/asound/<card>/pcm0p/sub0/status` (`owner_pid`
 resolved through `/proc/<pid>/comm`); the open stream's rate, period and buffer
-come from `hw_params` and the live ring delay from `status`. With nobody holding
-the PCM the path is idle. Detection follows the PCM owner, not a server's
+come from `hw_params`. The live queue state (fill, in-flight, delay, state) and
+the device clock come from the driver `SNAPSHOT` record on the hwdep node;
+`status` remains the fallback and the owner source. With nobody holding the PCM
+the path is idle. Detection follows the PCM owner, not a server's
 presence: a DAW running on PipeWire's JACK emulation is a PipeWire client.
 
 The `audio_path` module (core) holds the fact snapshot, the owner→path
 classification and the clock-authority decisions as pure functions over that
 snapshot. The `audio_path_service` (GUI) is the effectful shell: a kernel-fact
-collector reads procfs on a fast cadence, never blocked by a server call, and a
+collector reads the driver snapshot and procfs on a fast cadence, never blocked
+by a server call, and a
 PipeWire worker executes the engine intents and the graph reads, each bounded by
 a timeout. Both publish one latest-value engine snapshot; the GUI reads it on
 its own cadence and issues intents only. No sound-server call runs on the UI
