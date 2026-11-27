@@ -17104,10 +17104,11 @@ fn latency_out_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Mess
     let device_a = personality
         .and_then(|p| latency_device_a(p, rate))
         .unwrap_or_else(|| latency_a(rate));
-    // The measured UCX ISO/IF5 split uses the vendor DA delay; the UC horizon
-    // model keeps its converter half.
+    // The measured splits use the vendor DA delay; the horizon fallback keeps
+    // its converter half.
     let converter = match personality {
         Some(LatencyPersonality::UcxIso | LatencyPersonality::UcxIf5) => dac_frames(rate),
+        Some(LatencyPersonality::UcPc | LatencyPersonality::UcAp) => uc_dac_frames(),
         _ => converter_frames(rate),
     };
     let bus = device_a.saturating_sub(converter);
@@ -17353,26 +17354,57 @@ fn latency_ucx_if5_ab(rate: u32) -> Option<(u32, u32)> {
     latency_if5_unit(rate).map(|d| latency_split(d, rate))
 }
 
+/// UC device spans after the queue. The PC transport carries two URBs; the
+/// 4x path has two endpoint pairs, and the span uses one pair's queue. The
+/// AP transport uses the ISO queue. The values are the measured five
+/// loopback rates.
+fn latency_uc_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
+    match (personality, rate) {
+        (LatencyPersonality::UcPc, 32_000 | 44_100 | 48_000) => Some(119),
+        (LatencyPersonality::UcPc, 96_000) => Some(159),
+        (LatencyPersonality::UcPc, 192_000) => Some(233),
+        (LatencyPersonality::UcAp, 32_000) => Some(91),
+        (LatencyPersonality::UcAp, 44_100) => Some(83),
+        (LatencyPersonality::UcAp, 48_000) => Some(91),
+        (LatencyPersonality::UcAp, 96_000) => Some(103),
+        (LatencyPersonality::UcAp, 192_000) => Some(121),
+        _ => None,
+    }
+}
+
+/// The UC output and input halves. The vendor converters are DA 28 and AD
+/// 43.2 at 1x/2x, 38.2 at 4x; the digital remainder is symmetric.
+fn latency_uc_ab(personality: LatencyPersonality, rate: u32) -> Option<(u32, u32)> {
+    let d = latency_uc_d(personality, rate)?;
+    let ad = if rate > 96_000 { 38.2 } else { 43.2 };
+    let da = 28.0;
+    let digital = d as f32 - (ad + da);
+    let a = (da + digital / 2.0).round() as u32;
+    Some((a, d - a))
+}
+
 /// The device output term A for a personality: the measured converter-aware
-/// split on UCX ISO and IF5, the horizon split on the UC personalities.
+/// split on UCX ISO, UCX IF5 and UC; the horizon split is the fallback for a
+/// rate without a measured span.
 fn latency_device_a(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     match personality {
         LatencyPersonality::UcxIso => latency_ucx_iso_ab(rate).map(|(a, _)| a),
         LatencyPersonality::UcxIf5 => latency_ucx_if5_ab(rate).map(|(a, _)| a),
-        LatencyPersonality::UcPc | LatencyPersonality::UcAp => Some(latency_a(rate)),
+        LatencyPersonality::UcPc | LatencyPersonality::UcAp => {
+            latency_uc_ab(personality, rate).map(|(a, _)| a)
+        }
     }
 }
 
-/// B: the capture delivery. UCX ISO and IF5 use the measured converter-aware
-/// split; the UC personalities keep the measured span minus the horizon A.
+/// B: the capture delivery. Every measured personality uses its converter-
+/// aware split; an unmeasured rate returns `None`.
 fn latency_b(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     match personality {
         LatencyPersonality::UcxIso => latency_ucx_iso_ab(rate).map(|(_, b)| b),
         LatencyPersonality::UcxIf5 => latency_ucx_if5_ab(rate).map(|(_, b)| b),
-        LatencyPersonality::UcPc | LatencyPersonality::UcAp => latency_d(
-            personality, rate,
-        )
-        .map(|d| d.saturating_sub(latency_a(rate))),
+        LatencyPersonality::UcPc | LatencyPersonality::UcAp => {
+            latency_uc_ab(personality, rate).map(|(_, b)| b)
+        }
     }
 }
 
@@ -17436,6 +17468,11 @@ fn converter_frames(rate: u32) -> u32 {
 /// §39.2). The measured UCX ISO/IF5 split uses this value.
 fn dac_frames(_rate: u32) -> u32 {
     7
+}
+
+/// The vendor UC DA converter delay (RME UC manual §33.2).
+fn uc_dac_frames() -> u32 {
+    28
 }
 
 fn frames_ms(frames: u32, rate: u32) -> f32 {
@@ -23203,8 +23240,8 @@ mod tests {
         ucx_urb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         LatencyIn, LatencyOut, LatencyPersonality, latency_a, latency_b, latency_d,
-        latency_device_a, latency_if5_unit, latency_ucx_if5_ab, latency_ucx_iso_ab,
-        dac_frames,
+        latency_device_a, latency_if5_unit, latency_uc_ab, latency_ucx_if5_ab,
+        latency_ucx_iso_ab, dac_frames, uc_dac_frames,
         PwClock, ResetMix, RoutingMode, RowMode, StartupMismatch,
         TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,
         FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H,
@@ -23806,7 +23843,7 @@ mod tests {
 
     #[test]
     fn latency_tables_split_the_device_span() {
-        // The UC horizon split is unchanged.
+        // The horizon helper remains the fallback for unmeasured rates.
         assert_eq!(latency_a(32_000), 63);
         assert_eq!(latency_a(44_100), 82);
         assert_eq!(latency_a(48_000), 88);
@@ -23827,8 +23864,8 @@ mod tests {
         assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(216));
         assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(64));
         assert_eq!(latency_device_a(LatencyPersonality::UcxIso, 48_000), Some(56));
-        assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(127));
-        assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(99));
+        assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(67));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(53));
         assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), None);
         assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), Some(82));
         // IF5 uses the same converter split on its unit span.
@@ -23848,12 +23885,20 @@ mod tests {
     #[test]
     fn uc_latency_tables_use_the_loopback_span() {
         assert_eq!(latency_d(LatencyPersonality::UcPc, 44_100), Some(215));
-        assert_eq!(latency_b(LatencyPersonality::UcPc, 44_100), Some(133));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 48_000), Some((52, 67)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 96_000), Some((72, 87)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 192_000), Some((111, 122)));
+        assert_eq!(latency_b(LatencyPersonality::UcPc, 44_100), Some(67));
         assert_eq!(latency_d(LatencyPersonality::UcAp, 44_100), Some(179));
-        assert_eq!(latency_b(LatencyPersonality::UcAp, 44_100), Some(97));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 32_000), Some((38, 53)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 44_100), Some((34, 49)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 48_000), Some((38, 53)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 96_000), Some((44, 59)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 192_000), Some((55, 66)));
         assert_eq!(latency_d(LatencyPersonality::UcAp, 192_000), Some(505));
-        assert_eq!(latency_b(LatencyPersonality::UcAp, 192_000), Some(193));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 192_000), Some(66));
         assert_eq!(latency_d(LatencyPersonality::UcPc, 64_000), None);
+        assert_eq!(latency_b(LatencyPersonality::UcPc, 64_000), None);
     }
 
     #[test]
@@ -28245,11 +28290,11 @@ mod tests {
     fn the_live_rtl_counts_the_host_delay_once() {
         // Under a PCM owner the host term is the live snd_pcm_delay, which
         // already covers the in-flight URBs. The live form adds the device A
-        // (bus + converter) on top; the queue is not added again.
-        let a = latency_a(48_000);
-        assert_eq!(a, 88);
-        assert_eq!(465 + a, 553);
-        assert!((frames_ms(553, 48_000) - 11.521).abs() < 0.05);
+        // on top; the queue is not added again. UC PC at 48 kHz uses A = 52.
+        let a = latency_device_a(LatencyPersonality::UcPc, 48_000).unwrap();
+        assert_eq!(a, 52);
+        assert_eq!(465 + a, 517);
+        assert!((frames_ms(517, 48_000) - 10.771).abs() < 0.05);
         // A smaller buffer (-n 2) lowers it, exactly as the owner's -n changes.
         assert!(300 + a < 465 + a);
     }

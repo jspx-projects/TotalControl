@@ -2247,15 +2247,15 @@ B(rate)    = D(rate) - A(rate)
 ```
 
 D is the device span measured by the output-5 to input-5 loopback, after the
-capture start-alignment correction. On UCX ISO and IF5, D is stored after the
-live host queue is removed, because the queue is already in the live playback
-and capture delays. On UC, D is the ring-to-ring result. The UCX ISO and IF5
-split uses the vendor converters: DA is 7 samples; AD is 14 at 1x/2x and 11
-at 4x. The digital remainder is split symmetrically. The UC split is the
-horizon model: A is the playback bus plus output converter, B is the ADC plus
-capture delivery. Only D is directly measured; the converter half is vendor
-data and the digital remainder is the model. A rate without a D measurement
-shows `—` for `Latency in`; `Latency out` still uses the A model.
+capture start-alignment correction. On every measured personality, D is
+stored after the live host queue is removed, because the queue is already in
+the live playback and capture delays. The UCX ISO and IF5 split uses the UCX
+converters: DA is 7 samples; AD is 14 at 1x/2x and 11 at 4x. The UC split uses
+the UC converters: DA is 28 samples; AD is 43.2 at 1x/2x and 38.2 at 4x. The
+digital remainder is split symmetrically. Only D is directly measured; the
+converter half is vendor data and the digital remainder is the model. A rate
+without a D measurement shows `—` for `Latency in`; `Latency out` falls back
+to the horizon A.
 
 | Rate | UCX ISO A | UCX ISO B | UCX ISO D |
 |---|---:|---:|---:|
@@ -2272,17 +2272,25 @@ shows `—` for `Latency in`; `Latency out` still uses the A model.
 The 128 kHz D is interpolated between 96 and 192 kHz; its direct reading
 was one URB high.
 
-| Rate | UC A | UC PC D / B | UC AP D / B |
-|---|---:|---|---|
-| 32 kHz | 63 | 215 / 152 | 155 / 92 |
-| 44.1 kHz | 82 | 215 / 133 | 179 / 97 |
-| 48 kHz | 88 | 215 / 127 | 187 / 99 |
-| 64 kHz | 113 | — | — |
-| 88.2 kHz | 151 | — | — |
-| 96 kHz | 163 | 351 / 188 | 295 / 132 |
-| 128 kHz | 213 | — | — |
-| 176.4 kHz | 288 | — | — |
-| 192 kHz | 312 | 617 / 305 | 505 / 193 |
+| Rate | UC PC A | UC PC B | UC PC D |
+|---|---:|---:|---:|
+| 32 kHz | 52 | 67 | 119 |
+| 44.1 kHz | 52 | 67 | 119 |
+| 48 kHz | 52 | 67 | 119 |
+| 96 kHz | 72 | 87 | 159 |
+| 192 kHz | 111 | 122 | 233 |
+
+| Rate | UC AP A | UC AP B | UC AP D |
+|---|---:|---:|---:|
+| 32 kHz | 38 | 53 | 91 |
+| 44.1 kHz | 34 | 49 | 83 |
+| 48 kHz | 38 | 53 | 91 |
+| 96 kHz | 44 | 59 | 103 |
+| 192 kHz | 55 | 66 | 121 |
+
+The UC PC 192 kHz D uses one endpoint pair's queue; the reported backlog uses
+the pair that is behind. The UC tables cover the five loopback rates; other
+rates show `—` for `Latency in` and the horizon A for `Latency out`.
 
 The queue split uses the live playback fill from the driver `SNAPSHOT`: the
 USB term is `snd_pcm_delay - ring fill`. The split changes only the labels;
@@ -2301,10 +2309,10 @@ unit span alone; A and B use the same vendor converter split.
 
 The calibration is per personality and rate. A firmware or device-path change
 needs a repeat measurement. The UC PC/AP D values are the five loopback rates;
-the UCX ISO D values are 32/44.1/48/88.2/96/176.4/192. The UC split is the
-horizon model; the UCX ISO/IF5 split uses the vendor converter delays and a
-symmetric digital remainder. The loopback is an electrical output-5 to input-5
-connection, not an acoustic one.
+the UCX ISO D values are 32/44.1/48/88.2/96/176.4/192. The UC split uses the
+UC converter delays; the UCX ISO/IF5 split uses the UCX converter delays. Both
+use a symmetric digital remainder. The loopback is an electrical output-5 to
+input-5 connection, not an acoustic one.
 
 Below it, **Diagnostics** lists the kernel transport error counters in
 three sections by reset behaviour (§4): **Scheduling** (`underrun /

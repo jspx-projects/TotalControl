@@ -548,27 +548,24 @@ The GUI reports **Latency out** (host to analog output) and **Latency in**
 
 - **Latency out:** `snd_pcm_delay + A(rate)`. `snd_pcm_delay` is the ring
   occupancy plus the in-flight URB queue; the display splits the live
-  in-flight so the queue is counted once. On UCX ISO and IF5, A is the vendor
-  DA delay (7 samples) plus half of the measured digital remainder. On UC it
-  is the horizon model: bus delivery plus output converter. The host term's
-  label follows the authority: `graph` on the PipeWire and JACK paths, `ring`
-  on direct ALSA.
-- **Latency in:** `capture snd_pcm_delay + B(rate)`, with `B = D - A`. On UCX
-  ISO and IF5, B uses the same vendor converter split; on UC it is the ADC
-  plus capture delivery. D is the measured device span: after the live host
-  queue on UCX ISO and IF5, ring-to-ring on UC. A rate with no D measurement,
-  or no capture stream, shows `—`.
+  in-flight so the queue is counted once. On UCX ISO and IF5, A uses the UCX
+  DA delay (7 samples); on UC it uses the UC DA delay (28 samples). Both add
+  half of the measured digital remainder. The host term's label follows the
+  authority: `graph` on the PipeWire and JACK paths, `ring` on direct ALSA.
+- **Latency in:** `capture snd_pcm_delay + B(rate)`, with `B = D - A`. B uses
+  the same converter split as A. D is the measured device span after the live
+  host queue. A rate with no D measurement, or no capture stream, shows `—`.
 - **Idle:** while nothing plays, the graph quantum is the host term of
   Latency out; Latency in is `—`.
 
 Every buffer is counted once. The device span D is measured by the
 output-5 to input-5 loopback after the capture start-alignment correction.
-On UC the A/B split is the horizon model: A is the playback bus (12.5
-microframes) plus the output converter; B is the remainder, the input
-delivery. On UCX ISO and IF5 the split uses the vendor converters (DA 7; AD
-14 at 1x/2x, 11 at 4x) and a symmetric digital remainder. Only D is directly
-measured; the converter half is vendor data and the digital remainder is the
-model. The device values are tabulated in
+On UC the split uses the UC converters (DA 28; AD 43.2 at 1x/2x, 38.2 at
+4x); on UCX ISO and IF5 it uses the UCX converters (DA 7; AD 14 at 1x/2x,
+11 at 4x). Both split the digital remainder symmetrically. The UC PC 192 kHz
+span uses one endpoint pair's queue. Only D is directly measured; the
+converter half is vendor data and the digital remainder is the model. The
+device values are tabulated in
 [`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) §13. The UC PC
 and AP tables cover 32, 44.1, 48, 96 and 192 kHz; the UCX ISO table covers 32,
 44.1, 48, 88.2, 96, 176.4 and 192 kHz. The UCX IF5 interrupt transport uses the
