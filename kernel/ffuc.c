@@ -3998,6 +3998,42 @@ static void ffuc_read_identity(struct ffuc *chip)
 		strscpy(chip->serial, chip->dev->serial, sizeof(chip->serial));
 }
 
+/* Derive the generic transport capabilities from the device table.  This is
+ * the only place the model identity selects behaviour; the transport code
+ * uses the capability bits.  Phase 2 removes the model name from the ABI. */
+static u32 ff_caps_for_desc(const struct ffuc_device_desc *d)
+{
+	u32 caps = 0;
+
+	switch (d->model) {
+	case FFUC_MODEL_UC:
+		caps |= FF_CAP_SKIP_SAME_ALT |
+			FF_CAP_SESSION_BEFORE_URBS |
+			FF_CAP_SESSION_ON_RATE_CHANGE;
+		break;
+	case FFUC_MODEL_UCX:
+		caps |= FF_CAP_MUTE_ON_STOP |
+			FF_CAP_FRAME_LEAD |
+			FF_CAP_STATUS_RUNNING_ONLY |
+			FF_CAP_LEAD_HORIZON;
+		if (d->transport == FFUC_XPORT_INTERRUPT)
+			caps |= FF_CAP_FIXED_URB | FF_CAP_IF5_SELECT;
+		break;
+	case FFUC_MODEL_BABYFACE_CLASSIC:
+		caps |= FF_CAP_MUTE_ON_STOP |
+			FF_CAP_FRAME_LEAD |
+			FF_CAP_STATUS_RUNNING_ONLY |
+			FF_CAP_LEAD_HORIZON |
+			FF_CAP_MUTE_MASK_18BIT;
+		break;
+	default:
+		break;
+	}
+	if (d->transport == FFUC_XPORT_ISO || (caps & FF_CAP_FRAME_LEAD))
+		caps |= FF_CAP_KILL_BOTH;
+	return caps;
+}
+
 static int ffuc_probe(struct usb_interface *intf,
 		      const struct usb_device_id *usb_id)
 {
@@ -4054,6 +4090,7 @@ static int ffuc_probe(struct usb_interface *intf,
 	 * stream open/close words). */
 	chip->ucx = desc->model == FFUC_MODEL_UCX ||
 		    desc->model == FFUC_MODEL_BABYFACE_CLASSIC;
+	chip->caps = ff_caps_for_desc(desc);
 	chip->dev_idx = dev_idx;
 	chip->audio_iface = desc->audio_iface;
 	chip->out_ep = desc->out_ep;

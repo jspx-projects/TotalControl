@@ -182,6 +182,20 @@ unsigned int ffuc_rate_family(unsigned int rate);
  * Windows-personality property. */
 #define FFUC_QUIRK_WIN_SESSION		BIT(6)
 
+/* Internal transport capabilities: behaviour, not model names.  Phase 1 of
+ * the driver refactor moves the remaining model checks here. */
+#define FF_CAP_MUTE_MASK_18BIT		BIT(0)	/* 18-bit mute mask packing */
+#define FF_CAP_MUTE_ON_STOP		BIT(1)	/* mute outputs on engine stop */
+#define FF_CAP_SKIP_SAME_ALT		BIT(2)	/* skip SET_INTERFACE on same alt */
+#define FF_CAP_SESSION_BEFORE_URBS	BIT(3)	/* session words before URBs */
+#define FF_CAP_SESSION_ON_RATE_CHANGE	BIT(4)	/* arm session words on rate change */
+#define FF_CAP_FRAME_LEAD		BIT(5)	/* per-frame lead words */
+#define FF_CAP_STATUS_RUNNING_ONLY	BIT(6)	/* status ticker only while running */
+#define FF_CAP_KILL_BOTH		BIT(7)	/* kill both URB sets on stop */
+#define FF_CAP_FIXED_URB		BIT(8)	/* fixed URB frames, no band shift */
+#define FF_CAP_LEAD_HORIZON		BIT(9)	/* lead horizon in buffer minimum */
+#define FF_CAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
+
 struct ffuc;
 
 /* One USB bandwidth class (alternate setting). */
@@ -315,6 +329,7 @@ struct ffuc_device_desc {
 	u8 iface;
 	u8 transport;			/* enum ffuc_transport */
 	u32 quirks;
+	u32 caps;			/* FF_CAP_* transport capabilities */
 	u32 model;			/* enum ffuc_model */
 	const struct ffuc_mode *modes;
 	unsigned int n_modes;
@@ -381,6 +396,7 @@ struct ffuc {
 	unsigned int model;
 	bool iso;
 	bool ucx;
+	u32 caps;			/* FF_CAP_* transport capabilities */
 	unsigned int audio_iface;
 	unsigned int cur_alt;		/* current streaming alternate setting */
 	u8 out_ep, in_ep;
