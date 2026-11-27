@@ -3018,16 +3018,19 @@ static int ff_engine_commit_rate(struct ff *chip)
 	 * word needs the Windows gap before the rate write (A2: 220 ms);
 	 * writing right after the close wedges the unit.  The settle above
 	 * already separated the close from this start. */
-	/* The unit reloads its stored mixer setup after any REG1 write, even
-	 * one carrying the current rate.  When the rate status word already
-	 * reports the target family and band, skip the DDS/family/options
-	 * commit and preserve the current mixer state.  The alt selection
-	 * above still ran, so the streaming geometry is current. */
+	/* A reference driver reports that a REG1 write can make the unit
+	 * reload its stored setup.  A controlled full-dump test on the UCX
+	 * ISO path, with the state session held open by the 0x3f00 heartbeat,
+	 * did not reproduce it: a current-rate family write and a real
+	 * 48->44.1 change left the input gain unchanged; only the stop mute,
+	 * rate index and status word moved.  The skip still avoids the three
+	 * rate-commit control writes on a same-rate start and preserves the
+	 * DDS/pitch word.  The alt selection above still ran. */
 	if ((chip->caps & FF_TCAP_RATE_READBACK) &&
 	    ff_device_rate_current(chip, chip->rate) == 1) {
 		atomic_inc(&chip->rate_skips);
 		dev_dbg(&chip->dev->dev,
-			"rate commit: %u Hz already current; REG1 write skipped\n",
+			"rate commit: %u Hz already current; sequence skipped\n",
 			chip->rate);
 		return 0;
 	}
