@@ -742,7 +742,7 @@ enum {
 static const struct ff_device_desc ff_devices[] = {
 	{
 		.vendor = FF_VENDOR_SMSC,
-		.product = FF_PRODUCT_UC_PC,
+		.product = FF_PRODUCT_ID_A,
 		.iface = 0,
 		.transport = FF_XPORT_INTERRUPT,
 		.quirks = FF_QUIRK_STATUS_LATCH | FF_QUIRK_WIN_SESSION,
@@ -769,7 +769,7 @@ static const struct ff_device_desc ff_devices[] = {
 		.ops = &ff_uc_ops,
 	}, {
 		.vendor = FF_VENDOR_SMSC,
-		.product = FF_PRODUCT_UC_MAC,
+		.product = FF_PRODUCT_ID_C,
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
@@ -793,7 +793,7 @@ static const struct ff_device_desc ff_devices[] = {
 		.ops = &ff_uc_ops,
 	}, {
 		.vendor = FF_VENDOR_RME,
-		.product = FF_PRODUCT_UC_MAC,
+		.product = FF_PRODUCT_ID_C,
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
@@ -817,7 +817,7 @@ static const struct ff_device_desc ff_devices[] = {
 		.ops = &ff_uc_ops,
 	}, {
 		.vendor = FF_VENDOR_SMSC,
-		.product = FF_PRODUCT_UCX,
+		.product = FF_PRODUCT_ID_D,
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
@@ -844,7 +844,7 @@ static const struct ff_device_desc ff_devices[] = {
 		.ops = &ff_ucx_ops,
 	}, {
 		.vendor = FF_VENDOR_SMSC,
-		.product = FF_PRODUCT_UCX,
+		.product = FF_PRODUCT_ID_D,
 		.iface = 5,
 		.transport = FF_XPORT_INTERRUPT,
 		.quirks = FF_QUIRK_ALT_RESELECT |
@@ -873,7 +873,7 @@ static const struct ff_device_desc ff_devices[] = {
 		.ops = &ff_ucx_if5_ops,
 	}, {
 		.vendor = FF_VENDOR_RME,
-		.product = FF_PRODUCT_UCX,
+		.product = FF_PRODUCT_ID_D,
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
@@ -900,7 +900,7 @@ static const struct ff_device_desc ff_devices[] = {
 		.ops = &ff_ucx_ops,
 	}, {
 		.vendor = FF_VENDOR_RME,
-		.product = FF_PRODUCT_UCX,
+		.product = FF_PRODUCT_ID_D,
 		.iface = 5,
 		.transport = FF_XPORT_INTERRUPT,
 		.quirks = FF_QUIRK_ALT_RESELECT |
@@ -935,7 +935,7 @@ static const struct ff_device_desc ff_devices[] = {
 		 * takes a full 512-byte bulk packet and passes the actual
 		 * length on. */
 		.vendor = FF_VENDOR_RME,
-		.product = FF_PRODUCT_BABYFACE_CLASSIC,
+		.product = FF_PRODUCT_ID_E,
 		.iface = 0,
 		.transport = FF_XPORT_ISO,
 		.quirks = 0,
@@ -957,7 +957,7 @@ static const struct ff_device_desc ff_devices[] = {
 		.ops = &ff_ucx_ops,
 	}, {
 		.vendor = FF_VENDOR_RME,
-		.product = FF_PRODUCT_UC_WIN_RME,
+		.product = FF_PRODUCT_ID_B,
 		.iface = 0,
 		.transport = FF_XPORT_INTERRUPT,
 		/* The output latch clears only on an alt 0 -> alt N reselect,
@@ -995,27 +995,27 @@ static const struct ff_device_desc ff_devices[] = {
 static_assert(ARRAY_SIZE(ff_devices) == FF_DEV_COUNT);
 
 static const struct usb_device_id ff_ids[] = {
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_UC_PC, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_A, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_PC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_UC_PC_RME, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_A_RME, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_PC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_UC_WIN_RME, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_B, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_WIN_RME] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_UC_MAC, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_C, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_MAC_SMSC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_UC_MAC, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_C, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_MAC_RME] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_UCX, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_D, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UCX_ISO_SMSC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_UCX, 5),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_D, 5),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UCX_IF5_SMSC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_UCX, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_D, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UCX_ISO_RME] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_UCX, 5),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_D, 5),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UCX_IF5_RME] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_BABYFACE_CLASSIC, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_E, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_BABYFACE_CLASSIC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_BABYFACE_CLASSIC, 0),
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_E, 0),
 	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_BABYFACE_CLASSIC] },
 	{ }
 };
@@ -3975,9 +3975,9 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 	u32 caps = 0;
 
 	switch (d->product) {
-	case FF_PRODUCT_UC_PC:
-	case FF_PRODUCT_UC_MAC:
-	case FF_PRODUCT_UC_WIN_RME:
+	case FF_PRODUCT_ID_A:
+	case FF_PRODUCT_ID_C:
+	case FF_PRODUCT_ID_B:
 		caps |= FF_TCAP_SKIP_SAME_ALT |
 			FF_TCAP_SESSION_BEFORE_URBS |
 			FF_TCAP_SESSION_ON_RATE_CHANGE |
@@ -3985,7 +3985,7 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 		if (d->transport == FF_XPORT_ISO)
 			caps |= FF_TCAP_KILL_BOTH;
 		break;
-	case FF_PRODUCT_UCX:
+	case FF_PRODUCT_ID_D:
 		caps |= FF_TCAP_MUTE_ON_STOP |
 			FF_TCAP_FRAME_LEAD |
 			FF_TCAP_STATUS_RUNNING_ONLY |
@@ -3994,7 +3994,7 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 		if (d->transport == FF_XPORT_INTERRUPT)
 			caps |= FF_TCAP_FIXED_URB | FF_TCAP_IF5_SELECT;
 		break;
-	case FF_PRODUCT_BABYFACE_CLASSIC:
+	case FF_PRODUCT_ID_E:
 		caps |= FF_TCAP_MUTE_ON_STOP |
 			FF_TCAP_FRAME_LEAD |
 			FF_TCAP_STATUS_RUNNING_ONLY |

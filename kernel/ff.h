@@ -62,12 +62,14 @@
 
 #define FF_VENDOR_SMSC	0x0424
 #define FF_VENDOR_RME		0x2a39
-#define FF_PRODUCT_UC_PC	0x3fc5
-#define FF_PRODUCT_UC_PC_RME	0x3fc5
-#define FF_PRODUCT_UC_WIN_RME	0x3fce
-#define FF_PRODUCT_UC_MAC	0x3fc6
-#define FF_PRODUCT_UCX	0x3fc9
-#define FF_PRODUCT_BABYFACE_CLASSIC	0x3fc7
+/* USB product ids are hardware facts; the host maps them to profiles.  The
+ * names below are internal identifiers only and do not describe a model. */
+#define FF_PRODUCT_ID_A		0x3fc5
+#define FF_PRODUCT_ID_A_RME	0x3fc5
+#define FF_PRODUCT_ID_B		0x3fce
+#define FF_PRODUCT_ID_C		0x3fc6
+#define FF_PRODUCT_ID_D		0x3fc9
+#define FF_PRODUCT_ID_E		0x3fc7
 
 #define FF_IFACE_NONE		0xff
 
