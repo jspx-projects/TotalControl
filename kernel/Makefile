@@ -10,7 +10,7 @@
 # This module is a transport core: USB, PCM and the snd-hwdep raw control
 # node.  Mixer/device policy lives in TotalControl (userspace).
 
-snd-fireface-uc-y := ffuc.o ffuc-hwdep.o ffuc-midi.o
+snd-fireface-uc-y := ff.o ff-hwdep.o ff-midi.o
 obj-m += snd-fireface-uc.o
 
 KVER ?= $(shell uname -r)

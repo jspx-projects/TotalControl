@@ -25,7 +25,7 @@ typedef uint32_t u32;
  * publishes the eight analog records (idle floors included); the RMS half
  * carries input-bank slot words in that address range, which are zero
  * while the digital inputs are silent. */
-static inline unsigned int ffuc_an_record_words(const u8 *page,
+static inline unsigned int ff_an_record_words(const u8 *page,
 						unsigned int len)
 {
 	unsigned int i, n = 0;
@@ -42,7 +42,7 @@ static inline unsigned int ffuc_an_record_words(const u8 *page,
 	return n;
 }
 
-enum ffuc_meter_feed {
+enum ff_meter_feed {
 	FFUC_METER_HELD,		/* first half stored, no pair yet */
 	FFUC_METER_PAIR,		/* pair[] is RMS then peak */
 	FFUC_METER_PAIR_UNVERIFIED,	/* arrival order, roles unverified */
@@ -71,8 +71,8 @@ enum ffuc_meter_feed {
  * Any other pair the shape cannot decide is emitted in arrival order; it
  * is reported unverified while @lost is set.
  */
-static inline enum ffuc_meter_feed
-ffuc_meter_feed(u8 *pair, unsigned int *held, bool *lost, const u8 *page,
+static inline enum ff_meter_feed
+ff_meter_feed(u8 *pair, unsigned int *held, bool *lost, const u8 *page,
 		unsigned int len)
 {
 	unsigned int a, b;
@@ -83,8 +83,8 @@ ffuc_meter_feed(u8 *pair, unsigned int *held, bool *lost, const u8 *page,
 		return FFUC_METER_HELD;
 	}
 	*held = 0;
-	a = ffuc_an_record_words(pair, len);
-	b = ffuc_an_record_words(pair + len, len);
+	a = ff_an_record_words(pair, len);
+	b = ff_an_record_words(pair + len, len);
 	if (a >= b + 4) {
 		memcpy(pair, pair + len, len);
 		*held = len;

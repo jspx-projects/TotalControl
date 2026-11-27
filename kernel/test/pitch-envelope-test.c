@@ -5,7 +5,7 @@
  * The ISO transport carries at most max_frames frames per microframe
  * packet; the programmed clock (nominal * (1 + pitch/100)) must stay at or
  * below 8000 * max_frames. These tests exercise the pure decode/clamp law
- * in ffuc-cadence.h exhaustively: every supported rate across the full
+ * in ff-cadence.h exhaustively: every supported rate across the full
  * pitch range, the clamp invariants, and the desk-verified boundary.
  *
  * Build: cc -std=c11 -Wall -Wextra -Werror -o pitch-envelope-test \
@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#include "../ffuc-cadence.h"
+#include "../ff-cadence.h"
 
 static int failures;
 
@@ -80,7 +80,7 @@ static void test_decode_matches_programmed(void)
 			u32 got;
 
 			dds_word(rate, pitch, &val, &idx);
-			got = ffuc_dds_clock(val, idx, rate);
+			got = ff_dds_clock(val, idx, rate);
 			CHECK(fabs((double)got - want) < 2.0,
 			      "rate %u pitch %.2f: decoded %u vs programmed %.1f",
 			      rate, pitch, got, want);
@@ -106,10 +106,10 @@ static void test_clamp_sweep(void)
 			bool over, changed;
 
 			dds_word(rate, pitch, &val, &idx);
-			clock = ffuc_dds_clock(val, idx, rate);
+			clock = ff_dds_clock(val, idx, rate);
 			over = (u64)clock > cap;
 			v2 = val; i2 = idx;
-			changed = ffuc_dds_clamp(val, idx, rate, mf, &v2, &i2);
+			changed = ff_dds_clamp(val, idx, rate, mf, &v2, &i2);
 			CHECK(changed == over,
 			      "rate %u pitch %.2f: clamp=%d but clock %u cap %llu",
 			      rate, pitch, changed, clock,
@@ -120,7 +120,7 @@ static void test_clamp_sweep(void)
 				      rate, pitch);
 				continue;
 			}
-			clamped_clock = ffuc_dds_clock(v2, i2, rate);
+			clamped_clock = ff_dds_clock(v2, i2, rate);
 			CHECK((u64)clamped_clock <= cap,
 			      "rate %u pitch %.2f: clamped clock %u above cap %llu",
 			      rate, pitch, clamped_clock,
@@ -141,7 +141,7 @@ static void test_clamp_sweep(void)
 			}
 			CHECK((i2 & 0xff) == (idx & 0xff),
 			      "rate %u pitch %.2f: family bits changed", rate, pitch);
-			CHECK(!ffuc_dds_clamp(v2, i2, rate, mf, &v2, &i2),
+			CHECK(!ff_dds_clamp(v2, i2, rate, mf, &v2, &i2),
 			      "rate %u pitch %.2f: clamp not idempotent",
 			      rate, pitch);
 			CHECK(clamped_clock >= prev_clock,
@@ -159,27 +159,27 @@ static void test_desk_boundary(void)
 	u32 val, idx, v2, i2;
 
 	dds_word(192000, 4.1, &val, &idx);
-	CHECK(ffuc_dds_clock(val, idx, 192000) == 199872,
-	      "192k +4.1%% decode %u", ffuc_dds_clock(val, idx, 192000));
-	CHECK(!ffuc_dds_clamp(val, idx, 192000, 25, &v2, &i2),
+	CHECK(ff_dds_clock(val, idx, 192000) == 199872,
+	      "192k +4.1%% decode %u", ff_dds_clock(val, idx, 192000));
+	CHECK(!ff_dds_clamp(val, idx, 192000, 25, &v2, &i2),
 	      "192k +4.1%% must not clamp");
 
 	dds_word(192000, 4.17, &val, &idx);
-	CHECK(ffuc_dds_clock(val, idx, 192000) > 200000,
+	CHECK(ff_dds_clock(val, idx, 192000) > 200000,
 	      "192k +4.17%% must be over the ceiling");
-	CHECK(ffuc_dds_clamp(val, idx, 192000, 25, &v2, &i2),
+	CHECK(ff_dds_clamp(val, idx, 192000, 25, &v2, &i2),
 	      "192k +4.17%% must clamp");
-	CHECK(ffuc_dds_clock(v2, i2, 192000) <= 200000,
+	CHECK(ff_dds_clock(v2, i2, 192000) <= 200000,
 	      "192k +4.17%% clamped above ceiling");
 
 	/* 176.4k +5% is in-envelope (185220 <= 200000): the 4x band itself
 	 * is not the boundary, the capacity is. */
 	dds_word(176400, 5.0, &val, &idx);
-	CHECK(!ffuc_dds_clamp(val, idx, 176400, 25, &v2, &i2),
+	CHECK(!ff_dds_clamp(val, idx, 176400, 25, &v2, &i2),
 	      "176.4k +5%% must not clamp");
 	/* 96k +5% (2x): 100800 <= 104000. */
 	dds_word(96000, 5.0, &val, &idx);
-	CHECK(!ffuc_dds_clamp(val, idx, 96000, 13, &v2, &i2),
+	CHECK(!ff_dds_clamp(val, idx, 96000, 13, &v2, &i2),
 	      "96k +5%% must not clamp");
 }
 
@@ -188,8 +188,8 @@ static void test_degenerate(void)
 {
 	u32 v2 = 1, i2 = 1;
 
-	CHECK(ffuc_dds_clock(0, 0, 192000) == 0, "zero divisor decode");
-	CHECK(!ffuc_dds_clamp(0, 0, 192000, 25, &v2, &i2),
+	CHECK(ff_dds_clock(0, 0, 192000) == 0, "zero divisor decode");
+	CHECK(!ff_dds_clamp(0, 0, 192000, 25, &v2, &i2),
 	      "zero divisor must not clamp");
 	CHECK(v2 == 1 && i2 == 1, "zero divisor outputs touched");
 }

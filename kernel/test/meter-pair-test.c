@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "../ffuc-meter-pair.h"
+#include "../ff-meter-pair.h"
 
 #define LEN 324
 
@@ -59,7 +59,7 @@ static void feed(struct run *r, const char *roles)
 
 	for (; *roles; roles++) {
 		page(p, *roles, n++);
-		switch (ffuc_meter_feed(r->pair, &r->held, &r->lost, p, LEN)) {
+		switch (ff_meter_feed(r->pair, &r->held, &r->lost, p, LEN)) {
 		case FFUC_METER_PAIR:
 		case FFUC_METER_PAIR_UNVERIFIED:
 			r->out[r->pairs][0] = (char)r->pair[0];

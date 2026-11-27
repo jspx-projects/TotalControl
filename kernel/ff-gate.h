@@ -14,7 +14,7 @@
  * periods have no common boundary, so a withheld wake would be deferred on
  * every cycle. Such a pair is signalled independently at its own boundary.
  */
-static inline bool ffuc_gate_together(unsigned int p_period,
+static inline bool ff_gate_together(unsigned int p_period,
 				      unsigned int c_period)
 {
 	return p_period > 0 && p_period == c_period;
