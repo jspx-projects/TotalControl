@@ -317,8 +317,9 @@ Every rate carries the full ±5 % except 192 kHz positive pitch, which ends at
 word to the ceiling on every vendor DDS write (`ff_dds_clamp`, counted by
 `pitch_clamps`); the clamped divisor rounds up on the word's 256-unit grid so
 the decoded clock stays at or below the capacity. The other families' words
-pass untouched. The rate sequence writes nominal words, which are always in
-envelope. Above the ceiling the device's capture cadence folds back and the
+pass untouched. The ISO rate sequence re-sends the stored host word, which
+is already clamped, and computes a nominal word only when the family has
+none. Above the ceiling the device's capture cadence folds back and the
 transport errors, so the clamp is a correctness boundary, not a preference.
 The GUI offers the same envelope on the pitch slider (0.1 % grid).
 
@@ -868,7 +869,7 @@ a bounded reply wait (§5.2).
 | `INFO` | identity and capabilities: ABI, caps, transport, channels, endpoints, rate, firmware, card/PCM, USB vendor/product/bcd and serial. No device model name. |
 | `VENDOR` | one EP0 vendor request (read or write, up to 64 bytes) |
 | `WRITE_WORDS` | up to 63 register words; the kernel adds odd parity |
-| `DIAGNOSTICS` | transport and stream counters, the `run_seq` re-base epoch, `urb_errors` (consecutive-error gauge), `pitch_clamps`, and the watermarks `ring_min_filled`, `ring_missed`, `ring_starved`, `ring_max_stall_ns`, gate `deferred/overdue/max_pending`, `out_lag_min/max`, prefill and meter counters, `in_total` |
+| `DIAGNOSTICS` | transport and stream counters, the `run_seq` re-base epoch, `urb_errors` (consecutive-error gauge), `pitch_clamps`, the rate-sequence counters `dds_words`/`family_writes`/`rate_commits`/`option_writes`, and the watermarks `ring_min_filled`, `ring_missed`, `ring_starved`, `ring_max_stall_ns`, gate `deferred/overdue/max_pending`, `out_lag_min/max`, prefill and meter counters, `in_total` |
 | `ENVELOPE` | per-rate period floor and buffer minimum, plus `urb_frames`, `nurbs`, `iso`, `iso_packets`, `fb_delay`, `out_lead`, `lead_bias` |
 | `SNAPSHOT` | one atomic sample: OUT and IN queue state (state, appl/hw, fill, in-flight, delay, period, buffer, URB geometry, device position, xruns) and the device clock (host time, position, phase, `rate_meas`, SOF anchor). The caller sets `size`; the driver fills the prefix it knows. |
 | `SET_RATE` | set the device clock rate while the engine is idle (no PCM owner): adopt, commit, confirm from the state-word rate readback, bump `run_seq` (§7.2) |
@@ -935,7 +936,28 @@ message must fit one transfer. Output is polled by a delayed work at 1 ms.
 
 ## 7. Rate, session and startup timing
 
-The rate sequence is one generic flow for every model and transport:
+The rate sequence has one form per transport.
+
+The ISO form follows the USB audio engine's `hwSetSampleRate`:
+
+| Order | Request | wValue | wIndex |
+|---|---|---|---|
+| 1 | `0x1b` | high16(p1) | (p1 & 0xff00) \| family |
+| 2 | `0x10` | family << 4 | 0x0030 |
+
+The interrupt forms are model-specific.
+
+The UCX interrupt form writes the family selector only:
+
+| Order | Request | wValue | wIndex |
+|---|---|---|---|
+| 1 | `0x10` | family << 4 | 0x0030 |
+
+The four-word DDS quad is written at connect (the IF5 connect preload) and
+by the host on a settings apply.  The Windows UCX rate captures E8/E9 write
+the family word only.
+
+The UC interrupt form keeps the generic Windows-derived sequence:
 
 | Order | Request | wValue | wIndex |
 |---|---|---|---|
@@ -945,11 +967,27 @@ The rate sequence is one generic flow for every model and transport:
 
 p1 = 0x5f5e10000000 / rate, shifted left 1 above 57000 Hz and left 2
 above 114000 Hz. family: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz,
-2 = 48/96/192 kHz. The third word is the options commit: the driver reads
-the options word the device holds (`0x10` in) and rewrites it under the
-mask, so the mixer's settings survive the rate change. The DDS word
-carries the active family's divisor; the band multiplier follows the
+2 = 48/96/192 kHz. The DDS word is the actual clock; the family word
+selects which stored divisor is active. The band multiplier follows the
 streaming alternate setting.
+
+Every engine start writes its form's words: a fresh start, a same-rate
+repeat, a rate change, a resume and a recovery. A same-rate re-prepare that
+keeps the engine alive does not re-commit.
+
+The ISO form re-sends the family's last host-written DDS word. The host
+writes pitch through that word, so a pitched clock survives a restart and
+the programmed clock tracked for the cadence judge stays pitched. A family
+with no host word uses its nominal divisor. The other families' words are
+stored for later rates. The ISO form does not write the options word; the
+settings path owns it.
+
+The UCX interrupt form writes only the family word; the DDS quad is already
+programmed at connect. The UC interrupt form writes the nominal DDS word
+and then the options commit: it reads the options word the device holds
+(`0x10` in) and rewrites it under the mask. The kext analysis does not
+change the interrupt forms; their reference is the Windows driver binary
+and VM capture.
 
 Engine start selects the alternate setting, commits the rate, sends the
 session-open words where required, and sets up URBs. The ISO path waits
@@ -998,8 +1036,9 @@ See the TODO section for the readiness-poll work.
 ### 7.1 Clock writes into a running engine
 
 The rate sequence is committed at engine start, when no stream is running. A
-running engine holds its clock until the next engine start; a same-rate
-re-prepare that keeps the engine alive does not re-commit the rate.
+new engine run commits it even at the same rate. A running engine holds its
+clock until the next engine start; a same-rate re-prepare that keeps the
+engine alive does not re-commit the rate.
 
 A clock word written into a running engine takes effect immediately:
 
@@ -1022,7 +1061,10 @@ paragraph in §4.1.1). The device clock therefore has two owners:
   clock source (the unit is slaved), the user's pitch on the internal clock
   after the IRQ policy is confirmed. Pitch starts at nominal (0 %) and is reset
   to 0 on a clock-source change, startup and workspace load; a saved pitch is
-  not auto-restored.
+  not auto-restored. The host writes one DDS word for the active family on
+  the ISO transport and the four-word quad on interrupt. On ISO the driver
+  stores each family's last host word and re-sends it at engine start, so a
+  stream restart keeps the current pitch.
 
 A mixer scene apply writes the mixer group only. It adopts the scene's rate and
 pitch into the host model but writes neither clock word into the device, so a

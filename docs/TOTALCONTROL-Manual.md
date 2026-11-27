@@ -521,7 +521,8 @@ slaved to that clock: the slider is shown disabled at 0 % with a tooltip, pitch
 is held at 0 %, and the externally applied rate is respected. A conducting
 PipeWire client sets the nominal rate; the device clock carries the pitch, and
 TotalControl re-applies it after a client rate change, clamped to the new
-rate's ceiling.
+rate's ceiling. TotalControl re-applies the current pitch after a stream
+restart.
 
 Pitch always starts from a clean slate (0 %). Changing the clock source,
 starting TotalControl, or loading a workspace resets pitch to 0 %. A saved

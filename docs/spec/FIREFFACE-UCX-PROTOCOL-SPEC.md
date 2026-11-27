@@ -879,8 +879,9 @@ IF1 burst each.
 
 | Term | Context | Definition |
 |---|---|---|
-| settings-dialog rate apply | stream idle | the full apply: options word (§11.5), level word (`0x17/0x0fc0`), four-word `0x1b` DDS quad (§11.3) |
-| streaming rate change | engine running | the DDS divisor word, the family word, the options commit |
+| ISO rate sequence | every engine start | one DDS divisor word for the target family, then the family selector; the actual clock |
+| Windows settings-dialog rate apply | stream idle | the reference host's full apply: options word (§11.5), level word (`0x17/0x0fc0`), four-word `0x1b` DDS quad |
+| IF5 connect preload | connect | the four-word DDS quad in the interrupt connect sequence (§11.3) |
 | base-rate family | 0, 1, 2 | the DDS divisor group: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz, 2 = 48/96/192 kHz |
 | band | 1x, 2x, 4x | the streaming multiplier, selected by the alternate setting |
 
@@ -902,24 +903,30 @@ nine supported rates, their write words and their status readback:
 The DDS divisor word depends only on the family; the band multiplier
 follows the streaming alternate setting.
 
-The streaming rate change writes three EP0 words:
+The ISO rate sequence writes two EP0 words:
 
 | Order | Request | wValue | wIndex |
 |---|---|---|---|
 | 1 | `0x1b` | high16(p1) | (p1 & 0xff00) \| family |
 | 2 | `0x10` | family << 4 | 0x0030 |
-| 3 | `0x10` | current options word | 0x05cf (1487) |
 
 p1 = 0x5f5e10000000 / rate, shifted left 1 above 57000 Hz and left 2
-above 114000 Hz. The options commit rewrites the word the device holds
-under the mask, preserving the mixer's settings. The settings-dialog
-rate apply records the quad rewrite on every apply with the audio
-stream idle.
+above 114000 Hz. The sequence is written on every engine start: a fresh
+start, a same-rate repeat, a rate change, a resume and a recovery. The
+options word is not part of the sequence; settings writes own it. The
+driver re-sends the family's last host-written DDS word, so a pitched clock
+survives a restart; a family with no host word uses its nominal divisor.
 
-Verified across all nine rates on the UCX (firmware 49): the device
-cadence follows every family and band change with the streaming rate
-change, the output lead absorbs the transition silence, and recovery is
-clean.
+The Windows settings-dialog rate apply and the IF5 connect preload write
+the four-word DDS quad; the fourth word is the 50 kHz family (`0x7d00` /
+`0x0003`). The ISO rate sequence sends one target-family word; the UCX
+interrupt rate change sends none.
+
+Verified across all nine rates on the UCX (firmware 49) with direct-ALSA
+starts: every start writes one DDS word and one family word, writes no
+options word, and the measured device clock matches the requested rate at
+1x, 2x and 4x. The output lead absorbs the transition silence, and
+recovery is clean.
 
 ### 11.2 Clock source
 
@@ -944,7 +951,7 @@ The unit has no LTC source; the clock field is two bits.
 1. `SET_CONFIGURATION`
 2. `SET_INTERFACE(5, 1)`
 3. 60 × `0x16`, value 0 (indices 0..29 and 32..61)
-4. 4 × `0x1b` clock quad
+4. 4 × `0x1b` clock quad (the IF5 connect preload)
 5. `0x10/0x05ff = 0x0028` (`0x0018` in a later capture; §12.4)
 6. `0x17/0x0fc0 = 0x3c00`
 7. the `0x10/0x3000` and `0x10/0x0800` group (sequence below)
@@ -961,12 +968,15 @@ The `0x1b` quad is:
 (0x7d00, 0x0003)
 ```
 
-These are the same four DDS words as the UC. A pitch change scales the quad
-as `base / (1 + pitch / 100)` and writes all four words. The control is the
-host varispeed setting, not the family selection in §11.1. The four words
-are the four base-rate family divisors: 32 kHz, 44.1 kHz, 48 kHz and 50 kHz
-(family 0..3); the fourth word is the 50 kHz divisor, verified by the UC
-pitch capture where it tracks the 48 kHz word at 25/24.
+These are the same four DDS words as the UC. A pitch change on the interrupt
+transport scales the quad as `base / (1 + pitch / 100)` and writes all four
+words. The control is the host varispeed setting, not the family selection
+in §11.1. The four words are the four base-rate family divisors: 32 kHz,
+44.1 kHz, 48 kHz and 50 kHz (family 0..3); the fourth word is the 50 kHz
+divisor, verified by the UC pitch capture where it tracks the 48 kHz word
+at 25/24. The ISO pitch path writes one active-family word. The ISO rate
+sequence does not use the quad: it sends the active family's stored word on
+every start (§11.1).
 
 The driver clamps the active family's word to the pitch envelope
 (DRIVER-DESIGN §4.1.1): the programmed clock stays at or below the band's
@@ -1197,7 +1207,9 @@ driver block in order (E2b replug capture):
 
 The `0x16` value follows the wire-format pairing (0 = S32, 1 = float32).
 The DDS quad is written at connect. A streaming rate change writes the
-DDS divisor word, the family word and the options commit (§11.1). The settings-group field semantics are an open item (§12.4).
+family word only (the UCX interrupt form, DRIVER-DESIGN §7); the host
+settings apply rewrites the DDS quad. The settings-group field semantics
+are an open item (§12.4).
 
 Interrupt stream start:
 
@@ -1231,11 +1243,13 @@ The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
    setting decides it.
 4. The level word `0x17/0x0fc0`: observed `0x3c00` and `0x3d00`
    (bit 8 of the word). The bit layout is undecoded; a settings-dialog
-   capture changing one level control at a time decides it.
+   capture changing one level control at a time decides it. The interrupt
+   settings apply writes it (`0x3c00`) after the options word and before
+   the DDS quad; the host settings path does not rewrite it.
 5. Optional audible characterization of the rate transition: the
-   generic rate sequence (§11.1) is bench-verified — the device cadence
-   follows the requested rate across family and band changes with the
-   output lead intact. An analog output capture across a tone-playing
+   two-word ISO rate sequence (§11.1) is bench-verified — the device
+   cadence follows the requested rate across family and band changes with
+   the output lead intact. An analog output capture across a tone-playing
    round-trip measures the audible gap.
 6. ISO position-counter rate-band scaling: the position field width and
    modulus widen to 14-bit / 16384 at 2x and 15-bit / 32768 at 4x; the
