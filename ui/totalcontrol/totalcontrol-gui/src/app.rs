@@ -13063,7 +13063,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.reprepare_gen = snap.reprepare_gen;
                 state.reprepare_ok = snap.reprepare_ok;
                 if snap.kernel_at.is_some() {
-                    state.card_stream = snap.stream;
                     state.pcm_delay = snap.delay;
                     state.pcm_fill = snap.fill;
                     state.pcm_capture_delay = snap.capture_delay;
@@ -13082,7 +13081,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state,
                     Message::EngineRead(
                         state.engine,
-                        state.card_stream,
+                        snap.stream,
                         sink_running,
                         state.host_volume,
                         state.graph_quantum,
@@ -13141,6 +13140,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             );
         }
         Message::EngineRead(clock, stream, sink_running, host_volume, graph_quantum, conductor) => {
+            let stream_ended = state.card_stream.is_some() && stream.is_none();
             state.conductor = conductor;
             if let Some(quantum) = graph_quantum {
                 state.graph_quantum = Some(quantum);
@@ -13251,6 +13251,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         // The cushion aligns to the stream's actual quantum.
                         apply_engine_policy(state, running_rate(state));
                     }
+                }
+                // The PCM node keeps the last `period-size`/`headroom` props
+                // across a stream close. Re-apply the idle policy so a later
+                // player opens at the selected quantum, not the period the
+                // previous conductor requested.
+                if stream_ended && !detected_path(state).is_external() {
+                    apply_engine_policy(state, running_rate(state));
                 }
                 // While an external owner (JACK / direct ALSA) holds the PCM,
                 // the stored PipeWire mode must not determine the rate or
