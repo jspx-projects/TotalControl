@@ -16720,10 +16720,10 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .align_y(iced::Alignment::Center),
         );
     }
-    // The output latency is a labelled row: the caption column carries
-    // `Output`, the value column carries the total (`x.x ms`) with the formula
-    // wrapping below. The input row follows it; it is not measured yet and
-    // shows `—` so the panel keeps a stable height.
+    // Both latency rows use the same top-aligned caption and fixed-height
+    // block: the first line carries the total (`x.x ms`) and the formula
+    // lines follow below. The input row shows `—` when it is not measured so
+    // the panel keeps a stable height.
     let rtl_clock = clock.unwrap_or(PwClock {
         rate: 0,
         quantum: 0,
@@ -16742,7 +16742,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             ),
         ]
         .spacing(theme::SPACE_MD * scale)
-        .align_y(iced::Alignment::Center),
+        .align_y(iced::Alignment::Start),
     );
     body = body.push(
         row![
