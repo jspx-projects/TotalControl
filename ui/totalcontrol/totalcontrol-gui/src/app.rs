@@ -5875,7 +5875,7 @@ fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
     if !state.device.rate_follows_sound_server() {
         return;
     }
-    // The cushion for the new rate lands before the default; the rate change
+    // The headroom for the new rate lands before the default; the rate change
     // re-prepares the PCM and picks it up (C1).
     apply_engine_policy(state, rate);
     write_rate(state, rate);
@@ -13238,7 +13238,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         }
                     }
                     if rate_changed || quantum_changed {
-                        // The cushion aligns to the stream's actual quantum.
+                        // The headroom period aligns to the stream's actual quantum.
                         apply_engine_policy(state, running_rate(state));
                     }
                 }
@@ -15924,7 +15924,7 @@ fn reconcile_device_pitch(state: &mut TotalControl) {
 
 /// The scheduling policy for the current rate authority (the three-tier
 /// model), decided by the pure audio-path model. Device (Fixed) is the pro
-/// path: IRQ scheduling + a period-aligned cushion `H = 2·P`, placed before
+/// path: IRQ scheduling + a period-aligned host headroom `A = 2·P`, placed before
 /// each deliberate rate/quantum change. PipeWire (Auto) is the convenience
 /// path: timer scheduling + a fixed generous margin the DLL servos — safe at
 /// every rate without tracking the graph-conducted rate. An external owner
@@ -17104,37 +17104,18 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             } else {
                 theme::text_sec()
             };
-            // Live host term on every path: `snd_pcm_delay` is the ring fill
-            // plus the in-flight URBs. Split out the calibrated USB queue so
-            // each buffer is counted once.
+            // Live host term on every path: `snd_pcm_delay` is the host queue
+            // (ring fill + in-flight URBs) and already contains the USB depth.
+            // The instantaneous in-flight count is not available, so do not
+            // split a fixed (nurbs+1)-URB budget out of the delay and call the
+            // remainder the ring fill: that would misattribute up to one URB.
             if let Some(delay) = state.pcm_delay {
-                if let Some(queue) = state.driver_queue {
-                    let (usb, lead) = if state.device.is_uc_model() {
-                        uc_rtl_frames(card.rate, queue)
-                    } else {
-                        ucx_usb_frames(card.rate, queue)
-                    };
-                    let rtl = RtlEstimate {
-                        usb,
-                        lead,
-                        converter: converter_frames(card.rate),
-                        graph: delay.saturating_sub(usb),
-                        rate: card.rate,
-                    };
-                    return rtl_block(
-                        rtl.summary(),
-                        rtl.breakdown_with(host_label),
-                        theme::text_sec(),
-                        scale,
-                    );
-                }
-                // No queue fact: the live delay includes the in-flight queue.
                 return rtl_live_block(
                     delay,
                     60, // UC/UCX device lead (see ucx_usb_frames)
                     converter_frames(card.rate),
                     card.rate,
-                    host_label,
+                    "host delay",
                     scale,
                 );
             }
@@ -28373,11 +28354,11 @@ mod tests {
     }
 
     #[test]
-    fn the_cushion_is_two_aligned_periods() {
+    fn the_headroom_is_two_aligned_periods() {
         let mut state = new(true, None, None);
         state.driver_floor = Some(48);
         state.engine_rate_mode = EngineRateMode::Fixed;
-        // The cushion aligns to the forced quantum raised to the rate's floor.
+        // The headroom period aligns to the forced quantum raised to the rate's floor.
         state.engine_force_quantum = 32;
         assert_eq!(engine_sched_policy(&state, 44_100).headroom, 96); // 2·48
         state.engine_force_quantum = 96;
@@ -28409,7 +28390,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sched_policy_is_irq_with_the_cushion_on_every_path() {
+    fn the_sched_policy_is_irq_with_the_headroom_on_every_path() {
         let mut state = new(true, None, None);
         state.driver_floor = Some(48);
         state.device_envelope = Some(totalcontrol_core::fireface::hwdep::RateEnvelope {

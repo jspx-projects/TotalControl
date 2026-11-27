@@ -515,7 +515,7 @@ quantum, then closed; the apply is a closed loop of write, activate, confirm and
 retry. The capture reads the inputs and injects nothing into the playback path.
 PipeWire owns the PCM and multiplexes the capture, so a DAW keeps its stream.
 The scheduling policy pins `api.alsa.period-size` to the running graph quantum
-on both Pro Audio nodes and sizes the cushion `H = 2·P` from that running
+on both Pro Audio nodes and sizes the host headroom `A = 2·P` from that running
 value, not from the stored target. The ALSA node retains its last negotiated
 period as a node property; an unpinned or bumped period would override the
 graph quantum and run the PCM at the wrong period. The idle re-prepare pins the
@@ -596,10 +596,10 @@ The driver's XRUN recovery re-prepares the driver and then each linked
 follower; an unlinked follower is skipped and must recover on its own.
 
 The host scheduling policy is one (DRIVER-DESIGN §4.1): interrupt scheduling
-with the period-aligned cushion `H = 2·period`, set before each rate/quantum
+with the period-aligned host headroom `A = 2·period`, set before each rate/quantum
 change; a non-aligned IRQ wake threshold collapses the ring fill at fractional
 rates. **JACK** opens the PCM directly with a just-in-time fill. The refill
-wake cushion (`api.alsa.headroom`) requires `buffer > period + headroom`; below
+headroom (`api.alsa.headroom`) requires `buffer > period + headroom`; below
 that limit the SPA wake thresholds degenerate and the graph cycles at buffer
 granularity, so the period count keeps the inequality at every quantum.
 
@@ -621,7 +621,7 @@ to the other direction's stale pointer — the false-availability failure the
 gate prevents.
 
 The corner's severity scales with the rate (desk-verified, UCX, IRQ
-scheduling, H = 2·period, controlled supply):
+scheduling, host headroom `A = 2·period`, controlled supply):
 
 | Quantum = floor | Nominal playback | +5 % varispeed |
 |---|---|---|

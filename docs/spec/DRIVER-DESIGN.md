@@ -368,21 +368,56 @@ parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
 owns that policy.
 
 The host scheduling policy is one: interrupt scheduling with the period-aligned
-cushion. The startup prefill gate (§4.1.3) mutes the outputs from trigger until
+host headroom. The startup prefill gate (§4.1.3) mutes the outputs from trigger until
 delivery is stable on every path.
 
-**Interrupt scheduling (the policy).** IRQ scheduling
+**Interrupt scheduling (the host contract).** IRQ scheduling
 (`api.alsa.disable-tsched = true`); the graph wakes on the device's period
-interrupts. TotalControl holds a period-aligned scheduling cushion, the
-playback headroom `H = 2·P`, on both Pro Audio nodes. The IRQ wake threshold
-`P + H` is a whole multiple of the period. At fractional rates the URB cadence
-does not divide the period; a non-aligned threshold lands mid-period, doubles
-the write-skip rate and collapses the ring fill. The aligned cushion holds the
-fill clean at every supported rate under load. TotalControl sets the cushion
-before it writes the rate or quantum, so the value is in place when the
-re-prepare reads it — the reference pattern (the host sets rate and margin
-together, then restarts). The cushion is the host half of the reference margin
-pair; the device lead bias (§4.1.2) is the device half. The packaged fallback
+interrupts. The driver requires a period-aligned wake threshold and a ring
+larger than the period plus the host headroom. The concrete property values,
+the user-facing settings and the latency formula are owned by
+`TOTALCONTROL-GUI-SPEC.md` §13 and `TOTALCONTROL-STATE-SPEC.md`; this section
+states the contract and the terms the driver measures.
+
+Host contract terms:
+
+| Term | Symbol | Definition |
+|---|---|---|
+| period | `P` | `period_size`; the driver signals a period when its pointer crosses `P`. |
+| ring capacity | `B` | `P × N`; the whole circular buffer (`N = 32` in production). |
+| ring fill | `F` | `appl_ptr − hw_ptr`; the audio queued in the ring. |
+| fill target | `T` | the upper ring fill after a write. |
+| ring cushion | `H` | the lower ring fill the writer maintains, `H = T − P`. |
+| headroom | `A` | the `api.alsa.headroom` policy value. |
+| in-flight | `I` | audio in submitted USB URBs, including the one being filled. |
+| host queue | `D` | `snd_pcm_delay`; the ring fill plus the in-flight queue and the device position terms. |
+
+Total buffer capacity and queue:
+
+```text
+B       = P × N                         actual ALSA ring
+B_min   = (nurbs + 2) × urb_frames      driver minimum ring
+U       = (nurbs + 1) × urb_frames      USB queue budget
+D       = F + I + position terms        measured host queue
+```
+
+`B` is not queued audio. Only `F` is queued in the ring; `B − F` is free
+space. At the production setting `A = 2P`, the measured steady ring fill is
+`1P … 2P` (`T = 2P`, `H = 1P`); `U` is a worst-case budget of three URBs
+(`nurbs = 2` plus the URB being filled). The device lead and converter are
+after `D`; the latency formula `R = D + device lead + converter` is defined in
+`TOTALCONTROL-GUI-SPEC.md` §13 and the manual §14.
+
+TotalControl holds the period-aligned host headroom `A = 2·P` on both Pro
+Audio nodes. The IRQ wake threshold `P + A` is a whole multiple of the period.
+At fractional rates the URB cadence does not divide the period; a non-aligned
+threshold lands mid-period, doubles the write-skip rate and collapses the ring
+fill. The aligned headroom holds the fill clean at every supported rate under
+load. TotalControl sets the headroom before it writes the rate or quantum, so
+the value is in place when the re-prepare reads it — the reference pattern
+(the host sets rate and margin together, then restarts). The headroom is the
+host half of the reference margin pair; the device lead bias (§4.1.2) is the
+device half. The packaged fallback
 uses interrupt scheduling with no extra headroom; TotalControl sets `2·P` at
 runtime.
 
@@ -426,10 +461,21 @@ The IRQ-mode wake thresholds are
 `avail_min = buffer − (period + headroom)` (playback) and
 `avail_min = min(period + headroom, buffer)` (capture); both degenerate
 when `headroom ≥ buffer − period`, so the shipped period count keeps
-`buffer > period + headroom` down to the 32-frame period floor. The larger
-buffer is latency-neutral: the delay target is `period + headroom` and the
-start prefill is `start-delay + period + headroom`; neither depends on the
-buffer size.
+`buffer > period + headroom` down to the 32-frame period floor. The threshold
+is in the delay domain: the in-flight queue is part of it. The steady ring
+fill is therefore below the threshold value. With `headroom = 2P` at Q = 128,
+the measured steady ring fill is 1P…2P (129…256 frames), and the measured
+`snd_pcm_delay` is 177…344 frames. The larger buffer is latency-neutral: the
+delay target is `period + headroom` and the start prefill is
+`start-delay + period + headroom`; neither depends on the buffer size.
+
+The start prefill is `start-delay + period + headroom`. After the first graph
+period the steady fill settles one period lower. The shipped path sets
+`headroom = 2P`; the measured steady ring fill is 1P…2P, so the fill target is
+2P and the ring cushion is 1P. That is the definition used by the manual and
+the model note. A different headroom value must be measured before its fill
+band is stated. The latency formula adds the device lead and converter to the
+measured `snd_pcm_delay`, not to the ring fill.
 
 Lower `urb_frames` shortens the URB and lowers the period floor (lower
 latency). Raising `nurbs` enlarges the buffer (more margin); the period floor
@@ -507,7 +553,7 @@ start, not adjusted while streaming. A bias below it underruns. The
 `lead_margin` module parameter overrides the bias for measurement.
 
 The lead bias is the device half of the reference margin pair; the host
-half is the scheduling cushion the host policy holds (§4.1). The device
+half is the scheduling headroom the host policy holds (§4.1). The device
 lead is a scheduling horizon, not held audio: the device plays largely on
 arrival, so the measured playback path is smaller than `out_lead`.
 
@@ -911,8 +957,8 @@ The host:
   startup-only and adds no steady latency (§4.1.1);
 - declares `SNDRV_PCM_INFO_BATCH` so a timer-based host halves the requested
   period and holds the delay at its target (the timer fallback);
-- sets the refill wake cushion (`api.alsa.headroom`) for the scheduling
-  margin of the one interrupt-scheduling policy (§4.1.1);
+- sets the host headroom (`api.alsa.headroom`) for the scheduling margin of
+  the one interrupt-scheduling policy (§4.1.1);
 - keeps the ALSA buffer above `period + headroom` so the capture driver
   node keeps waking once per period (§4.1.1; the packaged `period-num`
   covers the smallest supported period);

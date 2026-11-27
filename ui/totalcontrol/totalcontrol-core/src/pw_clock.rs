@@ -986,8 +986,8 @@ pub fn set_node_period_size(node: u32, period: u32) -> Result<(), String> {
 }
 
 /// The scheduling policy for a Pro Audio node (C1 three-tier model):
-/// IRQ + per-rate cushion on the Device-authority pro path, timer + a fixed
-/// generous margin on the PipeWire convenience path.
+/// IRQ + per-rate host headroom on the Device-authority pro path, timer + a
+/// fixed generous margin on the PipeWire convenience path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SchedPolicy {
     /// `true` = IRQ (period-interrupt) scheduling; `false` = timer + DLL.

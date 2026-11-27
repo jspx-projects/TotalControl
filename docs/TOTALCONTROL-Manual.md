@@ -353,7 +353,7 @@ reports. The picker always shows the nominal rate in use, and `Current rate`
 always shows the truth, so a pitched clock is displayed correctly.
 
 TotalControl has one playback policy: interrupt scheduling with a period-aligned
-safety cushion. There is no scheduling mode to choose. The quantum is the buffer
+host headroom. There is no scheduling mode to choose. The quantum is the buffer
 control.
 
 The host stream is the rate authority on every path: a PipeWire client, a JACK
@@ -369,12 +369,12 @@ graph's current rate; a second stream at another rate is resampled, because the
 device has one clock.
 
 **Choosing the quantum.** A larger quantum raises the period, the period-aligned
-cushion and the queued audio. It gives more margin against scheduling jitter and
-host stalls at the cost of latency. For listening or video where uninterrupted
+host headroom and the queued audio. It gives more margin against scheduling
+jitter and host stalls at the cost of latency. For listening or video where uninterrupted
 playback matters more than latency, choose a larger value — for example 256 or
 512 at 48 kHz. For DAW monitoring choose a small value near the rate floor. For
 the lowest latency use JACK, which opens the device directly and does not use
-the PipeWire scheduling or cushion (see [Latency](#14-latency)). A host stream
+the PipeWire scheduling or headroom (see [Latency](#14-latency)). A host stream
 that sets the buffer wins; the quantum picker then reports that value.
 
 The device has one clock, so the graph has one rate. While a stream is already
@@ -1533,7 +1533,7 @@ The Audio Configuration panel shows the `Input` row first: it reads `—` until
 the capture chain is measured. The **output latency** follows in the `Output`
 row (hover for "Output latency (host to analog output)"): the value as `x.x ms`
 on the first line, and below it the contributions in milliseconds — the host
-term, the USB queue, the device lead and the converter. The output row is
+delay, the device lead and the converter. The output row is
 shown on every path. Under JACK, a direct-ALSA DAW or a PipeWire conductor the
 figure includes the device lead and converters that the client's own latency
 display may omit. The **Quantum** picker sets the host buffer in samples while
@@ -1545,24 +1545,29 @@ While a stream runs the picker is a grayed report of the actual value.
 The output latency is:
 
 ```text
-output latency = host term + USB queue + device lead + converter delay
+output latency = host delay (live, includes the USB queue) + device lead + converter
 ```
 
-The host term is `snd_pcm_delay` minus the in-flight queue while a stream runs,
-so the USB queue is counted once, and the graph quantum while nothing is
-playing. The term is labelled `graph` on the PipeWire and JACK paths and `ring`
-on the direct-ALSA path. At 48 kHz with a 128-frame period the terms are 128 +
-144 + 60 + 13 = 345 frames = **7.2 ms**.
+The live host delay is the measured `snd_pcm_delay`: the host queue, made of
+the ring fill and the in-flight USB queue. The display does not split it,
+because the instantaneous in-flight count is not available; the live label is
+`host delay`. The in-flight USB queue is already inside the live delay and is
+not counted again. While nothing plays, the host term is an estimate: the
+graph quantum plus the USB queue budget. At 48 kHz with a 128-frame period
+that estimate is 128 + 144 + 60 + 13 = 345 frames = **7.2 ms**.
 
-The USB queue is the driver's in-flight URBs (three URBs at the standard
-setting) while nothing is playing; when a stream runs it is already inside the
-live host queue and is not counted again. The device lead is the margin the
-unit holds ahead of its converters, and the converter delay is the interface's
-conversion time. Because the host queue is live when a stream runs, a larger
-`jackd -n` (more periods) shows as more latency and a smaller `-n` as less;
-TotalControl does not assume a fixed buffer. The host queue is read live; the
-device lead and converter are model terms, so treat the total as the host-side
-budget.
+The USB queue budget is the driver's in-flight URBs at the standard setting:
+`nurbs = 2` submitted plus the URB being filled, so three URBs, 144 frames at
+44.1/48 kHz. The steady ring fill is smaller and is a different quantity: it
+is `appl_ptr − hw_ptr`, and at the production setting it cycles between one
+and two periods while `api.alsa.headroom` is two periods. The ALSA ring
+capacity is 32 periods and is not the latency; only the ring fill is queued
+audio. The device lead is the margin the unit holds ahead of its converters,
+and the converter delay is the interface's conversion time. Because the host
+queue is live when a stream runs, a larger `jackd -n` (more periods) shows as
+more latency and a smaller `-n` as less; TotalControl does not assume a fixed
+buffer. The host queue is read live; the device lead and converter are model
+terms, so treat the total as the host-side budget.
 
 The UC device side is measured by loopback (output 5 to input 5) for both
 personalities at 32, 44.1, 48, 96 and 192 kHz; the display applies the live
@@ -1581,14 +1586,15 @@ calibration.
 ### Playback policy
 
 TotalControl uses one playback policy: interrupt scheduling with a
-period-aligned cushion of two periods. The cushion keeps the ring fed at the
-fractional rates (44.1/88.2/176.4 kHz), where a smaller or misaligned cushion
-drops out under load. It costs about two quanta of extra latency (about 2 ms
-at the 48-frame floor) and is placed before each rate and quantum change.
+period-aligned host headroom of two periods. The headroom keeps the ring fed at
+the fractional rates (44.1/88.2/176.4 kHz), where a smaller or misaligned
+headroom drops out under load. It holds the ring fill at one to two periods
+(target two periods), about 2 ms at the 48-frame floor, and is placed before
+each rate and quantum change.
 
 The host stream sets the rate and the buffer where it supports it; TotalControl
 follows and names the owner. The quantum is the smooth-playback control: a
-larger quantum raises the cushion and the queued audio, trading latency for
+larger quantum raises the headroom and the queued audio, trading latency for
 margin. A host that sets the buffer wins. For the lowest latency use JACK: it
 opens the device directly and fills the ring just-in-time, so the PipeWire
 policy does not apply.

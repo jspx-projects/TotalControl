@@ -1340,19 +1340,20 @@ is not running" notice is shown only when there is no stream and no graph.
 
 `Quantum` is the host buffer: the graph period and, under interrupt
 scheduling, the ALSA period. The engine always uses interrupt scheduling with
-the period-aligned cushion `H = 2·P`; there is no playback-mode control. A
-larger quantum is the smooth-playback choice: it raises the period, the
-cushion and the queued audio, at the cost of latency.
+the period-aligned host headroom `A = 2·P`; there is no playback-mode control.
+A larger quantum is the smooth-playback choice: it raises the period, the
+headroom and the queued audio, at the cost of latency.
 
 The `Input` row precedes the `Output` row. It shows `—` until the capture
 chain is measured. The `Output` row carries the tooltip "Output latency (host
 to analog output)". It is a fixed block: the first line is the total (`x.x
-ms`), and the formula (USB queue, device lead, converter, host term) wraps
-below. The host term is the live `snd_pcm_delay` of the running stream, split
-into the ring fill and the in-flight queue; while idle it is the graph
-quantum. The label names the authority: `graph` on the PipeWire and JACK
-paths, `ring` on direct ALSA. The formula and the calibration basis are in the
-manual §14. Both rows keep their height in every state.
+ms`), and the formula (host delay, device lead, converter) wraps below. The
+live host term is `snd_pcm_delay` of the running stream: the host queue,
+including the ring fill and the in-flight USB queue. The display does not
+split it, because the instantaneous in-flight count is not available; the
+live label is `host delay`. While idle the host term is an estimate: the
+graph quantum plus the USB queue budget. The formula and the calibration
+basis are in the manual §14. Both rows keep their height in every state.
 
 The group also shows the Fireface sink's host volume in percent and dB, with a
 `0 dB` action. The host volume is an attenuation before the interface, so it
@@ -1442,9 +1443,9 @@ node lock in the PipeWire graph. The client's node is the owner; its name is
 shown in the heading and the picker tooltips. When the stream stops, the device
 keeps the last rate and quantum; the next start uses the last value.
 The scheduling policy pins `api.alsa.period-size` to the running graph quantum
-and sizes the cushion `H = 2·P` from that running value, not from a stored
-target. A client that changes its own quantum is followed; the pin and the
-cushion are updated at the next re-prepare.
+and sizes the host headroom `A = 2·P` from that running value, not from a
+stored target. A client that changes its own quantum is followed; the pin and
+the headroom are updated at the next re-prepare.
 A DAW that uses the JACK API or the node force/lock properties conducts the
 graph. A stream that only follows the graph runs at the graph's current rate;
 a second stream at another rate is resampled into it, because the device has
@@ -2221,21 +2222,32 @@ The Audio Configuration panel has an `Input` row and an `Output` field. The
 carries the tooltip "Output latency (host to analog output)". It is a fixed
 block in the value column, aligned with the pickers: the caption column
 carries the `Output` label, the first line carries the total (`x.x ms`, one
-decimal, secondary grey), and the formula (host term, USB queue, device lead,
-converter, in milliseconds) wraps below. The `Input` row follows with `—` until the capture chain is measured.
+decimal, secondary grey), and the formula (host delay, device lead, converter,
+in milliseconds) wraps below. The `Input` row follows with `—` until the capture chain is measured.
 The formula and the terms are in the manual §14. The output field is shown on
-every path: the host term is the live stream queue split into ring fill and
-in-flight queue, or the graph quantum while idle. The device terms are the
+every path: the live host term is the measured `snd_pcm_delay` — the host
+queue, including the ring fill and the in-flight USB queue — and is not split,
+because the instantaneous in-flight count is not available. While idle the
+host term is an estimate: the graph quantum plus the USB queue budget. The
+live label is `host delay`; the idle estimate names the authority, `graph` on
+the PipeWire and JACK paths and `ring` on direct ALSA. The device terms are the
 same, so the value includes the device lead and converters that the DAW's own
-display may omit. The host term's label follows the authority: `graph` on the
-PipeWire and JACK paths, `ring` on the direct-ALSA path. The quantum picker
-sets the graph period.
+display may omit. The quantum picker sets the graph period.
 
-The output value is the host-to-analog-output latency: host term + USB queue +
-device lead + converter delay. The live host term is `snd_pcm_delay` minus the
-in-flight queue; the device terms are the measured or model terms. The UC
-device side is loopback-measured per personality at five rates; the display
-applies a live queue delta. The measured device values (frames, at the
+The output value is the host-to-analog-output latency. While a stream runs:
+
+```text
+output latency = host delay (live, includes the USB queue) + device lead + converter
+```
+
+The live host delay is the measured `snd_pcm_delay`; the in-flight USB queue is
+already inside it and is not counted again. While idle the host estimate is
+the graph quantum plus the USB queue budget, `(nurbs + 1)` URBs. The USB queue
+budget is not the ring fill: the steady ring fill is the measurable
+`appl_ptr − hw_ptr`, and at the production setting it cycles one period below
+the `api.alsa.headroom` value. The device lead and converter are model terms.
+The UC device side is loopback-measured per personality at five rates; the
+display applies a live queue delta. The measured device values (frames, at the
 calibration queue) are:
 
 | Rate | UC PC device | queue | UC AP device | queue |
