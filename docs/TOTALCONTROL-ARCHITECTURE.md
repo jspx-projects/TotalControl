@@ -563,8 +563,11 @@ The A/B split is the horizon model: A is the playback bus (12.5 microframes)
 plus the output converter; B is the remainder, the input delivery. Only D is
 directly measured; the split is not. The device values are tabulated in
 [`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) §13. The UC PC
-and AP tables cover 32, 44.1, 48, 96 and 192 kHz; the UCX table covers 32,
-44.1, 48, 88.2, 96, 176.4 and 192 kHz. The engine poll reads the PipeWire
+and AP tables cover 32, 44.1, 48, 96 and 192 kHz; the UCX ISO table covers 32,
+44.1, 48, 88.2, 96, 176.4 and 192 kHz. The UCX IF5 interrupt transport has no
+D measurement yet: Latency in is `—` and Latency out uses the live host term
+and the A model. The IF5 fixed-1024-frame URB span is much larger than the ISO
+span, so the ISO table does not apply. The engine poll reads the PipeWire
 inputs off the UI task and refreshes the live playback/capture delays from the
 kernel snapshot. The calibration is per personality and rate; a firmware or
 device-path change needs a repeat measurement. The quantum/period/URB geometry

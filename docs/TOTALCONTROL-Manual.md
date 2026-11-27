@@ -1564,7 +1564,7 @@ Latency in  =  96 + 128     = 224 frames = 4.7 ms
 
 The device values (frames):
 
-| Rate | A | UCX B | UC PC B | UC AP B |
+| Rate | A | UCX ISO B | UC PC B | UC AP B |
 |---|---|---|---|---|
 | 32 kHz | 63 | 95 | 152 | 92 |
 | 44.1 kHz | 82 | 119 | 133 | 97 |
@@ -1577,7 +1577,10 @@ The device values (frames):
 | 192 kHz | 312 | 331 | 305 | 193 |
 
 `Latency out` uses A at every rate. `Latency in` needs a measured D for the
-rate; where there is none it shows `—`. The fixed 60-frame device lead is
+rate; where there is none it shows `—`. The UCX **IF5** interrupt transport has
+no D measurement yet: its `Latency in` shows `—`, and `Latency out` uses the
+live host term and the A model. The IF5 fixed-1024-frame URB span is much
+larger than the ISO span, so the ISO values do not apply. The fixed 60-frame device lead is
 replaced by the per-rate A. The device round trip D is measured; the A/B split
 is the horizon model. A firmware or device-path change needs a new
 measurement.

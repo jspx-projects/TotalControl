@@ -2250,7 +2250,7 @@ A is the playback bus plus output converter; B is the ADC plus capture
 delivery. Only D is directly measured. A rate without a D measurement shows
 `—` for `Latency in`; `Latency out` still uses the A model.
 
-| Rate | A | UCX D / B | UC PC D / B | UC AP D / B |
+| Rate | A | UCX ISO D / B | UC PC D / B | UC AP D / B |
 |---|---|---|---|---|
 | 32 kHz | 63 | 158 / 95 | 215 / 152 | 155 / 92 |
 | 44.1 kHz | 82 | 201 / 119 | 215 / 133 | 179 / 97 |
@@ -2266,6 +2266,11 @@ The queue split uses the live playback fill from the driver `SNAPSHOT`: the
 USB term is `snd_pcm_delay - ring fill`. The split changes only the labels;
 the total is `snd_pcm_delay + A`. The capture host term is the live capture
 `snd_pcm_delay`; the device-in term is B. The values are frames.
+
+The UCX **IF5** (interrupt) transport has no D measurement yet. Its
+`Latency in` shows `—`; `Latency out` uses the live host term and the A model.
+The IF5 fixed-1024-frame URB span is about 2122 frames at 48 kHz, so the ISO
+table must not be used for it. A full IF5 A/B calibration is an open item.
 
 The calibration is per personality and rate. A firmware or device-path change
 needs a repeat measurement. The UC PC/AP D values are the five loopback rates;

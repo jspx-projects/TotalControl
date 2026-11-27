@@ -17231,7 +17231,8 @@ impl LatencyIn {
 /// `snd_pcm_delay` terms are added separately.
 #[derive(Clone, Copy)]
 enum LatencyPersonality {
-    Ucx,
+    UcxIso,
+    UcxIf5,
     UcPc,
     UcAp,
 }
@@ -17244,7 +17245,10 @@ fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
             _ => None,
         }
     } else if device.is_ucx_model() {
-        Some(LatencyPersonality::Ucx)
+        match device.personality_label() {
+            Some("IF5") => Some(LatencyPersonality::UcxIf5),
+            _ => Some(LatencyPersonality::UcxIso),
+        }
     } else {
         None
     }
@@ -17256,13 +17260,13 @@ fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
 fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     use LatencyPersonality::*;
     match (personality, rate) {
-        (Ucx, 32_000) => Some(158),
-        (Ucx, 44_100) => Some(201),
-        (Ucx, 48_000) => Some(216),
-        (Ucx, 88_200) => Some(373),
-        (Ucx, 96_000) => Some(401),
-        (Ucx, 176_400) => Some(586),
-        (Ucx, 192_000) => Some(643),
+        (UcxIso, 32_000) => Some(158),
+        (UcxIso, 44_100) => Some(201),
+        (UcxIso, 48_000) => Some(216),
+        (UcxIso, 88_200) => Some(373),
+        (UcxIso, 96_000) => Some(401),
+        (UcxIso, 176_400) => Some(586),
+        (UcxIso, 192_000) => Some(643),
         (UcPc, 32_000) => Some(215),
         (UcPc, 44_100) => Some(215),
         (UcPc, 48_000) => Some(215),
@@ -23716,12 +23720,15 @@ mod tests {
         assert_eq!(latency_a(96_000), 163);
         assert_eq!(latency_a(176_400), 288);
         assert_eq!(latency_a(192_000), 312);
-        assert_eq!(latency_d(LatencyPersonality::Ucx, 48_000), Some(216));
-        assert_eq!(latency_b(LatencyPersonality::Ucx, 48_000), Some(128));
+        assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(216));
+        assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(128));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(127));
         assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(99));
-        assert_eq!(latency_d(LatencyPersonality::Ucx, 64_000), None);
-        assert_eq!(latency_b(LatencyPersonality::Ucx, 64_000), None);
+        assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), None);
+        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), None);
+        // The IF5 transport has a much larger fixed-URB span and is not
+        // calibrated yet; its input row must not use the ISO B.
+        assert_eq!(latency_b(LatencyPersonality::UcxIf5, 48_000), None);
     }
 
     #[test]
