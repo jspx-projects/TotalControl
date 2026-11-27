@@ -7,8 +7,8 @@
  * decision only, free of USB and ALSA, so kernel/test/ can drive it with
  * page sequences on the host.
  */
-#ifndef FFUC_METER_PAIR_H
-#define FFUC_METER_PAIR_H
+#ifndef FF_METER_PAIR_H
+#define FF_METER_PAIR_H
 
 #ifdef __KERNEL__
 #include <linux/string.h>
@@ -43,10 +43,10 @@ static inline unsigned int ff_an_record_words(const u8 *page,
 }
 
 enum ff_meter_feed {
-	FFUC_METER_HELD,		/* first half stored, no pair yet */
-	FFUC_METER_PAIR,		/* pair[] is RMS then peak */
-	FFUC_METER_PAIR_UNVERIFIED,	/* arrival order, roles unverified */
-	FFUC_METER_REALIGNED,		/* peak half dropped, no pair */
+	FF_METER_HELD,		/* first half stored, no pair yet */
+	FF_METER_PAIR,		/* pair[] is RMS then peak */
+	FF_METER_PAIR_UNVERIFIED,	/* arrival order, roles unverified */
+	FF_METER_REALIGNED,		/* peak half dropped, no pair */
 };
 
 /*
@@ -80,7 +80,7 @@ ff_meter_feed(u8 *pair, unsigned int *held, bool *lost, const u8 *page,
 	memcpy(pair + *held, page, len);
 	if (!*held) {
 		*held = len;
-		return FFUC_METER_HELD;
+		return FF_METER_HELD;
 	}
 	*held = 0;
 	a = ff_an_record_words(pair, len);
@@ -89,19 +89,19 @@ ff_meter_feed(u8 *pair, unsigned int *held, bool *lost, const u8 *page,
 		memcpy(pair, pair + len, len);
 		*held = len;
 		*lost = false;
-		return FFUC_METER_REALIGNED;
+		return FF_METER_REALIGNED;
 	}
 	if (b >= a + 4) {
 		*lost = false;
-		return FFUC_METER_PAIR;
+		return FF_METER_PAIR;
 	}
 	if (a < 4 && b < 4 && !*lost) {
 		memcpy(pair, pair + len, len);
 		*held = len;
 		*lost = true;
-		return FFUC_METER_REALIGNED;
+		return FF_METER_REALIGNED;
 	}
-	return *lost ? FFUC_METER_PAIR_UNVERIFIED : FFUC_METER_PAIR;
+	return *lost ? FF_METER_PAIR_UNVERIFIED : FF_METER_PAIR;
 }
 
 #endif

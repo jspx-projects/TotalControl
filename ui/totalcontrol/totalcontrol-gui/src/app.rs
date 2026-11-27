@@ -5778,11 +5778,13 @@ fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &st
 /// scene carries the confirmed card rate so it never writes a stale rate back
 /// to the unit. Idempotent: a pending reapply is only upgraded, not duplicated.
 fn arm_engine_run_reapply(state: &mut TotalControl) {
-    // The engine start commits the nominal rate to the device, wiping the
-    // pitched clock. Re-assert the saved pitch through the gated reconcile
-    // so every restart re-establishes the programmed clock — the fresh-start
-    // precondition on the restart path. The reconcile guards capability,
-    // mode and clock source itself, as on every other pitch path.
+    // The driver re-sends the family's stored DDS word at engine start, so
+    // a pitched clock normally survives a restart. Re-assert the saved pitch
+    // through the gated reconcile anyway: after a module reload or an
+    // external clock change the stored word can be nominal, and a restart
+    // must re-establish the programmed clock — the fresh-start precondition
+    // on the restart path. The reconcile guards capability, mode and clock
+    // source itself, as on every other pitch path.
     state.pitch_clock_dirty = true;
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return;
@@ -17039,6 +17041,7 @@ fn transport_delta(
         hw_ptr_mismatch: now.hw_ptr_mismatch.saturating_sub(base.hw_ptr_mismatch),
         delta_zero: now.delta_zero.saturating_sub(base.delta_zero),
         run_seq: now.run_seq,
+        ..Default::default()
     }
 }
 
@@ -28402,6 +28405,7 @@ mod tests {
                 rate: 176_400,
                 period_floor: 184,
                 buffer_min: 5888,
+                ..Default::default()
             }],
         });
         state.engine = None;
@@ -28417,8 +28421,8 @@ mod tests {
             nurbs: 2,
             iso: true,
             rates: vec![
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336 },
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 176_400, period_floor: 184, buffer_min: 5888 },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, ..Default::default() },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 176_400, period_floor: 184, buffer_min: 5888, ..Default::default() },
             ],
         });
         state.engine_force_quantum = 48;
@@ -28479,6 +28483,7 @@ mod tests {
                 rate: *rate,
                 period_floor: *floor,
                 buffer_min: floor * 7,
+                ..Default::default()
             })
             .collect(),
         }
@@ -28539,9 +28544,9 @@ mod tests {
             nurbs: 2,
             iso: true,
             rates: vec![
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336 },
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 96_000, period_floor: 96, buffer_min: 672 },
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 192_000, period_floor: 192, buffer_min: 1344 },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, ..Default::default() },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 96_000, period_floor: 96, buffer_min: 672, ..Default::default() },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 192_000, period_floor: 192, buffer_min: 1344, ..Default::default() },
             ],
         });
         assert_eq!(safe_default_quantum(&state), 192);

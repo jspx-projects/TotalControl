@@ -1,22 +1,37 @@
 //! Userspace ABI for the kernel driver's `snd-hwdep` control node.
 //!
-//! This file mirrors `kernel/ffuc-uapi.h` and must be updated with it.
+//! This file mirrors `kernel/ff-uapi.h` and must be updated with it.
 //! The kernel owns USB and PCM; this ABI carries raw vendor requests,
-//! IF1 register words and raw meter/state/status events.  All parsing and
-//! device policy lives in this crate.
+//! register words, raw meter/state/status events, live stream snapshots and
+//! diagnostics.  All device models, names and policy live in this crate.
 
 use std::mem::size_of;
 
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 pub const HWDEP_MAX_DATA: usize = 64;
 pub const HWDEP_MAX_WORDS: usize = 63;
 pub const HWDEP_MAX_RATES: usize = 16;
 pub const EVENT_MAX: usize = 704;
 
-pub const MODEL_UNKNOWN: u32 = 0;
-pub const MODEL_UC: u32 = 1;
-pub const MODEL_UCX: u32 = 2;
-pub const MODEL_BABYFACE_CLASSIC: u32 = 3;
+/* USB product ids are hardware facts.  The host maps them to a profile;
+ * the kernel does not name a model. */
+pub const PRODUCT_UC_PC: u32 = 0x3fc5;
+pub const PRODUCT_UC_MAC: u32 = 0x3fc6;
+pub const PRODUCT_UC_WIN: u32 = 0x3fce;
+pub const PRODUCT_UCX: u32 = 0x3fc9;
+pub const PRODUCT_BABYFACE_CLASSIC: u32 = 0x3fc7;
+
+pub fn is_uc(product: u32) -> bool {
+    matches!(product, PRODUCT_UC_PC | PRODUCT_UC_MAC | PRODUCT_UC_WIN)
+}
+
+pub fn is_ucx(product: u32) -> bool {
+    product == PRODUCT_UCX
+}
+
+pub fn is_babyface_classic(product: u32) -> bool {
+    product == PRODUCT_BABYFACE_CLASSIC
+}
 
 pub const XPORT_INTERRUPT: u32 = 0;
 pub const XPORT_ISO: u32 = 1;
@@ -26,6 +41,8 @@ pub const CAP_WORDS: u32 = 1 << 1;
 pub const CAP_METERS: u32 = 1 << 2;
 pub const CAP_STATUS: u32 = 1 << 3;
 pub const CAP_PCM: u32 = 1 << 4;
+pub const CAP_SNAPSHOT: u32 = 1 << 5;
+pub const CAP_DIAGNOSTICS: u32 = 1 << 6;
 
 pub const EV_METER: u32 = 1;
 pub const EV_STATE: u32 = 2;
@@ -41,9 +58,8 @@ pub const EV_FLAG_METER_PAIR: u32 = 2;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HwdepInfo {
     pub abi: u32,
-    pub model: u32,
-    pub transport: u32,
     pub caps: u32,
+    pub transport: u32,
     pub channels: u32,
     pub inputs: u32,
     pub outputs: u32,
@@ -57,7 +73,9 @@ pub struct HwdepInfo {
     pub firmware: u32,
     pub card: u32,
     pub pcm_device: u32,
-    pub name: [u8; 32],
+    pub vendor: u32,
+    pub product: u32,
+    pub bcd_device: u32,
     pub serial: [u8; 32],
     pub reserved: [u32; 16],
 }
@@ -98,9 +116,11 @@ pub struct HwdepEventHdr {
     pub flags: u32,
 }
 
+/// Accumulated diagnostics and watermarks.  `run_seq` scopes the per-run
+/// values; `urb_errors` is a consecutive-error gauge, not a total.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct HwdepCounters {
+pub struct HwdepDiagnostics {
     pub out_urbs: u32,
     pub out_gaps: u32,
     pub out_shorts: u32,
@@ -132,22 +152,42 @@ pub struct HwdepCounters {
     pub out_fb_stale: u32,
     pub hw_ptr_mismatch: u32,
     pub delta_zero: u32,
-    /// Engine-run epoch; increments on every engine start. Per-run detail
-    /// counters reset with it; cumulative counters do not.
     pub run_seq: u32,
+    pub ring_min_filled: u32,
+    pub ring_missed: u32,
+    pub ring_starved: u32,
+    pub ring_max_stall_ns: u64,
+    pub gate_deferred: u32,
+    pub gate_overdue: u32,
+    pub gate_max_pending: u32,
+    pub out_lag_min: i32,
+    pub out_lag_max: i32,
+    pub out_prefills: u32,
+    pub out_prefill_timeouts: u32,
+    pub meter_paused: u32,
+    pub meter_pairs: u32,
+    pub meter_realigns: u32,
+    pub in_total: u64,
+    pub pitch_clamps: u32,
+    pub dds_words: u32,
+    pub family_writes: u32,
+    pub rate_commits: u32,
+    pub option_writes: u32,
+    pub reserved: [u32; 3],
 }
 
+/// Historical name kept for the device/diagnostics call sites.
+pub type HwdepCounters = HwdepDiagnostics;
+
 /// One supported rate and the ALSA geometry the driver accepts at it.
-/// `period_floor` is one URB (the smallest period and, with disable-tsched,
-/// the smallest graph quantum); `buffer_min` is the smallest ring. The driver
-/// computes these with the same functions that refine `hw_params`, so it is
-/// the single owner of the achievable envelope.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HwdepRateEnv {
     pub rate: u32,
     pub period_floor: u32,
     pub buffer_min: u32,
+    pub capture_channels: u32,
+    pub playback_channels: u32,
 }
 
 #[repr(C)]
@@ -157,13 +197,60 @@ pub struct HwdepEnvelope {
     pub urb_frames: u32,
     pub nurbs: u32,
     pub iso: u32,
+    pub iso_packets: u32,
+    pub fb_delay: u32,
+    pub out_lead: u32,
+    pub lead_bias: u32,
+    pub reserved: [u32; 4],
     pub rates: [HwdepRateEnv; HWDEP_MAX_RATES],
 }
 
-/// Set the device clock rate while the engine is idle (no PCM owner). The
-/// driver adopts the rate, commits it, confirms it from the state-word rate
-/// readback and bumps `run_seq`. Idle-only: `-EBUSY` while an owner holds the
-/// PCM. `confirmed` returns the state-word rate after the write. ABI 8.
+/// One direction of the live stream snapshot.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HwdepStream {
+    pub present: u32,
+    pub state: u32,
+    pub appl_ptr: u64,
+    pub hw_ptr: u64,
+    pub fill: u32,
+    pub inflight: u32,
+    pub delay: u32,
+    pub period: u32,
+    pub buffer: u32,
+    pub urb_frames: u32,
+    pub nurbs: u32,
+    pub iso_packets: u32,
+    pub last_complete_ns: u64,
+    pub device_pos: u64,
+    pub xruns: u32,
+    pub flags: u32,
+    pub reserved: [u32; 8],
+}
+
+/// Atomic live snapshot: queue state for both directions and the device
+/// clock in one sample.  `size` is set by the caller to the struct size;
+/// the driver writes the prefix it knows.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HwdepSnapshot {
+    pub abi: u32,
+    pub size: u32,
+    pub run_seq: u32,
+    pub rate: u32,
+    pub timestamp_ns: u64,
+    pub timestamp_pos: u64,
+    pub timestamp_phase: u32,
+    pub rate_meas: u32,
+    pub anchor_ns: u64,
+    pub frames: u64,
+    pub wrap: u32,
+    pub flags: u32,
+    pub out: HwdepStream,
+    pub input: HwdepStream,
+    pub reserved: [u32; 16],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HwdepSetRate {
@@ -174,6 +261,17 @@ pub struct HwdepSetRate {
     /// Out: the state-word rate after the write, Hz.
     pub confirmed: u32,
     pub reserved: [u32; 5],
+}
+
+impl HwdepInfo {
+    pub fn serial_str(&self) -> String {
+        cstr(&self.serial)
+    }
+}
+
+fn cstr(b: &[u8]) -> String {
+    let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+    String::from_utf8_lossy(&b[..end]).into_owned()
 }
 
 /// Linux `_IOC` encoding (the generic asm-generic layout used on x86_64,
@@ -191,37 +289,13 @@ const IOC_WRITE: u32 = 1;
 pub const IOCTL_INFO: u64 = ioc(IOC_READ, b'F', 0x10, size_of::<HwdepInfo>());
 pub const IOCTL_VENDOR: u64 = ioc(IOC_READ | IOC_WRITE, b'F', 0x11, size_of::<HwdepVendor>());
 pub const IOCTL_WRITE_WORDS: u64 = ioc(IOC_WRITE, b'F', 0x12, size_of::<HwdepWords>());
-pub const IOCTL_COUNTERS: u64 = ioc(IOC_READ, b'F', 0x13, size_of::<HwdepCounters>());
+pub const IOCTL_DIAGNOSTICS: u64 =
+    ioc(IOC_READ, b'F', 0x13, size_of::<HwdepDiagnostics>());
 pub const IOCTL_ENVELOPE: u64 = ioc(IOC_READ, b'F', 0x14, size_of::<HwdepEnvelope>());
 pub const IOCTL_SET_RATE: u64 =
     ioc(IOC_READ | IOC_WRITE, b'F', 0x16, size_of::<HwdepSetRate>());
-
-impl HwdepInfo {
-    pub fn name_str(&self) -> String {
-        cstr(&self.name)
-    }
-
-    pub fn serial_str(&self) -> String {
-        cstr(&self.serial)
-    }
-
-    /// Human-readable transport/personality identity reported by the driver.
-    pub fn personality_label(&self) -> &'static str {
-        match (self.model, self.transport) {
-            (MODEL_UC, XPORT_INTERRUPT) => "UC PC (interrupt)",
-            (MODEL_UC, XPORT_ISO) => "UC AP (ISO)",
-            (MODEL_UCX, XPORT_ISO) => "UCX ISO",
-            (MODEL_UCX, XPORT_INTERRUPT) => "UCX IF5 (interrupt)",
-            (MODEL_BABYFACE_CLASSIC, XPORT_ISO) => "Babyface classic (ISO)",
-            _ => "unknown",
-        }
-    }
-}
-
-fn cstr(b: &[u8]) -> String {
-    let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-    String::from_utf8_lossy(&b[..end]).into_owned()
-}
+pub const IOCTL_SNAPSHOT: u64 =
+    ioc(IOC_READ | IOC_WRITE, b'F', 0x17, size_of::<HwdepSnapshot>());
 
 #[cfg(test)]
 mod tests {
@@ -229,27 +303,23 @@ mod tests {
 
     #[test]
     fn ioctl_sizes_match_the_c_header() {
-        // ffuc_hwdep_info: 17*4 + 32 + 32 + 16*4 = 196
-        assert_eq!(size_of::<HwdepInfo>(), 196);
-        // ffuc_hwdep_vendor: 1 + 1 + 2 + 2 + 2 + 2 + 64 = 74, aligned to 2
+        assert_eq!(size_of::<HwdepInfo>(), 172);
         assert_eq!(size_of::<HwdepVendor>(), 74);
         assert_eq!(size_of::<HwdepWords>(), 4 + 4 + 63 * 4);
-        // ffuc_hwdep_counters: 32 * 4 = 128 (31 counters + run_seq)
-        assert_eq!(size_of::<HwdepCounters>(), 128);
-        // ffuc_hwdep_rate_env: 3 * 4 = 12; envelope: 4 * 4 + 16 * 12 = 208
-        assert_eq!(size_of::<HwdepRateEnv>(), 12);
-        assert_eq!(size_of::<HwdepEnvelope>(), 208);
-        // ffuc_hwdep_set_rate: 8 * 4 = 32
+        assert_eq!(size_of::<HwdepDiagnostics>(), 232);
+        assert_eq!(size_of::<HwdepRateEnv>(), 20);
+        assert_eq!(size_of::<HwdepEnvelope>(), 368);
+        assert_eq!(size_of::<HwdepStream>(), 112);
+        assert_eq!(size_of::<HwdepSnapshot>(), 352);
         assert_eq!(size_of::<HwdepSetRate>(), 32);
     }
 
     #[test]
     fn ioc_number_is_stable() {
-        // _IOR('F', 0x10, 196) = 0x80c44610
-        assert_eq!(IOCTL_INFO, 0x80c4_4610);
-        // _IOR('F', 0x14, 208) = 0x80d04614
-        assert_eq!(IOCTL_ENVELOPE, 0x80d0_4614);
-        // _IOWR('F', 0x16, 32) = 0xc0204616
+        assert_eq!(IOCTL_INFO, 0x80ac_4610);
+        assert_eq!(IOCTL_DIAGNOSTICS, 0x80e8_4613);
+        assert_eq!(IOCTL_ENVELOPE, 0x8170_4614);
         assert_eq!(IOCTL_SET_RATE, 0xc020_4616);
+        assert_eq!(IOCTL_SNAPSHOT, 0xc160_4617);
     }
 }

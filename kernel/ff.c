@@ -188,7 +188,7 @@ static unsigned int ff_urb_frames(struct ff *chip, unsigned int rate)
 	if (chip->iso)
 		return chip->iso_packets * DIV_ROUND_UP(rate, 8000);
 	/* The Windows IF5 driver uses one fixed URB size at every rate. */
-	if (chip->caps & FF_CAP_FIXED_URB)
+	if (chip->caps & FF_TCAP_FIXED_URB)
 		return chip->base_urb_frames;
 	return chip->base_urb_frames << ff_mode_index(rate);
 }
@@ -266,10 +266,14 @@ int ff_vendor_send(struct ff *chip, u8 req, u16 val, u16 idx,
 	ret = usb_control_msg_send(chip->dev, 0, req,
 				   USB_DIR_OUT | USB_TYPE_VENDOR |
 				   USB_RECIP_DEVICE, val, idx,
-				   (void *)data, len, FFUC_CTL_TIMEOUT,
+				   (void *)data, len, FF_CTL_TIMEOUT,
 				   GFP_KERNEL);
-	if (ret >= 0 && req == FFUC_REQ_DDS)
-		ff_track_clock(chip, val, idx);
+	if (ret >= 0) {
+		if (req == FF_REQ_DDS)
+			ff_track_clock(chip, val, idx);
+		else if (req == FF_REQ_SETTINGS && idx == FF_OPTIONS_MASK)
+			atomic_inc(&chip->option_writes);
+	}
 	return ret;
 }
 
@@ -281,7 +285,7 @@ int ff_vendor_recv(struct ff *chip, u8 req, u16 val, u16 idx,
 	return usb_control_msg_recv(chip->dev, 0, req,
 				    USB_DIR_IN | USB_TYPE_VENDOR |
 				    USB_RECIP_DEVICE, val, idx,
-				    data, len, FFUC_CTL_TIMEOUT, GFP_KERNEL);
+				    data, len, FF_CTL_TIMEOUT, GFP_KERNEL);
 }
 
 /* One IF1 register word: [parity:1][addr:15][value:16], little-endian. */
@@ -300,7 +304,7 @@ static u32 ff_word_encode(u16 addr, u16 value)
 	return w;
 }
 
-int ff_reg_send(struct ff *chip, const struct ffuc_hwdep_word *words,
+int ff_reg_send(struct ff *chip, const struct ff_hwdep_word *words,
 		  unsigned int count)
 {
 	u8 *buf;
@@ -311,8 +315,8 @@ int ff_reg_send(struct ff *chip, const struct ffuc_hwdep_word *words,
 		return -ENODEV;
 	if (!count)
 		return 0;
-	if (count > FFUC_HWDEP_MAX_WORDS)
-		count = FFUC_HWDEP_MAX_WORDS;
+	if (count > FF_HWDEP_MAX_WORDS)
+		count = FF_HWDEP_MAX_WORDS;
 
 	buf = kmalloc(count * sizeof(u32), GFP_KERNEL);
 	if (!buf)
@@ -320,7 +324,7 @@ int ff_reg_send(struct ff *chip, const struct ffuc_hwdep_word *words,
 
 	while (done < count) {
 		unsigned int n = min_t(unsigned int, count - done,
-				       FFUC_HWDEP_MAX_WORDS);
+				       FF_HWDEP_MAX_WORDS);
 		unsigned int i, actual;
 		u8 *p = buf;
 
@@ -380,8 +384,8 @@ static const struct ff_init_range ff_uc_chan_init[] = {
 };
 
 static const struct ff_init_range ff_ucx_chan_init[] = {
-	{ .first = 0,    .count = FFUC_MAX_CHANNELS },
-	{ .first = 0x20, .count = FFUC_MAX_CHANNELS },
+	{ .first = 0,    .count = FF_MAX_CHANNELS },
+	{ .first = 0x20, .count = FF_MAX_CHANNELS },
 };
 
 /* UCX interrupt init covers 60 slots: 0..29 and 32..61 (E2b capture). */
@@ -403,7 +407,7 @@ static int ff_uc_chan_init_write(struct ff *chip)
 	for (r = 0; r < chip->desc->n_chan_init; r++) {
 		range = &chip->desc->chan_init[r];
 		for (i = 0; i < range->count; i++) {
-			ret = ff_vendor_send(chip, FFUC_REQ_CHAN_INIT,
+			ret = ff_vendor_send(chip, FF_REQ_CHAN_INIT,
 					       value, range->first + i, NULL, 0);
 			if (ret < 0)
 				return ret;
@@ -422,11 +426,11 @@ static int ff_uc_init(struct ff *chip)
 	ret = ff_uc_chan_init_write(chip);
 	if (ret < 0)
 		return ret;
-	ret = ff_vendor_send(chip, FFUC_REQ_SETTINGS, 0x0800, 0xb800,
+	ret = ff_vendor_send(chip, FF_REQ_SETTINGS, 0x0800, 0xb800,
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
-	return ff_vendor_send(chip, FFUC_REQ_ENABLE, 0x0001, 0x0000,
+	return ff_vendor_send(chip, FF_REQ_ENABLE, 0x0001, 0x0000,
 				NULL, 0);
 }
 
@@ -455,27 +459,88 @@ unsigned int ff_rate_family(unsigned int rate)
  * current clock; the other three families are stored for later rates. */
 static void ff_track_clock(struct ff *chip, u16 val, u16 idx)
 {
+	unsigned int fam = idx & 0x03;
+
+	/* The ISO path remembers the host's word for this family; a start
+	 * re-sends it, so varispeed survives an engine restart.  The packed
+	 * word is stored before the valid bit is set.  The interrupt path
+	 * keeps the Windows rate sequence and does not use this store. */
+	if (chip->iso) {
+		WRITE_ONCE(chip->dds_word[fam], ((u32)val << 16) | idx);
+		set_bit(fam, &chip->dds_valid);
+	}
 	if (!chip->rate)
 		return;
-	if ((idx & 0x03) != ff_rate_family(chip->rate))
+	if (fam != ff_rate_family(chip->rate))
 		return;
 	WRITE_ONCE(chip->clock_rate, ff_dds_clock(val, idx, chip->rate));
 }
 
 static int ff_set_rate_family(struct ff *chip, unsigned int rate)
 {
-	return ff_vendor_send(chip, FFUC_REQ_SETTINGS,
+	return ff_vendor_send(chip, FF_REQ_SETTINGS,
 				ff_rate_family(rate) << 4, 0x0030, NULL, 0);
 }
 
-/* The rate sequence is one generic flow for every model and transport:
- * the DDS divisor word, the family select, then the options commit.
- * The DDS word carries base/rate with the 2x/4x shift; the family word
- * selects the base-rate family at index 0x30.  The commit applies the
- * change and rewrites the options word the device already holds, so the
- * mixer's settings (clock source, word clock, SPDIF and optical output
- * format) survive the rate change. */
-static int ff_set_rate(struct ff *chip, unsigned int rate)
+/* The rate sequence has one form per transport.
+ *
+ * ISO follows the USB audio engine's hwSetSampleRate: one DDS divisor word
+ * for the target base family, then the family selector at 0x10/0x30.  Both
+ * words are written on every start, change and resume.  The DDS word is the
+ * actual clock; the family selector only chooses which stored divisor is
+ * active.  The options word is not part of the sequence: settings writes own
+ * it.  The host owns varispeed; the start re-sends the family's last written
+ * word, so a pitched clock survives a restart.  An absent family falls back
+ * to its nominal divisor.
+ *
+ * Interrupt keeps the Windows-derived sequence: the nominal DDS word, the
+ * family selector, then the options commit.  The kext analysis does not
+ * change this path; it needs the Windows binary or a VM capture. */
+static int ff_set_rate_iso(struct ff *chip, unsigned int rate)
+{
+	unsigned int fam = ff_rate_family(rate);
+	u16 val, idx;
+	u32 dds;
+	int ret;
+
+	if (test_bit(fam, &chip->dds_valid)) {
+		u32 word = READ_ONCE(chip->dds_word[fam]);
+		u32 v = word >> 16, i = word & 0xffff;
+
+		/* The host wrote this word at some band.  The target band's
+		 * packet capacity is the hard ceiling, so clamp the reused
+		 * word before it reaches the device. */
+		if (ff_dds_clamp(v, i, rate,
+				   chip->modes[ff_mode_index(rate)].max_frames,
+				   &v, &i))
+			atomic_inc(&chip->pitch_clamps);
+		val = v;
+		idx = i;
+	} else {
+		dds = (u32)div_u64(0x5f5e10000000ULL, rate);
+		if (rate > 114000)
+			dds <<= 2;
+		else if (rate > 57000)
+			dds <<= 1;
+		val = dds >> 16;
+		idx = (dds & 0xff00) | fam;
+	}
+
+	ret = ff_vendor_send(chip, FF_REQ_DDS, val, idx, NULL, 0);
+	if (ret < 0)
+		return ret;
+	atomic_inc(&chip->dds_words);
+	ret = ff_set_rate_family(chip, rate);
+	if (ret < 0)
+		return ret;
+	atomic_inc(&chip->family_writes);
+	dev_dbg(&chip->dev->dev,
+		"rate %u Hz (iso): dds 0x%04x/0x%04x family 0x%02x ret=%d\n",
+		rate, val, idx, fam << 4, ret);
+	return 0;
+}
+
+static int ff_set_rate_int(struct ff *chip, unsigned int rate)
 {
 	__le32 cur;
 	u16 opts;
@@ -488,32 +553,58 @@ static int ff_set_rate(struct ff *chip, unsigned int rate)
 	else if (rate > 57000)
 		dds <<= 1;
 
-	ret = ff_vendor_send(chip, FFUC_REQ_DDS, dds >> 16,
+	ret = ff_vendor_send(chip, FF_REQ_DDS, dds >> 16,
 			       (dds & 0xff00) | ff_rate_family(rate),
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
+	atomic_inc(&chip->dds_words);
 	ret = ff_set_rate_family(chip, rate);
 	if (ret < 0)
 		return ret;
-	ret = ff_vendor_recv(chip, FFUC_REQ_SETTINGS, 0, 0, &cur,
+	atomic_inc(&chip->family_writes);
+	ret = ff_vendor_recv(chip, FF_REQ_SETTINGS, 0, 0, &cur,
 			       sizeof(cur));
 	if (ret < 0)
 		return ret;
-	opts = le32_to_cpu(cur) & FFUC_OPTIONS_MASK;
-	ret = ff_vendor_send(chip, FFUC_REQ_SETTINGS, opts,
-			       FFUC_OPTIONS_MASK, NULL, 0);
+	opts = le32_to_cpu(cur) & FF_OPTIONS_MASK;
+	ret = ff_vendor_send(chip, FF_REQ_SETTINGS, opts,
+			       FF_OPTIONS_MASK, NULL, 0);
 	dev_dbg(&chip->dev->dev,
-		"rate %u Hz: dds 0x%04x/0x%04x family 0x%02x commit 0x%04x ret=%d\n",
+		"rate %u Hz (int): dds 0x%04x/0x%04x family 0x%02x commit 0x%04x ret=%d\n",
 		rate, dds >> 16, (dds & 0xff00) | ff_rate_family(rate),
 		ff_rate_family(rate) << 4, opts, ret);
 	return ret;
 }
 
+/* The UCX interrupt rate change mirrors the Windows capture: it writes the
+ * family selector only.  The four-word DDS quad is written at connect
+ * (ff_ucx_if5_init) and by the host on a settings apply.  The DDS words are
+ * not rewritten on a rate change. */
+static int ff_set_rate_int_ucx(struct ff *chip, unsigned int rate)
+{
+	int ret;
+
+	ret = ff_set_rate_family(chip, rate);
+	if (ret < 0)
+		return ret;
+	atomic_inc(&chip->family_writes);
+	dev_dbg(&chip->dev->dev,
+		"rate %u Hz (int ucx): family 0x%02x ret=%d\n",
+		rate, ff_rate_family(rate) << 4, ret);
+	return 0;
+}
+
+static int ff_set_rate(struct ff *chip, unsigned int rate)
+{
+	return chip->iso ? ff_set_rate_iso(chip, rate) :
+			   ff_set_rate_int(chip, rate);
+}
+
 static int ff_uc_hw_mute(struct ff *chip, bool mute)
 {
 	return ff_vendor_send(chip,
-				mute ? FFUC_REQ_MUTE : FFUC_REQ_UNMUTE,
+				mute ? FF_REQ_MUTE : FF_REQ_UNMUTE,
 				0xffff, 0xc000, NULL, 0);
 }
 
@@ -526,12 +617,12 @@ static int ff_playback_mask(struct ff *chip, bool mute,
 	u32 mask;
 	u16 idx, val;
 
-	if (chip->caps & FF_CAP_MUTE_MASK_18BIT) {
+	if (chip->caps & FF_TCAP_MUTE_MASK_18BIT) {
 		/* The Babyface-classic reads an 18-bit mask packed like a
 		 * 0x12 level: channel n is bit n, wValue = mask >> 2,
 		 * wIndex bits 14-15 = mask bits 0-1.  The vendor driver
 		 * sends all 18 bits. */
-		mask = (1u << FFUC_MAX_CHANNELS) - 1;
+		mask = (1u << FF_MAX_CHANNELS) - 1;
 		val = mask >> 2;
 		idx = (mask & 3) << 14;
 	} else {
@@ -542,14 +633,14 @@ static int ff_playback_mask(struct ff *chip, bool mute,
 		idx = mask & 0xffff;
 	}
 	return ff_vendor_send(chip,
-				mute ? FFUC_REQ_UCX_MUTE :
-				       FFUC_REQ_UCX_UNMUTE,
+				mute ? FF_REQ_UCX_MUTE :
+				       FF_REQ_UCX_UNMUTE,
 				val, idx, NULL, 0);
 }
 
 static int ff_ucx_hw_mute(struct ff *chip, bool mute)
 {
-	return ff_playback_mask(chip, mute, FFUC_MAX_CHANNELS);
+	return ff_playback_mask(chip, mute, FF_MAX_CHANNELS);
 }
 
 static int ff_ucx_stream_start(struct ff *chip, unsigned int channels)
@@ -560,11 +651,11 @@ static int ff_ucx_stream_start(struct ff *chip, unsigned int channels)
 	 * audio packet.  0x8000/0x8000 is required for the DACs to open on
 	 * the interrupt transport; 0x1d is not understood but is part of the
 	 * captured working sequence. */
-	ret = ff_vendor_send(chip, FFUC_REQ_SETTINGS, 0x8000, 0x8000,
+	ret = ff_vendor_send(chip, FF_REQ_SETTINGS, 0x8000, 0x8000,
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
-	ret = ff_vendor_send(chip, FFUC_REQ_UCX_STREAM29, 0x0000, 0x0000,
+	ret = ff_vendor_send(chip, FF_REQ_UCX_STREAM29, 0x0000, 0x0000,
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
@@ -596,15 +687,15 @@ static int ff_uc_stream_start(struct ff *chip, unsigned int channels)
 	 * the probe/init sequence and must stay untouched.  Do not confuse
 	 * wValue and wIndex: 0x10 carries 0x8000 in wIndex and zero in
 	 * wValue. */
-	ret = ff_vendor_send(chip, FFUC_REQ_SETTINGS, 0x0000, 0x8000,
+	ret = ff_vendor_send(chip, FF_REQ_SETTINGS, 0x0000, 0x8000,
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
-	ret = ff_vendor_send(chip, FFUC_REQ_UCX_STREAM29, 0x0000, 0x0000,
+	ret = ff_vendor_send(chip, FF_REQ_UCX_STREAM29, 0x0000, 0x0000,
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
-	ret = ff_vendor_send(chip, FFUC_REQ_UNMUTE, 0x000f, 0xc000,
+	ret = ff_vendor_send(chip, FF_REQ_UNMUTE, 0x000f, 0xc000,
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
@@ -622,7 +713,7 @@ static int ff_uc_stream_stop(struct ff *chip, unsigned int channels)
 		"UC session close (rate=%u channels=%u)\n",
 		chip->rate, channels);
 	/* Windows session-close word: 0x13 wIndex 0xC000 wValue 0x000F. */
-	return ff_vendor_send(chip, FFUC_REQ_MUTE, 0x000f, 0xc000,
+	return ff_vendor_send(chip, FF_REQ_MUTE, 0x000f, 0xc000,
 				NULL, 0);
 }
 
@@ -646,8 +737,8 @@ static const struct ff_ops ff_ucx_ops = {
  * (E2b replug, win-20261027-ucx-transport): the 60-slot channel init,
  * the DDS/clock quad, the gain-ref word and the settings group.  The
  * quad is written once at connect; a rate change writes the family word
- * alone.  The settings group carries a ~100 ms settle between the
- * 0x3000 writes, measured in the capture. */
+ * only.  The settings group carries a ~100 ms settle between the 0x3000
+ * writes, measured in the capture. */
 static int ff_ucx_if5_init(struct ff *chip)
 {
 	static const u16 dds[4][2] = {
@@ -671,28 +762,28 @@ static int ff_ucx_if5_init(struct ff *chip)
 	if (ret < 0)
 		return ret;
 	for (i = 0; i < 4; i++) {
-		ret = ff_vendor_send(chip, FFUC_REQ_DDS, dds[i][0],
+		ret = ff_vendor_send(chip, FF_REQ_DDS, dds[i][0],
 				       dds[i][1], NULL, 0);
 		if (ret < 0)
 			return ret;
 	}
-	ret = ff_vendor_send(chip, FFUC_REQ_SETTINGS, 0x0028, 0x05ff,
+	ret = ff_vendor_send(chip, FF_REQ_SETTINGS, 0x0028, 0x05ff,
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
-	ret = ff_vendor_send(chip, FFUC_REQ_LEVELS, 0x3c00, 0x0fc0,
+	ret = ff_vendor_send(chip, FF_REQ_LEVELS, 0x3c00, 0x0fc0,
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
 	for (i = 0; i < 5; i++) {
-		ret = ff_vendor_send(chip, FFUC_REQ_SETTINGS, grp_pre[i][0],
+		ret = ff_vendor_send(chip, FF_REQ_SETTINGS, grp_pre[i][0],
 				       grp_pre[i][1], NULL, 0);
 		if (ret < 0)
 			return ret;
 	}
-	msleep(FFUC_UCX_IF5_SETTLE_MS);
+	msleep(FF_UCX_IF5_SETTLE_MS);
 	for (i = 0; i < 6; i++) {
-		ret = ff_vendor_send(chip, FFUC_REQ_SETTINGS,
+		ret = ff_vendor_send(chip, FF_REQ_SETTINGS,
 				       grp_post[i][0], grp_post[i][1],
 				       NULL, 0);
 		if (ret < 0)
@@ -703,7 +794,7 @@ static int ff_ucx_if5_init(struct ff *chip)
 
 static const struct ff_ops ff_ucx_if5_ops = {
 	.init = ff_ucx_if5_init,
-	.set_rate = ff_set_rate,
+	.set_rate = ff_set_rate_int_ucx,
 	.stream_start = ff_ucx_stream_start,
 	.stream_stop = ff_ucx_stream_stop,
 	.hw_mute = ff_ucx_hw_mute,
@@ -727,29 +818,25 @@ static bool ff_wire_s32(const struct ff *chip)
  * the build when a descriptor is added without updating the enum.  Append
  * new devices at the end of both. */
 enum {
-	FFUC_DEV_UC_PC,
-	FFUC_DEV_UC_MAC_SMSC,
-	FFUC_DEV_UC_MAC_RME,
-	FFUC_DEV_UCX_ISO_SMSC,
-	FFUC_DEV_UCX_IF5_SMSC,
-	FFUC_DEV_UCX_ISO_RME,
-	FFUC_DEV_UCX_IF5_RME,
-	FFUC_DEV_BABYFACE_CLASSIC,
-	FFUC_DEV_UC_WIN_RME,
-	FFUC_DEV_COUNT
+	FF_DEV_UC_PC,
+	FF_DEV_UC_MAC_SMSC,
+	FF_DEV_UC_MAC_RME,
+	FF_DEV_UCX_ISO_SMSC,
+	FF_DEV_UCX_IF5_SMSC,
+	FF_DEV_UCX_ISO_RME,
+	FF_DEV_UCX_IF5_RME,
+	FF_DEV_BABYFACE_CLASSIC,
+	FF_DEV_UC_WIN_RME,
+	FF_DEV_COUNT
 };
 
 static const struct ff_device_desc ff_devices[] = {
 	{
-		.name = "Fireface UC",
-		.shortname = "Fireface UC",
-		.card_id = "FirefaceUC",
-		.vendor = FFUC_VENDOR_SMSC,
-		.product = FFUC_PRODUCT_UC_PC,
+		.vendor = FF_VENDOR_SMSC,
+		.product = FF_PRODUCT_ID_A,
 		.iface = 0,
-		.transport = FFUC_XPORT_INTERRUPT,
-		.quirks = FFUC_QUIRK_STATUS_LATCH | FFUC_QUIRK_WIN_SESSION,
-		.model = FFUC_MODEL_UC,
+		.transport = FF_XPORT_INTERRUPT,
+		.quirks = FF_QUIRK_STATUS_LATCH | FF_QUIRK_WIN_SESSION,
 		.modes = ff_pc_modes,
 		.n_modes = ARRAY_SIZE(ff_pc_modes),
 		.audio_iface = 0,
@@ -772,15 +859,11 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_uc_chan_init),
 		.ops = &ff_uc_ops,
 	}, {
-		.name = "Fireface UC",
-		.shortname = "Fireface UC",
-		.card_id = "FirefaceUC",
-		.vendor = FFUC_VENDOR_SMSC,
-		.product = FFUC_PRODUCT_UC_MAC,
+		.vendor = FF_VENDOR_SMSC,
+		.product = FF_PRODUCT_ID_C,
 		.iface = 0,
-		.transport = FFUC_XPORT_ISO,
+		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FFUC_MODEL_UC,
 		.modes = ff_mac_modes,
 		.n_modes = ARRAY_SIZE(ff_mac_modes),
 		.audio_iface = 0,
@@ -800,15 +883,11 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_uc_chan_init),
 		.ops = &ff_uc_ops,
 	}, {
-		.name = "Fireface UC",
-		.shortname = "Fireface UC",
-		.card_id = "FirefaceUC",
-		.vendor = FFUC_VENDOR_RME,
-		.product = FFUC_PRODUCT_UC_MAC,
+		.vendor = FF_VENDOR_RME,
+		.product = FF_PRODUCT_ID_C,
 		.iface = 0,
-		.transport = FFUC_XPORT_ISO,
+		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FFUC_MODEL_UC,
 		.modes = ff_mac_modes,
 		.n_modes = ARRAY_SIZE(ff_mac_modes),
 		.audio_iface = 0,
@@ -828,15 +907,11 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_uc_chan_init),
 		.ops = &ff_uc_ops,
 	}, {
-		.name = "Fireface UCX",
-		.shortname = "Fireface UCX",
-		.card_id = "FirefaceUCX",
-		.vendor = FFUC_VENDOR_SMSC,
-		.product = FFUC_PRODUCT_UCX,
+		.vendor = FF_VENDOR_SMSC,
+		.product = FF_PRODUCT_ID_D,
 		.iface = 0,
-		.transport = FFUC_XPORT_ISO,
+		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FFUC_MODEL_UCX,
 		.modes = ff_ucx_modes,
 		.n_modes = ARRAY_SIZE(ff_ucx_modes),
 		.audio_iface = 0,
@@ -859,17 +934,13 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_ucx_chan_init),
 		.ops = &ff_ucx_ops,
 	}, {
-		.name = "Fireface UCX",
-		.shortname = "Fireface UCX",
-		.card_id = "FirefaceUCX",
-		.vendor = FFUC_VENDOR_SMSC,
-		.product = FFUC_PRODUCT_UCX,
+		.vendor = FF_VENDOR_SMSC,
+		.product = FF_PRODUCT_ID_D,
 		.iface = 5,
-		.transport = FFUC_XPORT_INTERRUPT,
-		.quirks = FFUC_QUIRK_ALT_RESELECT |
-			  FFUC_QUIRK_IF5_PRE_START |
-			  FFUC_QUIRK_IF5_PLAYBACK_MASK,
-		.model = FFUC_MODEL_UCX,
+		.transport = FF_XPORT_INTERRUPT,
+		.quirks = FF_QUIRK_ALT_RESELECT |
+			  FF_QUIRK_IF5_PRE_START |
+			  FF_QUIRK_IF5_PLAYBACK_MASK,
 		.modes = ff_ucx_if5_modes,
 		.n_modes = ARRAY_SIZE(ff_ucx_if5_modes),
 		.audio_iface = 5,
@@ -892,15 +963,11 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_ucx_if5_chan_init),
 		.ops = &ff_ucx_if5_ops,
 	}, {
-		.name = "Fireface UCX",
-		.shortname = "Fireface UCX",
-		.card_id = "FirefaceUCX",
-		.vendor = FFUC_VENDOR_RME,
-		.product = FFUC_PRODUCT_UCX,
+		.vendor = FF_VENDOR_RME,
+		.product = FF_PRODUCT_ID_D,
 		.iface = 0,
-		.transport = FFUC_XPORT_ISO,
+		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FFUC_MODEL_UCX,
 		.modes = ff_ucx_modes,
 		.n_modes = ARRAY_SIZE(ff_ucx_modes),
 		.audio_iface = 0,
@@ -923,17 +990,13 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_ucx_chan_init),
 		.ops = &ff_ucx_ops,
 	}, {
-		.name = "Fireface UCX",
-		.shortname = "Fireface UCX",
-		.card_id = "FirefaceUCX",
-		.vendor = FFUC_VENDOR_RME,
-		.product = FFUC_PRODUCT_UCX,
+		.vendor = FF_VENDOR_RME,
+		.product = FF_PRODUCT_ID_D,
 		.iface = 5,
-		.transport = FFUC_XPORT_INTERRUPT,
-		.quirks = FFUC_QUIRK_ALT_RESELECT |
-			  FFUC_QUIRK_IF5_PRE_START |
-			  FFUC_QUIRK_IF5_PLAYBACK_MASK,
-		.model = FFUC_MODEL_UCX,
+		.transport = FF_XPORT_INTERRUPT,
+		.quirks = FF_QUIRK_ALT_RESELECT |
+			  FF_QUIRK_IF5_PRE_START |
+			  FF_QUIRK_IF5_PLAYBACK_MASK,
 		.modes = ff_ucx_if5_modes,
 		.n_modes = ARRAY_SIZE(ff_ucx_if5_modes),
 		.audio_iface = 5,
@@ -962,21 +1025,17 @@ static const struct ff_device_desc ff_devices[] = {
 		 * mapped.  The meter packet length is not known, so the URB
 		 * takes a full 512-byte bulk packet and passes the actual
 		 * length on. */
-		.name = "Babyface-classic",
-		.shortname = "Babyface-classic",
-		.card_id = "Babyface",
-		.vendor = FFUC_VENDOR_RME,
-		.product = FFUC_PRODUCT_BABYFACE_CLASSIC,
+		.vendor = FF_VENDOR_RME,
+		.product = FF_PRODUCT_ID_E,
 		.iface = 0,
-		.transport = FFUC_XPORT_ISO,
+		.transport = FF_XPORT_ISO,
 		.quirks = 0,
-		.model = FFUC_MODEL_BABYFACE_CLASSIC,
 		.modes = ff_babyface_classic_modes,
 		.n_modes = ARRAY_SIZE(ff_babyface_classic_modes),
 		.audio_iface = 0,
 		.out_ep = 0x03,
 		.in_ep = 0x84,
-		.status_iface = FFUC_IFACE_NONE,
+		.status_iface = FF_IFACE_NONE,
 		.state_iface = 1,
 		.meter_in_ep = 0x85,
 		.meter_len = 512,
@@ -988,20 +1047,16 @@ static const struct ff_device_desc ff_devices[] = {
 		.max_rate = 192000,
 		.ops = &ff_ucx_ops,
 	}, {
-		.name = "Fireface UC",
-		.shortname = "Fireface UC",
-		.card_id = "FirefaceUC",
-		.vendor = FFUC_VENDOR_RME,
-		.product = FFUC_PRODUCT_UC_WIN_RME,
+		.vendor = FF_VENDOR_RME,
+		.product = FF_PRODUCT_ID_B,
 		.iface = 0,
-		.transport = FFUC_XPORT_INTERRUPT,
+		.transport = FF_XPORT_INTERRUPT,
 		/* The output latch clears only on an alt 0 -> alt N reselect,
 		 * as on the UCX.  The wire format follows the transport rule
 		 * (S32 on the interrupt personality). */
-		.quirks = FFUC_QUIRK_STATUS_LATCH |
-			  FFUC_QUIRK_ALT_RESELECT |
-			  FFUC_QUIRK_WIN_SESSION,
-		.model = FFUC_MODEL_UC,
+		.quirks = FF_QUIRK_STATUS_LATCH |
+			  FF_QUIRK_ALT_RESELECT |
+			  FF_QUIRK_WIN_SESSION,
 		.modes = ff_pc_modes,
 		.n_modes = ARRAY_SIZE(ff_pc_modes),
 		.audio_iface = 0,
@@ -1028,31 +1083,31 @@ static const struct ff_device_desc ff_devices[] = {
 
 /* The ID table indexes ff_devices by the named enum above; a new
  * descriptor without a new enum entry (or vice versa) fails the build. */
-static_assert(ARRAY_SIZE(ff_devices) == FFUC_DEV_COUNT);
+static_assert(ARRAY_SIZE(ff_devices) == FF_DEV_COUNT);
 
 static const struct usb_device_id ff_ids[] = {
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UC_PC, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UC_PC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_PC_RME, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UC_PC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_WIN_RME, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UC_WIN_RME] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UC_MAC, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UC_MAC_SMSC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UC_MAC, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UC_MAC_RME] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UCX, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UCX_ISO_SMSC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_UCX, 5),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UCX_IF5_SMSC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UCX, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UCX_ISO_RME] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UCX, 5),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_UCX_IF5_RME] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_SMSC, FFUC_PRODUCT_BABYFACE_CLASSIC, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_BABYFACE_CLASSIC] },
-	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_BABYFACE_CLASSIC, 0),
-	  .driver_info = (kernel_ulong_t)&ff_devices[FFUC_DEV_BABYFACE_CLASSIC] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_A, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_PC] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_A_RME, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_PC] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_B, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_WIN_RME] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_C, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_MAC_SMSC] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_C, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UC_MAC_RME] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_D, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UCX_ISO_SMSC] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_D, 5),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UCX_IF5_SMSC] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_D, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UCX_ISO_RME] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_D, 5),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_UCX_IF5_RME] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_SMSC, FF_PRODUCT_ID_E, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_BABYFACE_CLASSIC] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FF_VENDOR_RME, FF_PRODUCT_ID_E, 0),
+	  .driver_info = (kernel_ulong_t)&ff_devices[FF_DEV_BABYFACE_CLASSIC] },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, ff_ids);
@@ -1134,7 +1189,7 @@ static void ff_ring_event(struct ff *chip, struct snd_pcm_substream *subs,
  * The pointer difference is signed: when the application is behind the
  * read position (a dry ring that kept sending), the modular span would
  * read near-boundary and mask every later event.  A negative difference
- * clamps the fill to zero and sets FFUC_RING_F_BEHIND. */
+ * clamps the fill to zero and sets FF_RING_F_BEHIND. */
 static void ff_ring_trace(struct ff *chip, struct snd_pcm_substream *subs,
 			    unsigned long read_pos, unsigned long appl,
 			    unsigned long status_hw, unsigned int total)
@@ -1152,13 +1207,13 @@ static void ff_ring_trace(struct ff *chip, struct snd_pcm_substream *subs,
 	if (span <= rt->boundary / 2)
 		filled = span;
 	else
-		flags |= FFUC_RING_F_BEHIND;
+		flags |= FF_RING_F_BEHIND;
 	if (pspan <= rt->boundary / 2)
 		pub = pspan;
 	if (total > filled)
-		flags |= FFUC_RING_F_STARVED;
+		flags |= FF_RING_F_STARVED;
 	if (total > pub)
-		flags |= FFUC_RING_F_UNDERRUN;
+		flags |= FF_RING_F_UNDERRUN;
 	if (chip->ring_last_appl_ts) {
 		if (appl == chip->ring_last_appl) {
 			/* A write is overdue when a full period passes
@@ -1173,7 +1228,7 @@ static void ff_ring_trace(struct ff *chip, struct snd_pcm_substream *subs,
 			if (gap >= period_ns &&
 			    chip->ring_prev_ts - chip->ring_last_appl_ts <
 			    period_ns) {
-				flags |= FFUC_RING_F_MISSED;
+				flags |= FF_RING_F_MISSED;
 				atomic_inc(&chip->ring_missed);
 			}
 		} else {
@@ -1190,10 +1245,10 @@ static void ff_ring_trace(struct ff *chip, struct snd_pcm_substream *subs,
 	chip->ring_prev_ts = now;
 	if (filled < chip->ring_min_filled)
 		chip->ring_min_filled = filled;
-	if (flags & FFUC_RING_F_STARVED)
+	if (flags & FF_RING_F_STARVED)
 		atomic_inc(&chip->ring_starved);
 
-	r = &chip->ring_trace[chip->ring_head % FFUC_RING_TRACE];
+	r = &chip->ring_trace[chip->ring_head % FF_RING_TRACE];
 	r->ktime_ns = now;
 	r->appl = appl;
 	r->hw = read_pos;
@@ -1481,7 +1536,7 @@ static void ff_capture_urb(struct ff_ep *ep, struct urb *urb)
 	struct snd_pcm_substream *subs = s->substream;
 	const unsigned int words = chip->mode->words;
 	const unsigned int total = chip->mode->neps * words;
-	unsigned int frames = urb->actual_length / (words * FFUC_SAMPLE_BYTES);
+	unsigned int frames = urb->actual_length / (words * FF_SAMPLE_BYTES);
 	unsigned long flags;
 	bool elapsed = false;
 	bool bad = false;
@@ -1492,7 +1547,7 @@ static void ff_capture_urb(struct ff_ep *ep, struct urb *urb)
 	 * floor is copied and the remainder discarded, so the ring and
 	 * the wire stay frame-aligned; the anomaly is counted, like the
 	 * playback side. */
-	if (urb->actual_length % (words * FFUC_SAMPLE_BYTES))
+	if (urb->actual_length % (words * FF_SAMPLE_BYTES))
 		bad = true;
 	if (urb->actual_length > urb->transfer_buffer_length ||
 	    frames > chip->urb_frames) {
@@ -1587,7 +1642,7 @@ static void ff_playback_urb(struct ff_ep *ep, struct urb *urb)
 	struct ff_stream *s = &chip->streams[SNDRV_PCM_STREAM_PLAYBACK];
 	struct snd_pcm_substream *subs = s->substream;
 	const unsigned int words = ff_mode_out_words(chip->mode);
-	unsigned int frames = urb->actual_length / (words * FFUC_SAMPLE_BYTES);
+	unsigned int frames = urb->actual_length / (words * FF_SAMPLE_BYTES);
 	unsigned long flags;
 	bool elapsed = false;
 	bool bad = false;
@@ -1601,7 +1656,7 @@ static void ff_playback_urb(struct ff_ep *ep, struct urb *urb)
 	 * frame carries no complete channel set and must not shift the
 	 * ring; an overlong payload cannot exceed the buffer.  Both
 	 * anomalies are counted, like the capture side. */
-	if (urb->actual_length % (words * FFUC_SAMPLE_BYTES))
+	if (urb->actual_length % (words * FF_SAMPLE_BYTES))
 		bad = true;
 	if (frames > chip->urb_frames) {
 		frames = chip->urb_frames;
@@ -1691,7 +1746,7 @@ static void ff_fb_put(struct ff *chip, unsigned int pos, unsigned int frames,
 	 * 5..(4+width), phase the remaining upper bits (see ff_iso_layouts). */
 	e = ((phase & ff_iso_phase_mask(chip)) << ff_iso_phase_shift(chip)) |
 	    ((pos & ff_iso_pos_mask(chip)) << 5) | (frames & 0x1f);
-	chip->fb[chip->in_pkts++ & (FFUC_FB_SIZE - 1)] = e;
+	chip->fb[chip->in_pkts++ & (FF_FB_SIZE - 1)] = e;
 	chip->in_end = (pos + frames) % ff_iso_wrap(chip);
 	/* The unwrapped position advances exactly like the wrap-domain
 	 * in_end, so the two stay congruent across a 8192 wrap.  Only a
@@ -1738,9 +1793,9 @@ static bool ff_fb_get(struct ff *chip, u64 k, unsigned int *pos,
 	u32 e;
 
 	if (k < chip->fb_delay || src >= chip->in_pkts ||
-	    chip->in_pkts - src > FFUC_FB_SIZE)
+	    chip->in_pkts - src > FF_FB_SIZE)
 		return false;
-	e = chip->fb[src & (FFUC_FB_SIZE - 1)];
+	e = chip->fb[src & (FF_FB_SIZE - 1)];
 	*pos = (e >> 5) & ff_iso_pos_mask(chip);
 	*phase = (e >> ff_iso_phase_shift(chip)) & ff_iso_phase_mask(chip);
 	*frames = min(e & 0x1f, chip->mode->max_frames);
@@ -1836,7 +1891,7 @@ static void ff_iso_capture_urb(struct ff_ep *ep, struct urb *urb)
 	struct snd_pcm_substream *subs = s->substream;
 	const struct ff_mode *m = chip->mode;
 	const unsigned int nch = m->words;
-	unsigned int frames[FFUC_MAX_ISO_PACKETS];
+	unsigned int frames[FF_MAX_ISO_PACKETS];
 	unsigned long flags;
 	bool elapsed = false;
 	int i;
@@ -1884,21 +1939,21 @@ static void ff_iso_capture_urb(struct ff_ep *ep, struct urb *urb)
 			ff_fb_put_nominal(chip);
 			continue;
 		}
-		if (d->actual_length < FFUC_ISO_IN_HEADER) {
+		if (d->actual_length < FF_ISO_IN_HEADER) {
 			atomic_inc(&chip->in_short);
 			frames[i] = 0;
 			ff_fb_put_nominal(chip);
 			continue;
 		}
-		if ((d->actual_length - FFUC_ISO_IN_HEADER) %
-		    (nch * FFUC_SAMPLE_BYTES)) {
+		if ((d->actual_length - FF_ISO_IN_HEADER) %
+		    (nch * FF_SAMPLE_BYTES)) {
 			atomic_inc(&chip->in_misaligned);
 			frames[i] = 0;
 			ff_fb_put_nominal(chip);
 			continue;
 		}
-		frames[i] = min((d->actual_length - FFUC_ISO_IN_HEADER) /
-				(nch * FFUC_SAMPLE_BYTES), m->max_frames);
+		frames[i] = min((d->actual_length - FF_ISO_IN_HEADER) /
+				(nch * FF_SAMPLE_BYTES), m->max_frames);
 		if (!frames[i])
 			atomic_inc(&chip->in_hdr_only);
 		if (frames[i] < ARRAY_SIZE(chip->iso_frames_hist)) {
@@ -2060,11 +2115,11 @@ cadence_skip:
 				continue;
 			if (chip->s32_samples)
 				ff_capture_copy_int32(subs->runtime, s->pos[0],
-					  (const __le32 *)(pkt + FFUC_ISO_IN_HEADER),
+					  (const __le32 *)(pkt + FF_ISO_IN_HEADER),
 					  frames[i], nch, 0, 1, frames[i], nch);
 			else
 				ff_capture_copy(subs->runtime, s->pos[0],
-					  (const __le32 *)(pkt + FFUC_ISO_IN_HEADER),
+					  (const __le32 *)(pkt + FF_ISO_IN_HEADER),
 					  frames[i], nch, 0, 1, frames[i], nch);
 			elapsed |= ff_stream_advance(chip, s, subs->runtime, 0,
 						       frames[i]);
@@ -2092,8 +2147,8 @@ static void ff_iso_playback_fill(struct ff_ep *ep, struct urb *urb)
 	const struct ff_mode *m = chip->mode;
 	const unsigned int nch = ff_mode_out_words(m);
 	const unsigned int fwords = nch + 1;
-	unsigned int frames[FFUC_MAX_ISO_PACKETS], pos[FFUC_MAX_ISO_PACKETS];
-	unsigned int phase[FFUC_MAX_ISO_PACKETS];
+	unsigned int frames[FF_MAX_ISO_PACKETS], pos[FF_MAX_ISO_PACKETS];
+	unsigned int phase[FF_MAX_ISO_PACKETS];
 	unsigned int off = 0;
 	unsigned long flags;
 	bool elapsed = false;
@@ -2159,7 +2214,7 @@ static void ff_iso_playback_fill(struct ff_ep *ep, struct urb *urb)
 		unsigned int cap_off = 0;
 
 		for (i = 0; i < urb->number_of_packets; i++) {
-			unsigned int len = frames[i] * fwords * FFUC_SAMPLE_BYTES;
+			unsigned int len = frames[i] * fwords * FF_SAMPLE_BYTES;
 
 			if (cap_off + len > ep->buf_size) {
 				atomic_inc(&chip->out_capacity_err);
@@ -2239,7 +2294,7 @@ static void ff_iso_playback_fill(struct ff_ep *ep, struct urb *urb)
 	}
 	for (i = 0; i < urb->number_of_packets; i++) {
 		__le32 *dst = (__le32 *)((u8 *)urb->transfer_buffer + off);
-		unsigned int len = frames[i] * fwords * FFUC_SAMPLE_BYTES;
+		unsigned int len = frames[i] * fwords * FF_SAMPLE_BYTES;
 		unsigned int f;
 
 		urb->iso_frame_desc[i].offset = off;
@@ -2266,7 +2321,7 @@ static void ff_iso_playback_fill(struct ff_ep *ep, struct urb *urb)
 		if (frames[i]) {
 			u32 base = s->out_counter;
 
-			if (chip->caps & FF_CAP_FRAME_LEAD) {
+			if (chip->caps & FF_TCAP_FRAME_LEAD) {
 				for (f = 0; f < frames[i]; f++)
 					dst[f * fwords] = cpu_to_le32(
 						(base + f) %
@@ -2340,9 +2395,9 @@ static bool ff_iso_contiguous(struct ff_ep *ep, struct urb *urb)
 		}
 	}
 	ep->next_start = (urb->start_frame + urb->number_of_packets) &
-			 FFUC_ISO_FRAME_MASK;
+			 FF_ISO_FRAME_MASK;
 	return expected < 0 ||
-	       ((urb->start_frame - expected) & FFUC_ISO_FRAME_MASK) == 0;
+	       ((urb->start_frame - expected) & FF_ISO_FRAME_MASK) == 0;
 }
 
 static void ff_stop_running_streams(struct ff *chip)
@@ -2519,15 +2574,15 @@ static int ff_ringtrace_show(struct seq_file *m, void *v)
 	unsigned long flags;
 	u32 head, n, i;
 
-	snap = kmalloc_array(FFUC_RING_TRACE, sizeof(*snap), GFP_KERNEL);
+	snap = kmalloc_array(FF_RING_TRACE, sizeof(*snap), GFP_KERNEL);
 	if (!snap)
 		return -ENOMEM;
 	if (subs)
 		snd_pcm_stream_lock_irqsave(subs, flags);
 	head = chip->ring_head;
-	n = min(head, (u32)FFUC_RING_TRACE);
+	n = min(head, (u32)FF_RING_TRACE);
 	for (i = 0; i < n; i++)
-		snap[i] = chip->ring_trace[(head - n + i) % FFUC_RING_TRACE];
+		snap[i] = chip->ring_trace[(head - n + i) % FF_RING_TRACE];
 	if (subs)
 		snd_pcm_stream_unlock_irqrestore(subs, flags);
 
@@ -2586,7 +2641,7 @@ static void ff_urb_complete(struct urb *urb)
 	default:
 		dev_dbg_ratelimited(&chip->dev->dev, "%s URB status %d\n",
 				    ep->dir ? "IN" : "OUT", urb->status);
-		if (atomic_inc_return(&chip->urb_errors) > FFUC_MAX_URB_ERRORS) {
+		if (atomic_inc_return(&chip->urb_errors) > FF_MAX_URB_ERRORS) {
 			dev_err(&chip->dev->dev, "too many URB errors, stopping\n");
 			goto broken;
 		}
@@ -2656,16 +2711,16 @@ static int ff_status_submit(struct ff *chip)
 		usb_fill_bulk_urb(chip->status_urb, chip->dev,
 				  usb_rcvbulkpipe(chip->dev,
 						  chip->desc->status_ep),
-				  chip->status_buf, FFUC_STATUS_LEN,
+				  chip->status_buf, FF_STATUS_LEN,
 				  ff_status_complete, chip);
 	else
 		usb_fill_int_urb(chip->status_urb, chip->dev,
 				 usb_rcvintpipe(chip->dev,
 						chip->desc->status_ep),
-				 chip->status_buf, FFUC_STATUS_LEN,
+				 chip->status_buf, FF_STATUS_LEN,
 				 ff_status_complete, chip, 1);
 	WRITE_ONCE(chip->status_armed_at,
-		   jiffies + msecs_to_jiffies(FFUC_STATUS_GRACE_MS));
+		   jiffies + msecs_to_jiffies(FF_STATUS_GRACE_MS));
 	ret = usb_submit_urb(chip->status_urb, GFP_ATOMIC);
 	if (!ret)
 		chip->status_active = true;
@@ -2692,18 +2747,18 @@ static void ff_status_complete(struct urb *urb)
 		goto resubmit;
 	}
 
-	if (urb->actual_length >= FFUC_STATUS_LEN) {
-		memcpy(chip->last_status, chip->status_buf, FFUC_STATUS_LEN);
-		ff_event_put(chip, FFUC_EV_STATUS, chip->status_buf,
+	if (urb->actual_length >= FF_STATUS_LEN) {
+		memcpy(chip->last_status, chip->status_buf, FF_STATUS_LEN);
+		ff_event_put(chip, FF_EV_STATUS, chip->status_buf,
 			       min_t(unsigned int, urb->actual_length,
-				     FFUC_EVENT_MAX), 0);
+				     FF_EVENT_MAX), 0);
 	}
 
-	latched = (chip->desc->quirks & FFUC_QUIRK_STATUS_LATCH) &&
-		  chip->last_status[3] & FFUC_STATUS_OUT_LATCHED;
+	latched = (chip->desc->quirks & FF_QUIRK_STATUS_LATCH) &&
+		  chip->last_status[3] & FF_STATUS_OUT_LATCHED;
 	if (latched != READ_ONCE(chip->out_latched)) {
 		WRITE_ONCE(chip->out_latched, latched);
-		ff_event_put(chip, FFUC_EV_LATCH, NULL, 0,
+		ff_event_put(chip, FF_EV_LATCH, NULL, 0,
 			       latched ? 1 : 0);
 	}
 
@@ -2720,7 +2775,7 @@ static void ff_status_complete(struct urb *urb)
 resubmit:
 	/* The UC keeps the ticker open all the time (front-panel events);
 	 * the UCX IF5 endpoint only reports stream-period ticks. */
-	if ((chip->caps & FF_CAP_STATUS_RUNNING_ONLY) &&
+	if ((chip->caps & FF_TCAP_STATUS_RUNNING_ONLY) &&
 	    !READ_ONCE(chip->engine_running))
 		return;
 	ret = ff_status_submit(chip);
@@ -2734,7 +2789,7 @@ static void ff_kill_urbs(struct ff *chip, bool kill_status)
 	int dir, e, i;
 
 	for (dir = 0; dir < 2; dir++)
-		for (e = 0; e < FFUC_MAX_EPS; e++)
+		for (e = 0; e < FF_MAX_EPS; e++)
 			for (i = 0; i < chip->nurbs; i++)
 				usb_kill_urb(chip->eps[dir][e].urbs[i].urb);
 	if (kill_status) {
@@ -2752,10 +2807,10 @@ static void ff_engine_stop(struct ff *chip)
 	/* A restarted engine has a new frame counter; the ISO continuity
 	 * watchdog must not compare across the restart. */
 	for (i = 0; i < 2; i++)
-		for (j = 0; j < FFUC_MAX_EPS; j++)
+		for (j = 0; j < FF_MAX_EPS; j++)
 			chip->eps[i][j].next_start = -1;
 	for (i = 0; i < 2; i++)
-		for (j = 0; j < FFUC_MAX_EPS; j++)
+		for (j = 0; j < FF_MAX_EPS; j++)
 			chip->eps[i][j].last_start = -1;
 	dev_dbg(&chip->dev->dev,
 		"engine stop: rate=%u session=%d\n",
@@ -2768,11 +2823,11 @@ static void ff_engine_stop(struct ff *chip)
 	if (!READ_ONCE(chip->disconnected)) {
 		chip->desc->ops->stream_stop(chip, ff_mode_channels(chip,
 								     chip->rate));
-		if (chip->caps & FF_CAP_MUTE_ON_STOP)
+		if (chip->caps & FF_TCAP_MUTE_ON_STOP)
 			chip->desc->ops->hw_mute(chip, true);
 	}
 	WRITE_ONCE(chip->engine_running, false);
-	ff_kill_urbs(chip, chip->caps & FF_CAP_KILL_BOTH);
+	ff_kill_urbs(chip, chip->caps & FF_TCAP_KILL_BOTH);
 	/* The kill is synchronous: every in-flight frame has been
 	 * subtracted by its completion.  Rebase the counter for the next
 	 * engine run. */
@@ -2789,9 +2844,9 @@ static void ff_int_setup_urbs(struct ff *chip, unsigned int bytes)
 	int dir, e, i;
 
 	/* The Windows IF5 receive path always uses full 1024-frame URBs. */
-	if (chip->caps & FF_CAP_FIXED_URB)
+	if (chip->caps & FF_TCAP_FIXED_URB)
 		in_bytes = chip->base_urb_frames * ff_max_words(chip) *
-			   FFUC_SAMPLE_BYTES;
+			   FF_SAMPLE_BYTES;
 
 	for (dir = 0; dir < 2; dir++) {
 		for (e = 0; e < m->neps; e++) {
@@ -2863,10 +2918,12 @@ static void ff_iso_setup_urbs(struct ff *chip)
 	chip->ts_seed_counter = 0;
 	chip->ts_frac_q32 = 0;
 	chip->ts_tps_q32 = div64_u64(60000000ull << 32, chip->rate);
-	/* Per-run diagnostics: a stop line describes this stream only. */
+	/* Per-run diagnostics: a stop line describes this stream only.  The
+	 * rate commit above already sent the DDS word, and ff_track_clock
+	 * derived the programmed clock from it; do not overwrite a pitched
+	 * reference with the nominal rate here. */
 	memset(chip->iso_frames_hist, 0, sizeof(chip->iso_frames_hist));
 	ff_cadence_reset(&chip->cad);
-	chip->clock_rate = chip->rate;
 	atomic_set(&chip->in_hdr_only, 0);
 	atomic_set(&chip->in_short, 0);
 	atomic_set(&chip->in_misaligned, 0);
@@ -2991,19 +3048,19 @@ static int ff_engine_commit_rate(struct ff *chip)
 	 * the close word at once (interface reselect, session words) leaves
 	 * a UC_WIN_RME unit dead in both directions until the module is
 	 * reloaded.  100 ms was enough on the bench; keep a margin.  The
-	 * settle is a Windows-personality property (FFUC_QUIRK_WIN_SESSION);
+	 * settle is a Windows-personality property (FF_QUIRK_WIN_SESSION);
 	 * the AP personality restarts without it. */
-	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) &&
+	if ((chip->desc->quirks & FF_QUIRK_WIN_SESSION) &&
 	    chip->engine_stopped_at) {
 		unsigned long ready = chip->engine_stopped_at +
-				      msecs_to_jiffies(FFUC_RESTART_SETTLE_MS);
+				      msecs_to_jiffies(FF_RESTART_SETTLE_MS);
 
 		if (time_before(jiffies, ready))
 			msleep(jiffies_to_msecs(ready - jiffies) + 1);
 	}
 
 	/* alt 0 -> alt N reselect clears the UCX IF5 output latch. */
-	if (chip->desc->quirks & FFUC_QUIRK_ALT_RESELECT) {
+	if (chip->desc->quirks & FF_QUIRK_ALT_RESELECT) {
 		ret = usb_set_interface(chip->dev, chip->audio_iface, 0);
 		if (ret < 0)
 			return ret;
@@ -3015,7 +3072,7 @@ static int ff_engine_commit_rate(struct ff *chip)
 	 * after the session words and leaves both directions silent.  Only
 	 * program a genuinely different alt (2x/4x, or first start). */
 	{
-		bool skip_alt = (chip->caps & FF_CAP_SKIP_SAME_ALT) &&
+		bool skip_alt = (chip->caps & FF_TCAP_SKIP_SAME_ALT) &&
 				chip->uc_session &&
 				chip->cur_alt == m->alt;
 
@@ -3034,13 +3091,19 @@ static int ff_engine_commit_rate(struct ff *chip)
 	/* Commit the rate on every start.  The device keeps its own rate
 	 * across personality switches and prior sessions, and the init
 	 * sequence does not set it, so a cached value cannot be trusted.
-	 * This point is reached only with nothing running, so the commit
+	 * The state word and 0x19 word report the selected family/band, not
+	 * the actual DDS clock; only the DDS word moves the clock.  The
+	 * sequence therefore writes the DDS and the family selector on every
+	 * start.  The ISO form leaves the options word to the settings path;
+	 * the interrupt form keeps the Windows options commit.  This point is
+	 * reached only with nothing running, so the commit
 	 * cannot glitch a live stream.  On a Windows-session unit the close
 	 * word needs the Windows gap before the rate write (A2: 220 ms);
 	 * writing right after the close wedges the unit.  The settle above
 	 * already separated the close from this start. */
-	if ((chip->desc->quirks & FFUC_QUIRK_WIN_SESSION) && chip->uc_session)
+	if ((chip->desc->quirks & FF_QUIRK_WIN_SESSION) && chip->uc_session)
 		msleep(200);
+	atomic_inc(&chip->rate_commits);
 	ret = chip->desc->ops->set_rate(chip, chip->rate);
 	dev_dbg(&chip->dev->dev,
 		"rate commit: %u Hz alt %u cur_alt %u ret=%d\n",
@@ -3058,7 +3121,7 @@ static int ff_engine_start(struct ff *chip)
 		return 0;
 	/* Fresh continuity expectation for a fresh engine. */
 	for (e = 0; e < 2; e++)
-		for (i = 0; i < FFUC_MAX_EPS; i++) {
+		for (i = 0; i < FF_MAX_EPS; i++) {
 			chip->eps[e][i].next_start = -1;
 			chip->eps[e][i].last_start = -1;
 		}
@@ -3081,7 +3144,7 @@ static int ff_engine_start(struct ff *chip)
 	else
 		bytes = chip->urb_frames *
 			max(m->words, ff_mode_out_words(m)) *
-			FFUC_SAMPLE_BYTES;
+			FF_SAMPLE_BYTES;
 	if (WARN_ON(bytes > chip->urb_bytes_max))
 		return -EINVAL;
 	ret = ff_engine_commit_rate(chip);
@@ -3094,14 +3157,14 @@ static int ff_engine_start(struct ff *chip)
 	 * already running leaves the stream alive with silence in both
 	 * directions.  The later stream_start call is a no-op for the UC once
 	 * session_reopen has been cleared. */
-	if ((chip->caps & FF_CAP_SESSION_BEFORE_URBS) && chip->uc_session) {
+	if ((chip->caps & FF_TCAP_SESSION_BEFORE_URBS) && chip->uc_session) {
 		/* Windows leaves seconds between a stream close and the next
 		 * open (A2b: 6.64 -> 10.87).  A back-to-back reopen after the
 		 * 0x13 close leaves the UC silent even when the rate did not
 		 * change.  Give the close time to take effect.  The gap is a
 		 * Windows-personality property; the AP personality keeps the
 		 * session words without it. */
-		if (chip->desc->quirks & FFUC_QUIRK_WIN_SESSION)
+		if (chip->desc->quirks & FF_QUIRK_WIN_SESSION)
 			msleep(200);
 		ret = chip->desc->ops->stream_start(
 			chip, ff_mode_channels(chip, chip->rate));
@@ -3119,7 +3182,7 @@ static int ff_engine_start(struct ff *chip)
 	 * starts on a clean zero-based timeline, not the reset's position-0
 	 * placeholders and error microframe (DRIVER-DESIGN §4.3, §7). */
 	if (chip->iso)
-		msleep(FFUC_ISO_START_MARGIN_MS);
+		msleep(FF_ISO_START_MARGIN_MS);
 
 	atomic_set(&chip->urb_errors, 0);
 	chip->last_out_complete = 0;
@@ -3162,7 +3225,7 @@ static int ff_engine_start(struct ff *chip)
 
 	/* The UC already sent its session-open trio before the URBs.  The
 	 * UCX still needs its stream_start after the URBs are submitted. */
-	if (!(chip->caps & FF_CAP_SESSION_BEFORE_URBS)) {
+	if (!(chip->caps & FF_TCAP_SESSION_BEFORE_URBS)) {
 		ret = chip->desc->ops->stream_start(
 			chip, ff_mode_channels(chip, chip->rate));
 		if (ret < 0)
@@ -3173,7 +3236,7 @@ static int ff_engine_start(struct ff *chip)
 		ff_iso_align(chip);
 
 	WRITE_ONCE(chip->status_armed_at,
-		   jiffies + msecs_to_jiffies(FFUC_STATUS_GRACE_MS));
+		   jiffies + msecs_to_jiffies(FF_STATUS_GRACE_MS));
 	ret = ff_status_submit(chip);
 	if (ret < 0)
 		dev_warn_ratelimited(&chip->dev->dev,
@@ -3198,7 +3261,7 @@ static int ff_engine_start(struct ff *chip)
 error:
 	dev_err(&chip->dev->dev, "failed to start streaming: %d\n", ret);
 	WRITE_ONCE(chip->engine_running, false);
-	ff_kill_urbs(chip, chip->caps & FF_CAP_KILL_BOTH);
+	ff_kill_urbs(chip, chip->caps & FF_TCAP_KILL_BOTH);
 	return ret;
 }
 
@@ -3258,9 +3321,9 @@ static const struct snd_pcm_hardware ff_pcm_hw = {
 	.formats = SNDRV_PCM_FMTBIT_FLOAT_LE | SNDRV_PCM_FMTBIT_S32_LE,
 	.rates = SNDRV_PCM_RATE_KNOT,
 	.rate_min = 32000,
-	.rate_max = FFUC_MAX_RATE,
+	.rate_max = FF_MAX_RATE,
 	.channels_min = 1,
-	.channels_max = FFUC_MAX_CHANNELS,
+	.channels_max = FF_MAX_CHANNELS,
 	.buffer_bytes_max = 4 * 1024 * 1024,
 	.period_bytes_min = 32,
 	.period_bytes_max = 1024 * 1024,
@@ -3292,7 +3355,7 @@ static int ff_rule_rate(struct snd_pcm_hw_params *params,
 	unsigned int other = 1 << !subs->stream;
 	struct snd_interval t = {
 		.min = 32000,
-		.max = min(chip->desc->max_rate, (unsigned int)FFUC_MAX_RATE),
+		.max = min(chip->desc->max_rate, (unsigned int)FF_MAX_RATE),
 		.integer = 1,
 	};
 	unsigned int locked = 0;
@@ -3342,7 +3405,7 @@ static unsigned int ff_buffer_min(struct ff *chip, unsigned int rate)
 	unsigned int urb = ff_urb_frames(chip, rate);
 	unsigned int min = (chip->nurbs + 2) * urb;
 
-	if (chip->caps & FF_CAP_LEAD_HORIZON) {
+	if (chip->caps & FF_TCAP_LEAD_HORIZON) {
 		unsigned int fb_delay = (chip->nurbs + 1) * chip->iso_packets;
 		unsigned int lead = DIV_ROUND_CLOSEST(fb_delay * rate, 8000) + 60;
 
@@ -3372,7 +3435,7 @@ static int ff_rule_buffer(struct snd_pcm_hw_params *params,
 /* The achievable rate/quantum envelope, reported through hwdep so userspace
  * presents exactly what the driver accepts.  Uses the same geometry functions
  * as the hw_params rules: one implementation, one owner. */
-void ff_query_envelope(struct ff *chip, struct ffuc_hwdep_envelope *env)
+void ff_query_envelope(struct ff *chip, struct ff_hwdep_envelope *env)
 {
 	unsigned int i, n = 0;
 
@@ -3380,14 +3443,23 @@ void ff_query_envelope(struct ff *chip, struct ffuc_hwdep_envelope *env)
 	env->urb_frames = chip->base_urb_frames;
 	env->nurbs = chip->nurbs;
 	env->iso = chip->iso ? 1 : 0;
-	for (i = 0; i < ARRAY_SIZE(ff_rates) && n < FFUC_HWDEP_MAX_RATES; i++) {
+	env->iso_packets = chip->iso_packets;
+	env->fb_delay = chip->fb_delay;
+	env->out_lead = chip->out_lead;
+	env->lead_bias = chip->mode ? 2 * chip->mode->max_frames - 2 : 0;
+	for (i = 0; i < ARRAY_SIZE(ff_rates) && n < FF_HWDEP_MAX_RATES; i++) {
 		unsigned int rate = ff_rates[i];
 
 		if (!ff_rate_supported(chip, rate))
 			continue;
+		const struct ff_mode *m = &chip->modes[ff_mode_index(rate)];
+
 		env->rates[n].rate = rate;
 		env->rates[n].period_floor = ff_urb_frames(chip, rate);
 		env->rates[n].buffer_min = ff_buffer_min(chip, rate);
+		env->rates[n].capture_channels = m->neps * m->words;
+		env->rates[n].playback_channels =
+			m->neps * ff_mode_out_words(m);
 		n++;
 	}
 	env->count = n;
@@ -3400,13 +3472,13 @@ static int ff_confirm_idle_rate(struct ff *chip, unsigned int rate,
 				  unsigned int *confirmed)
 {
 	unsigned long deadline = jiffies +
-				 msecs_to_jiffies(FFUC_IDLE_RATE_CONFIRM_MS);
+				 msecs_to_jiffies(FF_IDLE_RATE_CONFIRM_MS);
 	unsigned int read_rate = 0;
 	__le32 word;
 	int ret;
 
 	for (;;) {
-		ret = ff_vendor_recv(chip, FFUC_REQ_STATUS, 0, 0, &word,
+		ret = ff_vendor_recv(chip, FF_REQ_STATUS, 0, 0, &word,
 				       sizeof(word));
 		if (ret == 0) {
 			read_rate = ff_rate_from_index(le32_to_cpu(word) >> 24);
@@ -3462,7 +3534,7 @@ int ff_set_rate_idle(struct ff *chip, unsigned int rate,
 	 * was already sent when the stream stopped (or there was no session).
 	 * UC session behaviour on a host-initiated idle rate change is a
 	 * needs-hardware item; this mirrors the verified hw_params flow. */
-	if (chip->caps & FF_CAP_SESSION_ON_RATE_CHANGE) {
+	if (chip->caps & FF_TCAP_SESSION_ON_RATE_CHANGE) {
 		chip->session_reopen = true;
 		chip->uc_session = true;
 	}
@@ -3566,7 +3638,7 @@ static int ff_pcm_hw_params(struct snd_pcm_substream *subs,
 		 * between the last tone packet and the rate write); from then
 		 * on every UC stop/open gets the session words. */
 		ff_engine_stop(chip);
-		if (chip->caps & FF_CAP_SESSION_ON_RATE_CHANGE) {
+		if (chip->caps & FF_TCAP_SESSION_ON_RATE_CHANGE) {
 			chip->session_reopen = true;
 			chip->uc_session = true;
 		}
@@ -3658,7 +3730,7 @@ static int ff_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->signalled = 0;
 		s->deferrals = 0;
 		s->out_starve_streak = 0;
-		s->out_start_urbs = FFUC_START_GRACE_URBS;
+		s->out_start_urbs = FF_START_GRACE_URBS;
 		s->out_counter_valid = false;
 		s->running = true;
 		if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK && prefill &&
@@ -3669,12 +3741,12 @@ static int ff_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			s->out_prefill_pending = true;
 			s->out_prefill_stable = 0;
 			s->out_prefill_need =
-				max(1u, FFUC_PREFILL_STABLE_MS / urb_ms);
+				max(1u, FF_PREFILL_STABLE_MS / urb_ms);
 			s->out_prefill_min =
-				max(1u, FFUC_PREFILL_MIN_MS / urb_ms);
+				max(1u, FF_PREFILL_MIN_MS / urb_ms);
 			s->out_prefill_max =
 				max(s->out_prefill_min + 1,
-				    FFUC_PREFILL_MAX_MS / urb_ms);
+				    FF_PREFILL_MAX_MS / urb_ms);
 			s->out_prefill_bound = s->out_prefill_max;
 			queue_work(system_unbound_wq, &chip->prefill_work);
 		}
@@ -3709,7 +3781,7 @@ static int ff_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		s->signalled = 0;
 		s->deferrals = 0;
 		s->out_starve_streak = 0;
-		s->out_start_urbs = FFUC_START_GRACE_URBS;
+		s->out_start_urbs = FF_START_GRACE_URBS;
 		s->out_counter_valid = false;
 		s->running = true;
 		if (subs->stream == SNDRV_PCM_STREAM_PLAYBACK && prefill &&
@@ -3720,12 +3792,12 @@ static int ff_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 			s->out_prefill_pending = true;
 			s->out_prefill_stable = 0;
 			s->out_prefill_need =
-				max(1u, FFUC_PREFILL_STABLE_MS / urb_ms);
+				max(1u, FF_PREFILL_STABLE_MS / urb_ms);
 			s->out_prefill_min =
-				max(1u, FFUC_PREFILL_MIN_MS / urb_ms);
+				max(1u, FF_PREFILL_MIN_MS / urb_ms);
 			s->out_prefill_max =
 				max(s->out_prefill_min + 1,
-				    FFUC_PREFILL_MAX_MS / urb_ms);
+				    FF_PREFILL_MAX_MS / urb_ms);
 			s->out_prefill_bound = s->out_prefill_max;
 			queue_work(system_unbound_wq, &chip->prefill_work);
 		}
@@ -3856,11 +3928,11 @@ static int ff_create_pcm(struct ff *chip)
 	struct snd_pcm *pcm;
 	int ret;
 
-	ret = snd_pcm_new(chip->card, chip->desc->name, 0, 1, 1, &pcm);
+	ret = snd_pcm_new(chip->card, "Fireface", 0, 1, 1, &pcm);
 	if (ret < 0)
 		return ret;
 	pcm->private_data = chip;
-	strscpy(pcm->name, chip->desc->name, sizeof(pcm->name));
+	strscpy(pcm->name, "Fireface", sizeof(pcm->name));
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &ff_pcm_ops);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &ff_pcm_ops);
 	/*
@@ -3887,12 +3959,12 @@ static int ff_alloc_urbs(struct ff *chip)
 	int dir, e, i;
 
 	chip->status_urb = usb_alloc_urb(0, GFP_KERNEL);
-	chip->status_buf = kmalloc(FFUC_STATUS_LEN, GFP_KERNEL);
+	chip->status_buf = kmalloc(FF_STATUS_LEN, GFP_KERNEL);
 	if (!chip->status_urb || !chip->status_buf)
 		return -ENOMEM;
 
 	for (dir = 0; dir < 2; dir++) {
-		for (e = 0; e < FFUC_MAX_EPS; e++) {
+		for (e = 0; e < FF_MAX_EPS; e++) {
 			struct ff_ep *ep = &chip->eps[dir][e];
 
 			ep->chip = chip;
@@ -3903,7 +3975,7 @@ static int ff_alloc_urbs(struct ff *chip)
 
 				u->ep = ep;
 				u->urb = usb_alloc_urb(chip->iso ?
-						       FFUC_MAX_ISO_PACKETS : 0,
+						       FF_MAX_ISO_PACKETS : 0,
 						       GFP_KERNEL);
 				if (!u->urb)
 					return -ENOMEM;
@@ -3931,8 +4003,8 @@ static void ff_free_urbs(struct ff *chip)
 	chip->status_buf = NULL;
 
 	for (dir = 0; dir < 2; dir++) {
-		for (e = 0; e < FFUC_MAX_EPS; e++) {
-			for (i = 0; i < FFUC_MAX_URBS; i++) {
+		for (e = 0; e < FF_MAX_EPS; e++) {
+			for (i = 0; i < FF_MAX_URBS; i++) {
 				struct ff_urb *u = &chip->eps[dir][e].urbs[i];
 
 				if (u->urb) {
@@ -3957,7 +4029,7 @@ static void ff_card_free(struct snd_card *card)
 
 	cancel_work_sync(&chip->recover_work);
 	cancel_work_sync(&chip->prefill_work);
-	ffuc_hwdep_cleanup(chip);
+	ff_hwdep_cleanup(chip);
 	ff_midi_cleanup(chip);
 	if (chip->status_intf) {
 		usb_driver_release_interface(&ff_driver, chip->status_intf);
@@ -3992,7 +4064,7 @@ static void ff_read_identity(struct ff *chip)
 {
 	u32 rev = 0;
 
-	if (ff_vendor_recv(chip, FFUC_REQ_REVISION, 0, 0, &rev,
+	if (ff_vendor_recv(chip, FF_REQ_REVISION, 0, 0, &rev,
 			     sizeof(rev)) == 0)
 		chip->firmware = (le32_to_cpu(rev) >> 16) & 0xff;
 	if (chip->dev->serial)
@@ -4006,35 +4078,43 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 {
 	u32 caps = 0;
 
-	switch (d->model) {
-	case FFUC_MODEL_UC:
-		caps |= FF_CAP_SKIP_SAME_ALT |
-			FF_CAP_SESSION_BEFORE_URBS |
-			FF_CAP_SESSION_ON_RATE_CHANGE |
-			FF_CAP_METER_PAIR;
+	switch (d->product) {
+	case FF_PRODUCT_ID_A:
+	case FF_PRODUCT_ID_C:
+	case FF_PRODUCT_ID_B:
+		caps |= FF_TCAP_SKIP_SAME_ALT |
+			FF_TCAP_SESSION_BEFORE_URBS |
+			FF_TCAP_SESSION_ON_RATE_CHANGE |
+			FF_TCAP_METER_PAIR;
+		if (d->transport == FF_XPORT_ISO)
+			caps |= FF_TCAP_KILL_BOTH;
 		break;
-	case FFUC_MODEL_UCX:
-		caps |= FF_CAP_MUTE_ON_STOP |
-			FF_CAP_FRAME_LEAD |
-			FF_CAP_STATUS_RUNNING_ONLY |
-			FF_CAP_LEAD_HORIZON;
-		if (d->transport == FFUC_XPORT_INTERRUPT)
-			caps |= FF_CAP_FIXED_URB | FF_CAP_IF5_SELECT;
+	case FF_PRODUCT_ID_D:
+		caps |= FF_TCAP_FLASH_GUARD |
+			FF_TCAP_MUTE_ON_STOP |
+			FF_TCAP_FRAME_LEAD |
+			FF_TCAP_STATUS_RUNNING_ONLY |
+			FF_TCAP_LEAD_HORIZON |
+			FF_TCAP_KILL_BOTH |
+			FF_TCAP_IF5_SELECT;
+		if (d->transport == FF_XPORT_INTERRUPT)
+			caps |= FF_TCAP_FIXED_URB;
 		break;
-	case FFUC_MODEL_BABYFACE_CLASSIC:
-		caps |= FF_CAP_MUTE_ON_STOP |
-			FF_CAP_FRAME_LEAD |
-			FF_CAP_STATUS_RUNNING_ONLY |
-			FF_CAP_LEAD_HORIZON |
-			FF_CAP_MUTE_MASK_18BIT;
+	case FF_PRODUCT_ID_E:
+		caps |= FF_TCAP_FLASH_GUARD |
+			FF_TCAP_MUTE_ON_STOP |
+			FF_TCAP_FRAME_LEAD |
+			FF_TCAP_STATUS_RUNNING_ONLY |
+			FF_TCAP_LEAD_HORIZON |
+			FF_TCAP_MUTE_MASK_18BIT |
+			FF_TCAP_KILL_BOTH;
 		break;
 	default:
 		break;
 	}
-	if (d->transport == FFUC_XPORT_ISO || (caps & FF_CAP_FRAME_LEAD))
-		caps |= FF_CAP_KILL_BOTH;
 	return caps;
 }
+
 
 static int ff_probe(struct usb_interface *intf,
 		      const struct usb_device_id *usb_id)
@@ -4062,9 +4142,9 @@ static int ff_probe(struct usb_interface *intf,
 		return -ENODEV;
 
 	/* One card per physical UCX: bind either IF0 or IF5, never both. */
-	if (caps & FF_CAP_IF5_SELECT &&
-	    ((ucx_if5 && desc->transport != FFUC_XPORT_INTERRUPT) ||
-	     (!ucx_if5 && desc->transport != FFUC_XPORT_ISO)))
+	if (caps & FF_TCAP_IF5_SELECT &&
+	    ((ucx_if5 && desc->transport != FF_XPORT_INTERRUPT) ||
+	     (!ucx_if5 && desc->transport != FF_XPORT_ISO)))
 		return -ENODEV;
 
 	mutex_lock(&devices_mutex);
@@ -4088,8 +4168,7 @@ static int ff_probe(struct usb_interface *intf,
 	chip->dev = usb_get_dev(dev);
 	chip->intf = intf;
 	chip->desc = desc;
-	chip->model = desc->model;
-	chip->iso = desc->transport == FFUC_XPORT_ISO;
+	chip->iso = desc->transport == FF_XPORT_ISO;
 	chip->caps = caps;
 	chip->dev_idx = dev_idx;
 	chip->audio_iface = desc->audio_iface;
@@ -4122,24 +4201,24 @@ static int ff_probe(struct usb_interface *intf,
 	WRITE_ONCE(chip->meter_phase_lost, true);
 	atomic_set(&chip->state_urbs, 0);
 	atomic_set(&chip->hwdep_users, 0);
-	if (kfifo_alloc(&chip->event_fifo, FFUC_EVENT_FIFO_SIZE, GFP_KERNEL)) {
+	if (kfifo_alloc(&chip->event_fifo, FF_EVENT_FIFO_SIZE, GFP_KERNEL)) {
 		ret = -ENOMEM;
 		goto free_card;
 	}
 	card->private_free = ff_card_free;
 
-	chip->nurbs = clamp(nurbs, 2u, (unsigned int)FFUC_MAX_URBS);
+	chip->nurbs = clamp(nurbs, 2u, (unsigned int)FF_MAX_URBS);
 	chip->base_urb_frames = clamp(round_up(
-		(chip->caps & FF_CAP_FIXED_URB) ? ucx_if5_frames : urb_frames, 8),
-		8u, (chip->caps & FF_CAP_FIXED_URB) ? 1024u : 256u);
-	if (chip->nurbs * chip->base_urb_frames < FFUC_MIN_QUEUE_FRAMES) {
-		chip->nurbs = DIV_ROUND_UP(FFUC_MIN_QUEUE_FRAMES,
+		(chip->caps & FF_TCAP_FIXED_URB) ? ucx_if5_frames : urb_frames, 8),
+		8u, (chip->caps & FF_TCAP_FIXED_URB) ? 1024u : 256u);
+	if (chip->nurbs * chip->base_urb_frames < FF_MIN_QUEUE_FRAMES) {
+		chip->nurbs = DIV_ROUND_UP(FF_MIN_QUEUE_FRAMES,
 					   chip->base_urb_frames);
 		dev_dbg(&intf->dev, "using %u URBs to keep %u frames queued\n",
-			chip->nurbs, FFUC_MIN_QUEUE_FRAMES);
+			chip->nurbs, FF_MIN_QUEUE_FRAMES);
 	}
 	chip->iso_packets = clamp(DIV_ROUND_UP(chip->base_urb_frames, 6), 1u,
-				  (unsigned int)FFUC_MAX_ISO_PACKETS);
+				  (unsigned int)FF_MAX_ISO_PACKETS);
 	max_words = ff_max_words(chip);
 	if (chip->iso) {
 		chip->urb_bytes_max = chip->iso_packets *
@@ -4152,7 +4231,7 @@ static int ff_probe(struct usb_interface *intf,
 		 * frame count times 18 words, at 2x twice as many frames times
 		 * 14 words, and so on. */
 		for (i = 0; i < chip->desc->n_modes; i++) {
-			unsigned int frames = (chip->caps & FF_CAP_FIXED_URB) ?
+			unsigned int frames = (chip->caps & FF_TCAP_FIXED_URB) ?
 				chip->base_urb_frames :
 				chip->base_urb_frames << i;
 
@@ -4160,7 +4239,7 @@ static int ff_probe(struct usb_interface *intf,
 				   max(chip->modes[i].words,
 				       ff_mode_out_words(&chip->modes[i])));
 		}
-		chip->urb_bytes_max = span * FFUC_SAMPLE_BYTES;
+		chip->urb_bytes_max = span * FF_SAMPLE_BYTES;
 		if (chip->iso) {
 			const struct ff_mode *im;
 			unsigned int k;
@@ -4172,15 +4251,15 @@ static int ff_probe(struct usb_interface *intf,
 				WARN_ON(im->max_frames > 31);
 				WARN_ON(im->neps != 1);
 				WARN_ON(im->max_frames * (im->words + 1) *
-					FFUC_SAMPLE_BYTES > im->out_mps);
-				WARN_ON(FFUC_ISO_IN_HEADER +
+					FF_SAMPLE_BYTES > im->out_mps);
+				WARN_ON(FF_ISO_IN_HEADER +
 					im->max_frames * im->words *
-					FFUC_SAMPLE_BYTES > im->in_mps);
+					FF_SAMPLE_BYTES > im->in_mps);
 			}
 		}
 	}
 	/* The Windows IF5 driver reads 73,728-byte IN URBs. */
-	if ((chip->desc->quirks & FFUC_QUIRK_IF5_PLAYBACK_MASK) &&
+	if ((chip->desc->quirks & FF_QUIRK_IF5_PLAYBACK_MASK) &&
 	    chip->urb_bytes_max < 73728)
 		chip->urb_bytes_max = 73728;
 	chip->rate = 48000;
@@ -4189,17 +4268,17 @@ static int ff_probe(struct usb_interface *intf,
 	dev_idx = -1;		/* released by ff_card_free() from now on */
 
 	strscpy(card->driver, "FirefaceUSB", sizeof(card->driver));
-	strscpy(card->shortname, desc->shortname, sizeof(card->shortname));
-	strscpy(card->mixername, desc->shortname, sizeof(card->mixername));
+	strscpy(card->shortname, "Fireface", sizeof(card->shortname));
+	strscpy(card->mixername, "Fireface", sizeof(card->mixername));
 	if (!id[chip->dev_idx])
-		snd_card_set_id(card, desc->card_id);
+		snd_card_set_id(card, "Fireface");
 
 	ff_midi_init(chip);
 	ret = ff_alloc_urbs(chip);
 	if (ret < 0)
 		goto free_card;
 
-	if (desc->status_iface != FFUC_IFACE_NONE) {
+	if (desc->status_iface != FF_IFACE_NONE) {
 		chip->status_intf = usb_ifnum_to_if(dev, desc->status_iface);
 		if (chip->status_intf &&
 		    usb_driver_claim_interface(&ff_driver, chip->status_intf,
@@ -4217,16 +4296,15 @@ static int ff_probe(struct usb_interface *intf,
 	{
 		u32 st = 0;
 
-		if (ff_vendor_recv(chip, FFUC_REQ_STATUS, 0, 0, &st,
+		if (ff_vendor_recv(chip, FF_REQ_STATUS, 0, 0, &st,
 				     sizeof(st)) == 0)
 			dev_info(&intf->dev,
 				 "probe status 0x%08x rate index %u (device state before any write)\n",
 				 le32_to_cpu(st), le32_to_cpu(st) >> 24);
 	}
 	snprintf(card->longname, sizeof(card->longname),
-		 "RME %s (%s, firmware %u) at %s",
-		 desc->name,
-		 chip->iso ? "ISO transport" : "interrupt transport",
+		 "RME Fireface (%s transport, firmware %u) at %s",
+		 chip->iso ? "ISO" : "interrupt",
 		 chip->firmware, dev_name(&dev->dev));
 
 	ret = ff_hw_setup(chip);
@@ -4237,7 +4315,7 @@ static int ff_probe(struct usb_interface *intf,
 	ret = ff_create_pcm(chip);
 	if (ret < 0)
 		goto free_card;
-	ret = ffuc_hwdep_create(chip);
+	ret = ff_hwdep_create(chip);
 	if (ret < 0)
 		goto free_card;
 	ret = ff_midi_create(chip);
@@ -4292,7 +4370,7 @@ static void ff_disconnect(struct usb_interface *intf)
 	mutex_unlock(&chip->mutex);
 	cancel_work_sync(&chip->recover_work);
 	cancel_work_sync(&chip->prefill_work);
-	ffuc_hwdep_quiesce(chip);
+	ff_hwdep_quiesce(chip);
 	ff_midi_cleanup(chip);
 	if (chip->status_intf) {
 		usb_driver_release_interface(&ff_driver, chip->status_intf);
@@ -4358,7 +4436,7 @@ static int ff_resume_common(struct usb_interface *intf, bool reset)
 		 * state.  Force the next engine start to select the alternate
 		 * setting and, on the UC, replay the session-open sequence.
 		 */
-		if (chip->caps & FF_CAP_SESSION_ON_RATE_CHANGE) {
+		if (chip->caps & FF_TCAP_SESSION_ON_RATE_CHANGE) {
 			chip->uc_session = true;
 			chip->session_reopen = true;
 		}

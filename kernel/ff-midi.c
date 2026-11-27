@@ -36,13 +36,13 @@
 
 #include "ff.h"
 
-#define FFUC_MIDI_PACKET	4
-#define FFUC_MIDI_IN_BYTES	512
+#define FF_MIDI_PACKET	4
+#define FF_MIDI_IN_BYTES	512
 /* One bulk packet is at most 512 bytes, so at most 128 event packets. */
-#define FFUC_MIDI_OUT_BYTES	128
-#define FFUC_MIDI_OUT_PACKETS	128
-#define FFUC_MIDI_OUT_INTERVAL	1	/* ms between output polls */
-#define FFUC_MIDI_OUT_TIMEOUT	1000	/* ms per bulk transfer */
+#define FF_MIDI_OUT_BYTES	128
+#define FF_MIDI_OUT_PACKETS	128
+#define FF_MIDI_OUT_INTERVAL	1	/* ms between output polls */
+#define FF_MIDI_OUT_TIMEOUT	1000	/* ms per bulk transfer */
 
 /* USB-MIDI 1.0 code index number -> payload bytes. */
 static const u8 ff_midi_cin_len[16] = {
@@ -76,8 +76,8 @@ static void ff_midi_in_complete(struct urb *urb)
 			urb->actual_length, (int)urb->actual_length,
 			urb->transfer_buffer);
 
-	for (i = 0; i + FFUC_MIDI_PACKET <= urb->actual_length;
-	     i += FFUC_MIDI_PACKET) {
+	for (i = 0; i + FF_MIDI_PACKET <= urb->actual_length;
+	     i += FF_MIDI_PACKET) {
 		const u8 *pkt = urb->transfer_buffer + i;
 		struct ff_midi_port *port;
 		struct snd_rawmidi_substream *sub;
@@ -108,13 +108,13 @@ static void ff_midi_in_start(struct ff *chip)
 		return;
 
 	WRITE_ONCE(chip->midi_in_running, true);
-	for (i = 0; i < FFUC_MIDI_IN_URBS; i++) {
+	for (i = 0; i < FF_MIDI_IN_URBS; i++) {
 		struct urb *urb = chip->midi_in_urb[i];
 
 		usb_fill_bulk_urb(urb, chip->dev,
 				  usb_rcvbulkpipe(chip->dev,
 						  chip->desc->midi_in_ep),
-				  chip->midi_in_buf[i], FFUC_MIDI_IN_BYTES,
+				  chip->midi_in_buf[i], FF_MIDI_IN_BYTES,
 				  ff_midi_in_complete, chip);
 		ret = usb_submit_urb(urb, GFP_ATOMIC);
 		if (ret < 0) {
@@ -131,7 +131,7 @@ static void ff_midi_in_stop(struct ff *chip)
 	unsigned int i;
 
 	WRITE_ONCE(chip->midi_in_running, false);
-	for (i = 0; i < FFUC_MIDI_IN_URBS; i++)
+	for (i = 0; i < FF_MIDI_IN_URBS; i++)
 		usb_kill_urb(chip->midi_in_urb[i]);
 }
 
@@ -143,10 +143,10 @@ static unsigned int ff_midi_emit(unsigned int port,
 {
 	u8 *pkt;
 
-	if (npkt >= FFUC_MIDI_OUT_PACKETS)
+	if (npkt >= FF_MIDI_OUT_PACKETS)
 		return npkt;
 
-	pkt = out + npkt * FFUC_MIDI_PACKET;
+	pkt = out + npkt * FF_MIDI_PACKET;
 	pkt[0] = (port << 4) | code;
 	pkt[1] = data[0];
 	pkt[2] = len > 1 ? data[1] : 0;
@@ -249,7 +249,7 @@ static void ff_midi_out_work(struct work_struct *work)
 						   out_work.work);
 	struct ff *chip = port->chip;
 	struct snd_rawmidi_substream *substream;
-	u8 in[FFUC_MIDI_OUT_BYTES];
+	u8 in[FF_MIDI_OUT_BYTES];
 	u8 *out = port->out_buf;
 
 	if (READ_ONCE(chip->disconnected) || !READ_ONCE(port->out_running))
@@ -270,8 +270,8 @@ static void ff_midi_out_work(struct work_struct *work)
 			ret = usb_bulk_msg(chip->dev,
 					   usb_sndbulkpipe(chip->dev,
 							   chip->desc->midi_out_ep),
-					   out, npkt * FFUC_MIDI_PACKET, &sent,
-					   FFUC_MIDI_OUT_TIMEOUT);
+					   out, npkt * FF_MIDI_PACKET, &sent,
+					   FF_MIDI_OUT_TIMEOUT);
 			if (ret < 0) {
 				dev_warn_ratelimited(&chip->dev->dev,
 						     "MIDI OUT %u failed: %d\n",
@@ -294,7 +294,7 @@ static void ff_midi_out_work(struct work_struct *work)
 
 	if (READ_ONCE(port->out_running))
 		schedule_delayed_work(&port->out_work,
-				      msecs_to_jiffies(FFUC_MIDI_OUT_INTERVAL));
+				      msecs_to_jiffies(FF_MIDI_OUT_INTERVAL));
 }
 
 /* -- ALSA rawmidi ---------------------------------------------------- */
@@ -389,7 +389,7 @@ void ff_midi_init(struct ff *chip)
 	unsigned int i;
 
 	atomic_set(&chip->midi_in_users, 0);
-	for (i = 0; i < FFUC_MIDI_PORTS; i++) {
+	for (i = 0; i < FF_MIDI_PORTS; i++) {
 		struct ff_midi_port *port = &chip->midi_port[i];
 
 		port->chip = chip;
@@ -488,16 +488,16 @@ int ff_midi_create(struct ff *chip)
 		return -EBUSY;
 	chip->midi_intf = intf;
 	chip->n_midi_ports = ff_midi_port_count(intf, chip->desc);
-	if (chip->n_midi_ports > FFUC_MIDI_PORTS) {
+	if (chip->n_midi_ports > FF_MIDI_PORTS) {
 		dev_info(&chip->dev->dev,
 			 "MIDI: %u ports on the endpoint pair, exposing %u\n",
-			 chip->n_midi_ports, FFUC_MIDI_PORTS);
-		chip->n_midi_ports = FFUC_MIDI_PORTS;
+			 chip->n_midi_ports, FF_MIDI_PORTS);
+		chip->n_midi_ports = FF_MIDI_PORTS;
 	}
 
-	for (i = 0; i < FFUC_MIDI_IN_URBS; i++) {
+	for (i = 0; i < FF_MIDI_IN_URBS; i++) {
 		chip->midi_in_urb[i] = usb_alloc_urb(0, GFP_KERNEL);
-		chip->midi_in_buf[i] = kmalloc(FFUC_MIDI_IN_BYTES, GFP_KERNEL);
+		chip->midi_in_buf[i] = kmalloc(FF_MIDI_IN_BYTES, GFP_KERNEL);
 		if (!chip->midi_in_urb[i] || !chip->midi_in_buf[i]) {
 			ret = -ENOMEM;
 			goto err;
@@ -509,13 +509,13 @@ int ff_midi_create(struct ff *chip)
 		struct snd_rawmidi *rmidi;
 		char id[32];
 
-		port->out_buf = kmalloc(FFUC_MIDI_OUT_PACKETS *
-					FFUC_MIDI_PACKET, GFP_KERNEL);
+		port->out_buf = kmalloc(FF_MIDI_OUT_PACKETS *
+					FF_MIDI_PACKET, GFP_KERNEL);
 		if (!port->out_buf) {
 			ret = -ENOMEM;
 			goto err;
 		}
-		strscpy(id, chip->desc->shortname, sizeof(id));
+		strscpy(id, "Fireface", sizeof(id));
 		ret = snd_rawmidi_new(chip->card, id, i, 1, 1, &rmidi);
 		if (ret < 0)
 			goto err;
@@ -525,8 +525,8 @@ int ff_midi_create(struct ff *chip)
 		rmidi->info_flags = SNDRV_RAWMIDI_INFO_OUTPUT |
 				    SNDRV_RAWMIDI_INFO_INPUT |
 				    SNDRV_RAWMIDI_INFO_DUPLEX;
-		snprintf(rmidi->name, sizeof(rmidi->name), "%s MIDI %u",
-			 chip->desc->name, i + 1);
+		snprintf(rmidi->name, sizeof(rmidi->name), "Fireface MIDI %u",
+			 i + 1);
 		snd_rawmidi_set_ops(rmidi, SNDRV_RAWMIDI_STREAM_INPUT,
 				    &ff_midi_input_ops);
 		snd_rawmidi_set_ops(rmidi, SNDRV_RAWMIDI_STREAM_OUTPUT,
@@ -536,7 +536,7 @@ int ff_midi_create(struct ff *chip)
 
 err:
 	ff_midi_release_ports(chip);
-	for (i = 0; i < FFUC_MIDI_IN_URBS; i++) {
+	for (i = 0; i < FF_MIDI_IN_URBS; i++) {
 		usb_free_urb(chip->midi_in_urb[i]);
 		chip->midi_in_urb[i] = NULL;
 		kfree(chip->midi_in_buf[i]);
@@ -552,7 +552,7 @@ void ff_midi_cleanup(struct ff *chip)
 	unsigned int i;
 
 	WRITE_ONCE(chip->midi_in_running, false);
-	for (i = 0; i < FFUC_MIDI_PORTS; i++) {
+	for (i = 0; i < FF_MIDI_PORTS; i++) {
 		struct ff_midi_port *port = &chip->midi_port[i];
 
 		WRITE_ONCE(port->out_running, false);
@@ -562,7 +562,7 @@ void ff_midi_cleanup(struct ff *chip)
 		kfree(port->out_buf);
 		port->out_buf = NULL;
 	}
-	for (i = 0; i < FFUC_MIDI_IN_URBS; i++) {
+	for (i = 0; i < FF_MIDI_IN_URBS; i++) {
 		if (chip->midi_in_urb[i]) {
 			usb_kill_urb(chip->midi_in_urb[i]);
 			usb_free_urb(chip->midi_in_urb[i]);
@@ -581,7 +581,7 @@ void ff_midi_suspend(struct ff *chip)
 {
 	unsigned int i;
 
-	for (i = 0; i < FFUC_MIDI_PORTS; i++) {
+	for (i = 0; i < FF_MIDI_PORTS; i++) {
 		struct ff_midi_port *port = &chip->midi_port[i];
 
 		WRITE_ONCE(port->out_running, false);

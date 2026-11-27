@@ -257,9 +257,9 @@ group carries a ~120 ms gap between its fifth and sixth writes.  The
 initial stream opens directly after the probe sequence; the engine start
 commits the rate (§9).
 
-A rate change closes the stream with `0x13 0x000f/0xc000`, writes the DDS
-divisor word, the new `0x10` rate family and the `0x10 / 1487` options commit
-(§9), waits 200 ms, then opens with:
+The Windows reference host's rate change closes the stream with
+`0x13 0x000f/0xc000`, writes a DDS divisor word, the new `0x10` rate family
+and the `0x10 / 1487` options commit (§9), waits 200 ms, then opens with:
 
 | Request | Value / index |
 |---|---|
@@ -503,9 +503,12 @@ follows the device/graph rate.
 The rate sequence writes the DDS divisor word (`0x1b`, wValue =
 high16(p1), wIndex = (p1 & 0xff00) | family, p1 = 0x5f5e10000000 / rate
 shifted left 1 above 57000 Hz and left 2 above 114000 Hz), then the
-family word, then the options commit. Rate selection uses `0x10`,
-`wIndex 48`, value `family << 4`. The nine supported rates, their write
-words and their state-word readback:
+family word. Both transport forms write these two words on every engine
+start: a fresh start, a same-rate repeat, a rate change, a resume and a
+recovery. The AP ISO form does not write the options word; the PC interrupt
+form follows the family word with the options commit. Rate selection uses
+`0x10`, `wIndex 48`, value `family << 4`. The nine supported rates, their
+write words and their state-word readback:
 
 | Rate | Family | Band | Family word | DDS `0x1b` wValue / wIndex | State-word index (§9.1) |
 |---|---|---|---|---|---|
@@ -525,10 +528,12 @@ setting. The DDS divisor word depends only on the family; the 1x words
 are the capture-verified 0% pitch words below.
 
 The word selects the 32 kHz, 44.1 kHz or 48 kHz family; the stream multiplier
-follows the active stream.  A selection is followed by the options commit,
-`0x10 / wIndex 1487`.  Verified across all nine rates on the UC (firmware
-127), PC interrupt and AP ISO personalities: the device clock follows the
-rate sequence, and the state-word index matches the running rate (§9.1).
+follows the active stream.  The PC interrupt form follows a family write
+with the options commit (`0x10 / wIndex 1487`); the AP ISO form does not
+write the options word.  Verified across all nine rates on the UC
+(firmware 127), PC interrupt and AP ISO personalities: the device clock
+follows the rate sequence, and the state-word index matches the running
+rate (§9.1).
 
 The options word at `wIndex 1487` carries word clock input termination
 (bit 0), clock source (bits 1–3), word-clock single-speed (bit 6), SPDIF
@@ -555,10 +560,12 @@ writes `0x0010 / 0x0030`, then `0x0480 / 1487`, and `0x11` then reports the
 44.1 kHz family (`0x01f0ff00`).  Bit 0 is not needed for the commit to
 apply.
 
-The options commit writes back the options word the device holds.  The
-host reads `0x10` as four bytes, little-endian.  It keeps the bits under
-`0x05cf` and writes them with `wIndex 1487`.  The commit applies the rate
-family and leaves clock source and output formats as the mixer set them.
+The Windows reference host's options commit writes back the options word
+the device holds.  The host reads `0x10` as four bytes, little-endian.  It
+keeps the bits under `0x05cf` and writes them with `wIndex 1487`.  The
+commit applies the rate family and leaves clock source and output formats
+as the mixer set them.  The AP ISO form does not read or write the options
+word; the PC interrupt form reads and rewrites it.
 
 The read form returns the bits under `0x05cf` as last written.  The
 clock-source bits report the selected source, not the locked one.  Bits

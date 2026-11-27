@@ -10,8 +10,8 @@
  * This file holds the convergence decision only, free of USB and ALSA,
  * so kernel/test/ can drive it with packet sequences on the host.
  */
-#ifndef FFUC_CADENCE_H
-#define FFUC_CADENCE_H
+#ifndef FF_CADENCE_H
+#define FF_CADENCE_H
 
 #ifdef __KERNEL__
 #include <linux/types.h>
@@ -27,7 +27,7 @@ typedef uint64_t u64;
  * window mean averages the clock's add/drop exactly.  Integer-frame
  * rates converge in any window.  The verdict needs successive windows
  * to agree, not a fixed packet count. */
-#define FFUC_CADENCE_WIN_PKTS	80
+#define FF_CADENCE_WIN_PKTS	80
 
 struct ff_cadence {
 	u64 win_frames;		/* frames summed in the current window */
@@ -111,7 +111,7 @@ static inline void ff_cadence_window(struct ff_cadence *c, u32 rate,
 
 	c->win_frames += urb_frames;
 	c->win_pkts += pkts;
-	if (c->win_pkts < FFUC_CADENCE_WIN_PKTS)
+	if (c->win_pkts < FF_CADENCE_WIN_PKTS)
 		return;
 	mean = (u32)(c->win_frames * 8000 / c->win_pkts);
 	if (c->prev_mean) {
@@ -140,4 +140,4 @@ static inline bool ff_cadence_stop_mismatch(const struct ff_cadence *c,
 	return c->stable_mean && ff_cadence_mismatch(rate, c->stable_mean);
 }
 
-#endif /* FFUC_CADENCE_H */
+#endif /* FF_CADENCE_H */

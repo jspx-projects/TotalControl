@@ -53,11 +53,15 @@ impl Model {
         }
     }
 
-    fn from_abi(model: u32) -> Option<Self> {
-        match model {
-            MODEL_UC => Some(Model::Uc),
-            MODEL_UCX => Some(Model::Ucx),
-            _ => None,
+    /// Map a USB product id to the host profile.  The driver does not name
+    /// a model; the product id is a hardware fact and the name lives here.
+    fn from_usb(_vendor: u32, product: u32) -> Option<Self> {
+        if is_uc(product) {
+            Some(Model::Uc)
+        } else if is_ucx(product) {
+            Some(Model::Ucx)
+        } else {
+            None
         }
     }
 }
@@ -95,7 +99,7 @@ impl DeviceInfo {
         self.abi >= ABI_VERSION
     }
     fn from_abi(card: i32, info: HwdepInfo) -> Option<Self> {
-        let model = Model::from_abi(info.model)?;
+        let model = Model::from_usb(info.vendor, info.product)?;
         let iso = match info.transport {
             XPORT_INTERRUPT => false,
             XPORT_ISO => true,
@@ -119,7 +123,7 @@ impl DeviceInfo {
             status_ep: info.status_ep,
             rate: info.rate,
             firmware: info.firmware,
-            name: info.name_str(),
+            name: model.name().to_string(),
             serial: info.serial_str(),
             abi: info.abi,
         })
@@ -5972,15 +5976,32 @@ impl RmeDevice for Fireface {
     }
 
     fn write_pitch_clock(&mut self, pitch_percent: f32) -> Result<(), Error> {
-        // UC and UCX share the four-word clock quad.  The UC pitch capture
-        // shows four `0x1b` writes per step, one per base family, with
-        // DDS = 0x5f5e10000000 / (base * (1 + pitch / 100)).  This writes the
-        // clock only; the stored host setting is left to `set_pitch`.
+        // The pitch path follows the transport.  The ISO path mirrors the
+        // Apple kext's hwSetSampleRate: one DDS word for the active base
+        // family.  The interrupt path keeps the four-word clock quad from
+        // the Windows/UC capture: one word per base family.
+        // DDS = 0x5f5e10000000 / (base * (1 + pitch / 100)).
         let pitch = pitch_percent.clamp(-5.0, 5.0);
+        let dds_for = |base: u32| {
+            (0x5f5e10000000u64 as f64 / (base as f64 * (1.0 + pitch as f64 / 100.0))).round()
+                as u64
+        };
+        if self.info.iso {
+            let (base, family) = match self.settings.sample_rate {
+                32_000 | 64_000 | 128_000 => (32_000u32, 0u16),
+                44_100 | 88_200 | 176_400 => (44_100, 1),
+                _ => (48_000, 2),
+            };
+            let dds = dds_for(base);
+            return self.vendor_out(
+                protocol::req::DDS,
+                (dds >> 16) as u16,
+                ((dds & 0xff00) as u16) | family,
+            );
+        }
         let bases = [32_000u32, 44_100, 48_000, 50_000];
         for (family, base) in bases.iter().enumerate() {
-            let dds = (0x5f5e10000000u64 as f64 / (*base as f64 * (1.0 + pitch as f64 / 100.0)))
-                .round() as u64;
+            let dds = dds_for(*base);
             self.vendor_out(
                 protocol::req::DDS,
                 (dds >> 16) as u16,
@@ -5997,10 +6018,17 @@ impl RmeDevice for Fireface {
             // nothing is written here.
             return Ok(());
         }
-        // Measured H82–H98: `0x10` wIndex 48 carries the base family only,
-        // and 2x/4x reuse it (the multiplier comes from the streaming
-        // alternate setting). The word is sticky, so it must be written
-        // explicitly — a mixer snapshot does not set the rate.
+        if self.info.iso {
+            // The ISO rate sequence is the driver's: it writes the DDS and
+            // the family word at every engine start. A host family-only
+            // write selects a different family without the DDS, so the
+            // driver owns this transition on the ISO transport.
+            return Ok(());
+        }
+        // Measured H82–H98 (interrupt): `0x10` wIndex 48 carries the base
+        // family only, and 2x/4x reuse it (the multiplier comes from the
+        // streaming alternate setting). The word is sticky, so it must be
+        // written explicitly — a mixer snapshot does not set the rate.
         let word = match rate {
             32_000 => 0x0000,
             44_100 | 88_200 | 176_400 => 0x0010,
@@ -8773,6 +8801,22 @@ mod tests {
     }
 
     #[test]
+    fn iso_set_sample_rate_leaves_the_rate_sequence_to_the_driver() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.info.iso = true;
+        writes.lock().unwrap().clear();
+
+        dev.set_sample_rate(44_100).unwrap();
+
+        assert_eq!(dev.settings().sample_rate, 44_100);
+        assert!(!writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x0010, 48))));
+    }
+
+    #[test]
     fn async_writer_orders_words_before_vendor_requests() {
         let (mut dev, writes) = open_async(Model::Ucx);
         writes.lock().unwrap().clear();
@@ -10416,6 +10460,35 @@ mod tests {
             uc::matrix_word(0.5, 3 * 36).1
         )));
         assert!(!w.iter().any(|x| matches!(x, Write::Words(_))));
+    }
+
+    #[test]
+    fn iso_pitch_writes_one_target_family_dds_word() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.info.iso = true;
+        dev.settings.sample_rate = 48_000;
+        writes.lock().unwrap().clear();
+
+        dev.write_pitch_clock(0.0).unwrap();
+        {
+            let w = writes.lock().unwrap();
+            let dds: Vec<_> = w
+                .iter()
+                .filter(|x| matches!(x, Write::Vendor(protocol::req::DDS, ..)))
+                .collect();
+            assert_eq!(dds.len(), 1);
+            assert!(dds.contains(&&Write::Vendor(protocol::req::DDS, 0x8235, 0x5502)));
+        }
+
+        writes.lock().unwrap().clear();
+        dev.write_pitch_clock(5.0).unwrap();
+        let w = writes.lock().unwrap();
+        let dds: Vec<_> = w
+            .iter()
+            .filter(|x| matches!(x, Write::Vendor(protocol::req::DDS, ..)))
+            .collect();
+        assert_eq!(dds.len(), 1);
+        assert!(dds.contains(&&Write::Vendor(protocol::req::DDS, 0x7c02, 0x0802)));
     }
 
     #[test]

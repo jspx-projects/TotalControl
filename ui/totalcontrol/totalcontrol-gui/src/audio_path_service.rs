@@ -4,9 +4,11 @@
 //!
 //! Two independent loops publish into one latest-value [`EngineSnapshot`]:
 //!
-//! - a **kernel-fact collector** reads the PCM owner, `hw_params` and the ALSA
-//!   delay from procfs on a fast cadence. These are short kernel reads, never a
-//!   server call, so they continue while PipeWire is stuck;
+//! - a **kernel-fact collector** reads the PCM owner and `hw_params` from
+//!   procfs and the live queue/clock from the driver `SNAPSHOT` on a fast
+//!   cadence. These are short kernel reads, never a server call, so they
+//!   continue while PipeWire is stuck; procfs remains the fallback when the
+//!   driver does not provide a snapshot;
 //! - a **PipeWire worker** executes engine intents (force rate/quantum, set the
 //!   scheduling policy, re-prepare, allowed-rates, sink volume) and the graph
 //!   reads. Every call is bounded by the `pw_clock` timeout; a stall delays only
@@ -43,6 +45,10 @@ pub struct EngineSnapshot {
     pub delay: Option<u32>,
     /// The ring fill (`appl_ptr − hw_ptr`), frames.
     pub fill: Option<u32>,
+    /// Capture `snd_pcm_delay` (ring fill + in-flight), frames.
+    pub capture_delay: Option<u32>,
+    /// The capture ring fill (`hw_ptr − appl_ptr`), frames.
+    pub capture_fill: Option<u32>,
     /// The PCM state (`RUNNING`, `XRUN`, …), empty when closed.
     pub pcm_state: String,
     /// When the kernel facts were last read.
@@ -75,6 +81,8 @@ impl Default for EngineSnapshot {
             stream: None,
             delay: None,
             fill: None,
+            capture_delay: None,
+            capture_fill: None,
             pcm_state: String::new(),
             kernel_at: None,
             clock: None,
@@ -258,9 +266,18 @@ impl Drop for AudioPathService {
 /// The kernel-fact collector: procfs only, never a server call. It keeps the
 /// PCM owner, stream and delay live even when PipeWire is stuck.
 fn collect_kernel_facts(card_id: &str, snapshot: &Arc<Mutex<EngineSnapshot>>, stop: &AtomicBool) {
+    let mut hwdep = pw_clock::card_number(card_id)
+        .and_then(|card| totalcontrol_core::fireface::hwdep::Hwdep::open(card).ok());
+    let mut retry = 0u32;
     while !stop.load(Ordering::Relaxed) {
+        if hwdep.is_none() && retry % 8 == 0 {
+            hwdep = pw_clock::card_number(card_id)
+                .and_then(|card| totalcontrol_core::fireface::hwdep::Hwdep::open(card).ok());
+        }
+        retry = retry.wrapping_add(1);
         let status = pw_clock::card_pcm_status(card_id);
         let stream = pw_clock::card_stream(card_id);
+        let live = hwdep.as_ref().and_then(|h| h.snapshot().ok());
         let comm = status
             .as_ref()
             .and_then(|s| s.owner_pid)
@@ -277,8 +294,21 @@ fn collect_kernel_facts(card_id: &str, snapshot: &Arc<Mutex<EngineSnapshot>>, st
             snap.owner = owner;
             snap.owner_comm = comm;
             snap.stream = stream;
-            snap.delay = status.as_ref().and_then(|s| s.delay);
-            snap.fill = status.as_ref().and_then(|s| s.fill);
+            let (delay, fill) = match live.as_ref().filter(|l| l.out.present != 0) {
+                Some(l) => (Some(l.out.delay), Some(l.out.fill)),
+                None => (
+                    status.as_ref().and_then(|s| s.delay),
+                    status.as_ref().and_then(|s| s.fill),
+                ),
+            };
+            snap.delay = delay;
+            snap.fill = fill;
+            snap.capture_delay = live.as_ref().and_then(|l| {
+                (l.input.present != 0).then_some(l.input.delay)
+            });
+            snap.capture_fill = live.as_ref().and_then(|l| {
+                (l.input.present != 0).then_some(l.input.fill)
+            });
             snap.pcm_state = status.map(|s| s.state).unwrap_or_default();
             snap.kernel_at = Some(Instant::now());
         }

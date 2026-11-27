@@ -208,12 +208,13 @@ impl Hwdep {
         Ok(())
     }
 
-    pub fn counters(&self) -> io::Result<HwdepCounters> {
-        let mut c = MaybeUninit::<HwdepCounters>::zeroed();
+    /// Accumulated diagnostics and watermarks (ABI 9).
+    pub fn diagnostics(&self) -> io::Result<HwdepDiagnostics> {
+        let mut c = MaybeUninit::<HwdepDiagnostics>::zeroed();
         let ret = unsafe {
             libc::ioctl(
                 self.file.as_raw_fd(),
-                IOCTL_COUNTERS as libc::c_ulong,
+                IOCTL_DIAGNOSTICS as libc::c_ulong,
                 c.as_mut_ptr(),
             )
         };
@@ -221,6 +222,30 @@ impl Hwdep {
             return Err(io::Error::last_os_error());
         }
         Ok(unsafe { c.assume_init() })
+    }
+
+    /// Historical name for the diagnostics record.
+    pub fn counters(&self) -> io::Result<HwdepCounters> {
+        self.diagnostics()
+    }
+
+    /// One atomic sample of both PCM directions and the device clock.
+    pub fn snapshot(&self) -> io::Result<HwdepSnapshot> {
+        let mut s = HwdepSnapshot {
+            size: size_of::<HwdepSnapshot>() as u32,
+            ..Default::default()
+        };
+        let ret = unsafe {
+            libc::ioctl(
+                self.file.as_raw_fd(),
+                IOCTL_SNAPSHOT as libc::c_ulong,
+                &mut s,
+            )
+        };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(s)
     }
 
     /// Wait until at least one event is ready.  Returns `false` on timeout.
@@ -320,7 +345,7 @@ fn enumerate_with(include_incompatible: bool) -> Vec<Discovered> {
         let Ok(info) = hw.info() else {
             continue;
         };
-        if info.model == MODEL_UC || info.model == MODEL_UCX {
+        if is_uc(info.product) || is_ucx(info.product) {
             out.push(Discovered { card, info });
         }
     }
@@ -393,7 +418,7 @@ pub fn class_compliant_cards() -> Vec<ClassCompliantCard> {
         }
         if let Ok(hw) = Hwdep::open(card) {
             if let Ok(info) = hw.info() {
-                if info.model == MODEL_UC || info.model == MODEL_UCX {
+                if is_uc(info.product) || is_ucx(info.product) {
                     continue; // proprietary mode, not CC
                 }
             }
@@ -416,11 +441,13 @@ fn parse_card_number(s: &str) -> Option<i32> {
 }
 
 /// One supported rate and the driver's achievable geometry at it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RateEnv {
     pub rate: u32,
     pub period_floor: u32,
     pub buffer_min: u32,
+    pub capture_channels: u32,
+    pub playback_channels: u32,
 }
 
 /// The driver-reported achievable envelope for the loaded module and device.
@@ -463,6 +490,8 @@ pub fn query_rate_envelope(card: i32) -> Option<RateEnvelope> {
                 rate: r.rate,
                 period_floor: r.period_floor,
                 buffer_min: r.buffer_min,
+                capture_channels: r.capture_channels,
+                playback_channels: r.playback_channels,
             })
             .collect(),
     })
@@ -485,8 +514,8 @@ mod tests {
             nurbs: 2,
             iso: true,
             rates: vec![
-                RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336 },
-                RateEnv { rate: 96_000, period_floor: 96, buffer_min: 576 },
+                RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, capture_channels: 18, playback_channels: 18 },
+                RateEnv { rate: 96_000, period_floor: 96, buffer_min: 576, capture_channels: 14, playback_channels: 14 },
             ],
         };
         assert_eq!(env.rate_list(), vec![48_000, 96_000]);

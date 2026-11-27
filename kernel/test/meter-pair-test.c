@@ -60,17 +60,17 @@ static void feed(struct run *r, const char *roles)
 	for (; *roles; roles++) {
 		page(p, *roles, n++);
 		switch (ff_meter_feed(r->pair, &r->held, &r->lost, p, LEN)) {
-		case FFUC_METER_PAIR:
-		case FFUC_METER_PAIR_UNVERIFIED:
+		case FF_METER_PAIR:
+		case FF_METER_PAIR_UNVERIFIED:
 			r->out[r->pairs][0] = (char)r->pair[0];
 			r->out[r->pairs][1] = (char)r->pair[LEN];
 			r->out[r->pairs][2] = r->lost ? 'u' : '-';
 			r->pairs++;
 			break;
-		case FFUC_METER_REALIGNED:
+		case FF_METER_REALIGNED:
 			r->realigns++;
 			break;
-		case FFUC_METER_HELD:
+		case FF_METER_HELD:
 			break;
 		}
 	}

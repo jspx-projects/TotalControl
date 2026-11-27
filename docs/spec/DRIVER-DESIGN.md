@@ -110,9 +110,9 @@ policy.
 
 | Layer | Owns |
 |---|---|
-| `kernel/ffuc.c` | USB probe, descriptor table, alt/rate selection, URB engines, ALSA PCM, status/latch watchdog, recovery, suspend/resume |
-| `kernel/ffuc-hwdep.c` | raw EP0 vendor requests, IF1 word bursts, meter/state readers, event queue, backpressure |
-| `kernel/ffuc-midi.c` | USB-MIDI rawmidi ports |
+| `kernel/ff.c` | USB probe, descriptor table, alt/rate selection, URB engines, ALSA PCM, status/latch watchdog, recovery, suspend/resume |
+| `kernel/ff-hwdep.c` | raw EP0 vendor requests, IF1 word bursts, meter/state readers, event queue, backpressure |
+| `kernel/ff-midi.c` | USB-MIDI rawmidi ports |
 | host | device model, protocol semantics, routing, scenes, meter decoding |
 
 The kernel exposes these userspace interfaces:
@@ -146,18 +146,18 @@ block and each path; the normative text references the IDs.
 | D6 | status IN | status ticker and output-latch bit, `0x8b` | device |
 | D7 | IF2 USB-MIDI | MIDI packet endpoints | device |
 | D8/D9 | IF3 / IF4 page stream | firmware programming and page stream; unclaimed | device |
-| K1 | URB engine | submits and completes audio URBs; ISO implicit feedback (§4.3) or interrupt handshake (§4.4); cadence and continuity guards | `ffuc.c` |
-| K2 | ALSA PCM | the coherent PCM buffer and the duplex period gate (§4.2); fed exclusively by K1 | `ffuc.c` |
-| K3 | EP0 passthrough | one synchronous vendor request per `VENDOR` ioctl, bounded by the USB timeout | `ffuc-hwdep.c` |
-| K4 | IF1 word writer | one `WRITE_WORDS` burst per ioctl, ≤63 words, odd parity added | `ffuc-hwdep.c` |
-| K5 | state reader | resubmits the `0x8d` URB; emits STATE events | `ffuc-hwdep.c` |
-| K6 | meter pump | reader-triggered `0x85` submission with backpressure (§5.1); UC pair model | `ffuc-hwdep.c` |
-| K7 | status + watchdog | the `0x8b` URB; STATUS and LATCH events; the output-latch watchdog (§4.6) | `ffuc.c` |
-| K8 | event FIFO | the 64 KiB event queue; `read()`/`poll()` drain it; a full FIFO drops events | `ffuc-hwdep.c` |
-| K9 | USB-MIDI engine | bulk MIDI transfers, one stream per transfer | `ffuc-midi.c` |
-| K10 | recovery | marks the engine broken and restarts it (§4.6) | `ffuc.c` |
+| K1 | URB engine | submits and completes audio URBs; ISO implicit feedback (§4.3) or interrupt handshake (§4.4); cadence and continuity guards | `ff.c` |
+| K2 | ALSA PCM | the coherent PCM buffer and the duplex period gate (§4.2); fed exclusively by K1 | `ff.c` |
+| K3 | EP0 passthrough | one synchronous vendor request per `VENDOR` ioctl, bounded by the USB timeout | `ff-hwdep.c` |
+| K4 | IF1 word writer | one `WRITE_WORDS` burst per ioctl, ≤63 words, odd parity added | `ff-hwdep.c` |
+| K5 | state reader | resubmits the `0x8d` URB; emits STATE events | `ff-hwdep.c` |
+| K6 | meter pump | reader-triggered `0x85` submission with backpressure (§5.1); UC pair model | `ff-hwdep.c` |
+| K7 | status + watchdog | the `0x8b` URB; STATUS and LATCH events; the output-latch watchdog (§4.6) | `ff.c` |
+| K8 | event FIFO | the 64 KiB event queue; `read()`/`poll()` drain it; a full FIFO drops events | `ff-hwdep.c` |
+| K9 | USB-MIDI engine | bulk MIDI transfers, one stream per transfer | `ff-midi.c` |
+| K10 | recovery | marks the engine broken and restarts it (§4.6) | `ff.c` |
 | U1 | ALSA PCM node | `hw:<card>,0` | ALSA |
-| U2 | hwdep node | `/dev/snd/hwC<card>D0`; INFO/VENDOR/WRITE_WORDS/COUNTERS ioctls and the event stream | `ffuc-hwdep.c` |
+| U2 | hwdep node | `/dev/snd/hwC<card>D0`; INFO/VENDOR/WRITE_WORDS/COUNTERS ioctls and the event stream | `ff-hwdep.c` |
 | U3 | rawmidi nodes | one per logical MIDI port | ALSA |
 | H1 | PipeWire / DAW | the ALSA PCM client | host |
 | H2 | MIDI clients | rawmidi clients | host |
@@ -200,21 +200,21 @@ held by another reader.
 
 ## 2. Device descriptors and quirks
 
-`struct ffuc_device_desc` is the per-device table. USB IDs point at
+`struct ff_device_desc` is the per-device table. USB IDs point at
 descriptors through `.driver_info`. Each probe allocates its own
-`struct ffuc`; model state is per-card.
+`struct ff`; model state is per-card.
 
 A descriptor carries:
 
 - identity: name, card id, vendor/product;
 - transport: interface number, interrupt or ISO, audio/status/state/meter/MIDI
   endpoint numbers;
-- modes: one `ffuc_mode` per alternate setting (words, packet sizes, max
+- modes: one `ff_mode` per alternate setting (words, packet sizes, max
   frames);
 - channel counts, max rate, meter length;
 - channel-init ranges (`0x16` slot ranges);
 - quirks;
-- `ffuc_ops` callbacks: `init`, `set_rate`, `stream_start`, `stream_stop`,
+- `ff_ops` callbacks: `init`, `set_rate`, `stream_start`, `stream_stop`,
   `hw_mute`.
 
 Quirks:
@@ -227,7 +227,7 @@ Quirks:
 | `IF5_PLAYBACK_MASK` | request 19/20 channel mask; IN URBs are 73728 bytes |
 | `WIN_SESSION` | Windows-personality session timing: stop->start settle and close->rate / close->trio gaps |
 
-Model-specific behaviour belongs in a descriptor quirk or an `ffuc_ops`
+Model-specific behaviour belongs in a descriptor quirk or an `ff_ops`
 callback; the shared PCM/URB path stays model-independent.
 
 ## 3. Personalities and wire formats
@@ -244,7 +244,7 @@ The wire format is keyed to the transport: interrupt personalities carry
 S32 (the Windows reference pairing), ISO personalities carry float32
 (the macOS reference pairing). The device accepts either format when the
 channel-init value matches. The driver resolves the format at probe
-(`ffuc_wire_s32`) and writes the matching `0x16` value, so wire and init
+(`ff_wire_s32`) and writes the matching `0x16` value, so wire and init
 always agree. The kernel converts between the wire format and the ALSA
 format.
 
@@ -274,8 +274,8 @@ Module parameters: `urb_frames` (default 48), `nurbs` (default 2),
 
 The driver is the single owner of the supported rates and the per-rate
 quantum envelope. It computes them with the same functions that refine
-`hw_params` (`ffuc_urb_frames`, `ffuc_buffer_min`) and reports them through
-`FFUC_HWDEP_IOCTL_ENVELOPE` (ABI 5). Userspace queries the envelope once per
+`hw_params` (`ff_urb_frames`, `ff_buffer_min`) and reports them through
+`FF_HWDEP_IOCTL_ENVELOPE`. Userspace queries the envelope once per
 attach and presents exactly what the driver reports. It does not recompute
 the geometry.
 
@@ -314,11 +314,12 @@ pitch_max(R)   = min(5 %, (capacity(band(R)) / R - 1) * 100)
 
 Every rate carries the full ±5 % except 192 kHz positive pitch, which ends at
 +4.1667 % (200000 / 192000). The driver clamps the active family's DDS divisor
-word to the ceiling on every vendor DDS write (`ffuc_dds_clamp`, counted by
+word to the ceiling on every vendor DDS write (`ff_dds_clamp`, counted by
 `pitch_clamps`); the clamped divisor rounds up on the word's 256-unit grid so
 the decoded clock stays at or below the capacity. The other families' words
-pass untouched. The rate sequence writes nominal words, which are always in
-envelope. Above the ceiling the device's capture cadence folds back and the
+pass untouched. The ISO rate sequence re-sends the stored host word, which
+is already clamped, and computes a nominal word only when the family has
+none. Above the ceiling the device's capture cadence folds back and the
 transport errors, so the clamp is a correctness boundary, not a preference.
 The GUI offers the same envelope on the pitch slider (0.1 % grid).
 
@@ -351,7 +352,7 @@ the envelope ioctl:
 | 176400 | 184 | 1104 |
 | 192000 | 192 | 1152 |
 
-The envelope ioctl reply (`struct ffuc_hwdep_envelope`):
+The envelope ioctl reply (`struct ff_hwdep_envelope`):
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -361,7 +362,7 @@ The envelope ioctl reply (`struct ffuc_hwdep_envelope`):
 | iso | u32 | 1 ISO, 0 interrupt |
 | rates[16] | u32×3 each | `{rate, period_floor, buffer_min}` per supported rate |
 
-The supported rates are `ffuc_rates` filtered by the model's `max_rate`. The
+The supported rates are `ff_rates` filtered by the model's `max_rate`. The
 envelope is static for a module load. It changes only on reload (new
 parameters) or a different model. PipeWire's `min-quantum`, `max-quantum` and
 `allowed-rates` are host policy and must permit the envelope; the installer
@@ -540,9 +541,9 @@ startup mechanism: steady-state delivery and latency are unchanged.
 | Term | Shape | Definition |
 |---|---|---|
 | prefill gate | per playback stream | the mute-until-stable state armed at trigger START/RESUME |
-| minimum window | `FFUC_PREFILL_MIN_MS` = 64 ms | the shortest muted hold, sized at 2× the worst measured startup dip (30 ms) |
-| stability run | `FFUC_PREFILL_STABLE_MS` = 4 ms | consecutive non-starved, anchored completions required to clear |
-| hard bound | `FFUC_PREFILL_MAX_MS` = 256 ms | the longest muted hold; clears even if the host never delivers |
+| minimum window | `FF_PREFILL_MIN_MS` = 64 ms | the shortest muted hold, sized at 2× the worst measured startup dip (30 ms) |
+| stability run | `FF_PREFILL_STABLE_MS` = 4 ms | consecutive non-starved, anchored completions required to clear |
+| hard bound | `FF_PREFILL_MAX_MS` = 256 ms | the longest muted hold; clears even if the host never delivers |
 | `prefill` | module param, bool, default on | enables the gate; off clears an armed gate at the next fill |
 
 The constants are milliseconds. At arm time they scale to completion
@@ -715,7 +716,7 @@ and [`FIREFFACE-UCX-PROTOCOL-SPEC.md`](FIREFFACE-UCX-PROTOCOL-SPEC.md)
 | position | the stream position modulo the rate-band modulus — 8192 at 1x, 16384 at 2x, 32768 at 4x (UC, UCX, Babyface-classic share the header); anchors the feedback timeline | K1.3 lead anchor |
 | frame count | frames in this packet; carries the clock's add/drop | K1.3 mirrors it (rate lock) |
 | phase | an 11-bit field (bits 21–31) at every rate band, above the widened position. A 60 MHz tick accumulator (16.667 ns); the value wraps at `tps = 60000000/rate` (ticks per sample: 1250 at 48 kHz, 1360.5 at 44.1 kHz, 625 at 96 kHz) and advances one microframe per packet mod tps, independent of the frame count | K1.1 records it; the device timestamp and `rate_meas` |
-| device timestamp | the pair (unwrapped position, host time) of the device clock, taken per IN packet: the position at a packet end against the host time of the next packet boundary, from the start-frame anchor | the `rate_meas` window, the lead anchor seed, the `CLOCK` ioctl |
+| device timestamp | the pair (unwrapped position, host time) of the device clock, taken per IN packet: the position at a packet end against the host time of the next packet boundary, from the start-frame anchor | the `rate_meas` window, the lead anchor seed, the `SNAPSHOT` record |
 | lead word | the stream position an OUT frame plays at; keeps the device output buffer supplied | K1.3 |
 | `fb_delay` | driver parameter: how far OUT lags IN, in packets; covers the URBs in flight | K1.3 |
 | `out_lead` | driver parameter: margin added to the mirrored position; absorbs scheduling jitter | K1.3 |
@@ -733,7 +734,7 @@ Guards:
 | K1.4 cadence (A5) | cadence mean against the programmed clock | diagnostic: a sustained disagreement marks a rate mismatch (below) |
 | K1.5 continuity (A8) | URB start-frame sequence | a discontinuity marks the engine broken → K10 |
 | K7 latch watchdog (A6, A7) | D6 status byte 3 bit 7 | a latched output while playback runs, after the grace, marks the engine broken → K10 |
-| URB error burst | completion status | above `FFUC_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
+| URB error burst | completion status | above `FF_MAX_URB_ERRORS` marks the engine broken → K10 (§4.6) |
 
 **Clock-source audit.** Every consumer of the rate as a cadence, the
 clock it uses, and its behaviour under pitch. A new consumer belongs in
@@ -746,7 +747,7 @@ table states why it is safe.
 | IN-error nominal substitution | programmed | the estimate matches the device delivery |
 | Lead-seed rewind step | programmed | the position extrapolation matches the device timeline |
 | Cadence judge reference | programmed | the verdict compares against the actual clock |
-| URB geometry (`ffuc_urb_frames`) | nominal (`hw_params`) | the geometry is per nominal rate; the mirrored frame counts carry the pitch |
+| URB geometry (`ff_urb_frames`) | nominal (`hw_params`) | the geometry is per nominal rate; the mirrored frame counts carry the pitch |
 | Device-timestamp phase fraction | nominal | the fraction decodes below 1 frame; the integer position slope carries the rate |
 | ALSA `hw_params` / period contract | nominal | the graph rate contract is nominal; pitch is a device-clock control only |
 
@@ -808,7 +809,7 @@ Status and watchdog:
   stream-period ticks and stops with the engine.
 - On `STATUS_LATCH` personalities, status byte 3 bit 7 is the output-latch
   watchdog. A latched output while playback runs, after the
-  `FFUC_STATUS_GRACE_MS` grace, marks the engine broken (§4.6).
+  `FF_STATUS_GRACE_MS` grace, marks the engine broken (§4.6).
 
 ### 4.5 Transport comparison
 
@@ -832,19 +833,19 @@ the engine. The host sees an xrun and re-prepares.
 
 | Trigger | Scope |
 |---|---|
-| URB error burst above `FFUC_MAX_URB_ERRORS`, or a failed resubmit | all personalities |
-| ISO URB queue discontinuity (`ffuc_iso_contiguous`) | ISO personalities |
-| Output latch while playback runs, after the `FFUC_STATUS_GRACE_MS` grace | `STATUS_LATCH` personalities (UC PC, UCX IF5) |
+| URB error burst above `FF_MAX_URB_ERRORS`, or a failed resubmit | all personalities |
+| ISO URB queue discontinuity (`ff_iso_contiguous`) | ISO personalities |
+| Output latch while playback runs, after the `FF_STATUS_GRACE_MS` grace | `STATUS_LATCH` personalities (UC PC, UCX IF5) |
 
 ## 5. Control transports and hwdep ABI
 
-The hwdep ABI is versioned (`FFUC_ABI_VERSION`, currently 8). The host checks
-it at open. The `COUNTERS` reply carries two counter classes — cumulative per
-driver instance (zeroed on reattach) and per-run (reset on every engine start)
-— plus `run_seq`, a re-base epoch that increments on every engine start and on
-a confirmed idle device-rate write (`SET_RATE`), so the host can re-base the
-per-run view and reapply the scene, and `urb_errors`, a consecutive-error
-gauge rather than a total.
+The hwdep ABI is versioned (`FF_ABI_VERSION`, currently 9). The host checks
+it at open. The `DIAGNOSTICS` reply carries accumulated history: cumulative
+counters (zeroed on reattach), per-run counters (reset on every engine start),
+and watermarks (`ring_min_filled`, `ring_max_stall_ns`, `out_lag`) with their
+reset class. `run_seq` is the re-base epoch; it increments on every engine
+start and on a confirmed idle device-rate write (`SET_RATE`). `urb_errors` is
+a consecutive-error gauge rather than a total.
 
 U2 carries two transfer modes with opposite characteristics:
 
@@ -865,12 +866,13 @@ a bounded reply wait (§5.2).
 
 | ioctl | Function |
 |---|---|
-| `INFO` | identity, capabilities, endpoint numbers, rate, firmware |
+| `INFO` | identity and capabilities: ABI, caps, transport, channels, endpoints, rate, firmware, card/PCM, USB vendor/product/bcd and serial. No device model name. |
 | `VENDOR` | one EP0 vendor request (read or write, up to 64 bytes) |
-| `WRITE_WORDS` | up to 63 IF1 register words; the kernel adds odd parity |
-| `COUNTERS` | transport error counters (host ring, USB, feedback, pointer, events): cumulative per instance and per-run classes, the `run_seq` re-base epoch, the `urb_errors` gauge, and `pitch_clamps` (DDS writes clamped to the pitch envelope); `run_seq` added at ABI 7 |
-| `CLOCK` | the device timestamp: the unwrapped device position at a host time, the raw phase field, the windowed device rate `rate_meas`, and the start-frame anchor (`sof_ns(f) = anchor_ns + f·125000`, one unit per ISO packet); ABI 6 |
-| `SET_RATE` | set the device clock rate while the engine is idle (no PCM owner): adopt, commit, confirm from the state-word rate readback, bump `run_seq`; ABI 8 (§7.2) |
+| `WRITE_WORDS` | up to 63 register words; the kernel adds odd parity |
+| `DIAGNOSTICS` | transport and stream counters, the `run_seq` re-base epoch, `urb_errors` (consecutive-error gauge), `pitch_clamps`, the rate-sequence counters `dds_words`/`family_writes`/`rate_commits`/`option_writes`, and the watermarks `ring_min_filled`, `ring_missed`, `ring_starved`, `ring_max_stall_ns`, gate `deferred/overdue/max_pending`, `out_lag_min/max`, prefill and meter counters, `in_total` |
+| `ENVELOPE` | per-rate period floor and buffer minimum, plus `urb_frames`, `nurbs`, `iso`, `iso_packets`, `fb_delay`, `out_lead`, `lead_bias` |
+| `SNAPSHOT` | one atomic sample: OUT and IN queue state (state, appl/hw, fill, in-flight, delay, period, buffer, URB geometry, device position, xruns) and the device clock (host time, position, phase, `rate_meas`, SOF anchor). The caller sets `size`; the driver fills the prefix it knows. |
+| `SET_RATE` | set the device clock rate while the engine is idle (no PCM owner): adopt, commit, confirm from the state-word rate readback, bump `run_seq` (§7.2) |
 
 `read()`/`poll()` deliver events:
 
@@ -934,7 +936,28 @@ message must fit one transfer. Output is polled by a delayed work at 1 ms.
 
 ## 7. Rate, session and startup timing
 
-The rate sequence is one generic flow for every model and transport:
+The rate sequence has one form per transport.
+
+The ISO form follows the USB audio engine's `hwSetSampleRate`:
+
+| Order | Request | wValue | wIndex |
+|---|---|---|---|
+| 1 | `0x1b` | high16(p1) | (p1 & 0xff00) \| family |
+| 2 | `0x10` | family << 4 | 0x0030 |
+
+The interrupt forms are model-specific.
+
+The UCX interrupt form writes the family selector only:
+
+| Order | Request | wValue | wIndex |
+|---|---|---|---|
+| 1 | `0x10` | family << 4 | 0x0030 |
+
+The four-word DDS quad is written at connect (the IF5 connect preload) and
+by the host on a settings apply.  The Windows UCX rate captures E8/E9 write
+the family word only.
+
+The UC interrupt form keeps the generic Windows-derived sequence:
 
 | Order | Request | wValue | wIndex |
 |---|---|---|---|
@@ -944,11 +967,27 @@ The rate sequence is one generic flow for every model and transport:
 
 p1 = 0x5f5e10000000 / rate, shifted left 1 above 57000 Hz and left 2
 above 114000 Hz. family: 0 = 32/64/128 kHz, 1 = 44.1/88.2/176.4 kHz,
-2 = 48/96/192 kHz. The third word is the options commit: the driver reads
-the options word the device holds (`0x10` in) and rewrites it under the
-mask, so the mixer's settings survive the rate change. The DDS word
-carries the active family's divisor; the band multiplier follows the
+2 = 48/96/192 kHz. The DDS word is the actual clock; the family word
+selects which stored divisor is active. The band multiplier follows the
 streaming alternate setting.
+
+Every engine start writes its form's words: a fresh start, a same-rate
+repeat, a rate change, a resume and a recovery. A same-rate re-prepare that
+keeps the engine alive does not re-commit.
+
+The ISO form re-sends the family's last host-written DDS word. The host
+writes pitch through that word, so a pitched clock survives a restart and
+the programmed clock tracked for the cadence judge stays pitched. A family
+with no host word uses its nominal divisor. The other families' words are
+stored for later rates. The ISO form does not write the options word; the
+settings path owns it.
+
+The UCX interrupt form writes only the family word; the DDS quad is already
+programmed at connect. The UC interrupt form writes the nominal DDS word
+and then the options commit: it reads the options word the device holds
+(`0x10` in) and rewrites it under the mask. The kext analysis does not
+change the interrupt forms; their reference is the Windows driver binary
+and VM capture.
 
 Engine start selects the alternate setting, commits the rate, sends the
 session-open words where required, and sets up URBs. The ISO path waits
@@ -997,8 +1036,9 @@ See the TODO section for the readiness-poll work.
 ### 7.1 Clock writes into a running engine
 
 The rate sequence is committed at engine start, when no stream is running. A
-running engine holds its clock until the next engine start; a same-rate
-re-prepare that keeps the engine alive does not re-commit the rate.
+new engine run commits it even at the same rate. A running engine holds its
+clock until the next engine start; a same-rate re-prepare that keeps the
+engine alive does not re-commit the rate.
 
 A clock word written into a running engine takes effect immediately:
 
@@ -1021,7 +1061,10 @@ paragraph in §4.1.1). The device clock therefore has two owners:
   clock source (the unit is slaved), the user's pitch on the internal clock
   after the IRQ policy is confirmed. Pitch starts at nominal (0 %) and is reset
   to 0 on a clock-source change, startup and workspace load; a saved pitch is
-  not auto-restored.
+  not auto-restored. The host writes one DDS word for the active family on
+  the ISO transport and the four-word quad on interrupt. On ISO the driver
+  stores each family's last host word and re-sends it at engine start, so a
+  stream restart keeps the current pitch.
 
 A mixer scene apply writes the mixer group only. It adopts the scene's rate and
 pitch into the host model but writes neither clock word into the device, so a
@@ -1049,14 +1092,14 @@ postcondition:
 | Action | adopt the rate into `chip->rate`, `clock_rate` and `mode`; commit it with the same rate-commit flow as engine start (§7) |
 | Postcondition | the state-word rate index reads back the requested rate; `run_seq` increments to arm the host scene reapply |
 
-The rate commit is shared with engine start (`ffuc_engine_commit_rate`): the
+The rate commit is shared with engine start (`ff_engine_commit_rate`): the
 Windows-personality restart settle, the alternate-setting (re)selection and the
 rate sequence. Both paths therefore establish the same device clock state. The
 confirmation polls the state-word rate index with a bounded timeout
-(`FFUC_IDLE_RATE_CONFIRM_MS`); the device's own rate report is the readiness
+(`FF_IDLE_RATE_CONFIRM_MS`); the device's own rate report is the readiness
 condition.
 
-`struct ffuc_hwdep_set_rate` (ABI 8):
+`struct ff_hwdep_set_rate`:
 
 | Field | Dir | Meaning |
 |---|---|---|
@@ -1111,10 +1154,13 @@ model, never the card index) on a periodic probe, independent of boot order.
 
 ## 9. Latency inputs
 
-The driver exposes the queue geometry (`urb_frames`, `nurbs`,
-`iso_packets`, `fb_delay`, `out_lead`) and the transport counters. The host
-computes round-trip latency from these inputs and its loopback calibration;
-that model is defined in
+The driver exposes the queue geometry and the live queue state; it does not
+compute a latency. `ENVELOPE` carries `urb_frames`, `nurbs`, `iso_packets`,
+`fb_delay`, `out_lead` and `lead_bias`. `SNAPSHOT` carries the per-direction
+fill, in-flight, delay, period, buffer and device position, plus the device
+clock. `DIAGNOSTICS` carries the accumulated transport and scheduling history.
+The host computes the output and input latency from these facts and its
+loopback calibration; the model is defined in
 [`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §10.
 
 ## 10. Open items
@@ -1137,7 +1183,7 @@ Scope labels used in this section and in the TODO:
 
 Terms used here are defined in the sections referenced.
 
-- **[ISO]** The **ISO continuity check** (K1.5, `ffuc_iso_contiguous`, §4.3)
+- **[ISO]** The **ISO continuity check** (K1.5, `ff_iso_contiguous`, §4.3)
   verifies URB start-frame continuity. Its log counter is module-global,
   shared across devices and endpoints. It should be per-endpoint.
 - **[all]** The **hwdep read path** (§5) allocates a temporary buffer per
@@ -1146,10 +1192,10 @@ Terms used here are defined in the sections referenced.
 - **[all]** The **PCM trigger stop** path (§4) emits verbose diagnostic
   logs on every stop. These belong in debugfs, ratelimited, or behind a
   diagnostic parameter.
-- **[all]** **Buffer poison** (`ffuc_poison`) memsets the whole PCM buffer
+- **[all]** **Buffer poison** (`ff_poison`) memsets the whole PCM buffer
   on every prepare (§4.1). It is a diagnostic; production should make it
   optional.
-- **[status]** The **COUNTERS** ioctl (§5) reports `status_urbs` as zero;
+- **[status]** The **DIAGNOSTICS** ioctl (§5) reports `status_urbs` as zero;
   the status URB counter is unexposed.
 - **[Babyface-classic]** The **INFO** ioctl (§5) reports `outputs` as the
   playback channel count. On Babyface-classic the hardware output count
@@ -1262,20 +1308,20 @@ personality. These items remain open in the metering specification:
 
 | Concern | Source |
 |---|---|
-| descriptor table, quirks, modes | `kernel/ffuc.c` |
-| URB engines, period gate, ISO feedback | `kernel/ffuc.c` |
-| PCM ops, buffer geometry | `kernel/ffuc.c` |
-| status/latch watchdog, recovery | `kernel/ffuc.c` |
-| hwdep ABI, event queue, meter pump | `kernel/ffuc-hwdep.c`, `kernel/ffuc-uapi.h` |
+| descriptor table, quirks, modes | `kernel/ff.c` |
+| URB engines, period gate, ISO feedback | `kernel/ff.c` |
+| PCM ops, buffer geometry | `kernel/ff.c` |
+| status/latch watchdog, recovery | `kernel/ff.c` |
+| hwdep ABI, event queue, meter pump | `kernel/ff-hwdep.c`, `kernel/ff-uapi.h` |
 | meter heartbeat pairing | `kernel/ffuc-meter-pair.h` |
-| USB-MIDI | `kernel/ffuc-midi.c` |
+| USB-MIDI | `kernel/ff-midi.c` |
 | host ABI binding | `ui/totalcontrol/totalcontrol-core/src/fireface/abi.rs` |
 | host protocol/model | `ui/totalcontrol/totalcontrol-core/src/fireface/` |
 
 ## 14. Adding support for a device
 
 A new device is a descriptor entry plus, where the streaming sequence
-differs, an `ffuc_ops` implementation. The shared PCM/URB path stays
+differs, an `ff_ops` implementation. The shared PCM/URB path stays
 model-independent.
 
 ### 14.1 Minimum evidence gate
@@ -1308,7 +1354,7 @@ mappings as open items; the driver carries only verified behaviour.
 
 ### 14.2 Descriptor
 
-Add an entry to `ffuc_devices[]` and a USB ID to `ffuc_ids[]`:
+Add an entry to `ff_devices[]` and a USB ID to `ff_ids[]`:
 
 | Field | Source |
 |---|---|
@@ -1318,19 +1364,19 @@ Add an entry to `ffuc_devices[]` and a USB ID to `ffuc_ids[]`:
 | `status_iface`, `status_ep`, `status_bulk` | status ticker, if present |
 | `state_iface`, `state_out_ep`, `state_in_ep`, `meter_in_ep` | bulk control/meter channel, if present |
 | `midi_iface`, `midi_out_ep`, `midi_in_ep`, `midi_ports` | USB-MIDI, if present |
-| `modes[]` | one `ffuc_mode` per alternate setting: words, out_words, pkt_frames, in_mps, out_mps, max_frames |
+| `modes[]` | one `ff_mode` per alternate setting: words, out_words, pkt_frames, in_mps, out_mps, max_frames |
 | `max_channels`, `max_playback`, `max_rate`, `meter_len` | channel counts and meter packet size |
 | `chan_init[]`, `n_chan_init` | `0x16` slot ranges |
 | `quirks` | only behaviour the shared path must select |
 | `ops` | `init`, `set_rate`, `stream_start`, `stream_stop`, `hw_mute` |
 
-The wire format is resolved at probe by `ffuc_wire_s32()` from the
+The wire format is resolved at probe by `ff_wire_s32()` from the
 transport: interrupt carries S32, ISO carries float32. The matching
 `0x16` channel-init value is derived from the same decision.
 
 ### 14.3 Ops and quirks
 
-Implement `ffuc_ops` only for the sequences that differ from the existing
+Implement `ff_ops` only for the sequences that differ from the existing
 models. Reuse an existing ops table where the sequence matches.
 
 Add a quirk only when the shared path must branch on a device property.
