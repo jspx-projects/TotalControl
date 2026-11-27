@@ -78,8 +78,15 @@ run_start() {
 	rate=$1
 	probe_rc=0
 	snap
-	# IF5 period floor is 1024 frames; prefill two periods.
-	"$PROBE" "$CARD" "$rate" 48 48 "$SECS" 2048 -1 0 0 >/dev/null 2>&1 &
+	# The IF5 URB is 16/32/64 frames at 1x/2x/4x and a period is a whole
+	# number of URBs; keep two periods of prefill.
+	case "$rate" in
+		32000|44100|48000) per=48 ;;
+		64000|88200|96000) per=96 ;;
+		*) per=192 ;;
+	esac
+	"$PROBE" "$CARD" "$rate" "$per" "$per" "$SECS" $((2 * per)) -1 0 0 \
+		>/dev/null 2>&1 &
 	probe_pid=$!
 	sleep 2.0
 	idx=$(state_index)

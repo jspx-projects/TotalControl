@@ -84,7 +84,7 @@ All development switches use the `TOTALCONTROL_` prefix:
 | `tools/alsa-latency-probe.c` | PCM loopback measurement: impulse latency + `pattern` sample-exact mode |
 | `tools/alsa-cushion-probe.c` | Direct duplex ring-fill/stall probe; separate periods exercise the duplex gate |
 | `scripts/rate-sequence-verify.sh` | ISO start/rate verifier: one DDS + family per start, no options, actual `rate_meas`; `FIREFFACE_HWDEP`/`ALSA_PROBE` select the binaries |
-| `scripts/int-rate-verify.sh` | UCX interrupt (IF5) rate verifier: family word only, state-word rate index; load the module with `ucx_if5=Y` first |
+| `scripts/int-rate-verify.sh` | UCX interrupt (IF5) rate verifier: family word only, state-word rate index, short-URB period per band; load the module with `ucx_if5=Y` first |
 
 Protocol captures and measurements are evidence, not specifications. Record
 the device model, transport, firmware and rate with every capture.

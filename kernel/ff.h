@@ -194,7 +194,7 @@ unsigned int ff_rate_family(unsigned int rate);
 #define FF_TCAP_FRAME_LEAD		BIT(5)	/* per-frame lead words */
 #define FF_TCAP_STATUS_RUNNING_ONLY	BIT(6)	/* status ticker only while running */
 #define FF_TCAP_KILL_BOTH		BIT(7)	/* kill both URB sets on stop */
-#define FF_TCAP_FIXED_URB		BIT(8)	/* fixed URB frames, no band shift */
+#define FF_TCAP_FIXED_URB		BIT(8)	/* short-URB interrupt geometry: no queue floor, whole-URB periods */
 #define FF_TCAP_LEAD_HORIZON		BIT(9)	/* lead horizon in buffer minimum */
 #define FF_TCAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
 #define FF_TCAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
@@ -235,6 +235,7 @@ struct ff_ep {
 	int next_start;
 	unsigned int buf_size;      /* allocated bytes for one URB */
 	int last_start;             /* diagnostic: previous start_frame */
+	atomic_t inflight;          /* playback frames submitted on this endpoint */
 	struct ff_urb urbs[FF_MAX_URBS];
 };
 
@@ -652,6 +653,7 @@ int ff_reg_send(struct ff *chip, const struct ff_hwdep_word *words,
 int ff_claim_interface(struct usb_interface *intf);
 void ff_release_interface(struct usb_interface *intf);
 unsigned int ff_rate_from_index(unsigned int idx);
+unsigned int ff_playback_inflight(struct ff *chip);
 void ff_query_envelope(struct ff *chip, struct ff_hwdep_envelope *env);
 int ff_set_rate_idle(struct ff *chip, unsigned int rate,
 		       unsigned int *confirmed);
