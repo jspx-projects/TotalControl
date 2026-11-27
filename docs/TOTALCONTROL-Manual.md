@@ -474,8 +474,11 @@ the DAW. The device confirms the rate from its own clock readback.
 above the rate's period floor — one USB transfer. On the UC PC and UCX IF5
 interrupt transports the transfer is 16/32/64 frames at 32–48/64–96/128–192
 kHz, and the block must be a whole multiple of it. On ISO the transfer is
-48/96/192 frames at the same bands, and any block at or above it is accepted.
-A buffer (block × periods) must cover the transfers in flight plus margin. A
+24/48/96 frames at the same bands by default, and any block at or above it is
+accepted. The ISO URB is the driver parameter `iso_packets` (1..8, default 4 =
+0.5 ms); a lower value lowers the period floor and the buffer minimum, and the
+picker reports the result. A buffer (block × periods) must cover the
+transfers in flight plus margin. A
 block below the floor, a non-multiple on the interrupt transport, or a buffer
 below the minimum is refused when the DAW opens the device. REAPER's defaults
 (512-frame block, 3 periods, 32-bit) are valid at every device rate. Use 32-bit
@@ -1583,26 +1586,25 @@ already in `snd_pcm_delay`.
 On UCX ISO at 48 kHz with a 128-frame live host term:
 
 ```text
-Latency out = 128 + 49 + 7 = 184 frames = 3.8 ms
-Latency in  =  96 + 64     = 160 frames = 3.3 ms
+Latency out = 128 + 34 = 162 frames = 3.4 ms
+Latency in  =  96 + 42 = 138 frames = 2.9 ms
 ```
 
 UCX ISO device values (frames):
 
 | Rate | A | B | D |
 |---|---:|---:|---:|
-| 32 kHz | 43 | 51 | 94 |
-| 44.1 kHz | 53 | 61 | 114 |
-| 48 kHz | 56 | 64 | 120 |
-| 64 kHz | 75 | 82 | 157 |
-| 88.2 kHz | 94 | 102 | 196 |
-| 96 kHz | 101 | 108 | 209 |
-| 128 kHz | 111 | 115 | 226 |
-| 176.4 kHz | 114 | 119 | 233 |
-| 192 kHz | 127 | 132 | 259 |
+| 32 kHz | 29 | 37 | 66 |
+| 44.1 kHz | 33 | 40 | 73 |
+| 48 kHz | 34 | 42 | 76 |
+| 64 kHz | 44 | 52 | 96 |
+| 88.2 kHz | 52 | 59 | 111 |
+| 96 kHz | 54 | 62 | 116 |
+| 128 kHz | 77 | 82 | 159 |
+| 176.4 kHz | 83 | 88 | 171 |
+| 192 kHz | 97 | 102 | 199 |
 
-The 128 kHz D is interpolated between 96 and 192 kHz; its direct reading
-was one URB high.
+All nine rates are measured at the four-packet default.
 
 UC PC device values (frames):
 
@@ -1622,13 +1624,13 @@ UC AP device values (frames):
 
 | Rate | A | B | D |
 |---|---:|---:|---:|
-| 32 kHz | 64 | 79 | 143 |
-| 44.1 kHz | 73 | 88 | 161 |
-| 48 kHz | 77 | 92 | 169 |
-| 88.2 kHz | 83 | 99 | 182 |
-| 96 kHz | 90 | 105 | 195 |
-| 176.4 kHz | 134 | 145 | 279 |
-| 192 kHz | 147 | 158 | 305 |
+| 32 kHz | 48 | 63 | 111 |
+| 44.1 kHz | 51 | 67 | 118 |
+| 48 kHz | 53 | 68 | 121 |
+| 88.2 kHz | 71 | 86 | 157 |
+| 96 kHz | 74 | 89 | 163 |
+| 176.4 kHz | 106 | 117 | 223 |
+| 192 kHz | 115 | 126 | 241 |
 
 The UC PC 192 kHz D uses one endpoint pair's queue. The UC PC table covers
 32–192 kHz; the UC AP table covers 32/44.1/48/88.2/96/176.4/192. Other rates

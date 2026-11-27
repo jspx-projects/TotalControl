@@ -17284,23 +17284,25 @@ fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
 fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     use LatencyPersonality::*;
     match (personality, rate) {
-        (UcxIso, 32_000) => Some(158),
-        (UcxIso, 44_100) => Some(201),
-        (UcxIso, 48_000) => Some(216),
-        (UcxIso, 88_200) => Some(373),
-        (UcxIso, 96_000) => Some(401),
-        (UcxIso, 176_400) => Some(586),
-        (UcxIso, 192_000) => Some(643),
+        (UcxIso, 32_000) => Some(98),
+        (UcxIso, 44_100) => Some(117),
+        (UcxIso, 48_000) => Some(124),
+        (UcxIso, 64_000) => Some(160),
+        (UcxIso, 88_200) => Some(199),
+        (UcxIso, 96_000) => Some(212),
+        (UcxIso, 128_000) => Some(287),
+        (UcxIso, 176_400) => Some(347),
+        (UcxIso, 192_000) => Some(391),
         (UcPc, 32_000 | 44_100 | 48_000) => Some(151),
         (UcPc, 64_000 | 88_200 | 96_000) => Some(223),
         (UcPc, 128_000 | 176_400 | 192_000) => Some(361),
-        (UcAp, 32_000) => Some(207),
-        (UcAp, 44_100) => Some(250),
-        (UcAp, 48_000) => Some(265),
-        (UcAp, 88_200) => Some(359),
-        (UcAp, 96_000) => Some(387),
-        (UcAp, 176_400) => Some(632),
-        (UcAp, 192_000) => Some(689),
+        (UcAp, 32_000) => Some(143),
+        (UcAp, 44_100) => Some(162),
+        (UcAp, 48_000) => Some(169),
+        (UcAp, 88_200) => Some(246),
+        (UcAp, 96_000) => Some(259),
+        (UcAp, 176_400) => Some(400),
+        (UcAp, 192_000) => Some(433),
         _ => None,
     }
 }
@@ -17314,20 +17316,19 @@ fn latency_a(rate: u32) -> u32 {
 }
 
 /// UCX ISO device span after the live two-URB queue, in frames. Measured by
-/// the output-5 to input-5 analog loopback at the nine ISO rates. The 128 kHz
-/// direct reading was one URB high; 226 is interpolated between 96 and
-/// 192 kHz.
+/// the output-5 to input-5 analog loopback at the nine ISO rates with the
+/// default four-packet URB.
 fn latency_ucx_iso_d(rate: u32) -> Option<u32> {
     match rate {
-        32_000 => Some(94),
-        44_100 => Some(114),
-        48_000 => Some(120),
-        64_000 => Some(157),
-        88_200 => Some(196),
-        96_000 => Some(209),
-        128_000 => Some(226),
-        176_400 => Some(233),
-        192_000 => Some(259),
+        32_000 => Some(66),
+        44_100 => Some(73),
+        48_000 => Some(76),
+        64_000 => Some(96),
+        88_200 => Some(111),
+        96_000 => Some(116),
+        128_000 => Some(159),
+        176_400 => Some(171),
+        192_000 => Some(199),
         _ => None,
     }
 }
@@ -17367,20 +17368,20 @@ fn latency_ucx_if5_ab(rate: u32) -> Option<(u32, u32)> {
 
 /// UC device spans after the queue. The PC transport carries two URBs; the
 /// 4x path has two endpoint pairs, and the span uses one pair's queue. The
-/// AP transport uses the ISO queue. The PC values are per rate family; the
-/// AP values are the measured 32/44.1/48/88.2/96/176.4/192 rates.
+/// AP transport uses the default four-packet ISO URB. The PC values are per
+/// rate family; the AP values are measured at all supported rates.
 fn latency_uc_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     match (personality, rate) {
         (LatencyPersonality::UcPc, 32_000 | 44_100 | 48_000) => Some(119),
         (LatencyPersonality::UcPc, 64_000 | 88_200 | 96_000) => Some(159),
         (LatencyPersonality::UcPc, 128_000 | 176_400 | 192_000) => Some(233),
-        (LatencyPersonality::UcAp, 32_000) => Some(143),
-        (LatencyPersonality::UcAp, 44_100) => Some(161),
-        (LatencyPersonality::UcAp, 48_000) => Some(169),
-        (LatencyPersonality::UcAp, 88_200) => Some(182),
-        (LatencyPersonality::UcAp, 96_000) => Some(195),
-        (LatencyPersonality::UcAp, 176_400) => Some(279),
-        (LatencyPersonality::UcAp, 192_000) => Some(305),
+        (LatencyPersonality::UcAp, 32_000) => Some(111),
+        (LatencyPersonality::UcAp, 44_100) => Some(118),
+        (LatencyPersonality::UcAp, 48_000) => Some(121),
+        (LatencyPersonality::UcAp, 88_200) => Some(157),
+        (LatencyPersonality::UcAp, 96_000) => Some(163),
+        (LatencyPersonality::UcAp, 176_400) => Some(223),
+        (LatencyPersonality::UcAp, 192_000) => Some(241),
         _ => None,
     }
 }
@@ -17457,8 +17458,8 @@ fn uc_min_buffer_frames(rate: u32, queue: (u32, u32)) -> u32 {
     usb + 2 * endpoint
 }
 
-/// Frames in one UCX USB URB: up to eight 1 ms ISO packets of
-/// `ceil(rate / 8000)` frames each.
+/// Legacy helper for an eight-packet UCX URB derived from a 48-frame base;
+/// production reads the driver envelope instead.
 fn ucx_urb_frames(rate: u32, urb_frames: u32) -> u32 {
     let iso_packets = 8.min(urb_frames.max(1).div_ceil(6));
     iso_packets * rate.max(1).div_ceil(8000)
@@ -23838,7 +23839,7 @@ mod tests {
 
     #[test]
     fn ucx_latency_chain_keeps_the_urb_and_converter_geometry() {
-        // Eight 1 ms ISO packets per URB at the default 48-frame size.
+        // Legacy eight-packet geometry from a 48-frame base.
         assert_eq!(ucx_urb_frames(48_000, 48), 48);
         assert_eq!(ucx_urb_frames(96_000, 48), 96);
         // nurbs + 2 URBs of ring margin.
@@ -23866,21 +23867,21 @@ mod tests {
         assert_eq!(latency_a(192_000), 312);
         // UCX ISO uses the measured device span and the vendor converters:
         // DA 7, AD 14 at 1x/2x, 11 at 4x; the digital remainder is symmetric.
-        assert_eq!(latency_ucx_iso_ab(44_100), Some((53, 61)));
-        assert_eq!(latency_ucx_iso_ab(48_000), Some((56, 64)));
-        assert_eq!(latency_ucx_iso_ab(64_000), Some((75, 82)));
-        assert_eq!(latency_ucx_iso_ab(88_200), Some((94, 102)));
-        assert_eq!(latency_ucx_iso_ab(96_000), Some((101, 108)));
-        assert_eq!(latency_ucx_iso_ab(128_000), Some((111, 115)));
-        assert_eq!(latency_ucx_iso_ab(176_400), Some((114, 119)));
-        assert_eq!(latency_ucx_iso_ab(192_000), Some((127, 132)));
-        assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(216));
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(64));
-        assert_eq!(latency_device_a(LatencyPersonality::UcxIso, 48_000), Some(56));
+        assert_eq!(latency_ucx_iso_ab(44_100), Some((33, 40)));
+        assert_eq!(latency_ucx_iso_ab(48_000), Some((34, 42)));
+        assert_eq!(latency_ucx_iso_ab(64_000), Some((44, 52)));
+        assert_eq!(latency_ucx_iso_ab(88_200), Some((52, 59)));
+        assert_eq!(latency_ucx_iso_ab(96_000), Some((54, 62)));
+        assert_eq!(latency_ucx_iso_ab(128_000), Some((77, 82)));
+        assert_eq!(latency_ucx_iso_ab(176_400), Some((83, 88)));
+        assert_eq!(latency_ucx_iso_ab(192_000), Some((97, 102)));
+        assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(124));
+        assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(42));
+        assert_eq!(latency_device_a(LatencyPersonality::UcxIso, 48_000), Some(34));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(67));
-        assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(92));
-        assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), None);
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), Some(82));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(68));
+        assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), Some(160));
+        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), Some(52));
         // IF5 uses the same converter split on its unit span.
         assert_eq!(latency_if5_unit(48_000), Some(74));
         assert_eq!(latency_if5_unit(64_000), Some(112));
@@ -23906,16 +23907,16 @@ mod tests {
         assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 176_400), Some((111, 122)));
         assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 192_000), Some((111, 122)));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 44_100), Some(67));
-        assert_eq!(latency_d(LatencyPersonality::UcAp, 44_100), Some(250));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 32_000), Some((64, 79)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 44_100), Some((73, 88)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 48_000), Some((77, 92)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 88_200), Some((83, 99)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 96_000), Some((90, 105)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 176_400), Some((134, 145)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 192_000), Some((147, 158)));
-        assert_eq!(latency_d(LatencyPersonality::UcAp, 192_000), Some(689));
-        assert_eq!(latency_b(LatencyPersonality::UcAp, 192_000), Some(158));
+        assert_eq!(latency_d(LatencyPersonality::UcAp, 44_100), Some(162));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 32_000), Some((48, 63)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 44_100), Some((51, 67)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 48_000), Some((53, 68)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 88_200), Some((71, 86)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 96_000), Some((74, 89)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 176_400), Some((106, 117)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 192_000), Some((115, 126)));
+        assert_eq!(latency_d(LatencyPersonality::UcAp, 192_000), Some(433));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 192_000), Some(126));
         assert_eq!(latency_d(LatencyPersonality::UcPc, 64_000), Some(223));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 64_000), Some(87));
     }

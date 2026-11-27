@@ -1143,7 +1143,7 @@ Input packet:
 - 4-byte header: bits 0..4 frame count, bits 5..17 position (1x; widens at
   2x/4x), bits 21..31 phase;
 - block/planar 32-bit samples;
-- up to 8 ISO packets per URB.
+- `iso_packets` ISO packets per URB (1..8, default 4), one per microframe.
 
 The position is a free-running counter wrapping at 8192 at 1x (13-bit,
 bits 5..17), 16384 at 2x (14-bit, bits 5..18) and 32768 at 4x (15-bit,
