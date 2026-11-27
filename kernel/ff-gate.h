@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef FFUC_GATE_H
-#define FFUC_GATE_H
+#ifndef FF_GATE_H
+#define FF_GATE_H
 
 #ifdef __KERNEL__
 #include <linux/types.h>
@@ -20,4 +20,4 @@ static inline bool ff_gate_together(unsigned int p_period,
 	return p_period > 0 && p_period == c_period;
 }
 
-#endif /* FFUC_GATE_H */
+#endif /* FF_GATE_H */

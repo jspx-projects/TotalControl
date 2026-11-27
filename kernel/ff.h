@@ -16,7 +16,7 @@
  *
  * Everything that is policy or a device model - matrix routing, faders, pan,
  * preamps, EQ/dynamics, clock preferences, meters, scenes - is implemented
- * in userspace (TotalControl) on top of the hwdep ABI in ffuc-uapi.h.  Do not add
+ * in userspace (TotalControl) on top of the hwdep ABI in ff-uapi.h.  Do not add
  * model-specific ALSA controls here; add a userspace profile instead.
  *
  * Transport summary
@@ -42,8 +42,8 @@
  *   playback 14/10/8 words at 1x/2x/4x.  Interface 1 bulk IN 0x85 streams
  *   the DSP meter packets.  USB-MIDI is on interface 2.
  */
-#ifndef FFUC_H
-#define FFUC_H
+#ifndef FF_H
+#define FF_H
 
 #include <linux/kfifo.h>
 #include <linux/mutex.h>
@@ -57,38 +57,38 @@
 #include <sound/pcm.h>
 #include <sound/rawmidi.h>
 
-#include "ffuc-uapi.h"
+#include "ff-uapi.h"
 #include "ff-cadence.h"
 
-#define FFUC_VENDOR_SMSC	0x0424
-#define FFUC_VENDOR_RME		0x2a39
-#define FFUC_PRODUCT_UC_PC	0x3fc5
-#define FFUC_PRODUCT_UC_PC_RME	0x3fc5
-#define FFUC_PRODUCT_UC_WIN_RME	0x3fce
-#define FFUC_PRODUCT_UC_MAC	0x3fc6
-#define FFUC_PRODUCT_UCX	0x3fc9
-#define FFUC_PRODUCT_BABYFACE_CLASSIC	0x3fc7
+#define FF_VENDOR_SMSC	0x0424
+#define FF_VENDOR_RME		0x2a39
+#define FF_PRODUCT_UC_PC	0x3fc5
+#define FF_PRODUCT_UC_PC_RME	0x3fc5
+#define FF_PRODUCT_UC_WIN_RME	0x3fce
+#define FF_PRODUCT_UC_MAC	0x3fc6
+#define FF_PRODUCT_UCX	0x3fc9
+#define FF_PRODUCT_BABYFACE_CLASSIC	0x3fc7
 
-#define FFUC_IFACE_NONE		0xff
+#define FF_IFACE_NONE		0xff
 
-#define FFUC_STATUS_LEN		4
-#define FFUC_STATUS_OUT_LATCHED	0x80
-#define FFUC_STATUS_GRACE_MS	20
+#define FF_STATUS_LEN		4
+#define FF_STATUS_OUT_LATCHED	0x80
+#define FF_STATUS_GRACE_MS	20
 /* UCX IF5 settings-group settle, measured in the E2b connect capture. */
-#define FFUC_UCX_IF5_SETTLE_MS	100
-#define FFUC_RESTART_SETTLE_MS	250	/* UC: minimum engine stop -> start gap */
+#define FF_UCX_IF5_SETTLE_MS	100
+#define FF_RESTART_SETTLE_MS	250	/* UC: minimum engine stop -> start gap */
 /* Idle device-rate write: bounded poll of the state-word rate readback that
  * confirms the committed rate (the readiness condition, not a timed guess). */
-#define FFUC_IDLE_RATE_CONFIRM_MS	500
+#define FF_IDLE_RATE_CONFIRM_MS	500
 
-#define FFUC_MAX_EPS		2	/* endpoints per direction (alt 3) */
-#define FFUC_MAX_URBS		32
-#define FFUC_MAX_CHANNELS	18
-#define FFUC_MAX_RATE		768000
-#define FFUC_SAMPLE_BYTES	4
-#define FFUC_MAX_URB_ERRORS	16
-#define FFUC_MIN_QUEUE_FRAMES	64
-#define FFUC_START_GRACE_URBS	4	/* starved URBs tolerated after start */
+#define FF_MAX_EPS		2	/* endpoints per direction (alt 3) */
+#define FF_MAX_URBS		32
+#define FF_MAX_CHANNELS	18
+#define FF_MAX_RATE		768000
+#define FF_SAMPLE_BYTES	4
+#define FF_MAX_URB_ERRORS	16
+#define FF_MIN_QUEUE_FRAMES	64
+#define FF_START_GRACE_URBS	4	/* starved URBs tolerated after start */
 /* Startup prefill gate: the playback outputs stay muted from trigger for a
  * minimum window, then until delivery is stable, with a hard bound.
  * PipeWire's startup prefill is silence written into the ring, so a
@@ -99,12 +99,12 @@
  * the whole transient (2x the worst observed); the bound keeps a dead
  * host from sticking muted.  Milliseconds, not URBs: an interrupt URB is
  * ~21 ms at 48 kHz, an ISO URB is 1 ms at every rate. */
-#define FFUC_PREFILL_MIN_MS	64
-#define FFUC_PREFILL_MAX_MS	256
-#define FFUC_PREFILL_STABLE_MS	4
-#define FFUC_MIDI_IN_URBS	2	/* bulk IN URBs kept queued */
-#define FFUC_MIDI_PORTS		2	/* logical ports on the endpoint pair */
-#define FFUC_CTL_TIMEOUT	1000	/* ms */
+#define FF_PREFILL_MIN_MS	64
+#define FF_PREFILL_MAX_MS	256
+#define FF_PREFILL_STABLE_MS	4
+#define FF_MIDI_IN_URBS	2	/* bulk IN URBs kept queued */
+#define FF_MIDI_PORTS		2	/* logical ports on the endpoint pair */
+#define FF_CTL_TIMEOUT	1000	/* ms */
 
 /* ISO ("Mac"/IF0) transport. */
 /* After the host stops polling, the device resets its capture stream
@@ -116,71 +116,71 @@
  * short, 20 ms is clean across the rate families.  Linux xHCI schedules
  * a new isochronous stream at the current frame index and ignores a
  * requested future start frame, so the margin is a submission delay. */
-#define FFUC_ISO_START_MARGIN_MS	20
-#define FFUC_MAX_ISO_PACKETS	8	/* per URB, one per 125 us microframe */
-#define FFUC_ISO_IN_HEADER	4
-#define FFUC_ISO_COUNTER_MOD	0x2000
-#define FFUC_FB_SIZE		1024
-#define FFUC_ISO_FRAME_MASK	0x7ff
+#define FF_ISO_START_MARGIN_MS	20
+#define FF_MAX_ISO_PACKETS	8	/* per URB, one per 125 us microframe */
+#define FF_ISO_IN_HEADER	4
+#define FF_ISO_COUNTER_MOD	0x2000
+#define FF_FB_SIZE		1024
+#define FF_ISO_FRAME_MASK	0x7ff
 
 struct ff;
 unsigned int ff_iso_wrap(struct ff *chip);
 unsigned int ff_rate_family(unsigned int rate);
 
-#define FFUC_STATE_BUF_SIZE	1024
-#define FFUC_EVENT_FIFO_SIZE	(64 * 1024)
-#define FFUC_METER_PAIR_MAX	648
+#define FF_STATE_BUF_SIZE	1024
+#define FF_EVENT_FIFO_SIZE	(64 * 1024)
+#define FF_METER_PAIR_MAX	648
 /* Backpressure marks for the UC heartbeat feed, in events.  The high mark
  * covers one slow 15 Hz consumer period with jitter; the low mark gives
  * hysteresis. */
-#define FFUC_METER_HIGH_WATER	16
-#define FFUC_METER_LOW_WATER	4
-#define FFUC_EVENT_BUF_SIZE	(sizeof(struct ffuc_hwdep_event_hdr) + \
-				 FFUC_EVENT_MAX)
+#define FF_METER_HIGH_WATER	16
+#define FF_METER_LOW_WATER	4
+#define FF_EVENT_BUF_SIZE	(sizeof(struct ff_hwdep_event_hdr) + \
+				 FF_EVENT_MAX)
 
 /* Vendor request numbers, shared by the UC and UCX.  The meaning of some
  * numbers differs between models; see docs/PROTOCOL-COMPLETE.md.
  */
-#define FFUC_REQ_SETTINGS	0x10
-#define FFUC_REQ_STATUS		0x11
-#define FFUC_REQ_MIXER		0x12
-#define FFUC_REQ_MUTE		0x13
-#define FFUC_REQ_UNMUTE		0x14
-#define FFUC_REQ_LOOPBACK	0x15
-#define FFUC_REQ_CHAN_INIT	0x16
-#define FFUC_REQ_LEVELS		0x17
-#define FFUC_REQ_PGA		0x1a
-#define FFUC_REQ_DDS		0x1b
-#define FFUC_REQ_REVISION	0x1c
-#define FFUC_REQ_ENABLE		0x20
+#define FF_REQ_SETTINGS	0x10
+#define FF_REQ_STATUS		0x11
+#define FF_REQ_MIXER		0x12
+#define FF_REQ_MUTE		0x13
+#define FF_REQ_UNMUTE		0x14
+#define FF_REQ_LOOPBACK	0x15
+#define FF_REQ_CHAN_INIT	0x16
+#define FF_REQ_LEVELS		0x17
+#define FF_REQ_PGA		0x1a
+#define FF_REQ_DDS		0x1b
+#define FF_REQ_REVISION	0x1c
+#define FF_REQ_ENABLE		0x20
 
 /* wIndex of the 0x10 options commit (1487): the mask of the option bits
  * (word clock termination, clock source, word clock single speed, SPDIF
  * and optical output format). */
-#define FFUC_OPTIONS_MASK	0x05cf
+#define FF_OPTIONS_MASK	0x05cf
 
 /* UCX/Windows path: request 16/19/20/21/22/23/27/29 and the status reads
  * 28/30/31.  The numbers are documented with the protocol, not repeated
  * here. */
-#define FFUC_REQ_UCX_INIT22	0x16
-#define FFUC_REQ_UCX_MUTE	0x13
-#define FFUC_REQ_UCX_UNMUTE	0x14
-#define FFUC_REQ_UCX_LOOPBACK	0x15
-#define FFUC_REQ_UCX_STREAM29	0x1d
-#define FFUC_REQ_UCX_FIRMWARE	0x1c
-#define FFUC_REQ_UCX_SERIAL_LO	0x1e
-#define FFUC_REQ_UCX_SERIAL_HI	0x1f
+#define FF_REQ_UCX_INIT22	0x16
+#define FF_REQ_UCX_MUTE	0x13
+#define FF_REQ_UCX_UNMUTE	0x14
+#define FF_REQ_UCX_LOOPBACK	0x15
+#define FF_REQ_UCX_STREAM29	0x1d
+#define FF_REQ_UCX_FIRMWARE	0x1c
+#define FF_REQ_UCX_SERIAL_LO	0x1e
+#define FF_REQ_UCX_SERIAL_HI	0x1f
 
 /* quirks */
-#define FFUC_QUIRK_ALT_RESELECT		BIT(0)	/* alt 0 then alt N at start */
-#define FFUC_QUIRK_STATUS_LATCH		BIT(2)	/* status byte 3 bit 7 */
-#define FFUC_QUIRK_IF5_PRE_START	BIT(3)	/* 0x10 0x8000 + 0x1d before audio */
-#define FFUC_QUIRK_IF5_PLAYBACK_MASK	BIT(4)	/* req 19/20 channel mask */
+#define FF_QUIRK_ALT_RESELECT		BIT(0)	/* alt 0 then alt N at start */
+#define FF_QUIRK_STATUS_LATCH		BIT(2)	/* status byte 3 bit 7 */
+#define FF_QUIRK_IF5_PRE_START	BIT(3)	/* 0x10 0x8000 + 0x1d before audio */
+#define FF_QUIRK_IF5_PLAYBACK_MASK	BIT(4)	/* req 19/20 channel mask */
 /* Windows session timing: the stop->start settle and the close->rate and
  * close->trio gaps, measured on the UC_WIN_RME unit (captures A2/A2b).
  * The session words themselves are model-wide; only the timing is a
  * Windows-personality property. */
-#define FFUC_QUIRK_WIN_SESSION		BIT(6)
+#define FF_QUIRK_WIN_SESSION		BIT(6)
 
 /* Internal transport capabilities: behaviour, not model names.  Phase 1 of
  * the driver refactor moves the remaining model checks here. */
@@ -232,16 +232,16 @@ struct ff_ep {
 	int next_start;
 	unsigned int buf_size;      /* allocated bytes for one URB */
 	int last_start;             /* diagnostic: previous start_frame */
-	struct ff_urb urbs[FFUC_MAX_URBS];
+	struct ff_urb urbs[FF_MAX_URBS];
 };
 
 /* Ring-fill model trace: one record per playback URB completion while
  * the stream runs.  Diagnostic only; the audio path is unchanged. */
-#define FFUC_RING_TRACE		4096
-#define FFUC_RING_F_UNDERRUN	0x1	/* dry against the published status hw_ptr */
-#define FFUC_RING_F_STARVED	0x2	/* dry against the driver read position */
-#define FFUC_RING_F_MISSED	0x4	/* a full period passed without a write */
-#define FFUC_RING_F_BEHIND	0x8	/* appl_ptr is behind the read position */
+#define FF_RING_TRACE		4096
+#define FF_RING_F_UNDERRUN	0x1	/* dry against the published status hw_ptr */
+#define FF_RING_F_STARVED	0x2	/* dry against the driver read position */
+#define FF_RING_F_MISSED	0x4	/* a full period passed without a write */
+#define FF_RING_F_BEHIND	0x8	/* appl_ptr is behind the read position */
 
 struct ff_ring_rec {
 	u64 ktime_ns;
@@ -250,7 +250,7 @@ struct ff_ring_rec {
 	u32 status_hw;		/* low 32 bits of the published status hw_ptr */
 	u32 filled;		/* (appl - hw) mod boundary */
 	u32 total;		/* frames this URB sends */
-	u32 flags;		/* FFUC_RING_F_* */
+	u32 flags;		/* FF_RING_F_* */
 };
 
 struct ff_stream {
@@ -258,7 +258,7 @@ struct ff_stream {
 	bool running;
 	u32 out_counter;
 	bool out_counter_valid;
-	snd_pcm_uframes_t pos[FFUC_MAX_EPS];
+	snd_pcm_uframes_t pos[FF_MAX_EPS];
 	snd_pcm_uframes_t hw_ptr;
 	snd_pcm_uframes_t period;
 	/* Period index at this stream's last period signal.  Reset at
@@ -437,7 +437,7 @@ struct ff {
 	/* ISO implicit feedback */
 	unsigned int iso_packets;
 	spinlock_t fb_lock;
-	u32 fb[FFUC_FB_SIZE];
+	u32 fb[FF_FB_SIZE];
 	u64 in_pkts, out_pkts;
 	u32 iso_frames_hist[32];
 	/* Cadence convergence for the stop verdict (ff-cadence.h). */
@@ -498,7 +498,7 @@ struct ff {
 	/* Engine-run epoch: increments on every engine start.  The per-run
 	 * diagnostics reset with it; the host re-bases its counter view. */
 	u32 run_seq;
-	u8 last_status[FFUC_STATUS_LEN];
+	u8 last_status[FF_STATUS_LEN];
 	bool out_latched;
 
 	/* IF1 raw state/meter transports (owned by ffuc-hwdep.c) */
@@ -517,7 +517,7 @@ struct ff {
 	atomic_t meter_urbs;
 	/* One meter heartbeat under assembly: the RMS page then the peak
 	 * page.  Emitted as one event, so a reader can never see a half. */
-	u8 meter_pair[FFUC_METER_PAIR_MAX];
+	u8 meter_pair[FF_METER_PAIR_MAX];
 	unsigned int meter_pair_len;
 	/* The device's page phase is not anchored for this session (fresh
 	 * probe, a failed drain, or a pair without a peak half).  Pairs the
@@ -533,12 +533,12 @@ struct ff {
 
 	/* USB-MIDI streaming interface (bulk OUT / bulk IN) */
 	struct usb_interface *midi_intf;
-	struct urb *midi_in_urb[FFUC_MIDI_IN_URBS];
-	u8 *midi_in_buf[FFUC_MIDI_IN_URBS];
+	struct urb *midi_in_urb[FF_MIDI_IN_URBS];
+	u8 *midi_in_buf[FF_MIDI_IN_URBS];
 	atomic_t midi_in_users;
 	bool midi_in_running;
 	unsigned int n_midi_ports;
-	struct ff_midi_port midi_port[FFUC_MIDI_PORTS];
+	struct ff_midi_port midi_port[FF_MIDI_PORTS];
 
 	/* hwdep events */
 	struct kfifo event_fifo;
@@ -610,7 +610,7 @@ struct ff {
 	unsigned int hw_ptr_logged;
 	/* Ring-fill diagnostics, reset at engine start.  ring_head is
 	 * monotonic across runs so the trace keeps its history. */
-	struct ff_ring_rec ring_trace[FFUC_RING_TRACE];
+	struct ff_ring_rec ring_trace[FF_RING_TRACE];
 	u32 ring_head;
 	u64 ring_last_appl;
 	u64 ring_last_appl_ts;
@@ -628,7 +628,7 @@ struct ff {
 	bool s32_samples;	/* resolved wire format, see ff_wire_s32() */
 	char serial[32];
 
-	struct ff_ep eps[2][FFUC_MAX_EPS];
+	struct ff_ep eps[2][FF_MAX_EPS];
 	struct ff_stream streams[2];
 };
 
@@ -637,21 +637,21 @@ int ff_vendor_send(struct ff *chip, u8 req, u16 val, u16 idx,
 		     const void *data, u16 len);
 int ff_vendor_recv(struct ff *chip, u8 req, u16 val, u16 idx,
 		     void *data, u16 len);
-int ff_reg_send(struct ff *chip, const struct ffuc_hwdep_word *words,
+int ff_reg_send(struct ff *chip, const struct ff_hwdep_word *words,
 		  unsigned int count);
 int ff_claim_interface(struct usb_interface *intf);
 void ff_release_interface(struct usb_interface *intf);
 unsigned int ff_rate_from_index(unsigned int idx);
-void ff_query_envelope(struct ff *chip, struct ffuc_hwdep_envelope *env);
+void ff_query_envelope(struct ff *chip, struct ff_hwdep_envelope *env);
 int ff_set_rate_idle(struct ff *chip, unsigned int rate,
 		       unsigned int *confirmed);
 
 /* ffuc-hwdep.c */
 void ff_event_put(struct ff *chip, u32 type, const void *data, u32 size,
 		    u32 flags);
-int ffuc_hwdep_create(struct ff *chip);
-void ffuc_hwdep_cleanup(struct ff *chip);
-void ffuc_hwdep_quiesce(struct ff *chip);
+int ff_hwdep_create(struct ff *chip);
+void ff_hwdep_cleanup(struct ff *chip);
+void ff_hwdep_quiesce(struct ff *chip);
 int ff_transport_setup(struct ff *chip);
 int ff_transport_start(struct ff *chip);
 void ff_transport_stop(struct ff *chip);
@@ -664,4 +664,4 @@ void ff_midi_suspend(struct ff *chip);
 void ff_midi_resume(struct ff *chip);
 void ff_transport_suspend(struct ff *chip);
 
-#endif /* FFUC_H */
+#endif /* FF_H */

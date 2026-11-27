@@ -17,3 +17,6 @@ __pycache__/
 # Fedora RPM build outputs
 packaging/fedora/out/
 packaging/fedora/.rpmbuild/
+
+# kernel host-test binaries
+kernel/test/*-test

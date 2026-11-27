@@ -32,7 +32,7 @@
 
 static bool ff_event_ready(struct ff *chip)
 {
-	struct ffuc_hwdep_event_hdr h;
+	struct ff_hwdep_event_hdr h;
 	unsigned long flags;
 	bool ready = false;
 
@@ -47,13 +47,13 @@ static bool ff_event_ready(struct ff *chip)
 void ff_event_put(struct ff *chip, u32 type, const void *data, u32 size,
 		    u32 flags)
 {
-	struct ffuc_hwdep_event_hdr h;
+	struct ff_hwdep_event_hdr h;
 	unsigned long irqflags;
 
 	if (!chip->hwdep || READ_ONCE(chip->disconnected))
 		return;
-	if (size > FFUC_EVENT_MAX)
-		size = FFUC_EVENT_MAX;
+	if (size > FF_EVENT_MAX)
+		size = FF_EVENT_MAX;
 
 	h.type = type;
 	h.size = size;
@@ -73,11 +73,11 @@ void ff_event_put(struct ff *chip, u32 type, const void *data, u32 size,
 	wake_up_interruptible(&chip->event_wait);
 }
 
-static ssize_t ffuc_hwdep_read(struct snd_hwdep *hwdep, char __user *buf,
+static ssize_t ff_hwdep_read(struct snd_hwdep *hwdep, char __user *buf,
 			       long count, loff_t *offset)
 {
 	struct ff *chip = hwdep->private_data;
-	struct ffuc_hwdep_event_hdr h;
+	struct ff_hwdep_event_hdr h;
 	u8 *tmp;
 	unsigned int len, got;
 	unsigned long flags;
@@ -96,7 +96,7 @@ static ssize_t ffuc_hwdep_read(struct snd_hwdep *hwdep, char __user *buf,
 	if (READ_ONCE(chip->disconnected))
 		return -ENODEV;
 
-	tmp = kmalloc(FFUC_EVENT_BUF_SIZE, GFP_KERNEL);
+	tmp = kmalloc(FF_EVENT_BUF_SIZE, GFP_KERNEL);
 	if (!tmp)
 		return -ENOMEM;
 
@@ -117,7 +117,7 @@ static ssize_t ffuc_hwdep_read(struct snd_hwdep *hwdep, char __user *buf,
 	got = kfifo_out(&chip->event_fifo, tmp, len);
 	if (was_paused &&
 	    kfifo_len(&chip->event_fifo) <
-		    FFUC_METER_LOW_WATER *
+		    FF_METER_LOW_WATER *
 			    (chip->desc ? chip->desc->meter_len * 2 + 16 : 16))
 		WRITE_ONCE(chip->meter_paused, false);
 	spin_unlock_irqrestore(&chip->event_lock, flags);
@@ -137,7 +137,7 @@ static ssize_t ffuc_hwdep_read(struct snd_hwdep *hwdep, char __user *buf,
 	return ret;
 }
 
-static __poll_t ffuc_hwdep_poll(struct snd_hwdep *hwdep, struct file *file,
+static __poll_t ff_hwdep_poll(struct snd_hwdep *hwdep, struct file *file,
 				poll_table *wait)
 {
 	struct ff *chip = hwdep->private_data;
@@ -151,7 +151,7 @@ static __poll_t ffuc_hwdep_poll(struct snd_hwdep *hwdep, struct file *file,
 	return mask;
 }
 
-static int ffuc_hwdep_open(struct snd_hwdep *hwdep, struct file *file)
+static int ff_hwdep_open(struct snd_hwdep *hwdep, struct file *file)
 {
 	struct ff *chip = hwdep->private_data;
 
@@ -160,7 +160,7 @@ static int ffuc_hwdep_open(struct snd_hwdep *hwdep, struct file *file)
 	return 0;
 }
 
-static int ffuc_hwdep_release(struct snd_hwdep *hwdep, struct file *file)
+static int ff_hwdep_release(struct snd_hwdep *hwdep, struct file *file)
 {
 	struct ff *chip = hwdep->private_data;
 
@@ -181,23 +181,23 @@ static int ffuc_hwdep_release(struct snd_hwdep *hwdep, struct file *file)
 
 /* -- ioctls ---------------------------------------------------------- */
 
-static int ffuc_hwdep_info(struct ff *chip,
-			   struct ffuc_hwdep_info __user *arg)
+static int ff_hwdep_info(struct ff *chip,
+			   struct ff_hwdep_info __user *arg)
 {
-	struct ffuc_hwdep_info info;
-	u32 caps = FFUC_CAP_VENDOR | FFUC_CAP_PCM;
+	struct ff_hwdep_info info;
+	u32 caps = FF_CAP_VENDOR | FF_CAP_PCM;
 
 	if (chip->desc->state_out_ep)
-		caps |= FFUC_CAP_WORDS;
+		caps |= FF_CAP_WORDS;
 	if (chip->desc->meter_in_ep && chip->desc->meter_len)
-		caps |= FFUC_CAP_METERS;
-	if (chip->desc->status_iface != FFUC_IFACE_NONE)
-		caps |= FFUC_CAP_STATUS;
+		caps |= FF_CAP_METERS;
+	if (chip->desc->status_iface != FF_IFACE_NONE)
+		caps |= FF_CAP_STATUS;
 
 	memset(&info, 0, sizeof(info));
-	info.abi = FFUC_ABI_VERSION;
+	info.abi = FF_ABI_VERSION;
 	info.model = chip->model;
-	info.transport = chip->iso ? FFUC_XPORT_ISO : FFUC_XPORT_INTERRUPT;
+	info.transport = chip->iso ? FF_XPORT_ISO : FF_XPORT_INTERRUPT;
 	info.caps = caps;
 	info.channels = chip->desc->max_channels;
 	info.inputs = chip->desc->max_channels;
@@ -221,10 +221,10 @@ static int ffuc_hwdep_info(struct ff *chip,
 	return 0;
 }
 
-static int ffuc_hwdep_vendor(struct ff *chip,
-			     struct ffuc_hwdep_vendor __user *arg)
+static int ff_hwdep_vendor(struct ff *chip,
+			     struct ff_hwdep_vendor __user *arg)
 {
-	struct ffuc_hwdep_vendor v;
+	struct ff_hwdep_vendor v;
 	void *data = NULL;
 	int ret;
 
@@ -232,7 +232,7 @@ static int ffuc_hwdep_vendor(struct ff *chip,
 		return -EFAULT;
 	if (v.direction > 1)
 		return -EINVAL;
-	if (v.length > FFUC_HWDEP_MAX_DATA)
+	if (v.length > FF_HWDEP_MAX_DATA)
 		return -EINVAL;
 
 	if (v.length) {
@@ -256,7 +256,7 @@ static int ffuc_hwdep_vendor(struct ff *chip,
 		 * families store their pitch for later rates and pass
 		 * untouched; the rate sequence writes nominal words, which
 		 * are always in envelope. */
-		if (v.request == FFUC_REQ_DDS && chip->iso && chip->rate &&
+		if (v.request == FF_REQ_DDS && chip->iso && chip->rate &&
 		    chip->mode &&
 		    (v.index & 0x03) == ff_rate_family(chip->rate)) {
 			u32 val = v.value, idx = v.index;
@@ -283,14 +283,14 @@ static int ffuc_hwdep_vendor(struct ff *chip,
 	return 0;
 }
 
-static int ffuc_hwdep_words(struct ff *chip,
-			    struct ffuc_hwdep_words __user *arg)
+static int ff_hwdep_words(struct ff *chip,
+			    struct ff_hwdep_words __user *arg)
 {
-	struct ffuc_hwdep_words w;
+	struct ff_hwdep_words w;
 
 	if (copy_from_user(&w, arg, sizeof(w)))
 		return -EFAULT;
-	if (w.count > FFUC_HWDEP_MAX_WORDS)
+	if (w.count > FF_HWDEP_MAX_WORDS)
 		return -EINVAL;
 	/*
 	 * ff_reg_send() owns chip->ctl_lock.  Do not take it here:
@@ -301,10 +301,10 @@ static int ffuc_hwdep_words(struct ff *chip,
 }
 
 /* The device timestamp: a snapshot of the Stage 1 state under fb_lock. */
-static int ffuc_hwdep_clock(struct ff *chip,
-			    struct ffuc_hwdep_clock __user *arg)
+static int ff_hwdep_clock(struct ff *chip,
+			    struct ff_hwdep_clock __user *arg)
 {
-	struct ffuc_hwdep_clock c;
+	struct ff_hwdep_clock c;
 	unsigned long flags;
 
 	spin_lock_irqsave(&chip->fb_lock, flags);
@@ -323,10 +323,10 @@ static int ffuc_hwdep_clock(struct ff *chip,
 	return 0;
 }
 
-static int ffuc_hwdep_counters(struct ff *chip,
-			       struct ffuc_hwdep_counters __user *arg)
+static int ff_hwdep_counters(struct ff *chip,
+			       struct ff_hwdep_counters __user *arg)
 {
-	struct ffuc_hwdep_counters c;
+	struct ff_hwdep_counters c;
 
 	memset(&c, 0, sizeof(c));
 	c.out_urbs = atomic_read(&chip->out_urbs);
@@ -366,10 +366,10 @@ static int ffuc_hwdep_counters(struct ff *chip,
 	return 0;
 }
 
-static int ffuc_hwdep_set_rate(struct ff *chip,
-			       struct ffuc_hwdep_set_rate __user *arg)
+static int ff_hwdep_set_rate(struct ff *chip,
+			       struct ff_hwdep_set_rate __user *arg)
 {
-	struct ffuc_hwdep_set_rate r;
+	struct ff_hwdep_set_rate r;
 	unsigned int confirmed = 0;
 	int ret;
 
@@ -386,7 +386,7 @@ static int ffuc_hwdep_set_rate(struct ff *chip,
 	return 0;
 }
 
-static int ffuc_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
+static int ff_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
 			    unsigned int cmd, unsigned long arg)
 {
 	struct ff *chip = hwdep->private_data;
@@ -395,20 +395,20 @@ static int ffuc_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
 		return -ENODEV;
 
 	switch (cmd) {
-	case FFUC_HWDEP_IOCTL_INFO:
-		return ffuc_hwdep_info(chip, (void __user *)arg);
-	case FFUC_HWDEP_IOCTL_VENDOR:
-		return ffuc_hwdep_vendor(chip, (void __user *)arg);
-	case FFUC_HWDEP_IOCTL_WRITE_WORDS:
-		return ffuc_hwdep_words(chip, (void __user *)arg);
-	case FFUC_HWDEP_IOCTL_COUNTERS:
-		return ffuc_hwdep_counters(chip, (void __user *)arg);
-	case FFUC_HWDEP_IOCTL_CLOCK:
-		return ffuc_hwdep_clock(chip, (void __user *)arg);
-	case FFUC_HWDEP_IOCTL_SET_RATE:
-		return ffuc_hwdep_set_rate(chip, (void __user *)arg);
-	case FFUC_HWDEP_IOCTL_ENVELOPE: {
-		struct ffuc_hwdep_envelope env;
+	case FF_HWDEP_IOCTL_INFO:
+		return ff_hwdep_info(chip, (void __user *)arg);
+	case FF_HWDEP_IOCTL_VENDOR:
+		return ff_hwdep_vendor(chip, (void __user *)arg);
+	case FF_HWDEP_IOCTL_WRITE_WORDS:
+		return ff_hwdep_words(chip, (void __user *)arg);
+	case FF_HWDEP_IOCTL_COUNTERS:
+		return ff_hwdep_counters(chip, (void __user *)arg);
+	case FF_HWDEP_IOCTL_CLOCK:
+		return ff_hwdep_clock(chip, (void __user *)arg);
+	case FF_HWDEP_IOCTL_SET_RATE:
+		return ff_hwdep_set_rate(chip, (void __user *)arg);
+	case FF_HWDEP_IOCTL_ENVELOPE: {
+		struct ff_hwdep_envelope env;
 
 		ff_query_envelope(chip, &env);
 		if (copy_to_user((void __user *)arg, &env, sizeof(env)))
@@ -420,15 +420,15 @@ static int ffuc_hwdep_ioctl(struct snd_hwdep *hwdep, struct file *file,
 	}
 }
 
-static const struct snd_hwdep_ops ffuc_hwdep_ops = {
-	.open = ffuc_hwdep_open,
-	.release = ffuc_hwdep_release,
-	.read = ffuc_hwdep_read,
-	.poll = ffuc_hwdep_poll,
-	.ioctl = ffuc_hwdep_ioctl,
+static const struct snd_hwdep_ops ff_hwdep_ops = {
+	.open = ff_hwdep_open,
+	.release = ff_hwdep_release,
+	.read = ff_hwdep_read,
+	.poll = ff_hwdep_poll,
+	.ioctl = ff_hwdep_ioctl,
 };
 
-int ffuc_hwdep_create(struct ff *chip)
+int ff_hwdep_create(struct ff *chip)
 {
 	struct snd_hwdep *hwdep;
 	int ret;
@@ -438,7 +438,7 @@ int ffuc_hwdep_create(struct ff *chip)
 		return ret;
 	hwdep->private_data = chip;
 	hwdep->iface = SNDRV_HWDEP_IFACE_USB_STREAM;
-	hwdep->ops = ffuc_hwdep_ops;
+	hwdep->ops = ff_hwdep_ops;
 	strscpy(hwdep->name, "Fireface Control", sizeof(hwdep->name));
 	chip->hwdep = hwdep;
 	return 0;
@@ -455,12 +455,12 @@ static void ff_state_complete(struct urb *urb)
 	if (urb->status == 0 && urb->actual_length >= sizeof(u32)) {
 		words = urb->actual_length / sizeof(u32);
 		/* Split large reads into event-sized chunks. */
-		for (i = 0; i < words; i += FFUC_EVENT_MAX / sizeof(u32)) {
+		for (i = 0; i < words; i += FF_EVENT_MAX / sizeof(u32)) {
 			unsigned int n = min_t(unsigned int,
 					       words - i,
-					       FFUC_EVENT_MAX / sizeof(u32));
+					       FF_EVENT_MAX / sizeof(u32));
 
-			ff_event_put(chip, FFUC_EV_STATE,
+			ff_event_put(chip, FF_EV_STATE,
 				       (const u8 *)urb->transfer_buffer +
 				       i * sizeof(u32),
 				       n * sizeof(u32), 0);
@@ -500,38 +500,38 @@ static void ff_meter_complete(struct urb *urb)
 	if (urb->status == 0 && chip->desc &&
 	    (chip->caps & FF_CAP_METER_PAIR) &&
 	    urb->actual_length == chip->desc->meter_len &&
-	    2 * chip->desc->meter_len <= FFUC_EVENT_MAX) {
+	    2 * chip->desc->meter_len <= FF_EVENT_MAX) {
 		unsigned int len = chip->desc->meter_len;
-		unsigned int flags = FFUC_EV_FLAG_METER_PAIR;
+		unsigned int flags = FF_EV_FLAG_METER_PAIR;
 
 		switch (ff_meter_feed(chip->meter_pair, &chip->meter_pair_len,
 					&chip->meter_phase_lost,
 					urb->transfer_buffer, len)) {
-		case FFUC_METER_PAIR_UNVERIFIED:
-			flags |= FFUC_EV_FLAG_PHASE_LOST;
+		case FF_METER_PAIR_UNVERIFIED:
+			flags |= FF_EV_FLAG_PHASE_LOST;
 			fallthrough;
-		case FFUC_METER_PAIR:
-			ff_event_put(chip, FFUC_EV_METER, chip->meter_pair,
+		case FF_METER_PAIR:
+			ff_event_put(chip, FF_EV_METER, chip->meter_pair,
 				       2 * len, flags);
 			chip->meter_pairs++;
 			/* Pause only at a pair boundary. */
 			if (ff_event_bytes(chip) >
-			    FFUC_METER_HIGH_WATER * (2 * len + 16))
+			    FF_METER_HIGH_WATER * (2 * len + 16))
 				WRITE_ONCE(chip->meter_paused, true);
 			break;
-		case FFUC_METER_REALIGNED:
+		case FF_METER_REALIGNED:
 			chip->meter_realigns++;
 			break;
-		case FFUC_METER_HELD:
+		case FF_METER_HELD:
 			break;
 		}
 	} else if (urb->status == 0 && urb->actual_length >= 4 &&
 		   !(chip->caps & FF_CAP_METER_PAIR)) {
 		/* Self-describing packet devices (UCX, Babyface) pass each
 		 * packet through unchanged. */
-		ff_event_put(chip, FFUC_EV_METER, urb->transfer_buffer,
+		ff_event_put(chip, FF_EV_METER, urb->transfer_buffer,
 			       min_t(unsigned int, urb->actual_length,
-				     FFUC_EVENT_MAX), 0);
+				     FF_EVENT_MAX), 0);
 	}
 
 	switch (urb->status) {
@@ -605,7 +605,7 @@ int ff_transport_setup(struct ff *chip)
 	unsigned int i;
 	bool have_out = false, have_in = false, have_meter = false;
 
-	if (d->state_iface == FFUC_IFACE_NONE)
+	if (d->state_iface == FF_IFACE_NONE)
 		return 0;
 
 	if (!chip->state_intf) {
@@ -645,14 +645,14 @@ int ff_transport_setup(struct ff *chip)
 	if (have_in && !chip->state_urb) {
 		chip->state_urb = usb_alloc_urb(0, GFP_KERNEL);
 		chip->state_buf = usb_alloc_coherent(chip->dev,
-						     FFUC_STATE_BUF_SIZE,
+						     FF_STATE_BUF_SIZE,
 						     GFP_KERNEL,
 						     &chip->state_dma);
 		if (chip->state_urb && chip->state_buf) {
 			usb_fill_bulk_urb(chip->state_urb, chip->dev,
 					  usb_rcvbulkpipe(chip->dev,
 							  d->state_in_ep),
-					  chip->state_buf, FFUC_STATE_BUF_SIZE,
+					  chip->state_buf, FF_STATE_BUF_SIZE,
 					  ff_state_complete, chip);
 			chip->state_urb->transfer_dma = chip->state_dma;
 			chip->state_urb->transfer_flags |=
@@ -662,7 +662,7 @@ int ff_transport_setup(struct ff *chip)
 			chip->state_urb = NULL;
 			if (chip->state_buf)
 				usb_free_coherent(chip->dev,
-						  FFUC_STATE_BUF_SIZE,
+						  FF_STATE_BUF_SIZE,
 						  chip->state_buf,
 						  chip->state_dma);
 			chip->state_buf = NULL;
@@ -756,7 +756,7 @@ void ff_transport_stop(struct ff *chip)
 	if (chip->meter_pair_len && chip->desc &&
 	    (chip->caps & FF_CAP_METER_PAIR) &&
 	    !READ_ONCE(chip->disconnected)) {
-		u8 buf[FFUC_METER_PAIR_MAX];
+		u8 buf[FF_METER_PAIR_MAX];
 		int actual = 0;
 		int ret;
 
@@ -781,11 +781,11 @@ void ff_transport_suspend(struct ff *chip)
 
 /* Quiesce the control transport at disconnect: stop the pump, kill the
  * state/meter URBs and release the interface. The event FIFO and the
- * URB buffers stay allocated until ffuc_hwdep_cleanup runs from the
+ * URB buffers stay allocated until ff_hwdep_cleanup runs from the
  * card's private_free, after the last reader closes, so a reader inside
- * ffuc_hwdep_read never races a free.
+ * ff_hwdep_read never races a free.
  */
-void ffuc_hwdep_quiesce(struct ff *chip)
+void ff_hwdep_quiesce(struct ff *chip)
 {
 	ff_transport_suspend(chip);
 	if (chip->state_intf) {
@@ -794,7 +794,7 @@ void ffuc_hwdep_quiesce(struct ff *chip)
 	}
 }
 
-void ffuc_hwdep_cleanup(struct ff *chip)
+void ff_hwdep_cleanup(struct ff *chip)
 {
 	unsigned long flags;
 
@@ -804,7 +804,7 @@ void ffuc_hwdep_cleanup(struct ff *chip)
 		chip->state_urb = NULL;
 	}
 	if (chip->state_buf) {
-		usb_free_coherent(chip->dev, FFUC_STATE_BUF_SIZE,
+		usb_free_coherent(chip->dev, FF_STATE_BUF_SIZE,
 				  chip->state_buf, chip->state_dma);
 		chip->state_buf = NULL;
 	}
