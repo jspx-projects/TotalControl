@@ -81,7 +81,7 @@ with a 60-slot init block (§2.3).
 
 On `UC_WIN_RME` the output latch clears only on the alt 0 → alt N reselect.
 Every UC engine start follows the previous engine stop by at least
-`FFUC_RESTART_SETTLE_MS` (250 ms); an immediate restart leaves `UC_WIN_RME`
+`FF_RESTART_SETTLE_MS` (250 ms); an immediate restart leaves `UC_WIN_RME`
 silent in both directions.
 
 The UC uses EP0 vendor requests for control. Two additional endpoints carry
@@ -1326,11 +1326,11 @@ post-fader: the header and RMS-page output RMS words follow the row's
 
 | Concern | Source |
 |---|---|
-| EP0 requests and device sequences | `kernel/ffuc.c` |
-| PCM, URBs and sample conversion | `kernel/ffuc.c` |
-| USB-MIDI on interface 2 | `kernel/ffuc-midi.c` |
-| Meter pairing, status and hwdep events | `kernel/ffuc-hwdep.c` |
-| hwdep ABI | `kernel/ffuc-uapi.h` |
+| EP0 requests and device sequences | `kernel/ff.c` |
+| PCM, URBs and sample conversion | `kernel/ff.c` |
+| USB-MIDI on interface 2 | `kernel/ff-midi.c` |
+| Meter pairing, status and hwdep events | `kernel/ff-hwdep.c` |
+| hwdep ABI | `kernel/ff-uapi.h` |
 | UC control and meter decode | `ui/totalcontrol/totalcontrol-core/src/fireface/device.rs` |
 | UC protocol constants and parsers | `ui/totalcontrol/totalcontrol-core/src/fireface/protocol.rs` |
 | UC profile data | `ui/totalcontrol/totalcontrol-core/src/profiles/uc.rs` |

@@ -1,4 +1,4 @@
-//! Dump raw 0x85 transport/link packets (FFUC_EV_METER) with timestamps.
+//! Dump raw 0x85 transport/link packets (FF_EV_METER) with timestamps.
 //!
 //!   cargo run -p totalcontrol-core --example fireface-linkdump --features alsa -- 2 10
 //!

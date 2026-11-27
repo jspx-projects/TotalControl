@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze ffuc ringtrace dumps: reconstruct the ring-fill trajectory.
+"""Analyze ff ringtrace dumps: reconstruct the ring-fill trajectory.
 
 Usage: ringtrace-analyze.py <trace-file> [--events N]
 Records: ktime_ns appl hw status_hw filled total flags

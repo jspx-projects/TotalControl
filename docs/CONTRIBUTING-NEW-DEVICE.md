@@ -177,7 +177,7 @@ contains the values it needs; the contribution document does not repeat them.
 
 | Concern | Location |
 |---|---|
-| Kernel descriptors, transports, PCM and hwdep ABI | `kernel/ffuc.c`, `kernel/ffuc.h`, `kernel/ffuc-uapi.h` |
+| Kernel descriptors, transports, PCM and hwdep ABI | `kernel/ff.c`, `kernel/ff.h`, `kernel/ff-uapi.h` |
 | Kernel transport notes | `kernel/README.md` |
 | Device model and hwdep backend | `ui/totalcontrol/totalcontrol-core/src/fireface/` |
 | Profile schema and selection | `totalcontrol-core/src/profile.rs`, `models.rs`, `profiles/` |
@@ -243,7 +243,7 @@ python3 scripts/check-docs.py
 
 A kernel change also requires a kernel build with the matching headers. A
 transport, rate, channel-count or routing change requires
-`scripts/ffuc-48k-gate.sh` on a UC; add an equivalent gate if the new device
+`scripts/uc-48k-gate.sh` on a UC; add an equivalent gate if the new device
 needs one.
 
 ### Hardware test matrix

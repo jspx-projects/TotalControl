@@ -1313,7 +1313,7 @@ personality. These items remain open in the metering specification:
 | PCM ops, buffer geometry | `kernel/ff.c` |
 | status/latch watchdog, recovery | `kernel/ff.c` |
 | hwdep ABI, event queue, meter pump | `kernel/ff-hwdep.c`, `kernel/ff-uapi.h` |
-| meter heartbeat pairing | `kernel/ffuc-meter-pair.h` |
+| meter heartbeat pairing | `kernel/ff-meter-pair.h` |
 | USB-MIDI | `kernel/ff-midi.c` |
 | host ABI binding | `ui/totalcontrol/totalcontrol-core/src/fireface/abi.rs` |
 | host protocol/model | `ui/totalcontrol/totalcontrol-core/src/fireface/` |

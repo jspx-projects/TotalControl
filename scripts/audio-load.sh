@@ -89,8 +89,8 @@ monitor() {  # $1=secs $2=outdir
         printf '%s underruns=%s fill=%s delay_ms=%s run_ms=%s\n' "$now" "$u" "$f" "$dd" "$dr" >> "$out/soak.log"
         if [ "$u" -gt "$prev_u" ]; then
             local ts; ts=$(date +%H%M%S)
-            sudo -n ffuc-lab ringtrace > "$out/trace-$ts.txt" 2>/dev/null
-            sudo -n ffuc-lab stats > "$out/stats-$ts.txt" 2>/dev/null
+            sudo -n ff-lab ringtrace > "$out/trace-$ts.txt" 2>/dev/null
+            sudo -n ff-lab stats > "$out/stats-$ts.txt" 2>/dev/null
             echo "UNDERRUN at $now (count $u) -> trace-$ts.txt" | tee -a "$out/events.txt"
         fi
         prev_u=$u
@@ -151,7 +151,7 @@ sweep)
             stop_load; sleep 2
         done
     done
-    sudo -n ffuc-lab stats 2>/dev/null | grep -E "ring_max_stall|ring_starved|ring_min_filled" | tee -a "$out/table.txt"
+    sudo -n ff-lab stats 2>/dev/null | grep -E "ring_max_stall|ring_starved|ring_min_filled" | tee -a "$out/table.txt"
     ;;
 *)
     grep '^#' "$0" | sed -n '2,12p'

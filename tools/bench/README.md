@@ -39,11 +39,11 @@ another card.
 ### Device diagnostics (hwdep)
 | Tool | Purpose |
 |---|---|
-| `ffuc-diag.c` | full hwdep counters + achievable-envelope dump. |
-| `ffuc-0x19-probe.c` | read the readiness/status word (`0x19`) and `0x11`. |
+| `ff-diag.c` | full hwdep counters + achievable-envelope dump. |
+| `ff-0x19-probe.c` | read the readiness/status word (`0x19`) and `0x11`. |
 | `rdopts.c` | read `0x19` / `0x11` / `0x10` words once. |
 | `burst19.c`, `burst19r.c` | fast timestamped `0x19` sampling; `burst19r` reopens across a USB reset. |
-| `ffuc-xrun-probe.c` | host-ring xrun + clock-diagnostic counters. |
+| `ff-xrun-probe.c` | host-ring xrun + clock-diagnostic counters. |
 
 ### Host / ALSA measurement
 | Tool | Purpose |
@@ -80,12 +80,12 @@ C tools build against the checkout's kernel headers. From this directory:
 
 ```sh
 R=$(git rev-parse --show-toplevel)
-gcc -O2 -I"$R/kernel" -o ffuc-diag        ffuc-diag.c
-gcc -O2 -I"$R/kernel" -o ffuc-0x19-probe  ffuc-0x19-probe.c
+gcc -O2 -I"$R/kernel" -o ff-diag        ff-diag.c
+gcc -O2 -I"$R/kernel" -o ff-0x19-probe  ff-0x19-probe.c
 gcc -O2 -I"$R/kernel" -o rdopts           rdopts.c
 gcc -O2 -I"$R/kernel" -o burst19          burst19.c
 gcc -O2 -I"$R/kernel" -o burst19r         burst19r.c
-gcc -O2 -I"$R/kernel" -o ffuc-xrun-probe  ffuc-xrun-probe.c
+gcc -O2 -I"$R/kernel" -o ff-xrun-probe  ff-xrun-probe.c
 gcc -O2 -I"$R/kernel" -o cpu-dma-latency  cpu-dma-latency.c
 gcc -O2 -I"$R/kernel" -o clock-write      clock-write.c -lm
 gcc -O2 -I"$R/kernel" -o alsa-fill-probe  alsa-fill-probe.c -lasound
@@ -98,7 +98,7 @@ gcc -O2 -o pw-stream-rate pw-stream-rate.c \
 Runtime dependencies: the PipeWire CLI tools (`pw-dump`, `pw-cli`,
 `pw-metadata`, `pw-play`, `pw-record`), `alsa-lib` for the ALSA probes, and
 `libpipewire-0.3` for `pw-stream-rate`. The shell scripts use the lab helpers
-(`ffuc-lab`) and `pactl` where noted; see `docs/DEVELOPMENT-TOOLS.md`.
+(`ff-lab`) and `pactl` where noted; see `docs/DEVELOPMENT-TOOLS.md`.
 
 ## Measurement trap
 

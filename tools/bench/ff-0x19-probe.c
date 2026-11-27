@@ -1,7 +1,7 @@
-// ffuc-0x19-probe: read the device readiness register (0x19)
+// ff-0x19-probe: read the device readiness register (0x19)
 // and the status word (0x11) through the hwdep VENDOR ioctl.
-//   ffuc-0x19-probe <hwdep> idle <n>        n reads, 100 ms apart
-//   ffuc-0x19-probe <hwdep> watch <secs>    fast sampling, print changes
+//   ff-0x19-probe <hwdep> idle <n>        n reads, 100 ms apart
+//   ff-0x19-probe <hwdep> watch <secs>    fast sampling, print changes
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +10,7 @@
 #include <time.h>
 #include <sys/ioctl.h>
 #include <linux/types.h>
-#include "ffuc-uapi.h"
+#include "ff-uapi.h"
 
 static int fd;
 static unsigned long long now_ns(void)
@@ -21,12 +21,12 @@ static unsigned long long now_ns(void)
 }
 static int vread(unsigned char req, unsigned int *word)
 {
-	struct ffuc_hwdep_vendor v;
+	struct ff_hwdep_vendor v;
 	memset(&v, 0, sizeof(v));
 	v.request = req;
 	v.direction = 1;
 	v.length = 4;
-	if (ioctl(fd, FFUC_HWDEP_IOCTL_VENDOR, &v) < 0)
+	if (ioctl(fd, FF_HWDEP_IOCTL_VENDOR, &v) < 0)
 		return -1;
 	memcpy(word, v.data, 4);
 	return 0;

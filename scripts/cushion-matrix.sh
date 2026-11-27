@@ -1,7 +1,7 @@
 #!/bin/bash
 # Cushion matrix: stall duration x write phase x ring-fill target, direct ALSA.
 # The probe bypasses PipeWire and TotalControl, so stop them or let their
-# nodes suspend before running. Requires the lab `ffuc-lab stats` helper for
+# nodes suspend before running. Requires the lab `ff-lab stats` helper for
 # the driver's ring counters.
 #
 #   scripts/cushion-matrix.sh [out.csv]
@@ -21,7 +21,7 @@ if [ ! -x "$PROBE" ]; then
 fi
 CARD=$(awk '/Fireface|Babyface/{print $1}' /proc/asound/cards | tr -d '[]' | head -1)
 [ -n "$CARD" ] || { echo "no Fireface card found" >&2; exit 1; }
-STATS() { sudo -n /usr/local/sbin/ffuc-lab stats 2>/dev/null; }
+STATS() { sudo -n /usr/local/sbin/ff-lab stats 2>/dev/null; }
 num() { printf '%s\n' "$1" | awk -v k="$2" '$1==k{print $2}'; }
 
 echo "target phase stall_ms trial out_delta ring_min starved app_xruns stall_fill" > "$OUT"

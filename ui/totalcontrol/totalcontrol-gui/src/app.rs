@@ -15866,7 +15866,7 @@ fn force_engine_reprepare(state: &mut TotalControl) {
 
 /// The pitch slider's positive end: the transport's pitch envelope at the
 /// running rate, on the slider's 0.1 % grid. The driver clamps every DDS
-/// write to the same ceiling (`ffuc_dds_clamp`).
+/// write to the same ceiling (`ff_dds_clamp`).
 fn pitch_slider_max(state: &TotalControl) -> f32 {
     let max = clock_facts(state).pitch_max_percent(running_rate(state));
     (max * 10.0).floor() / 10.0

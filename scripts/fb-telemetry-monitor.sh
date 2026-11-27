@@ -73,7 +73,7 @@ done
 {
     echo "# end: $(date -Is)"
     echo "# recent driver kernel lines (timestamped):"
-    dmesg --time-format iso 2>/dev/null | grep -iE 'fireface|ffuc|snd_fireface' | tail -60
+    dmesg --time-format iso 2>/dev/null | grep -iE 'fireface|snd_fireface' | tail -60
     echo "# feedback gap ring (pos expected delta frames phase wrap):"
     cat "${STATS%stats}gaps" 2>/dev/null
 } >> "$OUT"

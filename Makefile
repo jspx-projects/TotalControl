@@ -23,7 +23,7 @@ all: rme-probe
 # default.  The hwdep backend includes the driver's uapi header.
 VENDORED_LIBUSB := $(wildcard third_party/libusb/libusb.h)
 
-rme-probe: tools/rme-probe.c kernel/ffuc-uapi.h $(VENDORED_LIBUSB)
+rme-probe: tools/rme-probe.c kernel/ff-uapi.h $(VENDORED_LIBUSB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/rme-probe.c $(LDFLAGS) $(LDLIBS)
 
 clean:

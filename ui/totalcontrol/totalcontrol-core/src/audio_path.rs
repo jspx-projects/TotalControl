@@ -305,7 +305,7 @@ impl ClockFacts {
     /// microframe packet — the band's highest period floor / 8 + 1 — so the
     /// programmed clock `rate * (1 + pitch/100)` must stay at or below
     /// `8000 * max_frames`. The driver clamps every DDS write to the same
-    /// ceiling (`ffuc_dds_clamp`); the slider offers the envelope so the
+    /// ceiling (`ff_dds_clamp`); the slider offers the envelope so the
     /// displayed value is what the device runs. Non-ISO transports carry no
     /// per-microframe frame ceiling and keep the full ±5 % range.
     pub fn pitch_max_percent(&self, rate: u32) -> f32 {

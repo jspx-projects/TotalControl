@@ -170,7 +170,7 @@ This packing differs from the UC/UCX mask, where channel *n* is bit *n* + 2.
 ## 5. Metering
 
 The unit streams meter packets on bulk IN `0x85` without a request. The kernel
-delivers each packet as an `FFUC_EV_METER` hwdep event. A packet is 456 bytes:
+delivers each packet as an `FF_EV_METER` hwdep event. A packet is 456 bytes:
 
 | Bytes | Contents |
 |---|---|
@@ -195,8 +195,8 @@ length.
 
 ## 6. hwdep ABI
 
-The device reports model value `3` (`FFUC_MODEL_BABYFACE_CLASSIC`) in the
-hwdep INFO block. The transport is isochronous (`FFUC_XPORT_ISO`).
+The device reports model value `3` (`FF_MODEL_BABYFACE_CLASSIC`) in the
+hwdep INFO block. The transport is isochronous (`FF_XPORT_ISO`).
 
 | Field | Value |
 |---|---|
@@ -244,10 +244,10 @@ requests from userspace.
 
 | Concern | Source |
 |---|---|
-| Device entry, modes, stream engine and mute packing | `kernel/ffuc.c` |
-| hwdep INFO, events and vendor ioctl | `kernel/ffuc-hwdep.c` |
-| USB-MIDI | `kernel/ffuc-midi.c` |
-| Model enum and product ID | `kernel/ffuc-uapi.h`, `kernel/ffuc.h` |
+| Device entry, modes, stream engine and mute packing | `kernel/ff.c` |
+| hwdep INFO, events and vendor ioctl | `kernel/ff-hwdep.c` |
+| USB-MIDI | `kernel/ff-midi.c` |
+| Model enum and product ID | `kernel/ff-uapi.h`, `kernel/ff.h` |
 | Mixer model, EP0 writes, preamps and meters | `ui/totalcontrol/totalcontrol-core/src/babyface_classic.rs` |
 | Channel topology | `ui/totalcontrol/totalcontrol-core/src/profiles/babyface_classic.rs` |
 | Device menu and backend selection | `ui/totalcontrol/totalcontrol-gui/src/app.rs` |

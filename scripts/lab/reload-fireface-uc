@@ -15,7 +15,7 @@
 # stops the graph first.
 set -eu
 
-KO=/usr/local/lib/ffuc-lab/snd-fireface-uc.ko
+KO=/usr/local/lib/ff-lab/snd-fireface-uc.ko
 if [ ! -f "$KO" ]; then
     KO=$(find /home /opt -maxdepth 7 -type f \
               -path '*/kernel/snd-fireface-uc.ko' -printf '%T@ %p\n' 2>/dev/null |

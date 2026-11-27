@@ -20,9 +20,9 @@
 # restored.  Run it on the bench or with that output unused.
 #
 # Usage:
-#   scripts/ffuc-48k-gate.sh all       # manages PipeWire user services
-#   scripts/ffuc-48k-gate.sh direct    # PipeWire must already be stopped
-#   scripts/ffuc-48k-gate.sh pipewire  # PipeWire must already be running
+#   scripts/uc-48k-gate.sh all       # manages PipeWire user services
+#   scripts/uc-48k-gate.sh direct    # PipeWire must already be stopped
+#   scripts/uc-48k-gate.sh pipewire  # PipeWire must already be running
 #
 # Options:
 #   --card N       ALSA card number (default: autodetect Fireface UC/UCX)
@@ -121,7 +121,7 @@ if pgrep -x totalcontrol-gui >/dev/null 2>&1; then
     fail "TotalControl is running; stop it so only one writer owns the mixer"
 fi
 
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/ffuc-48k-gate.XXXXXX")
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/uc-48k-gate.XXXXXX")
 TONE="$TMP/tone-18ch-48k.wav"
 SRC_WAV="$TMP/source-18ch-48k.wav"
 MON_WAV="$TMP/monitor-18ch-48k.wav"

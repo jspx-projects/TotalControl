@@ -61,7 +61,7 @@ delta() {
 	echo $(( $(counter "$1") - before ))
 }
 
-clock_field() { sudo -n /usr/local/sbin/ffuc-lab clock 2>/dev/null | awk -v k="$1" '$1 == k {print $2}'; }
+clock_field() { sudo -n /usr/local/sbin/ff-lab clock 2>/dev/null | awk -v k="$1" '$1 == k {print $2}'; }
 
 # One duplex start at $1.  Reads the actual clock mid-stream.  Leaves the
 # counter deltas in d_dds, d_fam, d_commit and d_opt.
