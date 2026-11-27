@@ -280,7 +280,11 @@ While a session is running the state stream is sparse and carries only changed
 values.  The full state dump is requested on demand: after the state endpoint
 is active, write `0x3f99 = 0x0812`.  The unit then emits a one-shot dump
 covering the 18 input blocks, the 18 output blocks, the output matrix-send
-block and the global FX/monitor words.  The input blocks include 48 V, Inst,
+block and the global FX/monitor words.  Keeping the endpoint active is a
+precondition: the host writes `0x3f00` sequence 0..15 every 100 ms and keeps
+one reader on `0x8d`.  A reader that does not heartbeat sees the sparse
+stream, not the dump; a second reader splits the stream.  The dump is a
+one-shot connect snapshot, not a live mixer readback.  The input blocks include 48 V, Inst,
 Level and AutoSet; the output blocks include references and balance.  The
 detailed field map is maintained in `docs/work/DEVICE-SETUPS.md`.
 
