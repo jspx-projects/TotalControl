@@ -35,7 +35,7 @@
 #include <unistd.h>
 
 #include "libusb.h"
-#include "../kernel/ffuc-uapi.h"
+#include "../kernel/ff-uapi.h"
 
 #define RME_VID_OLD 0x0424u
 #define RME_VID_NEW 0x2a39u
@@ -178,25 +178,24 @@ static void print_string(libusb_device_handle *h, uint8_t idx, const char *label
 struct probe_dev {
 	libusb_device_handle *usb;	/* NULL when routed through hwdep */
 	int fd;				/* hwdep node, -1 for direct USB */
-	struct ffuc_hwdep_info info;	/* valid when fd >= 0 */
+	struct ff_hwdep_info info;	/* valid when fd >= 0 */
 	char node[300];
 };
 
 static const char *g_hwdep_node;	/* --hwdep override, or NULL */
 
-static bool hwdep_match(const struct ffuc_hwdep_info *info, uint16_t pid)
+static bool hwdep_match(const struct ff_hwdep_info *info, uint16_t pid)
 {
-	/* The hwdep info carries model and transport, not USB IDs; both
-	 * vendor IDs of one personality map to the same entry. */
+	/* The hwdep info carries the USB product and transport. */
+	if (info->product != pid)
+		return false;
 	switch (pid) {
 	case 0x3fc5:
-		return info->model == FFUC_MODEL_UC &&
-		       info->transport == FFUC_XPORT_INTERRUPT;
+		return info->transport == FF_XPORT_INTERRUPT;
 	case 0x3fc6:
-		return info->model == FFUC_MODEL_UC &&
-		       info->transport == FFUC_XPORT_ISO;
+		return info->transport == FF_XPORT_ISO;
 	case 0x3fc9:
-		return info->model == FFUC_MODEL_UCX;
+		return true;
 	default:
 		return false;
 	}
@@ -205,14 +204,14 @@ static bool hwdep_match(const struct ffuc_hwdep_info *info, uint16_t pid)
 static int hwdep_open_node(const char *path, uint16_t pid, bool want_match,
 			   struct probe_dev *d)
 {
-	struct ffuc_hwdep_info info;
+	struct ff_hwdep_info info;
 	int fd = open(path, O_RDWR);
 
 	if (fd < 0)
 		return -1;
 	memset(&info, 0, sizeof(info));
-	if (ioctl(fd, FFUC_HWDEP_IOCTL_INFO, &info) < 0 ||
-	    info.abi != FFUC_ABI_VERSION ||
+	if (ioctl(fd, FF_HWDEP_IOCTL_INFO, &info) < 0 ||
+	    info.abi != FF_ABI_VERSION ||
 	    (want_match && !hwdep_match(&info, pid))) {
 		close(fd);
 		return -1;
@@ -303,8 +302,9 @@ static struct probe_dev probe_open(libusb_context *ctx, uint16_t vid,
 	}
 
 	if (hwdep_try_open(pid, &d) == 0) {
-		fprintf(stderr, "note: via hwdep %s (%s, driver bound)\n",
-			d.node, d.info.name);
+		fprintf(stderr, "note: via hwdep %s (%04x:%04x, transport %u, "
+			"driver bound)\n", d.node, d.info.vendor, d.info.product,
+			d.info.transport);
 		return d;
 	}
 	die("device %04x:%04x not usable (not found, or no USB access and no "
@@ -346,18 +346,18 @@ static const char *probe_err(int r, const struct probe_dev *d)
 static int probe_ctl_in(struct probe_dev *d, uint8_t req, uint16_t value,
 			uint16_t index, unsigned char *buf, uint16_t len)
 {
-	struct ffuc_hwdep_vendor v;
+	struct ff_hwdep_vendor v;
 
 	if (d->fd >= 0) {
-		if (len > FFUC_HWDEP_MAX_DATA)
-			len = FFUC_HWDEP_MAX_DATA;
+		if (len > FF_HWDEP_MAX_DATA)
+			len = FF_HWDEP_MAX_DATA;
 		memset(&v, 0, sizeof(v));
 		v.request = req;
 		v.direction = 1;
 		v.value = value;
 		v.index = index;
 		v.length = len;
-		if (ioctl(d->fd, FFUC_HWDEP_IOCTL_VENDOR, &v) < 0)
+		if (ioctl(d->fd, FF_HWDEP_IOCTL_VENDOR, &v) < 0)
 			return -errno;
 		memcpy(buf, v.data, v.length);
 		return v.length;
@@ -369,7 +369,7 @@ static int probe_ctl_in(struct probe_dev *d, uint8_t req, uint16_t value,
 static int probe_ctl_out(struct probe_dev *d, uint8_t req, uint16_t value,
 			 uint16_t index)
 {
-	struct ffuc_hwdep_vendor v;
+	struct ff_hwdep_vendor v;
 
 	if (d->fd >= 0) {
 		memset(&v, 0, sizeof(v));
@@ -377,7 +377,7 @@ static int probe_ctl_out(struct probe_dev *d, uint8_t req, uint16_t value,
 		v.direction = 0;
 		v.value = value;
 		v.index = index;
-		if (ioctl(d->fd, FFUC_HWDEP_IOCTL_VENDOR, &v) < 0)
+		if (ioctl(d->fd, FF_HWDEP_IOCTL_VENDOR, &v) < 0)
 			return -errno;
 		return 0;
 	}
@@ -395,9 +395,10 @@ static void cmd_info(libusb_context *ctx, uint16_t vid, uint16_t pid)
 	int r;
 
 	if (!h) {
-		printf("hwdep %s: %s\n", d.node, d.info.name);
-		printf("  abi %u  model %u  transport %u  caps 0x%x\n",
-		       d.info.abi, d.info.model, d.info.transport, d.info.caps);
+		printf("hwdep %s: %04x:%04x\n", d.node,
+		       d.info.vendor, d.info.product);
+		printf("  abi %u  transport %u  caps 0x%x\n",
+		       d.info.abi, d.info.transport, d.info.caps);
 		printf("  firmware %u  rate %u Hz  card %u  channels %u\n",
 		       d.info.firmware, d.info.rate, d.info.card,
 		       d.info.channels);
@@ -739,10 +740,10 @@ static void cmd_raw(libusb_context *ctx, uint16_t vid, uint16_t pid,
 		die("len too large (max %zu)", sizeof(buf));
 
 	d = probe_open(ctx, vid, pid);
-	if (d.fd >= 0 && len > FFUC_HWDEP_MAX_DATA) {
+	if (d.fd >= 0 && len > FF_HWDEP_MAX_DATA) {
 		printf("note: hwdep caps reads at %u bytes\n",
-		       FFUC_HWDEP_MAX_DATA);
-		len = FFUC_HWDEP_MAX_DATA;
+		       FF_HWDEP_MAX_DATA);
+		len = FF_HWDEP_MAX_DATA;
 	}
 	r = probe_ctl_in(&d, (uint8_t)req, (uint16_t)value, (uint16_t)index,
 			 buf, (uint16_t)len);

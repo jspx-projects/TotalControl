@@ -9,26 +9,26 @@ sequence.
 |---|---|---|
 | `reset-fireface-usb` | `/usr/local/sbin/reset-fireface-usb` | USB port reset without unplugging; waits for the card to reappear. |
 | `reload-fireface-uc` | `/usr/local/sbin/reload-fireface-uc` | Discover the newest module build, unbind, `rmmod` + `insmod`. |
-| `ffuc-lab` | `/usr/local/sbin/ffuc-lab` | Driver debugfs surface: read-only `stats`/`ringtrace`/`clock`, meter probes `pause`/`double`/`kill`. |
+| `ff-lab` | `/usr/local/sbin/ff-lab` | Driver debugfs surface: read-only `stats`/`ringtrace`/`clock`, meter probes `pause`/`double`/`kill`. |
 
 ## Install
 
 Install root-owned and not group/world-writable, then add the sudoers rules:
 
 ```sh
-sudo install -m 0755 -o root -g root reset-fireface-usb reload-fireface-uc ffuc-lab /usr/local/sbin/
-sudo visudo -f /etc/sudoers.d/ffuc-lab-helpers
+sudo install -m 0755 -o root -g root reset-fireface-usb reload-fireface-uc ff-lab /usr/local/sbin/
+sudo visudo -f /etc/sudoers.d/ff-lab-helpers
 ```
 
 with:
 
 ```
 <user> ALL=(root) NOPASSWD: /usr/local/sbin/reset-fireface-usb, \
-    /usr/local/sbin/reload-fireface-uc, /usr/local/sbin/ffuc-lab
+    /usr/local/sbin/reload-fireface-uc, /usr/local/sbin/ff-lab
 ```
 
 The raw bench commands used by `scripts/bench-reload.sh` are covered by a
-separate `/etc/sudoers.d/ffuc-bench` rule (documented in
+separate `/etc/sudoers.d/ff-bench` rule (documented in
 `docs/DEVELOPMENT-TOOLS.md`); its `insmod` line is pinned to the absolute
 checkout module path. Substitute `<user>` and the checkout path locally;
 do not commit personal paths or device serials.

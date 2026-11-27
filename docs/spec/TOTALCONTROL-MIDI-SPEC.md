@@ -258,9 +258,9 @@ below this limit.
 
 | Concern | Source |
 |---|---|
-| USB-MIDI transport, port routing, packet codec | `kernel/ffuc-midi.c` |
-| Device MIDI fields and quirk bits | `kernel/ffuc.h` |
-| MIDI interface, endpoints and port count per model | `kernel/ffuc.c` |
+| USB-MIDI transport, port routing, packet codec | `kernel/ff-midi.c` |
+| Device MIDI fields and quirk bits | `kernel/ff.h` |
+| MIDI interface, endpoints and port count per model | `kernel/ff.c` |
 | UC MIDI wire format | `FIREFFACE-UC-PROTOCOL-SPEC.md` §11.3 |
 | UCX MIDI wire format | `FIREFFACE-UCX-PROTOCOL-SPEC.md` §2.5 |
 | Babyface MIDI transport | `BABYFACE-CLASSIC-PROTOCOL-SPEC.md` §2 |

@@ -78,7 +78,7 @@ cargo run -p totalcontrol-core --example fireface-scan --features alsa
 cargo run -p totalcontrol-gui
 ```
 
-The hwdep ABI is versioned (`FFUC_ABI_VERSION`); the Rust binding checks it
+The hwdep ABI is versioned (`FF_ABI_VERSION`); the Rust binding checks it
 at open.
 
 ## DKMS

@@ -9,7 +9,7 @@ out=${1:-"./xrun-test"}
 mkdir -p "$out"
 pwpid=$(pgrep -x pipewire | head -1)
 state() { awk '/^state/{print $2}' /proc/asound/card$CARD/pcm0p/sub0/status; }
-sudo -n ffuc-lab stats > "$out/stats-before.txt"
+sudo -n ff-lab stats > "$out/stats-before.txt"
 echo "before: $(state)"
 kill -STOP "$pwpid"
 sleep 0.1
@@ -22,6 +22,6 @@ for i in $(seq 1 100); do
     sleep 0.1
 done
 echo "after: $(state) at $(date +%s.%N)"
-sudo -n ffuc-lab ringtrace > "$out/trace.txt"
-sudo -n ffuc-lab stats > "$out/stats-after.txt"
+sudo -n ff-lab ringtrace > "$out/trace.txt"
+sudo -n ff-lab stats > "$out/stats-after.txt"
 grep -E "out_underruns|recoveries|ring_" "$out/stats-after.txt"

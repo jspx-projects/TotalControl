@@ -14,8 +14,8 @@
 set -u
 secs=${1:-30}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${TMPDIR:-/tmp}/totalcontrol-ffuc-counters
-gcc -O2 -I"$root/kernel" -o "$bin" "$root/tools/ffuc-counters.c" || exit 1
+bin=${TMPDIR:-/tmp}/totalcontrol-ff-counters
+gcc -O2 -I"$root/kernel" -o "$bin" "$root/tools/ff-counters.c" || exit 1
 # Find the Fireface card dynamically (survives renumbering and replug).
 card=""
 for c in /sys/class/sound/card*; do

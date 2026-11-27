@@ -23,20 +23,23 @@
 #include <math.h>
 #include <sys/ioctl.h>
 #include <linux/types.h>
-#include "ffuc-uapi.h"
+#include "ff-uapi.h"
 
 static int fd;
 static int vwr(unsigned char req, unsigned short val, unsigned short idx)
 {
-	struct ffuc_hwdep_vendor v; memset(&v, 0, sizeof(v));
+	struct ff_hwdep_vendor v; memset(&v, 0, sizeof(v));
 	v.request = req; v.direction = 0; v.value = val; v.index = idx; v.length = 0;
-	return ioctl(fd, FFUC_HWDEP_IOCTL_VENDOR, &v);
+	return ioctl(fd, FF_HWDEP_IOCTL_VENDOR, &v);
 }
 static double rate_meas(void)
 {
-	struct ffuc_hwdep_clock c;
-	if (ioctl(fd, FFUC_HWDEP_IOCTL_CLOCK, &c) < 0) return -1;
-	return (double)c.rate_meas;
+	struct ff_hwdep_snapshot s;
+	memset(&s, 0, sizeof(s));
+	s.abi = FF_ABI_VERSION;
+	s.size = sizeof(s);
+	if (ioctl(fd, FF_HWDEP_IOCTL_SNAPSHOT, &s) < 0) return -1;
+	return (double)s.rate_meas;
 }
 static unsigned family_of(unsigned rate)
 {

@@ -313,7 +313,7 @@ mechanism, FX returns and unsupported controls.
 - One Fireface at a time.
 - Bench/lab helpers are installed in `/usr/local/sbin` with scoped
   password-free sudo: `reset-fireface-usb` (USB reset without unplugging),
-  `reload-fireface-uc` (module reload), `ffuc-lab` (meter debugfs probes).
+  `reload-fireface-uc` (module reload), `ff-lab` (meter debugfs probes).
   Prefer these over raw `sudo rmmod`/`insmod`; source copies are in
   `scripts/lab/` and the full usage, recovery sequence and sudoers setup
   are in `docs/DEVELOPMENT-TOOLS.md` ("Lab helpers"). `scripts/bench-reload.sh`

@@ -1380,9 +1380,9 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 
 | Concern | Source |
 |---|---|
-| IF1 word encoding and parity | `kernel/ffuc.c` |
-| hwdep ABI and events | `kernel/ffuc-hwdep.c`, `kernel/ffuc-uapi.h` |
-| Stream start/stop and rate | `kernel/ffuc.c` |
+| IF1 word encoding and parity | `kernel/ff.c` |
+| hwdep ABI and events | `kernel/ff-hwdep.c`, `kernel/ff-uapi.h` |
+| Stream start/stop and rate | `kernel/ff.c` |
 | IF1 constants and matrix encoding | `ui/totalcontrol/totalcontrol-core/src/fireface/protocol.rs` |
 | Device write paths, meters and scenes | `ui/totalcontrol/totalcontrol-core/src/fireface/device.rs` |
 | Channel DSP registers | `ui/totalcontrol/totalcontrol-core/src/fireface/settings.rs` |

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Host test for the UC meter heartbeat pairing (ffuc-meter-pair.h).
+ * Host test for the UC meter heartbeat pairing (ff-meter-pair.h).
  *
  *   make -C kernel test
  *

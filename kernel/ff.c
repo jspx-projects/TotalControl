@@ -4,8 +4,8 @@
  *
  * This file owns USB enumeration, the streaming engines, the ALSA PCM
  * device and the per-device descriptor table.  Device-model policy lives in
- * userspace behind the snd-hwdep node created by ffuc-hwdep.c; see
- * ffuc.h and docs/PROTOCOL-COMPLETE.md.
+ * userspace behind the snd-hwdep node created by ff-hwdep.c; see
+ * ff.h and docs/spec/DRIVER-DESIGN.md.
  */
 #include <linux/bitops.h>
 #include <linux/debugfs.h>
@@ -354,7 +354,7 @@ int ff_reg_send(struct ff *chip, const struct ff_hwdep_word *words,
 /* Claim/release a sibling interface for the raw control transports.  The
  * USB driver itself only probes the streaming interface, so the meter/state
  * interface must be claimed explicitly.  The helpers keep ff_driver local
- * to this file while ffuc-hwdep.c can still manage the interface. */
+ * to this file while ff-hwdep.c can still manage the interface. */
 int ff_claim_interface(struct usb_interface *intf)
 {
 	return usb_driver_claim_interface(&ff_driver, intf, NULL);

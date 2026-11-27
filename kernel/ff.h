@@ -507,7 +507,7 @@ struct ff {
 	u8 last_status[FF_STATUS_LEN];
 	bool out_latched;
 
-	/* IF1 raw state/meter transports (owned by ffuc-hwdep.c) */
+	/* IF1 raw state/meter transports (owned by ff-hwdep.c) */
 	struct usb_interface *state_intf;
 	struct urb *state_urb;
 	u8 *state_buf;
@@ -642,7 +642,7 @@ struct ff {
 	struct ff_stream streams[2];
 };
 
-/* ffuc.c */
+/* ff.c */
 int ff_vendor_send(struct ff *chip, u8 req, u16 val, u16 idx,
 		     const void *data, u16 len);
 int ff_vendor_recv(struct ff *chip, u8 req, u16 val, u16 idx,
@@ -656,7 +656,7 @@ void ff_query_envelope(struct ff *chip, struct ff_hwdep_envelope *env);
 int ff_set_rate_idle(struct ff *chip, unsigned int rate,
 		       unsigned int *confirmed);
 
-/* ffuc-hwdep.c */
+/* ff-hwdep.c */
 void ff_event_put(struct ff *chip, u32 type, const void *data, u32 size,
 		    u32 flags);
 int ff_hwdep_create(struct ff *chip);
@@ -666,7 +666,7 @@ int ff_transport_setup(struct ff *chip);
 int ff_transport_start(struct ff *chip);
 void ff_transport_stop(struct ff *chip);
 
-/* ffuc-midi.c */
+/* ff-midi.c */
 void ff_midi_init(struct ff *chip);
 int ff_midi_create(struct ff *chip);
 void ff_midi_cleanup(struct ff *chip);

@@ -67,11 +67,11 @@ All development switches use the `TOTALCONTROL_` prefix:
 | `tools/parse_capture.py` | Parse a captured stream |
 | `tools/decode-totalmix-capture.py` | Decode host application captures |
 | `tools/rme-probe.c` | Direct vendor-request probe |
-| `scripts/ffuc-counters.c` | Read driver transport counters |
+| `tools/ff-counters.c` | Read driver transport counters |
 | `tools/uc-loopback-phase-probe.sh` | UC loopback phase probe |
 | `tools/uc-rate-probe.sh` | UC rate probe |
 | `scripts/uc-latency-stress.py` | UC latency stress run |
-| `scripts/ffuc-48k-gate.sh` | 48 kHz transport gate |
+| `scripts/uc-48k-gate.sh` | 48 kHz transport gate |
 | `scripts/mixer-demo.sh` | Legacy mixer demonstration |
 | `ucx-state-watch` example | Print changed UCX state words |
 | `ucx-dump-diff` example | Request the full dump, change one control, print the changed words |
@@ -109,7 +109,7 @@ the playback **ring fill** (`appl_ptr - hw_ptr`), and injects a phase-
 controlled write stall. The ring fill cycles between `H` and `H + P`, so the
 worst-case cushion is `H`. Separate playback and capture periods exercise the
 driver's duplex gate. The tool prints the granted periods and the fill at the
-stall; the driver counters come from `ffuc-lab stats`.
+stall; the driver counters come from `ff-lab stats`.
 
 Build: `cc -O2 -o tools/alsa-cushion-probe tools/alsa-cushion-probe.c -lasound`.
 
@@ -305,8 +305,8 @@ raw `sudo rmmod`/`insmod`. Source copies live in [`scripts/lab/`](../scripts/lab
 | Helper | Usage | Purpose |
 |---|---|---|
 | `reset-fireface-usb` | `sudo -n reset-fireface-usb` | USB port reset (`usbreset`) without unplugging. Finds the unit by product string, waits for the card to reappear in `/proc/asound/cards`. Use when the card vanished or the interface will not re-bind. |
-| `reload-fireface-uc` | `sudo -n reload-fireface-uc` | Full module reload: discovers the newest `snd-fireface-uc.ko` (prefers `/usr/local/lib/ffuc-lab/`, else the newest build under any checkout), refuses a world-writable module, unbinds interfaces, `rmmod` + `insmod`, prints cards and hwdep nodes. If `rmmod` fails (the module is still referenced), it re-binds the interfaces it unbound, reports the holders (`refcnt`, `fuser`) and exits non-zero — the unit keeps working on the loaded module. A true swap while the audio graph holds the device needs `scripts/bench-reload.sh`, which stops the graph first. |
-| `ffuc-lab` | `sudo -n ffuc-lab stats` / `ringtrace` / `pause <ms>` / `double <0\|1>` / `kill` | Driver debugfs surface. `stats` reads the transport counters; `ringtrace` reads the playback ring-fill trace (one record per URB completion). `pause`/`double`/`kill` probe the UC meter pump. Fixed subcommands only; `stats` and `ringtrace` are read-only. |
+| `reload-fireface-uc` | `sudo -n reload-fireface-uc` | Full module reload: discovers the newest `snd-fireface-uc.ko` (prefers `/usr/local/lib/ff-lab/`, else the newest build under any checkout), refuses a world-writable module, unbinds interfaces, `rmmod` + `insmod`, prints cards and hwdep nodes. If `rmmod` fails (the module is still referenced), it re-binds the interfaces it unbound, reports the holders (`refcnt`, `fuser`) and exits non-zero — the unit keeps working on the loaded module. A true swap while the audio graph holds the device needs `scripts/bench-reload.sh`, which stops the graph first. |
+| `ff-lab` | `sudo -n ff-lab stats` / `ringtrace` / `pause <ms>` / `double <0\|1>` / `kill` | Driver debugfs surface. `stats` reads the transport counters; `ringtrace` reads the playback ring-fill trace (one record per URB completion). `pause`/`double`/`kill` probe the meter pump. Fixed subcommands only; `stats` and `ringtrace` are read-only. |
 
 Recovery sequence when the card disappears or a reload fails: stop the user
 audio graph (`systemctl --user stop wireplumber pipewire-pulse pipewire
@@ -321,22 +321,22 @@ for a checkout build and prefers `sudo -n` when the scoped rule is present.
 ### Scoped sudoers rule
 
 The helpers and the raw bench commands are covered by
-`/etc/sudoers.d/ffuc-bench` (0440 root:root). It grants **no general root** —
+`/etc/sudoers.d/ff-bench` (0440 root:root). It grants **no general root** —
 only these commands:
 
 ```
-Cmnd_Alias FFUC_BENCH = /usr/bin/rmmod snd_fireface_uc, \
+Cmnd_Alias FF_BENCH = /usr/bin/rmmod snd_fireface_uc, \
     /usr/bin/modprobe snd-pcm, \
     /usr/bin/dmesg, \
     /usr/bin/tee /sys/bus/usb/drivers/snd-fireface-uc/unbind, \
     /usr/bin/insmod <checkout>/kernel/snd-fireface-uc.ko *
 
-<user> ALL=(root) NOPASSWD: FFUC_BENCH
+<user> ALL=(root) NOPASSWD: FF_BENCH
 ```
 
 `<checkout>` is the absolute checkout path and `<user>` the bench user; the
 `insmod` line is pinned to that module so it cannot load arbitrary modules.
-Install with `sudo visudo -f /etc/sudoers.d/ffuc-bench` (validate syntax
+Install with `sudo visudo -f /etc/sudoers.d/ff-bench` (validate syntax
 first with `visudo -cf`). The three `/usr/local/sbin` helpers have their own
 `NOPASSWD` lines. `bench-reload.sh` probes with `sudo -n dmesg` (a covered
 command) to decide whether to use plain `sudo` or the `ksshaskpass` GUI

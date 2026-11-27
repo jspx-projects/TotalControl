@@ -126,7 +126,7 @@ Before a sample-rate, channel-count or transport change, run the 48 kHz gate:
 cd ui/totalcontrol
 cargo build -p totalcontrol-core --example fireface-ctl --features alsa
 cd ../..
-scripts/ffuc-48k-gate.sh all
+scripts/uc-48k-gate.sh all
 ```
 
 ## License

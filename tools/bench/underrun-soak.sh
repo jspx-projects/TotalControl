@@ -7,7 +7,7 @@ set -u
 secs=${1:-120}
 out=${2:-"./soak"}
 mkdir -p "$out"
-diag="$HERE/ffuc-diag"
+diag="$HERE/ff-diag"
 CARD=${CARD:-0}
 node=/dev/snd/hwC${CARD}D0
 
@@ -39,8 +39,8 @@ for i in $(seq 1 "$secs"); do
     printf '%s %s fill=%s delay_ms=%s run_ms=%s slices=%s\n' "$now" "$c" "$f" "$dd" "$dr" "$slices" >> "$out/soak.log"
     if [ "${u:-0}" -gt "$prev_u" ]; then
         ts=$(date +%H%M%S)
-        sudo -n ffuc-lab ringtrace > "$out/trace-$ts.txt" 2>/dev/null || echo "ringtrace unavailable" > "$out/trace-$ts.txt"
-        sudo -n ffuc-lab stats > "$out/stats-$ts.txt" 2>/dev/null
+        sudo -n ff-lab ringtrace > "$out/trace-$ts.txt" 2>/dev/null || echo "ringtrace unavailable" > "$out/trace-$ts.txt"
+        sudo -n ff-lab stats > "$out/stats-$ts.txt" 2>/dev/null
         echo "UNDERRUN at $now (count $u) -> trace-$ts.txt" | tee -a "$out/events.txt"
     fi
     prev_u=${u:-0}; prev_delay=$delay; prev_run=$run
