@@ -12,7 +12,8 @@
 //   fireface-hwdep read <req> [node]          one vendor word (req hex, e.g. 0x19)
 //   fireface-hwdep write <addr> <val> [...]   IF1 register words (hex)
 //   fireface-hwdep probe <req> <secs> [node]  fast-sample a vendor word, print changes
-//   fireface-hwdep dump [secs] [node]         full state dump (0x3f99), addr/value lines
+//   fireface-hwdep dump [secs] [node]         one-shot state dump with the 0x3f00 heartbeat
+//   fireface-hwdep dumpwatch <secs> <ms> [node]  heartbeat + two dump triggers (reload test)
 //   fireface-hwdep loopback <dsp> <0|1> [node]  internal loopback flag (EP0 0x15)
 //   fireface-hwdep loopback-setup <out> <src> [--cable] [node]
 //                                             configure a loopback measurement (UCX)
@@ -64,6 +65,7 @@
 #include <time.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <poll.h>
 #include <linux/types.h>
 #include "ff-uapi.h"
 
@@ -81,6 +83,18 @@ static int open_node(void)
 	int fd = open(node, O_RDWR);
 	if (fd < 0) { perror(node); exit(1); }
 	return fd;
+}
+
+static int vwrite(int fd, unsigned char req, unsigned int value,
+		  unsigned int index)
+{
+	struct ff_hwdep_vendor v;
+	memset(&v, 0, sizeof(v));
+	v.request = req;
+	v.direction = 0;
+	v.value = value;
+	v.index = index;
+	return ioctl(fd, FF_HWDEP_IOCTL_VENDOR, &v);
 }
 
 static int vread(int fd, unsigned char req, unsigned int *word)
@@ -199,6 +213,20 @@ static void cmd_info(void)
 	close(fd);
 }
 
+static void cmd_vw(int argc, char **argv)
+{
+	if (argc < 3) {
+		fprintf(stderr, "usage: fireface-hwdep vw <req> <value> <index> [node]\n");
+		exit(2);
+	}
+	unsigned char req = (unsigned char)strtoul(argv[0], 0, 16);
+	unsigned int value = (unsigned int)strtoul(argv[1], 0, 16);
+	unsigned int index = (unsigned int)strtoul(argv[2], 0, 16);
+	int fd = open_node();
+	if (vwrite(fd, req, value, index) < 0) { perror("vwrite"); exit(1); }
+	close(fd);
+}
+
 static void cmd_read(int argc, char **argv)
 {
 	if (argc < 1) { fprintf(stderr, "usage: fireface-hwdep read <req> [node]\n"); exit(2); }
@@ -295,25 +323,57 @@ static int vendor_out(int fd, unsigned char req, unsigned int value,
 	return ioctl(fd, FF_HWDEP_IOCTL_VENDOR, &v);
 }
 
-static void cmd_dump(int argc, char **argv)
+/* The host keeps the state endpoint active with a 0x3f00 heartbeat
+ * (0..15, every 100 ms) and requests the one-shot dump after that.  A
+ * standalone reader must do the same, or it sees only the sparse stream. */
+static void dump_collect(int secs, int second_ms)
 {
-	int secs = argc > 0 ? atoi(argv[0]) : 3;
 	int fd = open_node();
-	struct ff_hwdep_word trig = { 0x3f99, 0x0812 };
-	if (write_words_retry(fd, &trig, 1) < 0) {
-		perror("dump trigger"); exit(1);
-	}
 	static __u16 val[0x8000];
 	static char seen[0x8000];
-	unsigned char buf[4096];
-	unsigned long long end = now_ns() + (unsigned long long)secs * 1000000000ull;
 	unsigned int nwords = 0;
-	while (now_ns() < end) {
-		ssize_t r = read(fd, buf, sizeof(buf));
-		if (r < (ssize_t)sizeof(struct ff_hwdep_event_hdr)) {
-			usleep(2000);
-			continue;
+	unsigned int seq = 0;
+	unsigned long long start = now_ns();
+	unsigned long long next_hb = start;
+	unsigned long long trig1_at = start + 300000000ull;
+	unsigned long long trig2_at = second_ms >= 0 ?
+		start + (unsigned long long)second_ms * 1000000ull : 0;
+	int trig1 = 0, trig2 = 0;
+	unsigned char buf[4096];
+
+	while (now_ns() < start + (unsigned long long)secs * 1000000000ull) {
+		unsigned long long t = now_ns();
+
+		if (t >= next_hb) {
+			struct ff_hwdep_word hb = { 0x3f00, (__u16)seq };
+
+			if (write_words_retry(fd, &hb, 1) < 0)
+				fprintf(stderr, "heartbeat failed\n");
+			seq = (seq + 1) & 0x0f;
+			next_hb = t + 100000000ull;
 		}
+		if (!trig1 && t >= trig1_at) {
+			struct ff_hwdep_word trig = { 0x3f99, 0x0812 };
+
+			if (write_words_retry(fd, &trig, 1) < 0)
+				fprintf(stderr, "dump trigger failed\n");
+			trig1 = 1;
+		}
+		if (trig2_at && !trig2 && t >= trig2_at) {
+			struct ff_hwdep_word trig = { 0x3f99, 0x0812 };
+
+			if (write_words_retry(fd, &trig, 1) < 0)
+				fprintf(stderr, "second dump trigger failed\n");
+			trig2 = 1;
+		}
+
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+		int pr = poll(&pfd, 1, 20);
+		if (pr <= 0 || !(pfd.revents & POLLIN))
+			continue;
+		ssize_t r = read(fd, buf, sizeof(buf));
+		if (r < (ssize_t)sizeof(struct ff_hwdep_event_hdr))
+			continue;
 		struct ff_hwdep_event_hdr *h = (void *)buf;
 		if (h->type != FF_EV_STATE)
 			continue;
@@ -330,6 +390,21 @@ static void cmd_dump(int argc, char **argv)
 			printf("%04x %04x\n", a, val[a]);
 	fprintf(stderr, "%u words\n", nwords);
 	close(fd);
+}
+
+static void cmd_dump(int argc, char **argv)
+{
+	int secs = argc > 0 ? atoi(argv[0]) : 3;
+	dump_collect(secs, -1);
+}
+
+static void cmd_dumpwatch(int argc, char **argv)
+{
+	if (argc < 2) {
+		fprintf(stderr, "usage: fireface-hwdep dumpwatch <secs> <second_ms> [node]\n");
+		exit(2);
+	}
+	dump_collect(atoi(argv[0]), atoi(argv[1]));
 }
 
 static void cmd_loopback(int argc, char **argv)
@@ -453,9 +528,11 @@ int main(int argc, char **argv)
 	else if (!strcmp(cmd, "info")) cmd_info();
 	else if (!strcmp(cmd, "snapshot")) cmd_snapshot();
 	else if (!strcmp(cmd, "read")) cmd_read(npos, pos);
+	else if (!strcmp(cmd, "vw")) cmd_vw(npos, pos);
 	else if (!strcmp(cmd, "write")) cmd_write(npos, pos);
 	else if (!strcmp(cmd, "probe")) cmd_probe(npos, pos);
 	else if (!strcmp(cmd, "dump")) cmd_dump(npos, pos);
+	else if (!strcmp(cmd, "dumpwatch")) cmd_dumpwatch(npos, pos);
 	else if (!strcmp(cmd, "loopback")) cmd_loopback(npos, pos);
 	else if (!strcmp(cmd, "loopback-setup")) cmd_loopback_setup(npos, pos);
 	else usage();
