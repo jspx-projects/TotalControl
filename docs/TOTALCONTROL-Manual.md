@@ -1589,22 +1589,28 @@ UC PC device values (frames):
 | 32 kHz | 52 | 67 | 119 |
 | 44.1 kHz | 52 | 67 | 119 |
 | 48 kHz | 52 | 67 | 119 |
+| 64 kHz | 72 | 87 | 159 |
+| 88.2 kHz | 72 | 87 | 159 |
 | 96 kHz | 72 | 87 | 159 |
+| 128 kHz | 111 | 122 | 233 |
+| 176.4 kHz | 111 | 122 | 233 |
 | 192 kHz | 111 | 122 | 233 |
 
 UC AP device values (frames):
 
 | Rate | A | B | D |
 |---|---:|---:|---:|
-| 32 kHz | 38 | 53 | 91 |
-| 44.1 kHz | 34 | 49 | 83 |
-| 48 kHz | 38 | 53 | 91 |
-| 96 kHz | 44 | 59 | 103 |
-| 192 kHz | 55 | 66 | 121 |
+| 32 kHz | 64 | 79 | 143 |
+| 44.1 kHz | 73 | 88 | 161 |
+| 48 kHz | 77 | 92 | 169 |
+| 88.2 kHz | 83 | 99 | 182 |
+| 96 kHz | 90 | 105 | 195 |
+| 176.4 kHz | 134 | 145 | 279 |
+| 192 kHz | 147 | 158 | 305 |
 
-The UC PC 192 kHz D uses one endpoint pair's queue. The UC tables cover the
-five loopback rates; other rates show `—` for `Latency in` and the horizon A
-for `Latency out`.
+The UC PC 192 kHz D uses one endpoint pair's queue. The UC PC table covers
+32–192 kHz; the UC AP table covers 32/44.1/48/88.2/96/176.4/192. Other rates
+show `—` for `Latency in` and the horizon A for `Latency out`.
 
 The UCX IF5 interrupt transport has its own values (frames):
 

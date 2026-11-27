@@ -566,9 +566,9 @@ On UC the split uses the UC converters (DA 28; AD 43.2 at 1x/2x, 38.2 at
 span uses one endpoint pair's queue. Only D is directly measured; the
 converter half is vendor data and the digital remainder is the model. The
 device values are tabulated in
-[`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) §13. The UC PC
-and AP tables cover 32, 44.1, 48, 96 and 192 kHz; the UCX ISO table covers 32,
-44.1, 48, 88.2, 96, 176.4 and 192 kHz. The UCX IF5 interrupt transport uses the
+[`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) §13. The UC PC table covers 32–192 kHz; the UC AP table covers
+32/44.1/48/88.2/96/176.4/192; the UCX ISO table covers
+32/44.1/48/88.2/96/176.4/192. The UCX IF5 interrupt transport uses the
 measured unit span 74/112/192 frames at 1x/2x/4x, split into A/B 33/41, 52/60
 and 94/98. Its two-URB host queue is counted live by `snd_pcm_delay`, so it is
 not part of the table. The engine poll reads the PipeWire
