@@ -17039,6 +17039,7 @@ fn transport_delta(
         hw_ptr_mismatch: now.hw_ptr_mismatch.saturating_sub(base.hw_ptr_mismatch),
         delta_zero: now.delta_zero.saturating_sub(base.delta_zero),
         run_seq: now.run_seq,
+        ..Default::default()
     }
 }
 

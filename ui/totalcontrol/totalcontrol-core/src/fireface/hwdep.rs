@@ -208,12 +208,13 @@ impl Hwdep {
         Ok(())
     }
 
-    pub fn counters(&self) -> io::Result<HwdepCounters> {
-        let mut c = MaybeUninit::<HwdepCounters>::zeroed();
+    /// Accumulated diagnostics and watermarks (ABI 9).
+    pub fn diagnostics(&self) -> io::Result<HwdepDiagnostics> {
+        let mut c = MaybeUninit::<HwdepDiagnostics>::zeroed();
         let ret = unsafe {
             libc::ioctl(
                 self.file.as_raw_fd(),
-                IOCTL_COUNTERS as libc::c_ulong,
+                IOCTL_DIAGNOSTICS as libc::c_ulong,
                 c.as_mut_ptr(),
             )
         };
@@ -221,6 +222,30 @@ impl Hwdep {
             return Err(io::Error::last_os_error());
         }
         Ok(unsafe { c.assume_init() })
+    }
+
+    /// Historical name for the diagnostics record.
+    pub fn counters(&self) -> io::Result<HwdepCounters> {
+        self.diagnostics()
+    }
+
+    /// One atomic sample of both PCM directions and the device clock.
+    pub fn snapshot(&self) -> io::Result<HwdepSnapshot> {
+        let mut s = HwdepSnapshot {
+            size: size_of::<HwdepSnapshot>() as u32,
+            ..Default::default()
+        };
+        let ret = unsafe {
+            libc::ioctl(
+                self.file.as_raw_fd(),
+                IOCTL_SNAPSHOT as libc::c_ulong,
+                &mut s,
+            )
+        };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(s)
     }
 
     /// Wait until at least one event is ready.  Returns `false` on timeout.
@@ -320,7 +345,7 @@ fn enumerate_with(include_incompatible: bool) -> Vec<Discovered> {
         let Ok(info) = hw.info() else {
             continue;
         };
-        if info.model == MODEL_UC || info.model == MODEL_UCX {
+        if is_uc(info.product) || is_ucx(info.product) {
             out.push(Discovered { card, info });
         }
     }
@@ -393,7 +418,7 @@ pub fn class_compliant_cards() -> Vec<ClassCompliantCard> {
         }
         if let Ok(hw) = Hwdep::open(card) {
             if let Ok(info) = hw.info() {
-                if info.model == MODEL_UC || info.model == MODEL_UCX {
+                if is_uc(info.product) || is_ucx(info.product) {
                     continue; // proprietary mode, not CC
                 }
             }

@@ -53,11 +53,15 @@ impl Model {
         }
     }
 
-    fn from_abi(model: u32) -> Option<Self> {
-        match model {
-            MODEL_UC => Some(Model::Uc),
-            MODEL_UCX => Some(Model::Ucx),
-            _ => None,
+    /// Map a USB product id to the host profile.  The driver does not name
+    /// a model; the product id is a hardware fact and the name lives here.
+    fn from_usb(_vendor: u32, product: u32) -> Option<Self> {
+        if is_uc(product) {
+            Some(Model::Uc)
+        } else if is_ucx(product) {
+            Some(Model::Ucx)
+        } else {
+            None
         }
     }
 }
@@ -95,7 +99,7 @@ impl DeviceInfo {
         self.abi >= ABI_VERSION
     }
     fn from_abi(card: i32, info: HwdepInfo) -> Option<Self> {
-        let model = Model::from_abi(info.model)?;
+        let model = Model::from_usb(info.vendor, info.product)?;
         let iso = match info.transport {
             XPORT_INTERRUPT => false,
             XPORT_ISO => true,
@@ -119,7 +123,7 @@ impl DeviceInfo {
             status_ep: info.status_ep,
             rate: info.rate,
             firmware: info.firmware,
-            name: info.name_str(),
+            name: model.name().to_string(),
             serial: info.serial_str(),
             abi: info.abi,
         })

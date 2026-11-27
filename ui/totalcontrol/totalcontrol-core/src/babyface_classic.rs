@@ -40,7 +40,7 @@ use crate::channel::{
 };
 use crate::device::{DeviceSettings, RmeDevice};
 use crate::error::Error;
-use crate::fireface::abi::{EV_METER, MODEL_BABYFACE_CLASSIC};
+use crate::fireface::abi::{is_babyface_classic, EV_METER};
 use crate::fireface::control_worker::{AsyncWriter, ControlSink};
 use crate::fireface::hwdep::{Direction, Hwdep};
 use crate::mock::MockDevice;
@@ -236,7 +236,7 @@ impl BabyfaceClassic {
         (0..32).any(|card| {
             Hwdep::open(card)
                 .and_then(|hw| hw.info())
-                .is_ok_and(|i| i.model == MODEL_BABYFACE_CLASSIC)
+                .is_ok_and(|i| is_babyface_classic(i.product))
         })
     }
 
@@ -246,7 +246,7 @@ impl BabyfaceClassic {
             let Ok(hw) = Hwdep::open(card) else {
                 continue;
             };
-            if hw.info().is_ok_and(|i| i.model == MODEL_BABYFACE_CLASSIC) {
+            if hw.info().is_ok_and(|i| is_babyface_classic(i.product)) {
                 return Self::with_hwdep(hw);
             }
         }
