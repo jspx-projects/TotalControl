@@ -224,7 +224,7 @@ Quirks:
 | `ALT_RESELECT` | select alt 0 then alt N at engine start (clears the UCX IF5 output latch) |
 | `STATUS_LATCH` | status byte 3 bit 7 is the output-latch watchdog |
 | `IF5_PRE_START` | send `0x10 0x8000` + `0x1d` before audio |
-| `IF5_PLAYBACK_MASK` | request 19/20 channel mask; IN URBs are 73728 bytes |
+| `IF5_PLAYBACK_MASK` | request 19/20 channel mask; IN URBs are 1024 frames at the current alternate's input word count (73728 at 1x, 57344 at 2x, 2 × 24576 at 4x) |
 | `WIN_SESSION` | Windows-personality session timing: stop->start settle and close->rate / close->trio gaps |
 
 Model-specific behaviour belongs in a descriptor quirk or an `ff_ops`
@@ -237,7 +237,7 @@ callback; the shared PCM/URB path stays model-independent.
 | UC PC | interrupt IF0 | S32 | status ticker IF5; session words after a live rate change |
 | UC AP | ISO IF0 | float32 | IN header + planar frames; OUT per-frame lead word |
 | UCX IF0 | ISO IF0 | float32 | default UCX path |
-| UCX IF5 | interrupt IF5 | S32 | opt-in `ucx_if5=1`; Windows mode-setup block, alt 1 at 1x |
+| UCX IF5 | interrupt IF5 | S32 | opt-in `ucx_if5=1`; Windows mode-setup block; alt 1/2/3 for 1x/2x/4x |
 | Babyface-classic | ISO IF0 | float32 | UCX-family packet format; 12 capture / 14 playback words at 1x |
 
 The wire format is keyed to the transport: interrupt personalities carry
@@ -1285,7 +1285,7 @@ driver's transports. The owning sections carry the full detail:
 | Bulk role of `0x03`/`0x84` at 1x/2x; they are interrupt at 4x | UC PC | a capture of the bulk traffic at 1x/2x |
 | Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
 | AP header rate-band scaling: the position width and modulus widen to 16384/32768 at 2x/4x; the phase field is fixed 11-bit (bits 21-31) at every band with a 60 MHz reference (implemented). The 1x layout is capture-verified; the 2x/4x widening and phase field need device confirmation. The modern-UCX modulus is the 8192 family (the 3072 flag is old-firmware UFX/Babyface/UC-Mac only) | UCX IF0, UC IF0, Babyface | a 2x/4x ISO raw-header capture on the device; isolated add/drop events away from the wrap |
-| IF5 alternate selection at 2x/4x: alt 1 is the verified 1x path; alt 2/3 carry the higher bands in the descriptor | UCX IF5 | a reference-host capture streaming at 96/192 kHz |
+| IF5 alternate selection at 2x/4x: alt 1/2/3 carry 18/14/6 input words; the receive URB uses the current alternate's words (implemented and bench-verified at 88.2/96/176.4/192) | UCX IF5 | the Windows reference host's exact selection order |
 | Optional audible characterization of the rate transition: the protocol is bench-verified (cadence follows, lead intact); an analog output capture across the switch measures the audible gap | UCX | a tone-playing round-trip with the output recorded across each switch |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |
 | Phase consumption by the reference host: the scheduler records the phase accumulator and mirrors the frame count, which carries the add/drop; whether the macOS host additionally consumes phase for fractional prediction is unverified | ISO | a kext disassembly of the OUT scheduling path |
