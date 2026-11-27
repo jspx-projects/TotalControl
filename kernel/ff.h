@@ -58,7 +58,7 @@
 #include <sound/rawmidi.h>
 
 #include "ffuc-uapi.h"
-#include "ffuc-cadence.h"
+#include "ff-cadence.h"
 
 #define FFUC_VENDOR_SMSC	0x0424
 #define FFUC_VENDOR_RME		0x2a39
@@ -123,9 +123,9 @@
 #define FFUC_FB_SIZE		1024
 #define FFUC_ISO_FRAME_MASK	0x7ff
 
-struct ffuc;
-unsigned int ffuc_iso_wrap(struct ffuc *chip);
-unsigned int ffuc_rate_family(unsigned int rate);
+struct ff;
+unsigned int ff_iso_wrap(struct ff *chip);
+unsigned int ff_rate_family(unsigned int rate);
 
 #define FFUC_STATE_BUF_SIZE	1024
 #define FFUC_EVENT_FIFO_SIZE	(64 * 1024)
@@ -182,10 +182,25 @@ unsigned int ffuc_rate_family(unsigned int rate);
  * Windows-personality property. */
 #define FFUC_QUIRK_WIN_SESSION		BIT(6)
 
-struct ffuc;
+/* Internal transport capabilities: behaviour, not model names.  Phase 1 of
+ * the driver refactor moves the remaining model checks here. */
+#define FF_CAP_MUTE_MASK_18BIT		BIT(0)	/* 18-bit mute mask packing */
+#define FF_CAP_MUTE_ON_STOP		BIT(1)	/* mute outputs on engine stop */
+#define FF_CAP_SKIP_SAME_ALT		BIT(2)	/* skip SET_INTERFACE on same alt */
+#define FF_CAP_SESSION_BEFORE_URBS	BIT(3)	/* session words before URBs */
+#define FF_CAP_SESSION_ON_RATE_CHANGE	BIT(4)	/* arm session words on rate change */
+#define FF_CAP_FRAME_LEAD		BIT(5)	/* per-frame lead words */
+#define FF_CAP_STATUS_RUNNING_ONLY	BIT(6)	/* status ticker only while running */
+#define FF_CAP_KILL_BOTH		BIT(7)	/* kill both URB sets on stop */
+#define FF_CAP_FIXED_URB		BIT(8)	/* fixed URB frames, no band shift */
+#define FF_CAP_LEAD_HORIZON		BIT(9)	/* lead horizon in buffer minimum */
+#define FF_CAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
+#define FF_CAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
+
+struct ff;
 
 /* One USB bandwidth class (alternate setting). */
-struct ffuc_mode {
+struct ff_mode {
 	unsigned int alt;
 	unsigned int neps;		/* endpoints per direction */
 	unsigned int words;		/* channels (32-bit words) per endpoint */
@@ -197,27 +212,27 @@ struct ffuc_mode {
 	unsigned int max_frames;
 };
 
-static inline unsigned int ffuc_mode_out_words(const struct ffuc_mode *m)
+static inline unsigned int ff_mode_out_words(const struct ff_mode *m)
 {
 	return m->out_words ? m->out_words : m->words;
 }
 
-struct ffuc_urb {
+struct ff_urb {
 	struct urb *urb;
-	struct ffuc_ep *ep;
+	struct ff_ep *ep;
 	void *buf;
 	dma_addr_t dma;
 	unsigned int frames;	/* playback frames in the last fill */
 };
 
-struct ffuc_ep {
-	struct ffuc *chip;
+struct ff_ep {
+	struct ff *chip;
 	int dir;
 	unsigned int index;
 	int next_start;
 	unsigned int buf_size;      /* allocated bytes for one URB */
 	int last_start;             /* diagnostic: previous start_frame */
-	struct ffuc_urb urbs[FFUC_MAX_URBS];
+	struct ff_urb urbs[FFUC_MAX_URBS];
 };
 
 /* Ring-fill model trace: one record per playback URB completion while
@@ -228,7 +243,7 @@ struct ffuc_ep {
 #define FFUC_RING_F_MISSED	0x4	/* a full period passed without a write */
 #define FFUC_RING_F_BEHIND	0x8	/* appl_ptr is behind the read position */
 
-struct ffuc_ring_rec {
+struct ff_ring_rec {
 	u64 ktime_ns;
 	u64 appl;		/* control->appl_ptr at refill time */
 	u64 hw;			/* ring position this completion reads */
@@ -238,7 +253,7 @@ struct ffuc_ring_rec {
 	u32 flags;		/* FFUC_RING_F_* */
 };
 
-struct ffuc_stream {
+struct ff_stream {
 	struct snd_pcm_substream *substream;
 	bool running;
 	u32 out_counter;
@@ -289,34 +304,35 @@ struct ffuc_stream {
 
 /* Per-model core callbacks.  They may touch the device transport but must
  * not create ALSA controls or implement mixer policy. */
-struct ffuc_ops {
-	int (*init)(struct ffuc *chip);
-	int (*set_rate)(struct ffuc *chip, unsigned int rate);
-	int (*stream_start)(struct ffuc *chip, unsigned int channels);
-	int (*stream_stop)(struct ffuc *chip, unsigned int channels);
-	int (*hw_mute)(struct ffuc *chip, bool mute);
+struct ff_ops {
+	int (*init)(struct ff *chip);
+	int (*set_rate)(struct ff *chip, unsigned int rate);
+	int (*stream_start)(struct ff *chip, unsigned int channels);
+	int (*stream_stop)(struct ff *chip, unsigned int channels);
+	int (*hw_mute)(struct ff *chip, bool mute);
 };
 
 /* One run of 0x16 channel-initialization writes.  The slot ranges differ
  * between device models and personalities, so they are data in the device
  * descriptor.  The wValue (channel sample format) is derived from the wire
  * format at init time, not stored here. */
-struct ffuc_init_range {
+struct ff_init_range {
 	u16 first;
 	u16 count;
 };
 
-struct ffuc_device_desc {
+struct ff_device_desc {
 	const char *name;		/* "Fireface UC" */
 	const char *shortname;
 	const char *card_id;
 	u16 vendor;
 	u16 product;
 	u8 iface;
-	u8 transport;			/* enum ffuc_transport */
+	u8 transport;			/* enum ff_transport */
 	u32 quirks;
-	u32 model;			/* enum ffuc_model */
-	const struct ffuc_mode *modes;
+	u32 caps;			/* FF_CAP_* transport capabilities */
+	u32 model;			/* enum ff_model */
+	const struct ff_mode *modes;
 	unsigned int n_modes;
 	u8 audio_iface;
 	u8 out_ep;
@@ -336,19 +352,19 @@ struct ffuc_device_desc {
 	unsigned int max_playback;	/* playback channels; 0 = max_channels */
 	unsigned int max_rate;
 	unsigned int meter_len;
-	const struct ffuc_init_range *chan_init;
+	const struct ff_init_range *chan_init;
 	unsigned int n_chan_init;
-	const struct ffuc_ops *ops;
+	const struct ff_ops *ops;
 };
 
 static inline unsigned int
-ffuc_desc_playback(const struct ffuc_device_desc *d)
+ff_desc_playback(const struct ff_device_desc *d)
 {
 	return d->max_playback ? d->max_playback : d->max_channels;
 }
 
 /* USB-MIDI output parser state, kept across rawmidi chunks. */
-struct ffuc_midi_tx {
+struct ff_midi_tx {
 	u8 status;
 	u8 msg[2];
 	unsigned int msg_len;
@@ -358,33 +374,33 @@ struct ffuc_midi_tx {
 };
 
 /* One logical MIDI port carried on the shared endpoint pair. */
-struct ffuc_midi_port {
-	struct ffuc *chip;
+struct ff_midi_port {
+	struct ff *chip;
 	unsigned int index;
 	struct snd_rawmidi *rmidi;
 	struct snd_rawmidi_substream *in_sub;
 	struct snd_rawmidi_substream *out_sub;
 	struct delayed_work out_work;
-	struct ffuc_midi_tx tx;
+	struct ff_midi_tx tx;
 	u8 *out_buf;		/* bulk transfer buffer, must be DMA-able */
 	bool out_running;
 };
 
-struct ffuc {
+struct ff {
 	struct usb_device *dev;
 	struct usb_interface *intf;
 	struct snd_card *card;
 	struct snd_pcm *pcm;
 	struct snd_hwdep *hwdep;
 
-	const struct ffuc_device_desc *desc;
+	const struct ff_device_desc *desc;
 	unsigned int model;
 	bool iso;
-	bool ucx;
+	u32 caps;			/* FF_CAP_* transport capabilities */
 	unsigned int audio_iface;
 	unsigned int cur_alt;		/* current streaming alternate setting */
 	u8 out_ep, in_ep;
-	const struct ffuc_mode *modes;
+	const struct ff_mode *modes;
 
 	struct mutex mutex;		/* engine/rate state */
 	struct mutex ctl_lock;		/* serialises EP0/bulk control writes */
@@ -411,7 +427,7 @@ struct ffuc {
 	 * compares the measured clock against this, so a legitimate varispeed
 	 * offset is not a rate mismatch. */
 	unsigned int clock_rate;
-	const struct ffuc_mode *mode;
+	const struct ff_mode *mode;
 	unsigned int urb_frames;
 	unsigned int base_urb_frames;
 	unsigned int nurbs;
@@ -424,12 +440,12 @@ struct ffuc {
 	u32 fb[FFUC_FB_SIZE];
 	u64 in_pkts, out_pkts;
 	u32 iso_frames_hist[32];
-	/* Cadence convergence for the stop verdict (ffuc-cadence.h). */
-	struct ffuc_cadence cad;
+	/* Cadence convergence for the stop verdict (ff-cadence.h). */
+	struct ff_cadence cad;
 	unsigned int in_end;
 	/* The device start ramp's position resync was seen this run: the
 	 * first position discontinuity re-seeds the expectation instead of
-	 * counting (ffuc_iso_capture_urb).  Reset at engine setup. */
+	 * counting (ff_iso_capture_urb).  Reset at engine setup. */
 	bool in_start_resync;
 	unsigned int fb_acc;
 	/* Nominal-cadence accumulator for the OUT priming window: carries
@@ -522,7 +538,7 @@ struct ffuc {
 	atomic_t midi_in_users;
 	bool midi_in_running;
 	unsigned int n_midi_ports;
-	struct ffuc_midi_port midi_port[FFUC_MIDI_PORTS];
+	struct ff_midi_port midi_port[FFUC_MIDI_PORTS];
 
 	/* hwdep events */
 	struct kfifo event_fifo;
@@ -594,7 +610,7 @@ struct ffuc {
 	unsigned int hw_ptr_logged;
 	/* Ring-fill diagnostics, reset at engine start.  ring_head is
 	 * monotonic across runs so the trace keeps its history. */
-	struct ffuc_ring_rec ring_trace[FFUC_RING_TRACE];
+	struct ff_ring_rec ring_trace[FFUC_RING_TRACE];
 	u32 ring_head;
 	u64 ring_last_appl;
 	u64 ring_last_appl_ts;
@@ -609,43 +625,43 @@ struct ffuc {
 
 	/* identity */
 	u32 firmware;
-	bool s32_samples;	/* resolved wire format, see ffuc_wire_s32() */
+	bool s32_samples;	/* resolved wire format, see ff_wire_s32() */
 	char serial[32];
 
-	struct ffuc_ep eps[2][FFUC_MAX_EPS];
-	struct ffuc_stream streams[2];
+	struct ff_ep eps[2][FFUC_MAX_EPS];
+	struct ff_stream streams[2];
 };
 
 /* ffuc.c */
-int ffuc_vendor_send(struct ffuc *chip, u8 req, u16 val, u16 idx,
+int ff_vendor_send(struct ff *chip, u8 req, u16 val, u16 idx,
 		     const void *data, u16 len);
-int ffuc_vendor_recv(struct ffuc *chip, u8 req, u16 val, u16 idx,
+int ff_vendor_recv(struct ff *chip, u8 req, u16 val, u16 idx,
 		     void *data, u16 len);
-int ffuc_reg_send(struct ffuc *chip, const struct ffuc_hwdep_word *words,
+int ff_reg_send(struct ff *chip, const struct ffuc_hwdep_word *words,
 		  unsigned int count);
-int ffuc_claim_interface(struct usb_interface *intf);
-void ffuc_release_interface(struct usb_interface *intf);
-unsigned int ffuc_rate_from_index(unsigned int idx);
-void ffuc_query_envelope(struct ffuc *chip, struct ffuc_hwdep_envelope *env);
-int ffuc_set_rate_idle(struct ffuc *chip, unsigned int rate,
+int ff_claim_interface(struct usb_interface *intf);
+void ff_release_interface(struct usb_interface *intf);
+unsigned int ff_rate_from_index(unsigned int idx);
+void ff_query_envelope(struct ff *chip, struct ffuc_hwdep_envelope *env);
+int ff_set_rate_idle(struct ff *chip, unsigned int rate,
 		       unsigned int *confirmed);
 
 /* ffuc-hwdep.c */
-void ffuc_event_put(struct ffuc *chip, u32 type, const void *data, u32 size,
+void ff_event_put(struct ff *chip, u32 type, const void *data, u32 size,
 		    u32 flags);
-int ffuc_hwdep_create(struct ffuc *chip);
-void ffuc_hwdep_cleanup(struct ffuc *chip);
-void ffuc_hwdep_quiesce(struct ffuc *chip);
-int ffuc_transport_setup(struct ffuc *chip);
-int ffuc_transport_start(struct ffuc *chip);
-void ffuc_transport_stop(struct ffuc *chip);
+int ffuc_hwdep_create(struct ff *chip);
+void ffuc_hwdep_cleanup(struct ff *chip);
+void ffuc_hwdep_quiesce(struct ff *chip);
+int ff_transport_setup(struct ff *chip);
+int ff_transport_start(struct ff *chip);
+void ff_transport_stop(struct ff *chip);
 
 /* ffuc-midi.c */
-void ffuc_midi_init(struct ffuc *chip);
-int ffuc_midi_create(struct ffuc *chip);
-void ffuc_midi_cleanup(struct ffuc *chip);
-void ffuc_midi_suspend(struct ffuc *chip);
-void ffuc_midi_resume(struct ffuc *chip);
-void ffuc_transport_suspend(struct ffuc *chip);
+void ff_midi_init(struct ff *chip);
+int ff_midi_create(struct ff *chip);
+void ff_midi_cleanup(struct ff *chip);
+void ff_midi_suspend(struct ff *chip);
+void ff_midi_resume(struct ff *chip);
+void ff_transport_suspend(struct ff *chip);
 
 #endif /* FFUC_H */

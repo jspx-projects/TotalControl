@@ -29,7 +29,7 @@ typedef uint64_t u64;
  * to agree, not a fixed packet count. */
 #define FFUC_CADENCE_WIN_PKTS	80
 
-struct ffuc_cadence {
+struct ff_cadence {
 	u64 win_frames;		/* frames summed in the current window */
 	u32 win_pkts;		/* packets in the current window */
 	u32 prev_mean;		/* last completed window mean, Hz (0 = none) */
@@ -37,7 +37,7 @@ struct ffuc_cadence {
 	u32 agree;		/* consecutive window agreements */
 };
 
-static inline void ffuc_cadence_reset(struct ffuc_cadence *c)
+static inline void ff_cadence_reset(struct ff_cadence *c)
 {
 	c->win_frames = 0;
 	c->win_pkts = 0;
@@ -47,7 +47,7 @@ static inline void ffuc_cadence_reset(struct ffuc_cadence *c)
 }
 
 /* The ±1% band: a mean outside it disagrees with the committed clock. */
-static inline bool ffuc_cadence_mismatch(u32 rate, u32 mean)
+static inline bool ff_cadence_mismatch(u32 rate, u32 mean)
 {
 	return rate && (mean > rate + rate / 100 || mean + rate / 100 < rate);
 }
@@ -56,7 +56,7 @@ static inline bool ffuc_cadence_mismatch(u32 rate, u32 mean)
  * family's divisor encodes base/(1 + pitch/100); the band multiplier follows
  * the streaming rate. The full-rate division keeps truncation under 1 Hz,
  * far inside the ±1% judge band, so varispeed is not a rate mismatch. */
-static inline u32 ffuc_dds_clock(u32 val, u32 idx, unsigned int rate)
+static inline u32 ff_dds_clock(u32 val, u32 idx, unsigned int rate)
 {
 	u64 p1 = ((u64)val << 16) | (idx & 0xff00);
 	unsigned int band = rate > 114000 ? 4 : rate > 57000 ? 2 : 1;
@@ -75,7 +75,7 @@ static inline u32 ffuc_dds_clock(u32 val, u32 idx, unsigned int rate)
  * the decoded clock stays at or below the ceiling. Returns true when the
  * word pair was clamped. The caller clamps only the active family's word;
  * the other families store their pitch for later rates. */
-static inline bool ffuc_dds_clamp(u32 val, u32 idx, unsigned int rate,
+static inline bool ff_dds_clamp(u32 val, u32 idx, unsigned int rate,
 				  unsigned int max_frames, u32 *val_out,
 				  u32 *idx_out)
 {
@@ -104,7 +104,7 @@ static inline bool ffuc_dds_clamp(u32 val, u32 idx, unsigned int rate,
  * window mean.  Two consecutive agreements (three windows) hold the mean
  * stationary before it is trusted; a disagreement clears it.  Called per
  * capture URB under fb_lock. */
-static inline void ffuc_cadence_window(struct ffuc_cadence *c, u32 rate,
+static inline void ff_cadence_window(struct ff_cadence *c, u32 rate,
 				       unsigned int urb_frames, unsigned int pkts)
 {
 	u32 mean, tol;
@@ -134,10 +134,10 @@ static inline void ffuc_cadence_window(struct ffuc_cadence *c, u32 rate,
 
 /* The stop verdict: true when a converged mean disagrees with the rate.
  * False when no mean has converged (run too short, or still ramping). */
-static inline bool ffuc_cadence_stop_mismatch(const struct ffuc_cadence *c,
+static inline bool ff_cadence_stop_mismatch(const struct ff_cadence *c,
 					      u32 rate)
 {
-	return c->stable_mean && ffuc_cadence_mismatch(rate, c->stable_mean);
+	return c->stable_mean && ff_cadence_mismatch(rate, c->stable_mean);
 }
 
 #endif /* FFUC_CADENCE_H */
