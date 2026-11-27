@@ -194,7 +194,7 @@ unsigned int ff_rate_family(unsigned int rate);
 #define FF_TCAP_FRAME_LEAD		BIT(5)	/* per-frame lead words */
 #define FF_TCAP_STATUS_RUNNING_ONLY	BIT(6)	/* status ticker only while running */
 #define FF_TCAP_KILL_BOTH		BIT(7)	/* kill both URB sets on stop */
-#define FF_TCAP_FIXED_URB		BIT(8)	/* short-URB interrupt geometry: no queue floor, whole-URB periods */
+#define FF_TCAP_FIXED_URB		BIT(8)	/* short-URB interrupt geometry (UC PC, UCX IF5): no queue floor, whole-URB periods */
 #define FF_TCAP_LEAD_HORIZON		BIT(9)	/* lead horizon in buffer minimum */
 #define FF_TCAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
 #define FF_TCAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */

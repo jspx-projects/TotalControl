@@ -15797,6 +15797,12 @@ fn minimum_quantum(state: &TotalControl, rate: u32) -> u32 {
     clock_facts(state).minimum_quantum(rate)
 }
 
+/// The driver's period rule: the interrupt transport accepts whole-URB
+/// periods only; ISO accepts any period at or above the floor.
+fn quantum_allowed(q: u32, floor: u32, iso: bool) -> bool {
+    q >= floor && (iso || q % floor.max(1) == 0)
+}
+
 /// Keep the quantum achievable at `rate` and, while no host stream runs, keep
 /// the graph default at the user's quantum. A rate change can raise the period
 /// floor above the chosen value; raise it to the floor so the GUI never holds
@@ -16558,7 +16564,12 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .map(|engine| (engine.min_quantum, engine.max_quantum))
         .unwrap_or((0, 0));
     let lower = floor.max(policy_min);
-    let in_policy = |q: &u32| *q >= lower && (policy_max == 0 || *q <= policy_max);
+    let iso = clock_facts(state).is_iso();
+    let in_policy = |q: &u32| {
+        quantum_allowed(*q, floor, iso)
+            && *q >= lower
+            && (policy_max == 0 || *q <= policy_max)
+    };
     let mut quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(in_policy).collect();
     if in_policy(&floor) && !quanta.contains(&floor) {
         quanta.push(floor);
@@ -17280,9 +17291,9 @@ fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
         (UcxIso, 96_000) => Some(401),
         (UcxIso, 176_400) => Some(586),
         (UcxIso, 192_000) => Some(643),
-        (UcPc, 32_000 | 44_100 | 48_000) => Some(215),
-        (UcPc, 64_000 | 88_200 | 96_000) => Some(351),
-        (UcPc, 128_000 | 176_400 | 192_000) => Some(617),
+        (UcPc, 32_000 | 44_100 | 48_000) => Some(151),
+        (UcPc, 64_000 | 88_200 | 96_000) => Some(223),
+        (UcPc, 128_000 | 176_400 | 192_000) => Some(361),
         (UcAp, 32_000) => Some(207),
         (UcAp, 44_100) => Some(250),
         (UcAp, 48_000) => Some(265),
@@ -23233,7 +23244,7 @@ mod tests {
         host_settings_of,
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
         note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
-        safe_default_quantum, minimum_quantum, reconcile_device_pitch,
+        safe_default_quantum, minimum_quantum, quantum_allowed, reconcile_device_pitch,
         power_sum_output_meters, quantum_pending, rate_authority_target,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
@@ -23886,7 +23897,7 @@ mod tests {
 
     #[test]
     fn uc_latency_tables_use_the_loopback_span() {
-        assert_eq!(latency_d(LatencyPersonality::UcPc, 44_100), Some(215));
+        assert_eq!(latency_d(LatencyPersonality::UcPc, 44_100), Some(151));
         assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 48_000), Some((52, 67)));
         assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 64_000), Some((72, 87)));
         assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 88_200), Some((72, 87)));
@@ -23905,7 +23916,7 @@ mod tests {
         assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 192_000), Some((147, 158)));
         assert_eq!(latency_d(LatencyPersonality::UcAp, 192_000), Some(689));
         assert_eq!(latency_b(LatencyPersonality::UcAp, 192_000), Some(158));
-        assert_eq!(latency_d(LatencyPersonality::UcPc, 64_000), Some(351));
+        assert_eq!(latency_d(LatencyPersonality::UcPc, 64_000), Some(223));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 64_000), Some(87));
     }
 
@@ -28486,6 +28497,24 @@ mod tests {
         // rate's own floor.
         assert_eq!(minimum_quantum(&state, 48_000), 48);
         assert_eq!(minimum_quantum(&state, 192_000), 192);
+    }
+
+    #[test]
+    fn interrupt_quanta_are_whole_urbs() {
+        // The short URB gives floors 16/32/64 at 1x/2x/4x. The picker must
+        // not offer the standard quanta that are not whole URBs.
+        assert!(quantum_allowed(16, 16, false));
+        assert!(quantum_allowed(32, 16, false));
+        assert!(quantum_allowed(48, 16, false));
+        assert!(!quantum_allowed(24, 16, false));
+        assert!(!quantum_allowed(48, 32, false));
+        assert!(quantum_allowed(96, 32, false));
+        assert!(!quantum_allowed(96, 64, false));
+        assert!(quantum_allowed(128, 64, false));
+        // ISO keeps any period at or above the floor.
+        assert!(quantum_allowed(24, 16, true));
+        assert!(quantum_allowed(48, 32, true));
+        assert!(!quantum_allowed(8, 16, true));
     }
 
     #[test]

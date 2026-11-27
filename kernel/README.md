@@ -60,15 +60,17 @@ Module parameters:
 | Parameter | Default | Meaning |
 |---|---|---|
 | `index[]`, `id[]`, `enable[]` | ALSA defaults | card slot, id and enable |
-| `urb_frames` | 48 | frames per URB at 1× on the UC interrupt path |
+| `urb_frames` | 48 | frames per URB at 1× on the ISO path |
 | `nurbs` | 2 | URBs in flight per endpoint (`nurbs × urb_frames` queued at 1×) |
+| `uc_pc_frames` | 16 | frames per URB at 1× on the UC PC interrupt path; doubled at 2× and quadrupled at 4× (16/32/64) |
 | `ucx_if5` | 0 | UCX audio interface: 0 = isochronous IF0, 1 = interrupt IF5 |
 | `ucx_if5_frames` | 16 | frames per URB at 1× on the UCX interrupt path; doubled at 2× and quadrupled at 4× (16/32/64) |
 | `fixed_rate` | 0 | restrict the PCM rate |
 
 The ALSA ring is at least `(nurbs + 2) × urb_frames`, rounded up to whole
-periods: 192 frames at 1× on ISO, and 64 frames on the UCX interrupt path
-(16-frame URB). This covers the queued USB URBs and their margin.
+periods: 192 frames at 1× on ISO, and 64 frames on the UC PC/UCX IF5
+interrupt path (16-frame URB). This covers the queued USB URBs and their
+margin.
 
 ## Userspace
 

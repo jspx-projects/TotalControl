@@ -1370,9 +1370,10 @@ active only while audio is stopped (no PCM owner and no stream); while audio
 runs it reports the actual source read-only.
 
 The quantum picker offers every quantum at or above the running rate's period
-floor (one URB), plus the exact floor. The safe default — the highest period
-floor across the device's supported rates — applies when no quantum is
-stored; a chosen quantum may be lower, down to the rate floor. A selected
+floor (one URB), plus the exact floor; on the interrupt transport it offers
+only whole multiples of the floor. The safe default — the highest period floor
+across the device's supported rates — applies when no quantum is stored; a
+chosen quantum may be lower, down to the rate floor. A selected
 quantum below twice the rate floor shows the warning line "Audio stream can
 stutter below N samples.", where N is twice the rate floor; applying pitch in
 that zone raises a notice to double the quantum. A rate change raises a
@@ -1382,7 +1383,9 @@ in the tooltip (`Controlled by <owner>`).
 
 On the JACK / direct-ALSA path the owner adopts a rate and the device follows
 it; TotalControl reports the device truth and reapplies the scene on a rate
-change. When an owner takes the PCM, TotalControl releases any global force it
+change. Under JACK the server's `-p`/`-n` are the driver period and buffer; the
+same whole-URB and buffer-minimum rules apply, and the picker reports the
+running period. When an owner takes the PCM, TotalControl releases any global force it
 wrote so the owner's rate and quantum apply. While an owner holds the PCM a
 rate or quantum request through OSC is reported as controlled by the owner,
 never applied and never shown as "applying…". On release, TotalControl
@@ -1416,7 +1419,9 @@ scheduling the PCM period must equal the pinned quantum on both directions. A
 PCM period that differs from the graph quantum is a fault: the panel reports
 the running PCM period and the policy is reapplied. The picker offers the
 driver's period floor intersected
-with the host policy bounds (`clock.min-quantum`/`max-quantum`).
+with the host policy bounds (`clock.min-quantum`/`max-quantum`). On the
+interrupt transport it offers only whole multiples of the period floor; on
+ISO it offers every value at or above the floor.
 While no stream runs, TotalControl is the authority for the quantum: the
 selection is written as `clock.quantum`, a refused request is retried once, and
 a value the host still does not run is replaced by the actual value on the next
