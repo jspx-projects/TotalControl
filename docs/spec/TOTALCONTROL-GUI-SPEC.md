@@ -2260,14 +2260,17 @@ shows `—` for `Latency in`; `Latency out` still uses the A model.
 | Rate | UCX ISO A | UCX ISO B | UCX ISO D |
 |---|---:|---:|---:|
 | 32 kHz | 43 | 51 | 94 |
-| 44.1 kHz | 49 | 57 | 106 |
+| 44.1 kHz | 53 | 61 | 114 |
 | 48 kHz | 56 | 64 | 120 |
-| 64 kHz | — | — | — |
-| 88.2 kHz | 83 | 90 | 173 |
+| 64 kHz | 75 | 82 | 157 |
+| 88.2 kHz | 94 | 102 | 196 |
 | 96 kHz | 101 | 108 | 209 |
-| 128 kHz | — | — | — |
-| 176.4 kHz | 107 | 111 | 218 |
+| 128 kHz | 111 | 115 | 226 |
+| 176.4 kHz | 114 | 119 | 233 |
 | 192 kHz | 127 | 132 | 259 |
+
+The 128 kHz D is interpolated between 96 and 192 kHz; its direct reading
+was one URB high.
 
 | Rate | UC A | UC PC D / B | UC AP D / B |
 |---|---:|---|---|

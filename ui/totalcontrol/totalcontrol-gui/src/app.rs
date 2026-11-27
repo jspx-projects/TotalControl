@@ -17302,15 +17302,19 @@ fn latency_a(rate: u32) -> u32 {
 }
 
 /// UCX ISO device span after the live two-URB queue, in frames. Measured by
-/// the output-5 to input-5 loopback at the seven ISO rates.
+/// the output-5 to input-5 analog loopback at the nine ISO rates. The 128 kHz
+/// direct reading was one URB high; 226 is interpolated between 96 and
+/// 192 kHz.
 fn latency_ucx_iso_d(rate: u32) -> Option<u32> {
     match rate {
         32_000 => Some(94),
-        44_100 => Some(106),
+        44_100 => Some(114),
         48_000 => Some(120),
-        88_200 => Some(173),
+        64_000 => Some(157),
+        88_200 => Some(196),
         96_000 => Some(209),
-        176_400 => Some(218),
+        128_000 => Some(226),
+        176_400 => Some(233),
         192_000 => Some(259),
         _ => None,
     }
@@ -23812,18 +23816,21 @@ mod tests {
         assert_eq!(latency_a(192_000), 312);
         // UCX ISO uses the measured device span and the vendor converters:
         // DA 7, AD 14 at 1x/2x, 11 at 4x; the digital remainder is symmetric.
+        assert_eq!(latency_ucx_iso_ab(44_100), Some((53, 61)));
         assert_eq!(latency_ucx_iso_ab(48_000), Some((56, 64)));
+        assert_eq!(latency_ucx_iso_ab(64_000), Some((75, 82)));
+        assert_eq!(latency_ucx_iso_ab(88_200), Some((94, 102)));
         assert_eq!(latency_ucx_iso_ab(96_000), Some((101, 108)));
-        assert_eq!(latency_ucx_iso_ab(176_400), Some((107, 111)));
+        assert_eq!(latency_ucx_iso_ab(128_000), Some((111, 115)));
+        assert_eq!(latency_ucx_iso_ab(176_400), Some((114, 119)));
         assert_eq!(latency_ucx_iso_ab(192_000), Some((127, 132)));
-        assert_eq!(latency_ucx_iso_ab(64_000), None);
         assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(216));
         assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(64));
         assert_eq!(latency_device_a(LatencyPersonality::UcxIso, 48_000), Some(56));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(127));
         assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(99));
         assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), None);
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), None);
+        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), Some(82));
         // IF5 uses the same converter split on its unit span.
         assert_eq!(latency_if5_unit(48_000), Some(74));
         assert_eq!(latency_if5_unit(64_000), Some(112));
