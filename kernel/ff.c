@@ -29,7 +29,7 @@ static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 static unsigned int urb_frames = 48;
 static unsigned int nurbs = 2;
 static bool ucx_if5;
-static unsigned int ucx_if5_frames = 1024;
+static unsigned int ucx_if5_frames = 16;
 static unsigned int fixed_rate;
 /* q48 instrumentation (test/uc-q48-instrumentation).  Poison the PCM rings
  * with 0x00005A5A instead of the inherited memory so that a reader's
@@ -66,11 +66,11 @@ MODULE_PARM_DESC(enable, "Enable the Fireface sound card.");
 module_param(urb_frames, uint, 0444);
 MODULE_PARM_DESC(urb_frames, "Frames per URB at 32-48 kHz, multiple of 8 (8..256); doubled at 2x and quadrupled at 4x on the interrupt transport.");
 module_param(nurbs, uint, 0444);
-MODULE_PARM_DESC(nurbs, "URBs in flight per endpoint (2..32, default 2); raised so at least 64 frames stay queued.");
+MODULE_PARM_DESC(nurbs, "URBs in flight per endpoint (2..32, default 2); raised so at least 64 frames stay queued, except on the UCX IF5 short-URB geometry.");
 module_param(ucx_if5, bool, 0444);
 MODULE_PARM_DESC(ucx_if5, "Fireface UCX: bind the Windows-style interrupt interface 5 (default false). The default binds the Mac-style ISO interface 0; set Y only for the Windows transport.");
 module_param(ucx_if5_frames, uint, 0444);
-MODULE_PARM_DESC(ucx_if5_frames, "Fireface UCX interrupt transport: frames per URB at 1x rates (8..1024, default 1024).");
+MODULE_PARM_DESC(ucx_if5_frames, "Fireface UCX interrupt transport: frames per URB at 1x rates, doubled at 2x and quadrupled at 4x (8..1024, default 16 = 2 blocks of 8).");
 module_param(fixed_rate, uint, 0644);
 MODULE_PARM_DESC(fixed_rate, "Only allow this sample rate (0 = any supported rate).");
 
@@ -187,9 +187,9 @@ static unsigned int ff_urb_frames(struct ff *chip, unsigned int rate)
 {
 	if (chip->iso)
 		return chip->iso_packets * DIV_ROUND_UP(rate, 8000);
-	/* The Windows IF5 driver uses one fixed URB size at every rate. */
-	if (chip->caps & FF_TCAP_FIXED_URB)
-		return chip->base_urb_frames;
+	/* The interrupt URB is a fixed number of frames at 1x and doubles or
+	 * quadruples with the rate family, like the reference UCX engine: a
+	 * block is 8/16/32 frames and a URB is a fixed number of blocks. */
 	return chip->base_urb_frames << ff_mode_index(rate);
 }
 
@@ -2621,9 +2621,11 @@ static void ff_urb_complete(struct urb *urb)
 			ff_track_capture_urb(chip, urb);
 	}
 
-	if (u->frames && ep->dir == SNDRV_PCM_STREAM_PLAYBACK)
+	if (u->frames && ep->dir == SNDRV_PCM_STREAM_PLAYBACK) {
+		atomic_sub(u->frames, &ep->inflight);
 		atomic_sub(u->frames, &chip->streams[
 			SNDRV_PCM_STREAM_PLAYBACK].inflight);
+	}
 
 	switch (urb->status) {
 	case 0:
@@ -2676,9 +2678,11 @@ resubmit:
 		if (!ep->dir) {
 			struct ff_urb *uu = urb->context;
 
-			if (uu && uu->frames)
+			if (uu && uu->frames) {
+				atomic_add(uu->frames, &ep->inflight);
 				atomic_add(uu->frames,
 					   &chip->streams[SNDRV_PCM_STREAM_PLAYBACK].inflight);
+			}
 		}
 		if (!READ_ONCE(chip->iso_frames_ok) ||
 		    ff_iso_contiguous(ep, urb))
@@ -2833,6 +2837,13 @@ static void ff_engine_stop(struct ff *chip)
 	 * engine run. */
 	atomic_set(&chip->streams[SNDRV_PCM_STREAM_PLAYBACK].inflight, 0);
 	atomic_set(&chip->streams[SNDRV_PCM_STREAM_CAPTURE].inflight, 0);
+	{
+		int d, k;
+
+		for (d = 0; d < 2; d++)
+			for (k = 0; k < FF_MAX_EPS; k++)
+				atomic_set(&chip->eps[d][k].inflight, 0);
+	}
 	chip->engine_stopped_at = jiffies ?: 1;
 	dev_dbg(&chip->dev->dev, "engine stopped\n");
 }
@@ -2843,12 +2854,12 @@ static void ff_int_setup_urbs(struct ff *chip, unsigned int bytes)
 	unsigned int in_bytes = bytes;
 	int dir, e, i;
 
-	/* The Windows IF5 receive path always uses full 1024-frame URBs.
-	 * The input word count follows the current alternate setting: 18 at
-	 * 1x, 14 at 2x and 6 per input endpoint at 4x.  Using the maximum
+	/* The input word count follows the current alternate setting: 18 at
+	 * 1x, 14 at 2x and 6 per input endpoint at 4x.  The receive URB is
+	 * the same scaled frame count as the playback URB; using the maximum
 	 * across all modes mis-sizes the 2x/4x receive URB. */
 	if (chip->caps & FF_TCAP_FIXED_URB)
-		in_bytes = chip->base_urb_frames * m->words * FF_SAMPLE_BYTES;
+		in_bytes = chip->urb_frames * m->words * FF_SAMPLE_BYTES;
 
 	for (dir = 0; dir < 2; dir++) {
 		for (e = 0; e < m->neps; e++) {
@@ -3218,9 +3229,12 @@ static int ff_engine_start(struct ff *chip)
 					chip->eps[SNDRV_PCM_STREAM_PLAYBACK][e]
 						.urbs[i].urb->context;
 
-				if (u->frames)
+				if (u->frames) {
+					atomic_add(u->frames,
+						   &chip->eps[SNDRV_PCM_STREAM_PLAYBACK][e].inflight);
 					atomic_add(u->frames,
 						   &chip->streams[SNDRV_PCM_STREAM_PLAYBACK].inflight);
+				}
 			}
 		}
 	}
@@ -3378,20 +3392,32 @@ static int ff_rule_period(struct snd_pcm_hw_params *params,
 			    struct snd_pcm_hw_rule *rule)
 {
 	struct ff *chip = rule->private;
-	struct snd_interval *r = hw_param_interval(params, SNDRV_PCM_HW_PARAM_RATE);
-	/*
-	 * The ALSA period and the USB URB are separate buffers.  The period
-	 * floor is one URB (48 frames at 1x, scaled at 2x/4x); the graph
-	 * quantum follows at 48 frames and above.
-	 */
-	struct snd_interval t = {
-		.min = ff_urb_frames(chip, r->min),
-		.max = UINT_MAX,
-		.integer = 1,
-	};
+	const struct snd_interval *r =
+		hw_param_interval_c(params, SNDRV_PCM_HW_PARAM_RATE);
+	struct snd_interval *p =
+		hw_param_interval(params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+	unsigned int step = ff_urb_frames(chip, r->min);
+	struct snd_interval t = { .integer = 1 };
 
-	return snd_interval_refine(hw_param_interval(params,
-				   SNDRV_PCM_HW_PARAM_PERIOD_SIZE), &t);
+	/*
+	 * The ALSA period and the USB URB are separate buffers.  On the
+	 * interrupt transport a period is a whole number of URBs, so every
+	 * period interrupt lands on a completion.  The ISO path keeps a
+	 * one-URB floor and accepts any larger period.
+	 */
+	if (chip->caps & FF_TCAP_FIXED_URB) {
+		if (p->max < step)
+			return -EINVAL;
+		t.min = roundup(p->min + p->openmin, step);
+		t.max = rounddown(p->max - p->openmax, step);
+		if (t.min > t.max)
+			return -EINVAL;
+		return snd_interval_refine(p, &t);
+	}
+
+	t.min = step;
+	t.max = UINT_MAX;
+	return snd_interval_refine(p, &t);
 }
 
 static unsigned int ff_buffer_min(struct ff *chip, unsigned int rate)
@@ -3407,7 +3433,11 @@ static unsigned int ff_buffer_min(struct ff *chip, unsigned int rate)
 	unsigned int urb = ff_urb_frames(chip, rate);
 	unsigned int min = (chip->nurbs + 2) * urb;
 
-	if (chip->caps & FF_TCAP_LEAD_HORIZON) {
+	/* The lead horizon is an ISO scheduling property.  The interrupt
+	 * transport is paced by the device's fixed URB slices and keeps only
+	 * the in-flight URBs plus margin. */
+	if ((chip->caps & FF_TCAP_LEAD_HORIZON) &&
+	    !(chip->caps & FF_TCAP_FIXED_URB)) {
 		unsigned int fb_delay = (chip->nurbs + 1) * chip->iso_packets;
 		unsigned int lead = DIV_ROUND_CLOSEST(fb_delay * rate, 8000) + 60;
 
@@ -3884,6 +3914,23 @@ static int ff_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 	}
 }
 
+unsigned int ff_playback_inflight(struct ff *chip)
+{
+	struct ff_stream *s = &chip->streams[SNDRV_PCM_STREAM_PLAYBACK];
+	unsigned int i, n = UINT_MAX;
+
+	/* At 4x the channels are split over two independent endpoint pairs.
+	 * The queue the host sees is one pair's, and the reported position is
+	 * the pair that is behind (ff_stream_advance), so the backlog is the
+	 * minimum across pairs; summing them would double-count it. */
+	if (chip->iso || !chip->mode || chip->mode->neps < 2)
+		return (unsigned int)atomic_read(&s->inflight);
+	for (i = 0; i < chip->mode->neps; i++)
+		n = min(n, (unsigned int)atomic_read(
+			&chip->eps[SNDRV_PCM_STREAM_PLAYBACK][i].inflight));
+	return n == UINT_MAX ? 0 : n;
+}
+
 static snd_pcm_uframes_t ff_pcm_pointer(struct snd_pcm_substream *subs)
 {
 	struct ff *chip = snd_pcm_substream_chip(subs);
@@ -3894,7 +3941,9 @@ static snd_pcm_uframes_t ff_pcm_pointer(struct snd_pcm_substream *subs)
 	 * not accounted yet, so the capture delay is the ring fill.  ALSA
 	 * adds hw_avail to it, so snd_pcm_delay()/htimestamp see the real
 	 * queue (audit R4). */
-	subs->runtime->delay = atomic_read(&chip->streams[subs->stream].inflight);
+	subs->runtime->delay = subs->stream == SNDRV_PCM_STREAM_PLAYBACK ?
+		ff_playback_inflight(chip) :
+		atomic_read(&chip->streams[subs->stream].inflight);
 
 	return chip->streams[subs->stream].hw_ptr %
 	       subs->runtime->buffer_size;
@@ -3972,6 +4021,7 @@ static int ff_alloc_urbs(struct ff *chip)
 			ep->chip = chip;
 			ep->dir = dir;
 			ep->index = e;
+			atomic_set(&ep->inflight, 0);
 			for (i = 0; i < chip->nurbs; i++) {
 				struct ff_urb *u = &ep->urbs[i];
 
@@ -4213,7 +4263,11 @@ static int ff_probe(struct usb_interface *intf,
 	chip->base_urb_frames = clamp(round_up(
 		(chip->caps & FF_TCAP_FIXED_URB) ? ucx_if5_frames : urb_frames, 8),
 		8u, (chip->caps & FF_TCAP_FIXED_URB) ? 1024u : 256u);
-	if (chip->nurbs * chip->base_urb_frames < FF_MIN_QUEUE_FRAMES) {
+	/* The interrupt transport keeps the configured queue depth.  The
+	 * reference UCX engine queues two short URBs (32 frames at 1x); the
+	 * 64-frame ISO floor would defeat that geometry. */
+	if (!(chip->caps & FF_TCAP_FIXED_URB) &&
+	    chip->nurbs * chip->base_urb_frames < FF_MIN_QUEUE_FRAMES) {
 		chip->nurbs = DIV_ROUND_UP(FF_MIN_QUEUE_FRAMES,
 					   chip->base_urb_frames);
 		dev_dbg(&intf->dev, "using %u URBs to keep %u frames queued\n",
@@ -4233,9 +4287,7 @@ static int ff_probe(struct usb_interface *intf,
 		 * frame count times 18 words, at 2x twice as many frames times
 		 * 14 words, and so on. */
 		for (i = 0; i < chip->desc->n_modes; i++) {
-			unsigned int frames = (chip->caps & FF_TCAP_FIXED_URB) ?
-				chip->base_urb_frames :
-				chip->base_urb_frames << i;
+			unsigned int frames = chip->base_urb_frames << i;
 
 			span = max(span, frames *
 				   max(chip->modes[i].words,
@@ -4260,10 +4312,6 @@ static int ff_probe(struct usb_interface *intf,
 			}
 		}
 	}
-	/* The Windows IF5 driver reads 73,728-byte IN URBs. */
-	if ((chip->desc->quirks & FF_QUIRK_IF5_PLAYBACK_MASK) &&
-	    chip->urb_bytes_max < 73728)
-		chip->urb_bytes_max = 73728;
 	chip->rate = 48000;
 	chip->clock_rate = 48000;
 	chip->mode = &chip->modes[0];

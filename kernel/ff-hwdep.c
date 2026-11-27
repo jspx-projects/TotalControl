@@ -372,7 +372,9 @@ static int ff_hwdep_snapshot(struct ff *chip,
 				   boundary;
 		if (st->fill > st->buffer)
 			st->fill = st->buffer;
-		st->inflight = atomic_read(&fs->inflight);
+		st->inflight = dir == SNDRV_PCM_STREAM_PLAYBACK ?
+			ff_playback_inflight(chip) :
+			atomic_read(&fs->inflight);
 		st->delay = st->fill + st->inflight;
 		st->urb_frames = chip->urb_frames;
 		st->nurbs = chip->nurbs;

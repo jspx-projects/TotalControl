@@ -1170,7 +1170,13 @@ Output packet:
 - Alt 2: 2x, 14 words/frame (ADAT SMUX).
 - Alt 3: 4x, two endpoints, 6 words each.
 - S32 samples, no ISO header.
-- URB size 1024 frames is the host's choice.
+- The URB is a fixed number of 8/16/32-frame blocks. `ucx_if5_frames`
+  sets the 1x frame count (default 16, two blocks); the 2x and 4x URBs are
+  twice and four times as long, so 16/32/64 frames. Two URBs are queued:
+  32/64/128 frames.
+- The measured device round trip is 106/176/320 frames at 1x/2x/4x. The
+  two-URB queue is 32/64/128 frames; the unit is 74/112/192 frames. The
+  unit split is symmetric: 37/37, 56/56, 96/96 frames.
 
 The reference host selects alt 1 once at connect and streams 1x on it.
 Alt 2/3 carry the 2x/4x bands; the Windows reference host's exact

@@ -224,7 +224,7 @@ Quirks:
 | `ALT_RESELECT` | select alt 0 then alt N at engine start (clears the UCX IF5 output latch) |
 | `STATUS_LATCH` | status byte 3 bit 7 is the output-latch watchdog |
 | `IF5_PRE_START` | send `0x10 0x8000` + `0x1d` before audio |
-| `IF5_PLAYBACK_MASK` | request 19/20 channel mask; IN URBs are 1024 frames at the current alternate's input word count (73728 at 1x, 57344 at 2x, 2 × 24576 at 4x) |
+| `IF5_PLAYBACK_MASK` | request 19/20 channel mask; IN URBs carry the scaled short URB at the current alternate's input word count (1152 bytes at 1x, 1792 at 2x, 2 × 1536 at 4x) |
 | `WIN_SESSION` | Windows-personality session timing: stop->start settle and close->rate / close->trio gaps |
 
 Model-specific behaviour belongs in a descriptor quirk or an `ff_ops`
@@ -259,16 +259,22 @@ restores the 1x multiplier and forces a session replay on PC.
 ### 4.1 URB and buffer geometry
 
 Module parameters: `urb_frames` (default 48), `nurbs` (default 2),
-`ucx_if5_frames` (default 1024), `fixed_rate`.
+`ucx_if5_frames` (default 16), `fixed_rate`.
 
 - Interrupt: one URB carries `urb_frames` scaled by the rate band
-  (1x/2x/4x). The PCM buffer covers `(nurbs + 2) * urb_frames`, rounded up
-  to whole periods.
+  (1x/2x/4x). The UCX IF5 base is `ucx_if5_frames`, two 8-frame blocks;
+  two URBs are queued, so the host queue is 32/64/128 frames. The PCM
+  buffer covers `(nurbs + 2) * urb_frames`, rounded up to whole periods.
 - ISO: one URB carries up to 8 packets, one per 125 us microframe. The
   feedback delay is `(nurbs + 1) * iso_packets`. The UCX PCM buffer also
   covers the output lead plus two URBs of margin.
-- The period floor is one URB. The graph quantum follows at 48 frames and
-  above.
+- The period floor is one URB. On the interrupt transport the period is a
+  whole number of URBs; on ISO any period at or above the floor is
+  accepted. The graph quantum follows at 48 frames and above.
+
+The measured UCX IF5 round trip is 106/176/320 frames at 1x/2x/4x. The
+two-URB host queue accounts for 32/64/128 frames and the unit for
+74/112/192 frames.
 
 #### 4.1.1 The achievable envelope
 
@@ -327,11 +333,11 @@ The GUI offers the same envelope on the pitch slider (0.1 % grid).
 ISO:           urb = iso_packets * ceil(rate / 8000)
                iso_packets = clamp(ceil(urb_frames / 6), 1, 8)
 interrupt UC:  urb = urb_frames << band(rate)
+interrupt UCX: urb = ucx_if5_frames << band(rate)
                band = 0 (<=48k), 1 (<=96k), 2 (>96k)
-interrupt UCX: urb = ucx_if5_frames
 period_floor   = urb
 buffer_min     = roundup(max((nurbs + 2) * urb, lead + 2 * urb), urb)
-               UCX only: lead = round((nurbs + 1) * iso_packets * rate / 8000) + 60
+               UCX ISO only: lead = round((nurbs + 1) * iso_packets * rate / 8000) + 60
 ```
 
 `roundup()` rounds to any multiple. `round_up()` is a power-of-two bitmask and
@@ -436,11 +442,12 @@ Lower `urb_frames` shortens the URB and lowers the period floor (lower
 latency). Raising `nurbs` enlarges the buffer (more margin); the period floor
 is unchanged.
 
-The period floor bounds the quantum from below: the driver accepts any period
-≥ the period floor. The GUI offers the standard quantum steps filtered to ≥ the
-period floor, plus the exact floor, so the lowest achievable latency is
-selectable. A larger quantum is a larger period: more latency, more scheduling
-margin.
+The period floor bounds the quantum from below. On ISO the driver accepts any
+period at or above the floor; on the interrupt transport the period is a whole
+number of URBs. The GUI offers the standard quantum steps filtered to the
+driver's period floor, plus the exact floor, so the lowest achievable latency
+is selectable. A larger quantum is a larger period: more latency, more
+scheduling margin.
 
 The PCM buffer covers the URBs already in flight plus margin. Ring pressure
 is measured against the driver's own ring position — the position the
