@@ -165,7 +165,8 @@ struct ff_hwdep_diagnostics {
 	__u32 meter_pairs;
 	__u32 meter_realigns;
 	__u64 in_total;
-	__u32 reserved[8];
+	__u32 pitch_clamps;
+	__u32 reserved[7];
 };
 
 /* Largest rate table in one FF_HWDEP_IOCTL_ENVELOPE reply. */

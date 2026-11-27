@@ -515,7 +515,7 @@ int ff_midi_create(struct ff *chip)
 			ret = -ENOMEM;
 			goto err;
 		}
-		strscpy(id, chip->desc->shortname, sizeof(id));
+		strscpy(id, "Fireface", sizeof(id));
 		ret = snd_rawmidi_new(chip->card, id, i, 1, 1, &rmidi);
 		if (ret < 0)
 			goto err;
@@ -525,8 +525,8 @@ int ff_midi_create(struct ff *chip)
 		rmidi->info_flags = SNDRV_RAWMIDI_INFO_OUTPUT |
 				    SNDRV_RAWMIDI_INFO_INPUT |
 				    SNDRV_RAWMIDI_INFO_DUPLEX;
-		snprintf(rmidi->name, sizeof(rmidi->name), "%s MIDI %u",
-			 chip->desc->name, i + 1);
+		snprintf(rmidi->name, sizeof(rmidi->name), "Fireface MIDI %u",
+			 i + 1);
 		snd_rawmidi_set_ops(rmidi, SNDRV_RAWMIDI_STREAM_INPUT,
 				    &ff_midi_input_ops);
 		snd_rawmidi_set_ops(rmidi, SNDRV_RAWMIDI_STREAM_OUTPUT,

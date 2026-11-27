@@ -741,9 +741,6 @@ enum {
 
 static const struct ff_device_desc ff_devices[] = {
 	{
-		.name = "Fireface UC",
-		.shortname = "Fireface UC",
-		.card_id = "FirefaceUC",
 		.vendor = FF_VENDOR_SMSC,
 		.product = FF_PRODUCT_UC_PC,
 		.iface = 0,
@@ -771,9 +768,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_uc_chan_init),
 		.ops = &ff_uc_ops,
 	}, {
-		.name = "Fireface UC",
-		.shortname = "Fireface UC",
-		.card_id = "FirefaceUC",
 		.vendor = FF_VENDOR_SMSC,
 		.product = FF_PRODUCT_UC_MAC,
 		.iface = 0,
@@ -798,9 +792,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_uc_chan_init),
 		.ops = &ff_uc_ops,
 	}, {
-		.name = "Fireface UC",
-		.shortname = "Fireface UC",
-		.card_id = "FirefaceUC",
 		.vendor = FF_VENDOR_RME,
 		.product = FF_PRODUCT_UC_MAC,
 		.iface = 0,
@@ -825,9 +816,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_uc_chan_init),
 		.ops = &ff_uc_ops,
 	}, {
-		.name = "Fireface UCX",
-		.shortname = "Fireface UCX",
-		.card_id = "FirefaceUCX",
 		.vendor = FF_VENDOR_SMSC,
 		.product = FF_PRODUCT_UCX,
 		.iface = 0,
@@ -855,9 +843,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_ucx_chan_init),
 		.ops = &ff_ucx_ops,
 	}, {
-		.name = "Fireface UCX",
-		.shortname = "Fireface UCX",
-		.card_id = "FirefaceUCX",
 		.vendor = FF_VENDOR_SMSC,
 		.product = FF_PRODUCT_UCX,
 		.iface = 5,
@@ -887,9 +872,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_ucx_if5_chan_init),
 		.ops = &ff_ucx_if5_ops,
 	}, {
-		.name = "Fireface UCX",
-		.shortname = "Fireface UCX",
-		.card_id = "FirefaceUCX",
 		.vendor = FF_VENDOR_RME,
 		.product = FF_PRODUCT_UCX,
 		.iface = 0,
@@ -917,9 +899,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.n_chan_init = ARRAY_SIZE(ff_ucx_chan_init),
 		.ops = &ff_ucx_ops,
 	}, {
-		.name = "Fireface UCX",
-		.shortname = "Fireface UCX",
-		.card_id = "FirefaceUCX",
 		.vendor = FF_VENDOR_RME,
 		.product = FF_PRODUCT_UCX,
 		.iface = 5,
@@ -955,9 +934,6 @@ static const struct ff_device_desc ff_devices[] = {
 		 * mapped.  The meter packet length is not known, so the URB
 		 * takes a full 512-byte bulk packet and passes the actual
 		 * length on. */
-		.name = "Babyface-classic",
-		.shortname = "Babyface-classic",
-		.card_id = "Babyface",
 		.vendor = FF_VENDOR_RME,
 		.product = FF_PRODUCT_BABYFACE_CLASSIC,
 		.iface = 0,
@@ -980,9 +956,6 @@ static const struct ff_device_desc ff_devices[] = {
 		.max_rate = 192000,
 		.ops = &ff_ucx_ops,
 	}, {
-		.name = "Fireface UC",
-		.shortname = "Fireface UC",
-		.card_id = "FirefaceUC",
 		.vendor = FF_VENDOR_RME,
 		.product = FF_PRODUCT_UC_WIN_RME,
 		.iface = 0,
@@ -3851,11 +3824,11 @@ static int ff_create_pcm(struct ff *chip)
 	struct snd_pcm *pcm;
 	int ret;
 
-	ret = snd_pcm_new(chip->card, chip->desc->name, 0, 1, 1, &pcm);
+	ret = snd_pcm_new(chip->card, "Fireface", 0, 1, 1, &pcm);
 	if (ret < 0)
 		return ret;
 	pcm->private_data = chip;
-	strscpy(pcm->name, chip->desc->name, sizeof(pcm->name));
+	strscpy(pcm->name, "Fireface", sizeof(pcm->name));
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &ff_pcm_ops);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &ff_pcm_ops);
 	/*
@@ -4188,10 +4161,10 @@ static int ff_probe(struct usb_interface *intf,
 	dev_idx = -1;		/* released by ff_card_free() from now on */
 
 	strscpy(card->driver, "FirefaceUSB", sizeof(card->driver));
-	strscpy(card->shortname, desc->shortname, sizeof(card->shortname));
-	strscpy(card->mixername, desc->shortname, sizeof(card->mixername));
+	strscpy(card->shortname, "Fireface", sizeof(card->shortname));
+	strscpy(card->mixername, "Fireface", sizeof(card->mixername));
 	if (!id[chip->dev_idx])
-		snd_card_set_id(card, desc->card_id);
+		snd_card_set_id(card, "Fireface");
 
 	ff_midi_init(chip);
 	ret = ff_alloc_urbs(chip);
@@ -4223,9 +4196,8 @@ static int ff_probe(struct usb_interface *intf,
 				 le32_to_cpu(st), le32_to_cpu(st) >> 24);
 	}
 	snprintf(card->longname, sizeof(card->longname),
-		 "RME %s (%s, firmware %u) at %s",
-		 desc->name,
-		 chip->iso ? "ISO transport" : "interrupt transport",
+		 "RME Fireface (%s transport, firmware %u) at %s",
+		 chip->iso ? "ISO" : "interrupt",
 		 chip->firmware, dev_name(&dev->dev));
 
 	ret = ff_hw_setup(chip);

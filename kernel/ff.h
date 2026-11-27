@@ -322,9 +322,6 @@ struct ff_init_range {
 };
 
 struct ff_device_desc {
-	const char *name;		/* "Fireface UC" */
-	const char *shortname;
-	const char *card_id;
 	u16 vendor;
 	u16 product;
 	u8 iface;

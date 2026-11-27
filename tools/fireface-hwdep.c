@@ -4,10 +4,11 @@
 //
 // Subcommands (node defaults to /dev/snd/hwC0D0; pass any /dev/snd/hwC*D*
 // argument to override):
-//   fireface-hwdep counters [node]            every counter field, key=value
+//   fireface-hwdep counters [node]            every diagnostics field, key=value
 //   fireface-hwdep envelope [node]            rate/quantum envelope, key=value
 //   fireface-hwdep clock [node]               device timestamp + one-second delta
-//   fireface-hwdep info [node]                ABI, model, geometry (no serial)
+//   fireface-hwdep snapshot [node]            OUT/IN queue state and device clock
+//   fireface-hwdep info [node]                ABI, caps, USB ids, geometry (no serial)
 //   fireface-hwdep read <req> [node]          one vendor word (req hex, e.g. 0x19)
 //   fireface-hwdep write <addr> <val> [...]   IF1 register words (hex)
 //   fireface-hwdep probe <req> <secs> [node]  fast-sample a vendor word, print changes
