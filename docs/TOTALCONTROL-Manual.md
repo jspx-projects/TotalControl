@@ -1550,12 +1550,13 @@ plus capture delivery. The queue is counted once. The host term's label
 follows the authority: `graph` on the PipeWire and JACK paths, `ring` on
 direct ALSA.
 
-A and B are the two halves of the measured device round trip D: `D = A + B`.
+A and B are the two halves of the measured device span D: `D = A + B`.
 D is measured by the output-5 to input-5 loopback after the capture
-start-alignment correction. The A/B split is the horizon model, not an
-independent measurement of each half.
+start-alignment correction. On the ISO and UC transports the split is the
+horizon model. On the UCX IF5 transport the split is the symmetric half of
+the unit span; the live host queue is already in `snd_pcm_delay`.
 
-At 48 kHz with a 128-frame live host term:
+On UCX ISO at 48 kHz with a 128-frame live host term:
 
 ```text
 Latency out = 128 + 75 + 13 = 216 frames = 4.5 ms
@@ -1576,14 +1577,19 @@ The device values (frames):
 | 176.4 kHz | 288 | 298 | — | — |
 | 192 kHz | 312 | 331 | 305 | 193 |
 
+The UCX IF5 interrupt transport has its own values (frames):
+
+| Rates | A | B | D |
+|---|---|---|---|
+| 32, 44.1, 48 kHz | 37 | 37 | 74 |
+| 64, 88.2, 96 kHz | 56 | 56 | 112 |
+| 128, 176.4, 192 kHz | 96 | 96 | 192 |
+
 `Latency out` uses A at every rate. `Latency in` needs a measured D for the
 rate; where there is none it shows `—`. The UCX **IF5** interrupt transport has
-no D measurement yet: its `Latency in` shows `—`, and `Latency out` uses the
-live host term and the A model. The IF5 fixed-1024-frame URB span is much
-larger than the ISO span, so the ISO values do not apply. The fixed 60-frame device lead is
-replaced by the per-rate A. The device round trip D is measured; the A/B split
-is the horizon model. A firmware or device-path change needs a new
-measurement.
+its own values; the ISO table does not apply to it. The fixed 60-frame device
+lead is replaced by the per-rate A. The device span D is measured; the A/B
+split is the model. A firmware or device-path change needs a new measurement.
 
 The values are measured with the interface's own output-5 to input-5 loopback,
 not an acoustic path. Treat the result as the host-side latency budget; an

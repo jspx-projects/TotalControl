@@ -2231,7 +2231,8 @@ Latency out = snd_pcm_delay + A(rate)
 ```
 
 `snd_pcm_delay` is the live playback ring plus the in-flight URBs; A is the
-device output path: bus delivery plus output converter. The live host term is
+device output path: bus delivery plus output converter on UCX ISO and UC, and
+the symmetric output half of the unit span on UCX IF5. The live host term is
 split into ring fill and in-flight queue, so the queue is counted once. The
 host term's label follows the authority: `graph` on the PipeWire and JACK
 paths, `ring` on direct ALSA. While idle, the graph quantum is the host term.
@@ -2245,10 +2246,14 @@ B(rate)    = D(rate) - A(rate)
 ```
 
 D is the device round trip measured by the output-5 to input-5 loopback,
-after the capture start-alignment correction. The split is the horizon model:
-A is the playback bus plus output converter; B is the ADC plus capture
-delivery. Only D is directly measured. A rate without a D measurement shows
-`—` for `Latency in`; `Latency out` still uses the A model.
+after the capture start-alignment correction. On UCX ISO and UC, D is the
+ring-to-ring result. On UCX IF5, D is the unit span after the live host queue
+is subtracted, because the queue is already in the live playback and capture
+delays. The split is the horizon model on ISO and UC: A is the playback bus
+plus output converter, B is the ADC plus capture delivery. The split is the
+symmetric unit half on IF5. Only D is directly measured; the split is the
+model. A rate without a D measurement shows `—` for `Latency in`;
+`Latency out` still uses the A model.
 
 | Rate | A | UCX ISO D / B | UC PC D / B | UC AP D / B |
 |---|---|---|---|---|
@@ -2267,10 +2272,15 @@ USB term is `snd_pcm_delay - ring fill`. The split changes only the labels;
 the total is `snd_pcm_delay + A`. The capture host term is the live capture
 `snd_pcm_delay`; the device-in term is B. The values are frames.
 
-The UCX **IF5** (interrupt) transport has no D measurement yet. Its
-`Latency in` shows `—`; `Latency out` uses the live host term and the A model.
-The IF5 fixed-1024-frame URB span is about 2122 frames at 48 kHz, so the ISO
-table must not be used for it. A full IF5 A/B calibration is an open item.
+The UCX **IF5** (interrupt) transport has its own device span. Its short URB
+keeps the host queue small, and the live `snd_pcm_delay` counts it. D is the
+unit span alone; A and B are its two halves.
+
+| Rates | IF5 A | IF5 B | IF5 D |
+|---|---|---|---|
+| 32, 44.1, 48 kHz | 37 | 37 | 74 |
+| 64, 88.2, 96 kHz | 56 | 56 | 112 |
+| 128, 176.4, 192 kHz | 96 | 96 | 192 |
 
 The calibration is per personality and rate. A firmware or device-path change
 needs a repeat measurement. The UC PC/AP D values are the five loopback rates;
