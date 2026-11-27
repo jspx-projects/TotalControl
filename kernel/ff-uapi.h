@@ -181,6 +181,8 @@ struct ff_hwdep_rate_env {
 	__u32 rate;		/* Hz */
 	__u32 period_floor;	/* frames */
 	__u32 buffer_min;	/* frames */
+	__u32 capture_channels;	/* active capture channels at this rate */
+	__u32 playback_channels;/* active playback channels at this rate */
 };
 
 struct ff_hwdep_envelope {

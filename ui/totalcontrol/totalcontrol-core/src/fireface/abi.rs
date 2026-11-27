@@ -182,6 +182,8 @@ pub struct HwdepRateEnv {
     pub rate: u32,
     pub period_floor: u32,
     pub buffer_min: u32,
+    pub capture_channels: u32,
+    pub playback_channels: u32,
 }
 
 #[repr(C)]
@@ -301,8 +303,8 @@ mod tests {
         assert_eq!(size_of::<HwdepVendor>(), 74);
         assert_eq!(size_of::<HwdepWords>(), 4 + 4 + 63 * 4);
         assert_eq!(size_of::<HwdepDiagnostics>(), 232);
-        assert_eq!(size_of::<HwdepRateEnv>(), 12);
-        assert_eq!(size_of::<HwdepEnvelope>(), 240);
+        assert_eq!(size_of::<HwdepRateEnv>(), 20);
+        assert_eq!(size_of::<HwdepEnvelope>(), 368);
         assert_eq!(size_of::<HwdepStream>(), 112);
         assert_eq!(size_of::<HwdepSnapshot>(), 352);
         assert_eq!(size_of::<HwdepSetRate>(), 32);
@@ -312,7 +314,7 @@ mod tests {
     fn ioc_number_is_stable() {
         assert_eq!(IOCTL_INFO, 0x80ac_4610);
         assert_eq!(IOCTL_DIAGNOSTICS, 0x80e8_4613);
-        assert_eq!(IOCTL_ENVELOPE, 0x80f0_4614);
+        assert_eq!(IOCTL_ENVELOPE, 0x8170_4614);
         assert_eq!(IOCTL_SET_RATE, 0xc020_4616);
         assert_eq!(IOCTL_SNAPSHOT, 0xc160_4617);
     }

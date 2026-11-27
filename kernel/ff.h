@@ -198,6 +198,8 @@ unsigned int ff_rate_family(unsigned int rate);
 #define FF_TCAP_LEAD_HORIZON		BIT(9)	/* lead horizon in buffer minimum */
 #define FF_TCAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
 #define FF_TCAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
+#define FF_TCAP_FLASH_GUARD		BIT(12)	/* refuse flash vendor requests/words */
+#define FF_TCAP_RATE_STATUS_19		BIT(13)	/* 0x19 IN carries the rate status */
 
 struct ff;
 

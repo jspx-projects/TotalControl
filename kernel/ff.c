@@ -475,6 +475,26 @@ static int ff_set_rate_family(struct ff *chip, unsigned int rate)
  * change and rewrites the options word the device already holds, so the
  * mixer's settings (clock source, word clock, SPDIF and optical output
  * format) survive the rate change. */
+/* The device's rate status word (request 0x19 IN), UCX spec §11.6:
+ * 0x0184 | family << 11 | band << 13, readiness bits 0-1 cleared. */
+static u32 ff_rate_status_expected(unsigned int rate)
+{
+	unsigned int family = ff_rate_family(rate);
+	unsigned int band = rate > 114000 ? 2 : rate > 57000 ? 1 : 0;
+
+	return 0x0184 | (family << 11) | (band << 13);
+}
+
+static int ff_device_rate_current(struct ff *chip, unsigned int rate)
+{
+	__le32 word;
+	int ret = ff_vendor_recv(chip, 0x19, 0, 0, &word, sizeof(word));
+
+	if (ret < 0)
+		return ret;
+	return le32_to_cpu(word) == ff_rate_status_expected(rate);
+}
+
 static int ff_set_rate(struct ff *chip, unsigned int rate)
 {
 	__le32 cur;
@@ -3003,6 +3023,18 @@ static int ff_engine_commit_rate(struct ff *chip)
 	 * word needs the Windows gap before the rate write (A2: 220 ms);
 	 * writing right after the close wedges the unit.  The settle above
 	 * already separated the close from this start. */
+	/* The unit reloads its stored mixer setup after any REG1 write, even
+	 * one carrying the current rate.  When the rate status word already
+	 * reports the target family and band, skip the DDS/family/options
+	 * commit and preserve the current mixer state.  The alt selection
+	 * above still ran, so the streaming geometry is current. */
+	if ((chip->caps & FF_TCAP_RATE_STATUS_19) &&
+	    ff_device_rate_current(chip, chip->rate) == 1) {
+		dev_dbg(&chip->dev->dev,
+			"rate commit: %u Hz already current; REG1 write skipped\n",
+			chip->rate);
+		return 0;
+	}
 	if ((chip->desc->quirks & FF_QUIRK_WIN_SESSION) && chip->uc_session)
 		msleep(200);
 	ret = chip->desc->ops->set_rate(chip, chip->rate);
@@ -3353,9 +3385,14 @@ void ff_query_envelope(struct ff *chip, struct ff_hwdep_envelope *env)
 
 		if (!ff_rate_supported(chip, rate))
 			continue;
+		const struct ff_mode *m = &chip->modes[ff_mode_index(rate)];
+
 		env->rates[n].rate = rate;
 		env->rates[n].period_floor = ff_urb_frames(chip, rate);
 		env->rates[n].buffer_min = ff_buffer_min(chip, rate);
+		env->rates[n].capture_channels = m->neps * m->words;
+		env->rates[n].playback_channels =
+			m->neps * ff_mode_out_words(m);
 		n++;
 	}
 	env->count = n;
@@ -3986,7 +4023,9 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 			caps |= FF_TCAP_KILL_BOTH;
 		break;
 	case FF_PRODUCT_ID_D:
-		caps |= FF_TCAP_MUTE_ON_STOP |
+		caps |= FF_TCAP_FLASH_GUARD |
+			FF_TCAP_RATE_STATUS_19 |
+			FF_TCAP_MUTE_ON_STOP |
 			FF_TCAP_FRAME_LEAD |
 			FF_TCAP_STATUS_RUNNING_ONLY |
 			FF_TCAP_LEAD_HORIZON |
@@ -3995,7 +4034,8 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 			caps |= FF_TCAP_FIXED_URB | FF_TCAP_IF5_SELECT;
 		break;
 	case FF_PRODUCT_ID_E:
-		caps |= FF_TCAP_MUTE_ON_STOP |
+		caps |= FF_TCAP_FLASH_GUARD |
+			FF_TCAP_MUTE_ON_STOP |
 			FF_TCAP_FRAME_LEAD |
 			FF_TCAP_STATUS_RUNNING_ONLY |
 			FF_TCAP_LEAD_HORIZON |

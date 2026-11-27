@@ -236,6 +236,12 @@ static int ff_hwdep_vendor(struct ff *chip,
 		return -EINVAL;
 	if (v.length > FF_HWDEP_MAX_DATA)
 		return -EINVAL;
+	/* Flash programming on the guarded families.  The UC keeps 0x18 for
+	 * input phase; the guard capability is set only where 0x18/0x19 OUT
+	 * program flash.  Reads (the 0x19 rate status) stay allowed. */
+	if ((chip->caps & FF_TCAP_FLASH_GUARD) && v.direction == 0 &&
+	    (v.request == 0x18 || v.request == 0x19))
+		return -EPERM;
 
 	if (v.length) {
 		data = kmalloc(v.length, GFP_KERNEL);
@@ -294,6 +300,14 @@ static int ff_hwdep_words(struct ff *chip,
 		return -EFAULT;
 	if (w.count > FF_HWDEP_MAX_WORDS)
 		return -EINVAL;
+	if (chip->caps & FF_TCAP_FLASH_GUARD) {
+		unsigned int i;
+
+		for (i = 0; i < w.count; i++)
+			if (w.words[i].addr == 0x3e05 ||
+			    w.words[i].addr == 0x3e06)
+				return -EPERM;
+	}
 	/*
 	 * ff_reg_send() owns chip->ctl_lock.  Do not take it here:
 	 * the mutex is not recursive, and the UCX IF1 path would deadlock

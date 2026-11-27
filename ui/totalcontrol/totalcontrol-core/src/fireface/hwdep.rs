@@ -441,11 +441,13 @@ fn parse_card_number(s: &str) -> Option<i32> {
 }
 
 /// One supported rate and the driver's achievable geometry at it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RateEnv {
     pub rate: u32,
     pub period_floor: u32,
     pub buffer_min: u32,
+    pub capture_channels: u32,
+    pub playback_channels: u32,
 }
 
 /// The driver-reported achievable envelope for the loaded module and device.
@@ -488,6 +490,8 @@ pub fn query_rate_envelope(card: i32) -> Option<RateEnvelope> {
                 rate: r.rate,
                 period_floor: r.period_floor,
                 buffer_min: r.buffer_min,
+                capture_channels: r.capture_channels,
+                playback_channels: r.playback_channels,
             })
             .collect(),
     })
@@ -510,8 +514,8 @@ mod tests {
             nurbs: 2,
             iso: true,
             rates: vec![
-                RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336 },
-                RateEnv { rate: 96_000, period_floor: 96, buffer_min: 576 },
+                RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, capture_channels: 18, playback_channels: 18 },
+                RateEnv { rate: 96_000, period_floor: 96, buffer_min: 576, capture_channels: 14, playback_channels: 14 },
             ],
         };
         assert_eq!(env.rate_list(), vec![48_000, 96_000]);

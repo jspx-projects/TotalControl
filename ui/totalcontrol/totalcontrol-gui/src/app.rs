@@ -28403,6 +28403,7 @@ mod tests {
                 rate: 176_400,
                 period_floor: 184,
                 buffer_min: 5888,
+                ..Default::default()
             }],
         });
         state.engine = None;
@@ -28418,8 +28419,8 @@ mod tests {
             nurbs: 2,
             iso: true,
             rates: vec![
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336 },
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 176_400, period_floor: 184, buffer_min: 5888 },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, ..Default::default() },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 176_400, period_floor: 184, buffer_min: 5888, ..Default::default() },
             ],
         });
         state.engine_force_quantum = 48;
@@ -28480,6 +28481,7 @@ mod tests {
                 rate: *rate,
                 period_floor: *floor,
                 buffer_min: floor * 7,
+                ..Default::default()
             })
             .collect(),
         }
@@ -28540,9 +28542,9 @@ mod tests {
             nurbs: 2,
             iso: true,
             rates: vec![
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336 },
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 96_000, period_floor: 96, buffer_min: 672 },
-                totalcontrol_core::fireface::hwdep::RateEnv { rate: 192_000, period_floor: 192, buffer_min: 1344 },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, ..Default::default() },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 96_000, period_floor: 96, buffer_min: 672, ..Default::default() },
+                totalcontrol_core::fireface::hwdep::RateEnv { rate: 192_000, period_floor: 192, buffer_min: 1344, ..Default::default() },
             ],
         });
         assert_eq!(safe_default_quantum(&state), 192);
