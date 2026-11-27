@@ -168,7 +168,7 @@ static int ffuc_hwdep_release(struct snd_hwdep *hwdep, struct file *file)
 		unsigned long flags;
 
 		ffuc_transport_stop(chip);
-		if (chip->model == FFUC_MODEL_UC) {
+		if (chip->caps & FF_CAP_METER_PAIR) {
 			/* Unread events are stale for the next reader. */
 			spin_lock_irqsave(&chip->event_lock, flags);
 			kfifo_reset(&chip->event_fifo);
@@ -498,7 +498,7 @@ static void ffuc_meter_complete(struct urb *urb)
 
 	atomic_inc(&chip->meter_urbs);
 	if (urb->status == 0 && chip->desc &&
-	    (chip->model == FFUC_MODEL_UC) &&
+	    (chip->caps & FF_CAP_METER_PAIR) &&
 	    urb->actual_length == chip->desc->meter_len &&
 	    2 * chip->desc->meter_len <= FFUC_EVENT_MAX) {
 		unsigned int len = chip->desc->meter_len;
@@ -526,7 +526,7 @@ static void ffuc_meter_complete(struct urb *urb)
 			break;
 		}
 	} else if (urb->status == 0 && urb->actual_length >= 4 &&
-		   chip->model != FFUC_MODEL_UC) {
+		   !(chip->caps & FF_CAP_METER_PAIR)) {
 		/* Self-describing packet devices (UCX, Babyface) pass each
 		 * packet through unchanged. */
 		ffuc_event_put(chip, FFUC_EV_METER, urb->transfer_buffer,
@@ -713,7 +713,7 @@ int ffuc_transport_start(struct ffuc *chip)
 	if (chip->state_active)
 		return 0;
 	chip->state_active = true;
-	if (chip->model == FFUC_MODEL_UC) {
+	if (chip->caps & FF_CAP_METER_PAIR) {
 		chip->meter_pair_len = 0;
 		WRITE_ONCE(chip->meter_paused, false);
 	}
@@ -722,7 +722,7 @@ int ffuc_transport_start(struct ffuc *chip)
 	 * Keep the meter URB running for both models; PCM capture remains
 	 * owned by the ALSA/PipeWire stream.
 	 */
-	if (!chip->ucx) {
+	if (chip->caps & FF_CAP_METER_PAIR) {
 		ret = ffuc_meter_submit(chip);
 		if (ret < 0 && ret != -EALREADY)
 			dev_dbg(&chip->dev->dev, "UC meter URB submit: %d\n", ret);
@@ -754,7 +754,7 @@ void ffuc_transport_stop(struct ffuc *chip)
 	 * session.  Consume the partner page and discard the pair.
 	 */
 	if (chip->meter_pair_len && chip->desc &&
-	    (chip->model == FFUC_MODEL_UC) &&
+	    (chip->caps & FF_CAP_METER_PAIR) &&
 	    !READ_ONCE(chip->disconnected)) {
 		u8 buf[FFUC_METER_PAIR_MAX];
 		int actual = 0;

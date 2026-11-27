@@ -195,6 +195,7 @@ unsigned int ffuc_rate_family(unsigned int rate);
 #define FF_CAP_FIXED_URB		BIT(8)	/* fixed URB frames, no band shift */
 #define FF_CAP_LEAD_HORIZON		BIT(9)	/* lead horizon in buffer minimum */
 #define FF_CAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
+#define FF_CAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
 
 struct ffuc;
 
@@ -395,7 +396,6 @@ struct ffuc {
 	const struct ffuc_device_desc *desc;
 	unsigned int model;
 	bool iso;
-	bool ucx;
 	u32 caps;			/* FF_CAP_* transport capabilities */
 	unsigned int audio_iface;
 	unsigned int cur_alt;		/* current streaming alternate setting */
