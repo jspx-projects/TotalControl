@@ -519,6 +519,12 @@ half is the scheduling cushion the host policy holds (§4.1). The device
 lead is a scheduling horizon, not held audio: the device plays largely on
 arrival, so the measured playback path is smaller than `out_lead`.
 
+The GUI's **Latency out** device term A and **Latency in** device term B are
+a separate measured model: A is the playback bus delivery plus output
+converter; B = D - A, where D is the output-5/input-5 device round trip.
+`out_lead` is the scheduling horizon; it is not the display's A. The A/B split
+is the horizon model; D is measured.
+
 The graph quantum and the ALSA period are separate quantities. Under
 interrupt scheduling the host uses `P = Q`. In the timer fallback (not a user
 policy) with a BATCH device the host requests `P = Q/2`; the driver raises the

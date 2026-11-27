@@ -543,33 +543,39 @@ holds the policy pending and applies it with a confirmed re-prepare once the
 nodes exist. The scheduling state is therefore the same on every path — fresh
 start, owner release, reconnect.
 
-The GUI reports output latency, not a measured acoustic round trip:
+The GUI reports **Latency out** (host to analog output) and **Latency in**
+(analog input to host); the host-to-host round trip is their sum.
 
-- **Live:** `output latency = snd_pcm_delay + device lead + converter delay`.
-  `snd_pcm_delay` is the ring occupancy (`appl_ptr − hw_ptr`) plus the
-  in-flight URB queue (`runtime->delay`); the display splits out the in-flight
-  queue so the USB queue is counted once. The host term is labelled `graph` on
-  the PipeWire and JACK paths and `ring` on direct ALSA.
-- **Model estimate:** the graph quantum plus the in-flight queue, the device
-  lead and the converter delay. This is the planning value; it is not combined
-  with a live `snd_pcm_delay`.
+- **Latency out:** `snd_pcm_delay + A(rate)`. `snd_pcm_delay` is the ring
+  occupancy plus the in-flight URB queue; the display splits the live
+  in-flight so the queue is counted once. On UCX ISO and IF5, A uses the UCX
+  DA delay (7 samples); on UC it uses the UC DA delay (28 samples). Both add
+  half of the measured digital remainder. The host term's label follows the
+  authority: `graph` on the PipeWire and JACK paths, `ring` on direct ALSA.
+- **Latency in:** `capture snd_pcm_delay + B(rate)`, with `B = D - A`. B uses
+  the same converter split as A. D is the measured device span after the live
+  host queue. A rate with no D measurement, or no capture stream, shows `—`.
+- **Idle:** while nothing plays, the graph quantum is the host term of
+  Latency out; Latency in is `—`.
 
-The input latency (ADC, input queue and capture ring) is not reported yet; the
-`Input` row shows `—`. The host-to-host round trip is the sum of the two rows
-once the input is measured.
-
-Every buffer is counted once. The host ring and the in-flight queue are
-distinct terms.
-
-The UC PC and AP device sides are loopback-measured at 32, 44.1, 48, 96 and
-192 kHz; the display applies the live queue delta. The UCX and the
-uncalibrated UC rates use the model with the same terms. The engine poll reads
-the PipeWire inputs off the UI task and refreshes the module queue from sysfs.
-The calibration is per personality; a firmware or device-path change needs a
-repeat measurement. The measured device values are tabulated in
-[`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) §13. The
-quantum/period/URB geometry is defined in
-[`spec/DRIVER-DESIGN.md`](spec/DRIVER-DESIGN.md) §4.1.2.
+Every buffer is counted once. The device span D is measured by the
+output-5 to input-5 loopback after the capture start-alignment correction.
+On UC the split uses the UC converters (DA 28; AD 43.2 at 1x/2x, 38.2 at
+4x); on UCX ISO and IF5 it uses the UCX converters (DA 7; AD 14 at 1x/2x,
+11 at 4x). Both split the digital remainder symmetrically. The UC PC 192 kHz
+span uses one endpoint pair's queue. Only D is directly measured; the
+converter half is vendor data and the digital remainder is the model. The
+device values are tabulated in
+[`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) §13. The UC PC table covers 32–192 kHz; the UC AP table covers
+32/44.1/48/88.2/96/176.4/192; the UCX ISO table covers
+32/44.1/48/88.2/96/176.4/192. The UCX IF5 interrupt transport uses the
+measured unit span 74/112/192 frames at 1x/2x/4x, split into A/B 33/41, 52/60
+and 94/98. Its two-URB host queue is counted live by `snd_pcm_delay`, so it is
+not part of the table. The engine poll reads the PipeWire
+inputs off the UI task and refreshes the live playback/capture delays from the
+kernel snapshot. The calibration is per personality and rate; a firmware or
+device-path change needs a repeat measurement. The quantum/period/URB geometry
+is defined in [`spec/DRIVER-DESIGN.md`](spec/DRIVER-DESIGN.md) §4.1.2.
 
 The vendor path and the class-compliant path are mutually exclusive device
 personalities. In class-compliant mode the stock `snd-usb-audio` driver drives

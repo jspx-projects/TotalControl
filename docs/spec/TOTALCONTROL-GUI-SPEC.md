@@ -2216,40 +2216,111 @@ applied to the running device as they change.
 
 ## 13. Latency display
 
-The Audio Configuration panel has an `Input` row and an `Output` field. The
-`Input` row shows `—` until the capture chain is measured. The `Output` field
-carries the tooltip "Output latency (host to analog output)". It is a fixed
-block in the value column, aligned with the pickers: the caption column
-carries the `Output` label, the first line carries the total (`x.x ms`, one
-decimal, secondary grey), and the formula (host term, USB queue, device lead,
-converter, in milliseconds) wraps below. The `Input` row follows with `—` until the capture chain is measured.
-The formula and the terms are in the manual §14. The output field is shown on
-every path: the host term is the live stream queue split into ring fill and
-in-flight queue, or the graph quantum while idle. The device terms are the
-same, so the value includes the device lead and converters that the DAW's own
-display may omit. The host term's label follows the authority: `graph` on the
-PipeWire and JACK paths, `ring` on the direct-ALSA path. The quantum picker
-sets the graph period.
+The Audio Configuration panel has a `Latency in` row and a `Latency out`
+field. `Latency out` carries the tooltip "Latency out (host to analog
+output)"; `Latency in` carries "Latency in (analog input to host)". Both are
+fixed blocks in the value column, aligned with the pickers: the caption
+column carries the label, the first line the total (`x.x ms`, one decimal,
+secondary grey), and the contributions in milliseconds below. The formulas
+and terms are in the manual §14.
 
-The output value is the host-to-analog-output latency: host term + USB queue +
-device lead + converter delay. The live host term is `snd_pcm_delay` minus the
-in-flight queue; the device terms are the measured or model terms. The UC
-device side is loopback-measured per personality at five rates; the display
-applies a live queue delta. The measured device values (frames, at the
-calibration queue) are:
+`Latency out` is shown on every path:
 
-| Rate | UC PC device | queue | UC AP device | queue |
-|---|---|---|---|---|
-| 32 kHz | 215 | 144 | 155 | 96 |
-| 44.1 kHz | 215 | 144 | 179 | 144 |
-| 48 kHz | 215 | 144 | 187 | 144 |
-| 96 kHz | 351 | 288 | 295 | 288 |
-| 192 kHz | 617 | 576 | 505 | 576 |
+```text
+Latency out = snd_pcm_delay + A(rate)
+```
 
-Rates outside the measured set and the UCX use the model (the same terms).
-The calibration is per personality; a firmware or device-path change needs a
-repeat measurement. The PC measurement is a full-duplex electrical loopback
-(output 5 to input 5), not an acoustic one.
+`snd_pcm_delay` is the live playback ring plus the in-flight URBs; A is the
+device output path. On UCX ISO and IF5 it is the vendor DA delay (7 samples)
+plus half of the measured digital remainder. On UC it is the horizon model:
+bus delivery plus output converter. The live host term is split into ring fill
+and in-flight queue, so the queue is counted once. The host term's label
+follows the authority: `graph` on the PipeWire and JACK paths, `ring` on
+direct ALSA. While idle, the graph quantum is the host term.
+
+`Latency in` is shown when a capture stream exists and the rate has a
+measured device span:
+
+```text
+Latency in = capture snd_pcm_delay + B(rate)
+B(rate)    = D(rate) - A(rate)
+```
+
+D is the device span measured by the output-5 to input-5 loopback, after the
+capture start-alignment correction. On every measured personality, D is
+stored after the live host queue is removed, because the queue is already in
+the live playback and capture delays. The UCX ISO and IF5 split uses the UCX
+converters: DA is 7 samples; AD is 14 at 1x/2x and 11 at 4x. The UC split uses
+the UC converters: DA is 28 samples; AD is 43.2 at 1x/2x and 38.2 at 4x. The
+digital remainder is split symmetrically. Only D is directly measured; the
+converter half is vendor data and the digital remainder is the model. A rate
+without a D measurement shows `—` for `Latency in`; `Latency out` falls back
+to the horizon A.
+
+| Rate | UCX ISO A | UCX ISO B | UCX ISO D |
+|---|---:|---:|---:|
+| 32 kHz | 43 | 51 | 94 |
+| 44.1 kHz | 53 | 61 | 114 |
+| 48 kHz | 56 | 64 | 120 |
+| 64 kHz | 75 | 82 | 157 |
+| 88.2 kHz | 94 | 102 | 196 |
+| 96 kHz | 101 | 108 | 209 |
+| 128 kHz | 111 | 115 | 226 |
+| 176.4 kHz | 114 | 119 | 233 |
+| 192 kHz | 127 | 132 | 259 |
+
+The 128 kHz D is interpolated between 96 and 192 kHz; its direct reading
+was one URB high.
+
+| Rate | UC PC A | UC PC B | UC PC D |
+|---|---:|---:|---:|
+| 32 kHz | 52 | 67 | 119 |
+| 44.1 kHz | 52 | 67 | 119 |
+| 48 kHz | 52 | 67 | 119 |
+| 64 kHz | 72 | 87 | 159 |
+| 88.2 kHz | 72 | 87 | 159 |
+| 96 kHz | 72 | 87 | 159 |
+| 128 kHz | 111 | 122 | 233 |
+| 176.4 kHz | 111 | 122 | 233 |
+| 192 kHz | 111 | 122 | 233 |
+
+| Rate | UC AP A | UC AP B | UC AP D |
+|---|---:|---:|---:|
+| 32 kHz | 64 | 79 | 143 |
+| 44.1 kHz | 73 | 88 | 161 |
+| 48 kHz | 77 | 92 | 169 |
+| 88.2 kHz | 83 | 99 | 182 |
+| 96 kHz | 90 | 105 | 195 |
+| 176.4 kHz | 134 | 145 | 279 |
+| 192 kHz | 147 | 158 | 305 |
+
+The UC PC 192 kHz D uses one endpoint pair's queue; the reported backlog uses
+the pair that is behind. The UC PC table covers 32–192 kHz; the UC AP table
+covers 32/44.1/48/88.2/96/176.4/192. Other rates show `—` for `Latency in`
+and the horizon A for `Latency out`.
+
+The queue split uses the live playback fill from the driver `SNAPSHOT`: the
+USB term is `snd_pcm_delay - ring fill`. The split changes only the labels;
+the total is `snd_pcm_delay + A`. The capture host term is the live capture
+`snd_pcm_delay`; the device-in term is B. The values are frames.
+
+The UCX **IF5** (interrupt) transport has its own device span. Its short URB
+keeps the host queue small, and the live `snd_pcm_delay` counts it. D is the
+unit span alone; A and B use the same vendor converter split.
+
+| Rates | IF5 A | IF5 B | IF5 D |
+|---|---:|---:|---:|
+| 32, 44.1, 48 kHz | 33 | 41 | 74 |
+| 64, 88.2, 96 kHz | 52 | 60 | 112 |
+| 128, 176.4, 192 kHz | 94 | 98 | 192 |
+
+The calibration is per personality and rate. A firmware or device-path change
+needs a repeat measurement. The UC PC values cover 32–192 kHz; the UC AP
+values cover 32/44.1/48/88.2/96/176.4/192. The UCX ISO values cover
+32/44.1/48/88.2/96/176.4/192. The UC split uses the UC converter delays; the
+UCX ISO/IF5 split uses the UCX converter delays. Both use a symmetric digital
+remainder. The loopback is an electrical output-5 to
+input-5 connection, not an acoustic one.
 
 Below it, **Diagnostics** lists the kernel transport error counters in
 three sections by reset behaviour (§4): **Scheduling** (`underrun /
