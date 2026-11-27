@@ -2231,11 +2231,12 @@ Latency out = snd_pcm_delay + A(rate)
 ```
 
 `snd_pcm_delay` is the live playback ring plus the in-flight URBs; A is the
-device output path: bus delivery plus output converter on UCX ISO and UC, and
-the symmetric output half of the unit span on UCX IF5. The live host term is
-split into ring fill and in-flight queue, so the queue is counted once. The
-host term's label follows the authority: `graph` on the PipeWire and JACK
-paths, `ring` on direct ALSA. While idle, the graph quantum is the host term.
+device output path. On UCX ISO and IF5 it is the vendor DA delay (7 samples)
+plus half of the measured digital remainder. On UC it is the horizon model:
+bus delivery plus output converter. The live host term is split into ring fill
+and in-flight queue, so the queue is counted once. The host term's label
+follows the authority: `graph` on the PipeWire and JACK paths, `ring` on
+direct ALSA. While idle, the graph quantum is the host term.
 
 `Latency in` is shown when a capture stream exists and the rate has a
 measured device span:
@@ -2245,27 +2246,40 @@ Latency in = capture snd_pcm_delay + B(rate)
 B(rate)    = D(rate) - A(rate)
 ```
 
-D is the device round trip measured by the output-5 to input-5 loopback,
-after the capture start-alignment correction. On UCX ISO and UC, D is the
-ring-to-ring result. On UCX IF5, D is the unit span after the live host queue
-is subtracted, because the queue is already in the live playback and capture
-delays. The split is the horizon model on ISO and UC: A is the playback bus
-plus output converter, B is the ADC plus capture delivery. The split is the
-symmetric unit half on IF5. Only D is directly measured; the split is the
-model. A rate without a D measurement shows `—` for `Latency in`;
-`Latency out` still uses the A model.
+D is the device span measured by the output-5 to input-5 loopback, after the
+capture start-alignment correction. On UCX ISO and IF5, D is stored after the
+live host queue is removed, because the queue is already in the live playback
+and capture delays. On UC, D is the ring-to-ring result. The UCX ISO and IF5
+split uses the vendor converters: DA is 7 samples; AD is 14 at 1x/2x and 11
+at 4x. The digital remainder is split symmetrically. The UC split is the
+horizon model: A is the playback bus plus output converter, B is the ADC plus
+capture delivery. Only D is directly measured; the converter half is vendor
+data and the digital remainder is the model. A rate without a D measurement
+shows `—` for `Latency in`; `Latency out` still uses the A model.
 
-| Rate | A | UCX ISO D / B | UC PC D / B | UC AP D / B |
-|---|---|---|---|---|
-| 32 kHz | 63 | 158 / 95 | 215 / 152 | 155 / 92 |
-| 44.1 kHz | 82 | 201 / 119 | 215 / 133 | 179 / 97 |
-| 48 kHz | 88 | 216 / 128 | 215 / 127 | 187 / 99 |
-| 64 kHz | 113 | — | — | — |
-| 88.2 kHz | 151 | 373 / 222 | — | — |
-| 96 kHz | 163 | 401 / 238 | 351 / 188 | 295 / 132 |
-| 128 kHz | 213 | — | — | — |
-| 176.4 kHz | 288 | 586 / 298 | — | — |
-| 192 kHz | 312 | 643 / 331 | 617 / 305 | 505 / 193 |
+| Rate | UCX ISO A | UCX ISO B | UCX ISO D |
+|---|---:|---:|---:|
+| 32 kHz | 43 | 51 | 94 |
+| 44.1 kHz | 49 | 57 | 106 |
+| 48 kHz | 56 | 64 | 120 |
+| 64 kHz | — | — | — |
+| 88.2 kHz | 83 | 90 | 173 |
+| 96 kHz | 101 | 108 | 209 |
+| 128 kHz | — | — | — |
+| 176.4 kHz | 107 | 111 | 218 |
+| 192 kHz | 127 | 132 | 259 |
+
+| Rate | UC A | UC PC D / B | UC AP D / B |
+|---|---:|---|---|
+| 32 kHz | 63 | 215 / 152 | 155 / 92 |
+| 44.1 kHz | 82 | 215 / 133 | 179 / 97 |
+| 48 kHz | 88 | 215 / 127 | 187 / 99 |
+| 64 kHz | 113 | — | — |
+| 88.2 kHz | 151 | — | — |
+| 96 kHz | 163 | 351 / 188 | 295 / 132 |
+| 128 kHz | 213 | — | — |
+| 176.4 kHz | 288 | — | — |
+| 192 kHz | 312 | 617 / 305 | 505 / 193 |
 
 The queue split uses the live playback fill from the driver `SNAPSHOT`: the
 USB term is `snd_pcm_delay - ring fill`. The split changes only the labels;
@@ -2274,19 +2288,20 @@ the total is `snd_pcm_delay + A`. The capture host term is the live capture
 
 The UCX **IF5** (interrupt) transport has its own device span. Its short URB
 keeps the host queue small, and the live `snd_pcm_delay` counts it. D is the
-unit span alone; A and B are its two halves.
+unit span alone; A and B use the same vendor converter split.
 
 | Rates | IF5 A | IF5 B | IF5 D |
-|---|---|---|---|
-| 32, 44.1, 48 kHz | 37 | 37 | 74 |
-| 64, 88.2, 96 kHz | 56 | 56 | 112 |
-| 128, 176.4, 192 kHz | 96 | 96 | 192 |
+|---|---:|---:|---:|
+| 32, 44.1, 48 kHz | 33 | 41 | 74 |
+| 64, 88.2, 96 kHz | 52 | 60 | 112 |
+| 128, 176.4, 192 kHz | 94 | 98 | 192 |
 
 The calibration is per personality and rate. A firmware or device-path change
 needs a repeat measurement. The UC PC/AP D values are the five loopback rates;
-the UCX D values are 32/44.1/48/88.2/96/176.4/192. The A/B table is the
-horizon split, not an independent measurement of each half. The loopback is
-an electrical output-5 to input-5 connection, not an acoustic one.
+the UCX ISO D values are 32/44.1/48/88.2/96/176.4/192. The UC split is the
+horizon model; the UCX ISO/IF5 split uses the vendor converter delays and a
+symmetric digital remainder. The loopback is an electrical output-5 to input-5
+connection, not an acoustic one.
 
 Below it, **Diagnostics** lists the kernel transport error counters in
 three sections by reset behaviour (§4): **Scheduling** (`underrun /

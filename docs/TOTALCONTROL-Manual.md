@@ -1552,44 +1552,59 @@ direct ALSA.
 
 A and B are the two halves of the measured device span D: `D = A + B`.
 D is measured by the output-5 to input-5 loopback after the capture
-start-alignment correction. On the ISO and UC transports the split is the
-horizon model. On the UCX IF5 transport the split is the symmetric half of
-the unit span; the live host queue is already in `snd_pcm_delay`.
+start-alignment correction. On UCX ISO and IF5 the split uses the vendor
+converters: DA is 7 samples; AD is 14 at 1x/2x and 11 at 4x. The digital
+remainder is split symmetrically. On UC the split is the horizon model. The
+live host queue is already in `snd_pcm_delay`.
 
 On UCX ISO at 48 kHz with a 128-frame live host term:
 
 ```text
-Latency out = 128 + 75 + 13 = 216 frames = 4.5 ms
-Latency in  =  96 + 128     = 224 frames = 4.7 ms
+Latency out = 128 + 49 + 7 = 184 frames = 3.8 ms
+Latency in  =  96 + 64     = 160 frames = 3.3 ms
 ```
 
-The device values (frames):
+UCX ISO device values (frames):
 
-| Rate | A | UCX ISO B | UC PC B | UC AP B |
-|---|---|---|---|---|
-| 32 kHz | 63 | 95 | 152 | 92 |
-| 44.1 kHz | 82 | 119 | 133 | 97 |
-| 48 kHz | 88 | 128 | 127 | 99 |
-| 64 kHz | 113 | — | — | — |
-| 88.2 kHz | 151 | 222 | — | — |
-| 96 kHz | 163 | 238 | 188 | 132 |
-| 128 kHz | 213 | — | — | — |
-| 176.4 kHz | 288 | 298 | — | — |
-| 192 kHz | 312 | 331 | 305 | 193 |
+| Rate | A | B | D |
+|---|---:|---:|---:|
+| 32 kHz | 43 | 51 | 94 |
+| 44.1 kHz | 49 | 57 | 106 |
+| 48 kHz | 56 | 64 | 120 |
+| 64 kHz | — | — | — |
+| 88.2 kHz | 83 | 90 | 173 |
+| 96 kHz | 101 | 108 | 209 |
+| 128 kHz | — | — | — |
+| 176.4 kHz | 107 | 111 | 218 |
+| 192 kHz | 127 | 132 | 259 |
+
+UC device values (frames):
+
+| Rate | A | UC PC B | UC AP B |
+|---|---:|---:|---:|
+| 32 kHz | 63 | 152 | 92 |
+| 44.1 kHz | 82 | 133 | 97 |
+| 48 kHz | 88 | 127 | 99 |
+| 64 kHz | 113 | — | — |
+| 88.2 kHz | 151 | — | — |
+| 96 kHz | 163 | 188 | 132 |
+| 128 kHz | 213 | — | — |
+| 176.4 kHz | 288 | — | — |
+| 192 kHz | 312 | 305 | 193 |
 
 The UCX IF5 interrupt transport has its own values (frames):
 
 | Rates | A | B | D |
-|---|---|---|---|
-| 32, 44.1, 48 kHz | 37 | 37 | 74 |
-| 64, 88.2, 96 kHz | 56 | 56 | 112 |
-| 128, 176.4, 192 kHz | 96 | 96 | 192 |
+|---|---:|---:|---:|
+| 32, 44.1, 48 kHz | 33 | 41 | 74 |
+| 64, 88.2, 96 kHz | 52 | 60 | 112 |
+| 128, 176.4, 192 kHz | 94 | 98 | 192 |
 
 `Latency out` uses A at every rate. `Latency in` needs a measured D for the
 rate; where there is none it shows `—`. The UCX **IF5** interrupt transport has
-its own values; the ISO table does not apply to it. The fixed 60-frame device
-lead is replaced by the per-rate A. The device span D is measured; the A/B
-split is the model. A firmware or device-path change needs a new measurement.
+its own values; the ISO table does not apply to it. The UC split is the horizon
+model; the UCX ISO/IF5 split uses the vendor converter delays and a symmetric
+digital remainder. A firmware or device-path change needs a new measurement.
 
 The values are measured with the interface's own output-5 to input-5 loopback,
 not an acoustic path. Treat the result as the host-side latency budget; an
