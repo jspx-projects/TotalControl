@@ -262,8 +262,8 @@ static int ff_hwdep_vendor(struct ff *chip,
 		 * into a folded capture cadence and transport errors, so the
 		 * active family's word clamps to the ceiling. The other
 		 * families store their pitch for later rates and pass
-		 * untouched; the rate sequence writes nominal words, which
-		 * are always in envelope. */
+		 * untouched; the rate sequence re-clamps the stored word to
+		 * the target band before it re-sends it. */
 		if (v.request == FF_REQ_DDS && chip->iso && chip->rate &&
 		    chip->mode &&
 		    (v.index & 0x03) == ff_rate_family(chip->rate)) {
@@ -442,8 +442,10 @@ static int ff_hwdep_diagnostics(struct ff *chip,
 	c.meter_realigns = chip->meter_realigns;
 	c.in_total = chip->in_total;
 	c.pitch_clamps = atomic_read(&chip->pitch_clamps);
-	c.rate_skips = atomic_read(&chip->rate_skips);
-	c.rate_writes = atomic_read(&chip->rate_writes);
+	c.dds_words = atomic_read(&chip->dds_words);
+	c.family_writes = atomic_read(&chip->family_writes);
+	c.rate_commits = atomic_read(&chip->rate_commits);
+	c.option_writes = atomic_read(&chip->option_writes);
 	if (copy_to_user(arg, &c, sizeof(c)))
 		return -EFAULT;
 	return 0;

@@ -199,7 +199,6 @@ unsigned int ff_rate_family(unsigned int rate);
 #define FF_TCAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
 #define FF_TCAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
 #define FF_TCAP_FLASH_GUARD		BIT(12)	/* refuse flash vendor requests/words */
-#define FF_TCAP_RATE_READBACK		BIT(13)	/* state word carries the rate index */
 
 struct ff;
 
@@ -426,6 +425,14 @@ struct ff {
 	 * compares the measured clock against this, so a legitimate varispeed
 	 * offset is not a rate mismatch. */
 	unsigned int clock_rate;
+	/* The last successfully written DDS word per base-rate family, packed
+	 * as (wValue << 16) | wIndex.  The host owns varispeed through these
+	 * words; every start re-sends the current word so a pitched clock
+	 * survives an engine restart.  The valid bitmap is set after the word,
+	 * so a reader that sees the bit sees the matching word.  All entries
+	 * are cleared at probe and recomputed nominally when absent. */
+	u32 dds_word[4];
+	unsigned long dds_valid;
 	const struct ff_mode *mode;
 	unsigned int urb_frames;
 	unsigned int base_urb_frames;
@@ -584,8 +591,10 @@ struct ff {
 	atomic_t out_resync;
 	atomic_t rate_mismatch;   /* cadence disagrees with chip->rate */
 	atomic_t pitch_clamps;
-	atomic_t rate_skips;		/* rate commits skipped because current */
-	atomic_t rate_writes;		/* rate commits written */    /* DDS writes clamped to the pitch envelope */
+	atomic_t dds_words;       /* successful DDS 0x1b writes */
+	atomic_t family_writes;   /* successful family 0x10/0x30 writes */
+	atomic_t rate_commits;    /* engine/idle rate commits */
+	atomic_t option_writes;   /* successful options 0x10/0x5cf writes */
 	atomic_t in_frames_overflow; /* packet frames above the top bin */
 	atomic_t pcm_prepare_err;
 	atomic_t pcm_trigger_err;

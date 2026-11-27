@@ -134,7 +134,8 @@ static void cmd_counters(void)
 	P(out_prefills); P(out_prefill_timeouts);
 	P(meter_paused); P(meter_pairs); P(meter_realigns);
 	printf("in_total=%llu\n", (unsigned long long)c.in_total);
-	P(pitch_clamps); P(rate_skips); P(rate_writes);
+	P(pitch_clamps); P(dds_words); P(family_writes); P(rate_commits);
+	P(option_writes);
 #undef P
 	close(fd);
 }

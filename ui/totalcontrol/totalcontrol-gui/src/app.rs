@@ -5778,11 +5778,13 @@ fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &st
 /// scene carries the confirmed card rate so it never writes a stale rate back
 /// to the unit. Idempotent: a pending reapply is only upgraded, not duplicated.
 fn arm_engine_run_reapply(state: &mut TotalControl) {
-    // The engine start commits the nominal rate to the device, wiping the
-    // pitched clock. Re-assert the saved pitch through the gated reconcile
-    // so every restart re-establishes the programmed clock — the fresh-start
-    // precondition on the restart path. The reconcile guards capability,
-    // mode and clock source itself, as on every other pitch path.
+    // The driver re-sends the family's stored DDS word at engine start, so
+    // a pitched clock normally survives a restart. Re-assert the saved pitch
+    // through the gated reconcile anyway: after a module reload or an
+    // external clock change the stored word can be nominal, and a restart
+    // must re-establish the programmed clock — the fresh-start precondition
+    // on the restart path. The reconcile guards capability, mode and clock
+    // source itself, as on every other pitch path.
     state.pitch_clock_dirty = true;
     if state.device.is_mock() || !state.device.rate_follows_sound_server() {
         return;

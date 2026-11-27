@@ -268,8 +268,12 @@ int ff_vendor_send(struct ff *chip, u8 req, u16 val, u16 idx,
 				   USB_RECIP_DEVICE, val, idx,
 				   (void *)data, len, FF_CTL_TIMEOUT,
 				   GFP_KERNEL);
-	if (ret >= 0 && req == FF_REQ_DDS)
-		ff_track_clock(chip, val, idx);
+	if (ret >= 0) {
+		if (req == FF_REQ_DDS)
+			ff_track_clock(chip, val, idx);
+		else if (req == FF_REQ_SETTINGS && idx == FF_OPTIONS_MASK)
+			atomic_inc(&chip->option_writes);
+	}
 	return ret;
 }
 
@@ -455,9 +459,19 @@ unsigned int ff_rate_family(unsigned int rate)
  * current clock; the other three families are stored for later rates. */
 static void ff_track_clock(struct ff *chip, u16 val, u16 idx)
 {
+	unsigned int fam = idx & 0x03;
+
+	/* The ISO path remembers the host's word for this family; a start
+	 * re-sends it, so varispeed survives an engine restart.  The packed
+	 * word is stored before the valid bit is set.  The interrupt path
+	 * keeps the Windows rate sequence and does not use this store. */
+	if (chip->iso) {
+		WRITE_ONCE(chip->dds_word[fam], ((u32)val << 16) | idx);
+		set_bit(fam, &chip->dds_valid);
+	}
 	if (!chip->rate)
 		return;
-	if ((idx & 0x03) != ff_rate_family(chip->rate))
+	if (fam != ff_rate_family(chip->rate))
 		return;
 	WRITE_ONCE(chip->clock_rate, ff_dds_clock(val, idx, chip->rate));
 }
@@ -468,29 +482,65 @@ static int ff_set_rate_family(struct ff *chip, unsigned int rate)
 				ff_rate_family(rate) << 4, 0x0030, NULL, 0);
 }
 
-/* The rate sequence is one generic flow for every model and transport:
- * the DDS divisor word, the family select, then the options commit.
- * The DDS word carries base/rate with the 2x/4x shift; the family word
- * selects the base-rate family at index 0x30.  The commit applies the
- * change and rewrites the options word the device already holds, so the
- * mixer's settings (clock source, word clock, SPDIF and optical output
- * format) survive the rate change. */
-/* The state word (request 0x11 IN) carries the device rate index in bits
- * 24-31 (UCX spec §11.7).  It is available on the ISO and interrupt paths,
- * unlike the 0x19 rate-status word which is an interrupt-path word. */
-static int ff_device_rate_current(struct ff *chip, unsigned int rate)
+/* The rate sequence has one form per transport.
+ *
+ * ISO follows the USB audio engine's hwSetSampleRate: one DDS divisor word
+ * for the target base family, then the family selector at 0x10/0x30.  Both
+ * words are written on every start, change and resume.  The DDS word is the
+ * actual clock; the family selector only chooses which stored divisor is
+ * active.  The options word is not part of the sequence: settings writes own
+ * it.  The host owns varispeed; the start re-sends the family's last written
+ * word, so a pitched clock survives a restart.  An absent family falls back
+ * to its nominal divisor.
+ *
+ * Interrupt keeps the Windows-derived sequence: the nominal DDS word, the
+ * family selector, then the options commit.  The kext analysis does not
+ * change this path; it needs the Windows binary or a VM capture. */
+static int ff_set_rate_iso(struct ff *chip, unsigned int rate)
 {
-	__le32 word;
-	unsigned int idx;
-	int ret = ff_vendor_recv(chip, FF_REQ_STATUS, 0, 0, &word, sizeof(word));
+	unsigned int fam = ff_rate_family(rate);
+	u16 val, idx;
+	u32 dds;
+	int ret;
 
+	if (test_bit(fam, &chip->dds_valid)) {
+		u32 word = READ_ONCE(chip->dds_word[fam]);
+		u32 v = word >> 16, i = word & 0xffff;
+
+		/* The host wrote this word at some band.  The target band's
+		 * packet capacity is the hard ceiling, so clamp the reused
+		 * word before it reaches the device. */
+		if (ff_dds_clamp(v, i, rate,
+				   chip->modes[ff_mode_index(rate)].max_frames,
+				   &v, &i))
+			atomic_inc(&chip->pitch_clamps);
+		val = v;
+		idx = i;
+	} else {
+		dds = (u32)div_u64(0x5f5e10000000ULL, rate);
+		if (rate > 114000)
+			dds <<= 2;
+		else if (rate > 57000)
+			dds <<= 1;
+		val = dds >> 16;
+		idx = (dds & 0xff00) | fam;
+	}
+
+	ret = ff_vendor_send(chip, FF_REQ_DDS, val, idx, NULL, 0);
 	if (ret < 0)
 		return ret;
-	idx = (le32_to_cpu(word) >> 24) & 0xff;
-	return ff_rate_from_index(idx) == rate;
+	atomic_inc(&chip->dds_words);
+	ret = ff_set_rate_family(chip, rate);
+	if (ret < 0)
+		return ret;
+	atomic_inc(&chip->family_writes);
+	dev_dbg(&chip->dev->dev,
+		"rate %u Hz (iso): dds 0x%04x/0x%04x family 0x%02x ret=%d\n",
+		rate, val, idx, fam << 4, ret);
+	return 0;
 }
 
-static int ff_set_rate(struct ff *chip, unsigned int rate)
+static int ff_set_rate_int(struct ff *chip, unsigned int rate)
 {
 	__le32 cur;
 	u16 opts;
@@ -508,9 +558,11 @@ static int ff_set_rate(struct ff *chip, unsigned int rate)
 			       NULL, 0);
 	if (ret < 0)
 		return ret;
+	atomic_inc(&chip->dds_words);
 	ret = ff_set_rate_family(chip, rate);
 	if (ret < 0)
 		return ret;
+	atomic_inc(&chip->family_writes);
 	ret = ff_vendor_recv(chip, FF_REQ_SETTINGS, 0, 0, &cur,
 			       sizeof(cur));
 	if (ret < 0)
@@ -519,10 +571,34 @@ static int ff_set_rate(struct ff *chip, unsigned int rate)
 	ret = ff_vendor_send(chip, FF_REQ_SETTINGS, opts,
 			       FF_OPTIONS_MASK, NULL, 0);
 	dev_dbg(&chip->dev->dev,
-		"rate %u Hz: dds 0x%04x/0x%04x family 0x%02x commit 0x%04x ret=%d\n",
+		"rate %u Hz (int): dds 0x%04x/0x%04x family 0x%02x commit 0x%04x ret=%d\n",
 		rate, dds >> 16, (dds & 0xff00) | ff_rate_family(rate),
 		ff_rate_family(rate) << 4, opts, ret);
 	return ret;
+}
+
+/* The UCX interrupt rate change mirrors the Windows capture: it writes the
+ * family selector only.  The four-word DDS quad is written at connect
+ * (ff_ucx_if5_init) and by the host on a settings apply.  The DDS words are
+ * not rewritten on a rate change. */
+static int ff_set_rate_int_ucx(struct ff *chip, unsigned int rate)
+{
+	int ret;
+
+	ret = ff_set_rate_family(chip, rate);
+	if (ret < 0)
+		return ret;
+	atomic_inc(&chip->family_writes);
+	dev_dbg(&chip->dev->dev,
+		"rate %u Hz (int ucx): family 0x%02x ret=%d\n",
+		rate, ff_rate_family(rate) << 4, ret);
+	return 0;
+}
+
+static int ff_set_rate(struct ff *chip, unsigned int rate)
+{
+	return chip->iso ? ff_set_rate_iso(chip, rate) :
+			   ff_set_rate_int(chip, rate);
 }
 
 static int ff_uc_hw_mute(struct ff *chip, bool mute)
@@ -661,8 +737,8 @@ static const struct ff_ops ff_ucx_ops = {
  * (E2b replug, win-20261027-ucx-transport): the 60-slot channel init,
  * the DDS/clock quad, the gain-ref word and the settings group.  The
  * quad is written once at connect; a rate change writes the family word
- * alone.  The settings group carries a ~100 ms settle between the
- * 0x3000 writes, measured in the capture. */
+ * only.  The settings group carries a ~100 ms settle between the 0x3000
+ * writes, measured in the capture. */
 static int ff_ucx_if5_init(struct ff *chip)
 {
 	static const u16 dds[4][2] = {
@@ -718,7 +794,7 @@ static int ff_ucx_if5_init(struct ff *chip)
 
 static const struct ff_ops ff_ucx_if5_ops = {
 	.init = ff_ucx_if5_init,
-	.set_rate = ff_set_rate,
+	.set_rate = ff_set_rate_int_ucx,
 	.stream_start = ff_ucx_stream_start,
 	.stream_stop = ff_ucx_stream_stop,
 	.hw_mute = ff_ucx_hw_mute,
@@ -2842,10 +2918,12 @@ static void ff_iso_setup_urbs(struct ff *chip)
 	chip->ts_seed_counter = 0;
 	chip->ts_frac_q32 = 0;
 	chip->ts_tps_q32 = div64_u64(60000000ull << 32, chip->rate);
-	/* Per-run diagnostics: a stop line describes this stream only. */
+	/* Per-run diagnostics: a stop line describes this stream only.  The
+	 * rate commit above already sent the DDS word, and ff_track_clock
+	 * derived the programmed clock from it; do not overwrite a pitched
+	 * reference with the nominal rate here. */
 	memset(chip->iso_frames_hist, 0, sizeof(chip->iso_frames_hist));
 	ff_cadence_reset(&chip->cad);
-	chip->clock_rate = chip->rate;
 	atomic_set(&chip->in_hdr_only, 0);
 	atomic_set(&chip->in_short, 0);
 	atomic_set(&chip->in_misaligned, 0);
@@ -3013,30 +3091,19 @@ static int ff_engine_commit_rate(struct ff *chip)
 	/* Commit the rate on every start.  The device keeps its own rate
 	 * across personality switches and prior sessions, and the init
 	 * sequence does not set it, so a cached value cannot be trusted.
-	 * This point is reached only with nothing running, so the commit
+	 * The state word and 0x19 word report the selected family/band, not
+	 * the actual DDS clock; only the DDS word moves the clock.  The
+	 * sequence therefore writes the DDS and the family selector on every
+	 * start.  The ISO form leaves the options word to the settings path;
+	 * the interrupt form keeps the Windows options commit.  This point is
+	 * reached only with nothing running, so the commit
 	 * cannot glitch a live stream.  On a Windows-session unit the close
 	 * word needs the Windows gap before the rate write (A2: 220 ms);
 	 * writing right after the close wedges the unit.  The settle above
 	 * already separated the close from this start. */
-	/* A reference driver reports that a REG1 write can make the unit
-	 * reload its stored setup.  A controlled full-dump test on the UCX
-	 * ISO path, with the state session held open by the 0x3f00 heartbeat,
-	 * did not reproduce it: a current-rate family write and a real
-	 * 48->44.1 change left the input gain unchanged; only the stop mute,
-	 * rate index and status word moved.  The skip still avoids the three
-	 * rate-commit control writes on a same-rate start and preserves the
-	 * DDS/pitch word.  The alt selection above still ran. */
-	if ((chip->caps & FF_TCAP_RATE_READBACK) &&
-	    ff_device_rate_current(chip, chip->rate) == 1) {
-		atomic_inc(&chip->rate_skips);
-		dev_dbg(&chip->dev->dev,
-			"rate commit: %u Hz already current; sequence skipped\n",
-			chip->rate);
-		return 0;
-	}
 	if ((chip->desc->quirks & FF_QUIRK_WIN_SESSION) && chip->uc_session)
 		msleep(200);
-	atomic_inc(&chip->rate_writes);
+	atomic_inc(&chip->rate_commits);
 	ret = chip->desc->ops->set_rate(chip, chip->rate);
 	dev_dbg(&chip->dev->dev,
 		"rate commit: %u Hz alt %u cur_alt %u ret=%d\n",
@@ -4024,14 +4091,14 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 		break;
 	case FF_PRODUCT_ID_D:
 		caps |= FF_TCAP_FLASH_GUARD |
-			FF_TCAP_RATE_READBACK |
 			FF_TCAP_MUTE_ON_STOP |
 			FF_TCAP_FRAME_LEAD |
 			FF_TCAP_STATUS_RUNNING_ONLY |
 			FF_TCAP_LEAD_HORIZON |
-			FF_TCAP_KILL_BOTH;
+			FF_TCAP_KILL_BOTH |
+			FF_TCAP_IF5_SELECT;
 		if (d->transport == FF_XPORT_INTERRUPT)
-			caps |= FF_TCAP_FIXED_URB | FF_TCAP_IF5_SELECT;
+			caps |= FF_TCAP_FIXED_URB;
 		break;
 	case FF_PRODUCT_ID_E:
 		caps |= FF_TCAP_FLASH_GUARD |
