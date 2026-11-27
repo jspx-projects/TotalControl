@@ -3202,6 +3202,10 @@ pub struct TotalControl {
     /// a PCM owner (the server-free paths read it from procfs). `None` when no
     /// stream is open or the delay is unreadable.
     pub pcm_delay: Option<u32>,
+    /// Playback ring fill (`appl_ptr - hw_ptr`), frames, live with the delay.
+    pub pcm_fill: Option<u32>,
+    /// Capture `snd_pcm_delay` (ring fill + in-flight), frames.
+    pub pcm_capture_delay: Option<u32>,
     /// Driver transport counters as last read, and the baseline they are
     /// shown relative to (set on connect or by the reset button).
     pub transport_counters: Option<totalcontrol_core::fireface::abi::HwdepCounters>,
@@ -3821,6 +3825,8 @@ pub fn new_with_device(
         allowed_rates_written: None,
         card_stream: None,
         pcm_delay: None,
+        pcm_fill: None,
+        pcm_capture_delay: None,
         transport_counters: None,
         transport_baseline: None,
         transport_perrun_base: None,
@@ -13059,6 +13065,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 if snap.kernel_at.is_some() {
                     state.card_stream = snap.stream;
                     state.pcm_delay = snap.delay;
+                    state.pcm_fill = snap.fill;
+                    state.pcm_capture_delay = snap.capture_delay;
                 }
                 if snap.pw_at.is_some() {
                     state.engine = snap.clock;
@@ -16715,10 +16723,10 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     });
     body = body.push(
         row![
-            caption("Input"),
+            caption("Latency in"),
             strip::hint(
-                readout("\u{2014}".into(), text_size),
-                "Input latency is not measured yet.",
+                latency_in_readout(state, rtl_clock),
+                "Latency in (analog input to host)",
                 scale,
             ),
         ]
@@ -16727,10 +16735,10 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     );
     body = body.push(
         row![
-            caption("Output"),
+            caption("Latency out"),
             strip::hint(
-                latency_readout(state, rtl_clock),
-                "Output latency (host to analog output)",
+                latency_out_readout(state, rtl_clock),
+                "Latency out (host to analog output)",
                 scale,
             ),
         ]
@@ -17077,412 +17085,208 @@ fn rtl_block(
     rtl_field(value, formula, value_color, scale)
 }
 
-/// The latency readout: output latency on every path. While the card plays,
-/// the host term is the live `snd_pcm_delay` split into ring fill and in-flight
-/// queue. The UC in PC mode uses its loopback calibration; the UCX, UC AP mode
-/// and uncalibrated UC rates use the model estimate.
-fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
+/// The Latency out readout. The live host term is the playback
+/// `snd_pcm_delay` split into ring fill and in-flight queue. The device term
+/// is the output half A of the measured device span; A is the bus delivery
+/// plus the output converter. Every buffer is counted once.
+fn latency_out_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let path = detected_path(state);
-    let external = path.is_external();
     let host_label = match path {
         audio_path::AudioPath::External(audio_path::ExternalOwner::Alsa) => "ring",
         _ => "graph",
     };
-    // The host-ring term: the graph quantum on the PipeWire paths (the DAW
-    // runs through the graph), the owner's ALSA period under an external
-    // owner. The device terms (USB queue, lead, converter) are unchanged.
-    let host_ring = |period: u32| {
-        if external {
-            period
-        } else {
-            running_graph_quantum(state)
-        }
-    };
-    let blank3 = || " ".to_string();
+    let rate = state
+        .card_stream
+        .map(|stream| stream.rate)
+        .unwrap_or_else(|| clock.effective_rate());
+    let converter = converter_frames(rate);
+    let bus = latency_a(rate).saturating_sub(converter);
     match state.card_stream {
         Some(card) => {
-            let ring_color = if quantum_pending(state) {
-                theme::ysim()
-            } else {
-                theme::text_sec()
-            };
-            // Live host term on every path: `snd_pcm_delay` is the ring fill
-            // plus the in-flight URBs. Split out the calibrated USB queue so
-            // each buffer is counted once.
             if let Some(delay) = state.pcm_delay {
-                if let Some(queue) = state.driver_queue {
-                    let (usb, lead) = if state.device.is_uc_model() {
-                        uc_rtl_frames(card.rate, queue)
-                    } else {
-                        ucx_usb_frames(card.rate, queue)
-                    };
-                    let rtl = RtlEstimate {
-                        usb,
-                        lead,
-                        converter: converter_frames(card.rate),
-                        graph: delay.saturating_sub(usb),
-                        rate: card.rate,
-                    };
-                    return rtl_block(
-                        rtl.summary(),
-                        rtl.breakdown_with(host_label),
-                        theme::text_sec(),
-                        scale,
-                    );
-                }
-                // No queue fact: the live delay includes the in-flight queue.
-                return rtl_live_block(
-                    delay,
-                    60, // UC/UCX device lead (see ucx_usb_frames)
-                    converter_frames(card.rate),
-                    card.rate,
-                    host_label,
-                    scale,
-                );
-            }
-            if state.device.is_uc_model() {
-                let measured = match state.device.personality_label() {
-                    Some("PC") => state.driver_queue.and_then(|queue| {
-                        uc_measured_rtl(card.rate, queue, host_ring(card.period), false)
-                    }),
-                    Some("AP") => state.driver_queue.and_then(|queue| {
-                        uc_measured_rtl(card.rate, queue, host_ring(card.period), true)
-                    }),
-                    _ => None,
+                let fill = state.pcm_fill.unwrap_or(delay).min(delay);
+                let usb = delay.saturating_sub(fill);
+                let rtl = LatencyOut {
+                    usb,
+                    bus,
+                    converter,
+                    graph: fill,
+                    rate: card.rate,
                 };
-                if let Some(rtl) = measured {
-                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
-                }
-                if let Some(queue) = state.driver_queue {
-                    let (usb, lead) = uc_rtl_frames(card.rate, queue);
-                    let rtl = RtlEstimate {
-                        usb,
-                        lead,
-                        converter: converter_frames(card.rate),
-                        graph: host_ring(card.period),
-                        rate: card.rate,
-                    };
-                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
-                }
                 return rtl_block(
-                    ring_text(card.buffer, card.period, card.rate),
-                    blank3(),
-                    ring_color,
-                    scale,
-                );
-            }
-            if state.device.is_ucx_model() {
-                if let Some(queue) = state.driver_queue {
-                    let (usb, lead) = ucx_usb_frames(card.rate, queue);
-                    let rtl = RtlEstimate {
-                        usb,
-                        lead,
-                        converter: converter_frames(card.rate),
-                        graph: host_ring(card.period),
-                        rate: card.rate,
-                    };
-                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
-                }
-                return rtl_block(
-                    ring_text(card.buffer, card.period, card.rate),
-                    blank3(),
-                    ring_color,
+                    rtl.summary(),
+                    rtl.breakdown_with(host_label),
+                    theme::text_sec(),
                     scale,
                 );
             }
             rtl_block(
                 ring_text(card.buffer, card.period, card.rate),
-                blank3(),
-                ring_color,
+                " ".into(),
+                theme::text_sec(),
                 scale,
             )
         }
         None => {
-            let rate = clock.effective_rate();
             let quantum = clock.effective_quantum().max(1);
-            let minimum = state
-                .driver_queue
-                .map(|queue| {
-                    if state.device.is_uc_model() {
-                        uc_min_buffer_frames(rate, queue)
-                    } else if state.device.is_ucx_model() {
-                        ucx_min_buffer_frames(rate, queue)
-                    } else {
-                        0
-                    }
-                })
-                .unwrap_or(0);
-            let periods = if minimum > 0 {
-                minimum.div_ceil(quantum).max(2)
-            } else {
-                2
+            let rtl = LatencyOut {
+                usb: 0,
+                bus,
+                converter,
+                graph: quantum,
+                rate,
             };
-            let buffer = quantum.saturating_mul(periods);
-            if state.device.is_uc_model() {
-                let measured = match state.device.personality_label() {
-                    Some("PC") => state
-                        .driver_queue
-                        .and_then(|queue| uc_measured_rtl(rate, queue, quantum, false)),
-                    Some("AP") => state
-                        .driver_queue
-                        .and_then(|queue| uc_measured_rtl(rate, queue, quantum, true)),
-                    _ => None,
-                };
-                if let Some(rtl) = measured {
-                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
-                }
-                if let Some(queue) = state.driver_queue {
-                    let (usb, lead) = uc_rtl_frames(rate, queue);
-                    let rtl = RtlEstimate {
-                        usb,
-                        lead,
-                        converter: converter_frames(rate),
-                        graph: quantum,
-                        rate,
-                    };
-                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
-                }
-                return rtl_block(
-                    ring_text(buffer, quantum, rate),
-                    blank3(),
-                    theme::text_primary(),
-                    scale,
-                );
-            }
-            if state.device.is_ucx_model() {
-                if let Some(queue) = state.driver_queue {
-                    let (usb, lead) = ucx_usb_frames(rate, queue);
-                    let rtl = RtlEstimate {
-                        usb,
-                        lead,
-                        converter: converter_frames(rate),
-                        graph: quantum,
-                        rate,
-                    };
-                    return rtl_block(rtl.summary(), rtl.breakdown_with(host_label), theme::text_sec(), scale);
-                }
-                return rtl_block(
-                    ring_text(buffer, quantum, rate),
-                    blank3(),
-                    theme::text_primary(),
-                    scale,
-                );
-            }
             rtl_block(
-                format!("{:.1} ms per buffer", clock.latency_ms()),
-                blank3(),
-                theme::text_primary(),
+                rtl.summary(),
+                rtl.breakdown_with(host_label),
+                theme::text_sec(),
                 scale,
             )
         }
     }
 }
 
-/// Model-based output-latency estimate: USB queue, device lead, converter
-/// and the host buffer. Used for the UCX and for UC paths without a PC-mode
-/// loopback calibration. The tolerance is the stated uncertainty of the
-/// model (UC 1.5 ms, UCX 1.2 ms).
-struct RtlEstimate {
+/// The Latency in readout. The device term is the input half B of the
+/// measured device span (ADC plus capture delivery); the live capture
+/// `snd_pcm_delay` is added on top. Unmeasured rates show no value.
+fn latency_in_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message> {
+    let scale = state.ui_scale;
+    let rate = state
+        .card_stream
+        .map(|stream| stream.rate)
+        .unwrap_or_else(|| clock.effective_rate());
+    let b = latency_personality(&state.device).and_then(|p| latency_b(p, rate));
+    match (b, state.pcm_capture_delay) {
+        (Some(device_in), Some(capture)) => {
+            let rtl = LatencyIn {
+                device_in,
+                capture,
+                rate,
+            };
+            rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale)
+        }
+        _ => rtl_block("\u{2014}".into(), " ".into(), theme::text_sec(), scale),
+    }
+}
+
+/// The output side: the live host queue, the device bus delivery and the
+/// output converter.
+struct LatencyOut {
     usb: u32,
-    lead: u32,
+    bus: u32,
     converter: u32,
     graph: u32,
     rate: u32,
 }
 
-impl RtlEstimate {
+impl LatencyOut {
     fn total(&self) -> u32 {
-        self.usb + self.lead + self.converter + self.graph
+        self.usb + self.bus + self.converter + self.graph
     }
 
-    /// One short value: the output latency in milliseconds. The terms and
-    /// the calibration basis live in the manual (§14).
     fn summary(&self) -> String {
         format!("{:.1} ms", frames_ms(self.total(), self.rate))
     }
 
-    /// The formula under the value, one wrapping line, milliseconds. The
-    /// host term's label names the authority: `graph` or `ring`.
     fn breakdown_with(&self, host_label: &str) -> String {
         format!(
-            "{:.1} ms USB + {:.1} ms device lead + {:.1} ms converter + {:.1} ms {host_label}",
+            "{:.1} ms USB + {:.1} ms bus + {:.1} ms converter + {:.1} ms {host_label}",
             frames_ms(self.usb, self.rate),
-            frames_ms(self.lead, self.rate),
+            frames_ms(self.bus, self.rate),
             frames_ms(self.converter, self.rate),
             frames_ms(self.graph, self.rate)
         )
     }
-
-    fn breakdown(&self) -> String {
-        self.breakdown_with("graph")
-    }
 }
 
-/// Live output latency under a PCM owner: the host-side term is the stream's
-/// `snd_pcm_delay` (ring fill + in-flight URBs), so it tracks the owner's
-/// write-ahead. When the USB queue is known, it is split out of the delay and
-/// shown once; otherwise the delay is the host term on its own.
-fn rtl_live_frames(delay: u32, lead: u32, converter: u32) -> u32 {
-    delay + lead + converter
-}
-
-fn rtl_live_block(
-    delay: u32,
-    lead: u32,
-    converter: u32,
-    rate: u32,
-    host_label: &str,
-    scale: f32,
-) -> Element<'static, Message> {
-    let total = rtl_live_frames(delay, lead, converter);
-    let summary = format!("{:.1} ms", frames_ms(total, rate));
-    let breakdown = format!(
-        "{:.1} ms {host_label} (live) + {:.1} ms device lead + {:.1} ms converter",
-        frames_ms(delay, rate),
-        frames_ms(lead, rate),
-        frames_ms(converter, rate)
-    );
-    rtl_block(summary, breakdown, theme::text_sec(), scale)
-}
-
-/// One loopback measurement of the UC device round trip.  The measurement
-/// excludes the graph period; `queue_frames` is the nominal host queue at
-/// which it was taken, so a driver queue change can be applied without
-/// re-measuring.  Sources: `docs/work/UC-RTL-LOOPBACK.md`.
-struct UcMeasurement {
-    rate: u32,
-    device_frames: u32,
-    queue_frames: u32,
-}
-
-const UC_PC_MEASUREMENTS: &[UcMeasurement] = &[
-    UcMeasurement {
-        rate: 32_000,
-        device_frames: 215,
-        queue_frames: 144,
-    },
-    UcMeasurement {
-        rate: 44_100,
-        device_frames: 215,
-        queue_frames: 144,
-    },
-    UcMeasurement {
-        rate: 48_000,
-        device_frames: 215,
-        queue_frames: 144,
-    },
-    UcMeasurement {
-        rate: 96_000,
-        device_frames: 351,
-        queue_frames: 288,
-    },
-    UcMeasurement {
-        rate: 192_000,
-        device_frames: 617,
-        queue_frames: 576,
-    },
-];
-
-const UC_AP_MEASUREMENTS: &[UcMeasurement] = &[
-    UcMeasurement {
-        rate: 32_000,
-        device_frames: 155,
-        queue_frames: 96,
-    },
-    UcMeasurement {
-        rate: 44_100,
-        device_frames: 179,
-        queue_frames: 144,
-    },
-    UcMeasurement {
-        rate: 48_000,
-        device_frames: 187,
-        queue_frames: 144,
-    },
-    UcMeasurement {
-        rate: 96_000,
-        device_frames: 295,
-        queue_frames: 288,
-    },
-    UcMeasurement {
-        rate: 192_000,
-        device_frames: 505,
-        queue_frames: 576,
-    },
-];
-
-/// A loopback-calibrated UC estimate.  The measured device total includes
-/// the USB queue; the current queue is applied as a delta from the
-/// calibration queue, and one live graph period is added.
-struct MeasuredRtl {
-    device: u32,
-    /// The live queue at display time, shown in the contributions line.
-    live_queue: u32,
-    graph: u32,
+/// The input side: the live capture queue and the device input delivery.
+struct LatencyIn {
+    device_in: u32,
+    capture: u32,
     rate: u32,
 }
 
-impl MeasuredRtl {
+impl LatencyIn {
     fn total(&self) -> u32 {
-        self.device + self.graph
+        self.capture + self.device_in
     }
 
-    /// One short value: the round trip in milliseconds.  The terms and the
-    /// calibration basis live in the manual (§14).
     fn summary(&self) -> String {
         format!("{:.1} ms", frames_ms(self.total(), self.rate))
     }
 
-    /// The formula under the value, one wrapping line, milliseconds. The
-    /// measured device total includes the live USB queue; the host term's
-    /// label names the authority.
-    fn breakdown_with(&self, host_label: &str) -> String {
+    fn breakdown(&self) -> String {
         format!(
-            "{:.1} ms device (incl. {:.1} ms queue) + {:.1} ms {host_label}",
-            frames_ms(self.device, self.rate),
-            frames_ms(self.live_queue, self.rate),
-            frames_ms(self.graph, self.rate)
+            "{:.1} ms capture (live) + {:.1} ms device in",
+            frames_ms(self.capture, self.rate),
+            frames_ms(self.device_in, self.rate)
         )
     }
+}
 
-    fn breakdown(&self) -> String {
-        self.breakdown_with("graph")
+/// The measured device span is split at the horizon: A is the playback bus
+/// delivery plus the output converter; B is the ADC plus capture delivery.
+/// Only D is directly measured; the split is the horizon model. The host
+/// `snd_pcm_delay` terms are added separately.
+#[derive(Clone, Copy)]
+enum LatencyPersonality {
+    Ucx,
+    UcPc,
+    UcAp,
+}
+
+fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
+    if device.is_uc_model() {
+        match device.personality_label() {
+            Some("PC") => Some(LatencyPersonality::UcPc),
+            Some("AP") => Some(LatencyPersonality::UcAp),
+            _ => None,
+        }
+    } else if device.is_ucx_model() {
+        Some(LatencyPersonality::Ucx)
+    } else {
+        None
     }
 }
 
-/// The nominal host queue for the active personality.  PC uses the
-/// interrupt URB frame count; AP uses the ISO packet count.
-fn uc_live_queue_frames(rate: u32, queue: (u32, u32), ap: bool) -> u32 {
-    if ap {
-        ucx_usb_frames(rate, queue).0
-    } else {
-        let (usb, endpoint) = uc_usb_frames(rate, queue);
-        usb + endpoint
+/// Measured device round trip D = C - P after the capture start-alignment
+/// correction, per personality and rate. The UCX table is 32/44.1/48/88.2/
+/// 96/176.4/192; the UC tables are the five loopback rates.
+fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
+    use LatencyPersonality::*;
+    match (personality, rate) {
+        (Ucx, 32_000) => Some(158),
+        (Ucx, 44_100) => Some(201),
+        (Ucx, 48_000) => Some(216),
+        (Ucx, 88_200) => Some(373),
+        (Ucx, 96_000) => Some(401),
+        (Ucx, 176_400) => Some(586),
+        (Ucx, 192_000) => Some(643),
+        (UcPc, 32_000) => Some(215),
+        (UcPc, 44_100) => Some(215),
+        (UcPc, 48_000) => Some(215),
+        (UcPc, 96_000) => Some(351),
+        (UcPc, 192_000) => Some(617),
+        (UcAp, 32_000) => Some(155),
+        (UcAp, 44_100) => Some(179),
+        (UcAp, 48_000) => Some(187),
+        (UcAp, 96_000) => Some(295),
+        (UcAp, 192_000) => Some(505),
+        _ => None,
     }
 }
 
-/// Return the measured estimate for a rate covered by the loopback
-/// calibration.  If the driver queue differs from the calibration, its delta
-/// is applied to the device total; the graph period is always live.
-fn uc_measured_rtl(rate: u32, queue: (u32, u32), graph: u32, ap: bool) -> Option<MeasuredRtl> {
-    let measurements = if ap {
-        UC_AP_MEASUREMENTS
-    } else {
-        UC_PC_MEASUREMENTS
-    };
-    let measurement = measurements
-        .iter()
-        .find(|measurement| measurement.rate == rate)?;
-    let live_queue = uc_live_queue_frames(rate, queue, ap);
-    let device =
-        measurement.device_frames as i64 + live_queue as i64 - measurement.queue_frames as i64;
-    Some(MeasuredRtl {
-        device: device.max(0) as u32,
-        live_queue,
-        graph: graph.max(1),
-        rate,
-    })
+/// A: the playback horizon (12.5 microframes of bus delivery) plus the
+/// output converter half.
+fn latency_a(rate: u32) -> u32 {
+    let bus = ((25u64 * rate as u64) + 8_000) / 16_000;
+    bus as u32 + converter_frames(rate)
+}
+
+/// B: the capture delivery; the remainder of the measured device span.
+fn latency_b(personality: LatencyPersonality, rate: u32) -> Option<u32> {
+    latency_d(personality, rate).map(|d| d.saturating_sub(latency_a(rate)))
 }
 
 /// The ALSA ring as time and frames, with the period composition that
@@ -17526,21 +17330,6 @@ fn uc_min_buffer_frames(rate: u32, queue: (u32, u32)) -> u32 {
 fn ucx_urb_frames(rate: u32, urb_frames: u32) -> u32 {
     let iso_packets = 8.min(urb_frames.max(1).div_ceil(6));
     iso_packets * rate.max(1).div_ceil(8000)
-}
-
-/// Frames covered by the UC's host queue and device lead at the current
-/// rate.  The queued depth is `nurbs + 1` URBs, and the unit adds the same
-/// 60-frame output lead measured on the UCX.
-fn uc_rtl_frames(rate: u32, queue: (u32, u32)) -> (u32, u32) {
-    let (usb, endpoint) = uc_usb_frames(rate, queue);
-    (usb + endpoint, 60)
-}
-
-/// Frames covered by the UCX's host queue and device lead at the current
-/// rate.  The queued depth is `nurbs + 1` URBs (`fb_delay`), and the unit
-/// adds a 60-frame output lead.
-fn ucx_usb_frames(rate: u32, (urb_frames, urbs): (u32, u32)) -> (u32, u32) {
-    ((urbs + 1) * ucx_urb_frames(rate, urb_frames), 60)
 }
 
 /// Frames the UCX's ALSA ring needs: `nurbs + 2` URBs of margin.
@@ -23314,17 +23103,17 @@ mod tests {
         note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
         safe_default_quantum, minimum_quantum, reconcile_device_pitch,
         power_sum_output_meters, quantum_pending, rate_authority_target,
-        rtl_live_frames,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
-        temporary_group_exists, trim_factor, trim_meter_levels, uc_live_queue_frames,
-        uc_measured_rtl, uc_min_buffer_frames, uc_rtl_frames, uc_usb_frames, ucx_min_buffer_frames,
-        ucx_urb_frames, ucx_usb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
+        temporary_group_exists, trim_factor, trim_meter_levels,
+        uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
+        ucx_urb_frames, update, zoom, AssignMenu, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
-        PwClock, ResetMix, RoutingMode, RowMode, RtlEstimate, StartupMismatch,
+        LatencyIn, LatencyOut, LatencyPersonality, latency_a, latency_b, latency_d,
+        PwClock, ResetMix, RoutingMode, RowMode, StartupMismatch,
         TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,
         FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H,
-        FX_W, MAIN_DEST, METER_RELEASE_DB_S, UC_AP_MEASUREMENTS, UC_PC_MEASUREMENTS, ZOOM_STEP,
+        FX_W, MAIN_DEST, METER_RELEASE_DB_S, ZOOM_STEP,
     };
     use crate::osc::OscOutbound;
     use crate::sidebar;
@@ -23903,17 +23692,13 @@ mod tests {
     }
 
     #[test]
-    fn ucx_latency_chain_counts_queue_and_device_lead() {
+    fn ucx_latency_chain_keeps_the_urb_and_converter_geometry() {
         // Eight 1 ms ISO packets per URB at the default 48-frame size.
         assert_eq!(ucx_urb_frames(48_000, 48), 48);
         assert_eq!(ucx_urb_frames(96_000, 48), 96);
-        assert_eq!(ucx_usb_frames(48_000, (48, 2)), (144, 60));
-        assert_eq!(ucx_usb_frames(96_000, (48, 2)), (288, 60));
         // nurbs + 2 URBs of ring margin.
         assert_eq!(ucx_min_buffer_frames(48_000, (48, 2)), 192);
         assert_eq!(ucx_min_buffer_frames(96_000, (48, 2)), 384);
-        assert!((frames_ms(144, 48_000) - 3.0).abs() < 0.01);
-        assert!((frames_ms(60, 48_000) - 1.25).abs() < 0.01);
         // Half of the measured 25-frame converter round trip, 23 at 4x.
         assert_eq!(converter_frames(44_100), 13);
         assert_eq!(converter_frames(48_000), 13);
@@ -23922,86 +23707,60 @@ mod tests {
     }
 
     #[test]
-    fn uc_latency_line_uses_the_ucx_rtl_structure() {
-        // Full-duplex out5-in5 measurement: 217-frame device formula
-        // (3 x 48 USB + 60 lead + 13 converter) at 32-48 kHz, plus one
-        // 1024 graph period.  Higher rates scale the URB frames.
-        assert_eq!(uc_rtl_frames(32_000, (48, 2)), (144, 60));
-        assert_eq!(uc_rtl_frames(44_100, (48, 2)), (144, 60));
-        assert_eq!(uc_rtl_frames(48_000, (48, 2)), (144, 60));
-        assert_eq!(uc_rtl_frames(96_000, (48, 2)), (288, 60));
-        assert_eq!(uc_rtl_frames(192_000, (48, 2)), (576, 60));
-        let rtl = RtlEstimate {
-            usb: 144,
-            lead: 60,
-            converter: 13,
-            graph: 1024,
-            rate: 44_100,
-        };
-        assert_eq!(rtl.total(), 1241);
-        assert_eq!(rtl.summary(), "28.1 ms");
+    fn latency_tables_split_the_device_span() {
+        // A is the horizon split; B is the measured span minus A.
+        assert_eq!(latency_a(32_000), 63);
+        assert_eq!(latency_a(44_100), 82);
+        assert_eq!(latency_a(48_000), 88);
+        assert_eq!(latency_a(88_200), 151);
+        assert_eq!(latency_a(96_000), 163);
+        assert_eq!(latency_a(176_400), 288);
+        assert_eq!(latency_a(192_000), 312);
+        assert_eq!(latency_d(LatencyPersonality::Ucx, 48_000), Some(216));
+        assert_eq!(latency_b(LatencyPersonality::Ucx, 48_000), Some(128));
+        assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(127));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(99));
+        assert_eq!(latency_d(LatencyPersonality::Ucx, 64_000), None);
+        assert_eq!(latency_b(LatencyPersonality::Ucx, 64_000), None);
     }
 
     #[test]
-    fn uc_measured_rtl_uses_the_mode_calibration_and_live_inputs() {
-        for measurement in UC_PC_MEASUREMENTS {
-            let (usb, endpoint) = uc_usb_frames(measurement.rate, (48, 2));
-            assert_eq!(
-                usb + endpoint,
-                measurement.queue_frames,
-                "PC calibration queue drifted at {} Hz",
-                measurement.rate
-            );
-        }
-        for measurement in UC_AP_MEASUREMENTS {
-            let live = uc_live_queue_frames(measurement.rate, (48, 2), true);
-            assert_eq!(
-                live, measurement.queue_frames,
-                "AP calibration queue drifted at {} Hz",
-                measurement.rate
-            );
-        }
-
-        let rtl = uc_measured_rtl(44_100, (48, 2), 1024, false).expect("PC 44.1 calibrated");
-        assert_eq!(rtl.device, 215);
-        assert_eq!(rtl.live_queue, 144);
-        assert_eq!(rtl.total(), 1239);
-        assert_eq!(rtl.summary(), "28.1 ms");
-
-        let rtl = uc_measured_rtl(44_100, (48, 2), 128, true).expect("AP 44.1 calibrated");
-        assert_eq!(rtl.device, 179);
-        assert_eq!(rtl.live_queue, 144);
-        assert_eq!(rtl.total(), 307);
-        assert_eq!(rtl.summary(), "7.0 ms");
-
-        let rtl = uc_measured_rtl(192_000, (48, 2), 128, true).expect("AP 192 calibrated");
-        assert_eq!(rtl.device, 505);
-        assert_eq!(rtl.live_queue, 576);
-        assert_eq!(rtl.total(), 633);
-        assert_eq!(rtl.summary(), "3.3 ms");
-
-        // A driver queue change is applied as a delta from the calibration,
-        // without a new loopback measurement.
-        let adjusted = uc_measured_rtl(44_100, (48, 3), 128, false).expect("calibrated rate");
-        assert_eq!(adjusted.live_queue, 192);
-        assert_eq!(adjusted.device, 263);
-        assert_eq!(adjusted.total(), 391);
-
-        assert!(uc_measured_rtl(64_000, (48, 2), 128, false).is_none());
-        assert!(uc_measured_rtl(64_000, (48, 2), 128, true).is_none());
+    fn uc_latency_tables_use_the_loopback_span() {
+        assert_eq!(latency_d(LatencyPersonality::UcPc, 44_100), Some(215));
+        assert_eq!(latency_b(LatencyPersonality::UcPc, 44_100), Some(133));
+        assert_eq!(latency_d(LatencyPersonality::UcAp, 44_100), Some(179));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 44_100), Some(97));
+        assert_eq!(latency_d(LatencyPersonality::UcAp, 192_000), Some(505));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 192_000), Some(193));
+        assert_eq!(latency_d(LatencyPersonality::UcPc, 64_000), None);
     }
 
     #[test]
-    fn ucx_latency_line_is_an_rtl_estimate() {
-        let rtl = RtlEstimate {
-            usb: 144,
-            lead: 60,
+    fn latency_out_and_in_rows_add_the_live_host_terms() {
+        let out = LatencyOut {
+            usb: 96,
+            bus: 75,
             converter: 13,
-            graph: 128,
-            rate: 44_100,
+            graph: 59,
+            rate: 48_000,
         };
-        assert_eq!(rtl.total(), 345);
-        assert_eq!(rtl.summary(), "7.8 ms");
+        assert_eq!(out.total(), 243);
+        assert_eq!(out.summary(), "5.1 ms");
+        assert_eq!(
+            out.breakdown_with("graph"),
+            "2.0 ms USB + 1.6 ms bus + 0.3 ms converter + 1.2 ms graph"
+        );
+        let input = LatencyIn {
+            device_in: 128,
+            capture: 96,
+            rate: 48_000,
+        };
+        assert_eq!(input.total(), 224);
+        assert_eq!(input.summary(), "4.7 ms");
+        assert_eq!(
+            input.breakdown(),
+            "2.0 ms capture (live) + 2.7 ms device in"
+        );
     }
 
     #[test]
@@ -28364,15 +28123,14 @@ mod tests {
     #[test]
     fn the_live_rtl_counts_the_host_delay_once() {
         // Under a PCM owner the host term is the live snd_pcm_delay, which
-        // already covers the in-flight URBs. The live form adds only the device
-        // lead and converter on top — no separate USB-queue term (no double
-        // count).
-        assert_eq!(rtl_live_frames(465, 60, 13), 538);
-        // A fuller jackd write-ahead (-n 3) raises the number past the old
-        // one-period model: ~11.2 ms at 48 kHz.
-        assert!((frames_ms(538, 48_000) - 11.208).abs() < 0.05);
+        // already covers the in-flight URBs. The live form adds the device A
+        // (bus + converter) on top; the queue is not added again.
+        let a = latency_a(48_000);
+        assert_eq!(a, 88);
+        assert_eq!(465 + a, 553);
+        assert!((frames_ms(553, 48_000) - 11.521).abs() < 0.05);
         // A smaller buffer (-n 2) lowers it, exactly as the owner's -n changes.
-        assert!(rtl_live_frames(300, 60, 13) < rtl_live_frames(465, 60, 13));
+        assert!(300 + a < 465 + a);
     }
 
     #[test]

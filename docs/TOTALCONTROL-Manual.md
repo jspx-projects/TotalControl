@@ -1530,54 +1530,61 @@ groups with the stored ones.
 
 ## 14. Latency
 
-The Audio Configuration panel shows the `Input` row first: it reads `—` until
-the capture chain is measured. The **output latency** follows in the `Output`
-row (hover for "Output latency (host to analog output)"): the value as `x.x ms`
-on the first line, and below it the contributions in milliseconds — the host
-term, the USB queue, the device lead and the converter. The output row is
-shown on every path. Under JACK, a direct-ALSA DAW or a PipeWire conductor the
-figure includes the device lead and converters that the client's own latency
-display may omit. The **Quantum** picker sets the host buffer in samples while
-no stream runs. The safe default is the highest period floor across the
-device's rates. Choose a specific value from the list; the list offers every
-quantum at or above the current rate's period floor, plus the exact floor.
-While a stream runs the picker is a grayed report of the actual value.
-
-The output latency is:
+The Audio Configuration panel shows `Latency in` and `Latency out`.
+`Latency out` (hover: "Latency out (host to analog output)") is the
+host-to-analog-output latency. `Latency in` (hover: "Latency in (analog input
+to host)") is the analog-input-to-host latency. Both show the value as `x.x ms`
+on the first line and the contributions in milliseconds below. `Latency in`
+shows `—` when there is no capture stream or no measured device value for the
+rate.
 
 ```text
-output latency = host term + USB queue + device lead + converter delay
+Latency out = host term + bus + converter
+Latency in  = capture host term + device in
 ```
 
-The host term is `snd_pcm_delay` minus the in-flight queue while a stream runs,
-so the USB queue is counted once, and the graph quantum while nothing is
-playing. The term is labelled `graph` on the PipeWire and JACK paths and `ring`
-on the direct-ALSA path. At 48 kHz with a 128-frame period the terms are 128 +
-144 + 60 + 13 = 345 frames = **7.2 ms**.
+The host term is the live playback `snd_pcm_delay`: the ring fill plus the
+in-flight USB queue. The bus and converter are the device output path A. The
+capture host term is the live capture `snd_pcm_delay`; device in B is the ADC
+plus capture delivery. The queue is counted once. The host term's label
+follows the authority: `graph` on the PipeWire and JACK paths, `ring` on
+direct ALSA.
 
-The USB queue is the driver's in-flight URBs (three URBs at the standard
-setting) while nothing is playing; when a stream runs it is already inside the
-live host queue and is not counted again. The device lead is the margin the
-unit holds ahead of its converters, and the converter delay is the interface's
-conversion time. Because the host queue is live when a stream runs, a larger
-`jackd -n` (more periods) shows as more latency and a smaller `-n` as less;
-TotalControl does not assume a fixed buffer. The host queue is read live; the
-device lead and converter are model terms, so treat the total as the host-side
-budget.
+A and B are the two halves of the measured device round trip D: `D = A + B`.
+D is measured by the output-5 to input-5 loopback after the capture
+start-alignment correction. The A/B split is the horizon model, not an
+independent measurement of each half.
 
-The UC device side is measured by loopback (output 5 to input 5) for both
-personalities at 32, 44.1, 48, 96 and 192 kHz; the display applies the live
-queue and the host term. Other rates, and the UCX, use the model with the same
-terms. Treat the number as the host-side output budget; an acoustic
-measurement adds the room and monitoring path.
+At 48 kHz with a 128-frame live host term:
 
-On the UC the device part is a loopback calibration taken at 32, 44.1, 48,
-96 and 192 kHz in both PC and AP modes. The display says **measured PC** or
-**measured AP** and applies the live USB queue and the host term. If a driver
-change alters the USB queue, the calibration is adjusted by the queue
-difference without another cable measurement. Rates outside the calibrated set
-use the model estimate. A different firmware or device path needs a new
-calibration.
+```text
+Latency out = 128 + 75 + 13 = 216 frames = 4.5 ms
+Latency in  =  96 + 128     = 224 frames = 4.7 ms
+```
+
+The device values (frames):
+
+| Rate | A | UCX B | UC PC B | UC AP B |
+|---|---|---|---|---|
+| 32 kHz | 63 | 95 | 152 | 92 |
+| 44.1 kHz | 82 | 119 | 133 | 97 |
+| 48 kHz | 88 | 128 | 127 | 99 |
+| 64 kHz | 113 | — | — | — |
+| 88.2 kHz | 151 | 222 | — | — |
+| 96 kHz | 163 | 238 | 188 | 132 |
+| 128 kHz | 213 | — | — | — |
+| 176.4 kHz | 288 | 298 | — | — |
+| 192 kHz | 312 | 331 | 305 | 193 |
+
+`Latency out` uses A at every rate. `Latency in` needs a measured D for the
+rate; where there is none it shows `—`. The fixed 60-frame device lead is
+replaced by the per-rate A. The device round trip D is measured; the A/B split
+is the horizon model. A firmware or device-path change needs a new
+measurement.
+
+The values are measured with the interface's own output-5 to input-5 loopback,
+not an acoustic path. Treat the result as the host-side latency budget; an
+acoustic measurement adds the room and monitoring path.
 
 ### Playback policy
 

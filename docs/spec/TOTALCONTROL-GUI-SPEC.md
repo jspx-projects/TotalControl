@@ -2216,40 +2216,62 @@ applied to the running device as they change.
 
 ## 13. Latency display
 
-The Audio Configuration panel has an `Input` row and an `Output` field. The
-`Input` row shows `—` until the capture chain is measured. The `Output` field
-carries the tooltip "Output latency (host to analog output)". It is a fixed
-block in the value column, aligned with the pickers: the caption column
-carries the `Output` label, the first line carries the total (`x.x ms`, one
-decimal, secondary grey), and the formula (host term, USB queue, device lead,
-converter, in milliseconds) wraps below. The `Input` row follows with `—` until the capture chain is measured.
-The formula and the terms are in the manual §14. The output field is shown on
-every path: the host term is the live stream queue split into ring fill and
-in-flight queue, or the graph quantum while idle. The device terms are the
-same, so the value includes the device lead and converters that the DAW's own
-display may omit. The host term's label follows the authority: `graph` on the
-PipeWire and JACK paths, `ring` on the direct-ALSA path. The quantum picker
-sets the graph period.
+The Audio Configuration panel has a `Latency in` row and a `Latency out`
+field. `Latency out` carries the tooltip "Latency out (host to analog
+output)"; `Latency in` carries "Latency in (analog input to host)". Both are
+fixed blocks in the value column, aligned with the pickers: the caption
+column carries the label, the first line the total (`x.x ms`, one decimal,
+secondary grey), and the contributions in milliseconds below. The formulas
+and terms are in the manual §14.
 
-The output value is the host-to-analog-output latency: host term + USB queue +
-device lead + converter delay. The live host term is `snd_pcm_delay` minus the
-in-flight queue; the device terms are the measured or model terms. The UC
-device side is loopback-measured per personality at five rates; the display
-applies a live queue delta. The measured device values (frames, at the
-calibration queue) are:
+`Latency out` is shown on every path:
 
-| Rate | UC PC device | queue | UC AP device | queue |
+```text
+Latency out = snd_pcm_delay + A(rate)
+```
+
+`snd_pcm_delay` is the live playback ring plus the in-flight URBs; A is the
+device output path: bus delivery plus output converter. The live host term is
+split into ring fill and in-flight queue, so the queue is counted once. The
+host term's label follows the authority: `graph` on the PipeWire and JACK
+paths, `ring` on direct ALSA. While idle, the graph quantum is the host term.
+
+`Latency in` is shown when a capture stream exists and the rate has a
+measured device span:
+
+```text
+Latency in = capture snd_pcm_delay + B(rate)
+B(rate)    = D(rate) - A(rate)
+```
+
+D is the device round trip measured by the output-5 to input-5 loopback,
+after the capture start-alignment correction. The split is the horizon model:
+A is the playback bus plus output converter; B is the ADC plus capture
+delivery. Only D is directly measured. A rate without a D measurement shows
+`—` for `Latency in`; `Latency out` still uses the A model.
+
+| Rate | A | UCX D / B | UC PC D / B | UC AP D / B |
 |---|---|---|---|---|
-| 32 kHz | 215 | 144 | 155 | 96 |
-| 44.1 kHz | 215 | 144 | 179 | 144 |
-| 48 kHz | 215 | 144 | 187 | 144 |
-| 96 kHz | 351 | 288 | 295 | 288 |
-| 192 kHz | 617 | 576 | 505 | 576 |
+| 32 kHz | 63 | 158 / 95 | 215 / 152 | 155 / 92 |
+| 44.1 kHz | 82 | 201 / 119 | 215 / 133 | 179 / 97 |
+| 48 kHz | 88 | 216 / 128 | 215 / 127 | 187 / 99 |
+| 64 kHz | 113 | — | — | — |
+| 88.2 kHz | 151 | 373 / 222 | — | — |
+| 96 kHz | 163 | 401 / 238 | 351 / 188 | 295 / 132 |
+| 128 kHz | 213 | — | — | — |
+| 176.4 kHz | 288 | 586 / 298 | — | — |
+| 192 kHz | 312 | 643 / 331 | 617 / 305 | 505 / 193 |
 
-Rates outside the measured set and the UCX use the model (the same terms).
-The calibration is per personality; a firmware or device-path change needs a
-repeat measurement. The PC measurement is a full-duplex electrical loopback
-(output 5 to input 5), not an acoustic one.
+The queue split uses the live playback fill from the driver `SNAPSHOT`: the
+USB term is `snd_pcm_delay - ring fill`. The split changes only the labels;
+the total is `snd_pcm_delay + A`. The capture host term is the live capture
+`snd_pcm_delay`; the device-in term is B. The values are frames.
+
+The calibration is per personality and rate. A firmware or device-path change
+needs a repeat measurement. The UC PC/AP D values are the five loopback rates;
+the UCX D values are 32/44.1/48/88.2/96/176.4/192. The A/B table is the
+horizon split, not an independent measurement of each half. The loopback is
+an electrical output-5 to input-5 connection, not an acoustic one.
 
 Below it, **Diagnostics** lists the kernel transport error counters in
 three sections by reset behaviour (§4): **Scheduling** (`underrun /
