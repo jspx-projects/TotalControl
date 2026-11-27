@@ -169,7 +169,9 @@ pub struct HwdepDiagnostics {
     pub meter_realigns: u32,
     pub in_total: u64,
     pub pitch_clamps: u32,
-    pub reserved: [u32; 7],
+    pub rate_skips: u32,
+    pub rate_writes: u32,
+    pub reserved: [u32; 5],
 }
 
 /// Historical name kept for the device/diagnostics call sites.

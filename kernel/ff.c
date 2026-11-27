@@ -475,24 +475,19 @@ static int ff_set_rate_family(struct ff *chip, unsigned int rate)
  * change and rewrites the options word the device already holds, so the
  * mixer's settings (clock source, word clock, SPDIF and optical output
  * format) survive the rate change. */
-/* The device's rate status word (request 0x19 IN), UCX spec §11.6:
- * 0x0184 | family << 11 | band << 13, readiness bits 0-1 cleared. */
-static u32 ff_rate_status_expected(unsigned int rate)
-{
-	unsigned int family = ff_rate_family(rate);
-	unsigned int band = rate > 114000 ? 2 : rate > 57000 ? 1 : 0;
-
-	return 0x0184 | (family << 11) | (band << 13);
-}
-
+/* The state word (request 0x11 IN) carries the device rate index in bits
+ * 24-31 (UCX spec §11.7).  It is available on the ISO and interrupt paths,
+ * unlike the 0x19 rate-status word which is an interrupt-path word. */
 static int ff_device_rate_current(struct ff *chip, unsigned int rate)
 {
 	__le32 word;
-	int ret = ff_vendor_recv(chip, 0x19, 0, 0, &word, sizeof(word));
+	unsigned int idx;
+	int ret = ff_vendor_recv(chip, FF_REQ_STATUS, 0, 0, &word, sizeof(word));
 
 	if (ret < 0)
 		return ret;
-	return le32_to_cpu(word) == ff_rate_status_expected(rate);
+	idx = (le32_to_cpu(word) >> 24) & 0xff;
+	return ff_rate_from_index(idx) == rate;
 }
 
 static int ff_set_rate(struct ff *chip, unsigned int rate)
@@ -3028,8 +3023,9 @@ static int ff_engine_commit_rate(struct ff *chip)
 	 * reports the target family and band, skip the DDS/family/options
 	 * commit and preserve the current mixer state.  The alt selection
 	 * above still ran, so the streaming geometry is current. */
-	if ((chip->caps & FF_TCAP_RATE_STATUS_19) &&
+	if ((chip->caps & FF_TCAP_RATE_READBACK) &&
 	    ff_device_rate_current(chip, chip->rate) == 1) {
+		atomic_inc(&chip->rate_skips);
 		dev_dbg(&chip->dev->dev,
 			"rate commit: %u Hz already current; REG1 write skipped\n",
 			chip->rate);
@@ -3037,6 +3033,7 @@ static int ff_engine_commit_rate(struct ff *chip)
 	}
 	if ((chip->desc->quirks & FF_QUIRK_WIN_SESSION) && chip->uc_session)
 		msleep(200);
+	atomic_inc(&chip->rate_writes);
 	ret = chip->desc->ops->set_rate(chip, chip->rate);
 	dev_dbg(&chip->dev->dev,
 		"rate commit: %u Hz alt %u cur_alt %u ret=%d\n",
@@ -4024,7 +4021,7 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 		break;
 	case FF_PRODUCT_ID_D:
 		caps |= FF_TCAP_FLASH_GUARD |
-			FF_TCAP_RATE_STATUS_19 |
+			FF_TCAP_RATE_READBACK |
 			FF_TCAP_MUTE_ON_STOP |
 			FF_TCAP_FRAME_LEAD |
 			FF_TCAP_STATUS_RUNNING_ONLY |

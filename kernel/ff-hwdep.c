@@ -442,6 +442,8 @@ static int ff_hwdep_diagnostics(struct ff *chip,
 	c.meter_realigns = chip->meter_realigns;
 	c.in_total = chip->in_total;
 	c.pitch_clamps = atomic_read(&chip->pitch_clamps);
+	c.rate_skips = atomic_read(&chip->rate_skips);
+	c.rate_writes = atomic_read(&chip->rate_writes);
 	if (copy_to_user(arg, &c, sizeof(c)))
 		return -EFAULT;
 	return 0;

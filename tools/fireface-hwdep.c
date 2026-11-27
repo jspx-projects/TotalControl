@@ -120,6 +120,7 @@ static void cmd_counters(void)
 	P(out_prefills); P(out_prefill_timeouts);
 	P(meter_paused); P(meter_pairs); P(meter_realigns);
 	printf("in_total=%llu\n", (unsigned long long)c.in_total);
+	P(pitch_clamps); P(rate_skips); P(rate_writes);
 #undef P
 	close(fd);
 }
@@ -133,6 +134,8 @@ static void cmd_envelope(void)
 	for (unsigned i = 0; i < e.count; i++) {
 		printf("env_%u_floor=%u\n", e.rates[i].rate, e.rates[i].period_floor);
 		printf("env_%u_bufmin=%u\n", e.rates[i].rate, e.rates[i].buffer_min);
+		printf("env_%u_in=%u out=%u\n", e.rates[i].rate,
+		       e.rates[i].capture_channels, e.rates[i].playback_channels);
 	}
 	close(fd);
 }

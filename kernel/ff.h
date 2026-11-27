@@ -199,7 +199,7 @@ unsigned int ff_rate_family(unsigned int rate);
 #define FF_TCAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
 #define FF_TCAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
 #define FF_TCAP_FLASH_GUARD		BIT(12)	/* refuse flash vendor requests/words */
-#define FF_TCAP_RATE_STATUS_19		BIT(13)	/* 0x19 IN carries the rate status */
+#define FF_TCAP_RATE_READBACK		BIT(13)	/* state word carries the rate index */
 
 struct ff;
 
@@ -583,7 +583,9 @@ struct ff {
 	int out_lag_min, out_lag_max;   /* (in_end - out_counter) mod wrap */
 	atomic_t out_resync;
 	atomic_t rate_mismatch;   /* cadence disagrees with chip->rate */
-	atomic_t pitch_clamps;    /* DDS writes clamped to the pitch envelope */
+	atomic_t pitch_clamps;
+	atomic_t rate_skips;		/* rate commits skipped because current */
+	atomic_t rate_writes;		/* rate commits written */    /* DDS writes clamped to the pitch envelope */
 	atomic_t in_frames_overflow; /* packet frames above the top bin */
 	atomic_t pcm_prepare_err;
 	atomic_t pcm_trigger_err;

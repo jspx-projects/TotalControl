@@ -1057,12 +1057,15 @@ Request `0x19` (IN, 4 bytes) returns the rate status word:
 | 11–12 | base-rate family | 0 = 32 kHz, 1 = 44.1 kHz, 2 = 48 kHz |
 | 13–14 | band multiplier | 0 = 1x, 1 = 2x, 2 = 4x |
 
-The word is `0x0184 | (family << 11) | (band << 13)`. Verified across all
-nine supported rates on the UCX (firmware 49): 32000 → `0x0184`,
-44100 → `0x0984`, 48000 → `0x1184`, 64000 → `0x2184`, 88200 → `0x2984`,
-96000 → `0x3184`, 128000 → `0x4184`, 176400 → `0x4984`,
-192000 → `0x5184`. The word tracks the device's actual rate during
-streaming rate changes. A family change under a band change passes
+The stable fields are readiness in bits 0–1 and the family/band in bits
+11–14. Decode those fields; do not compare the whole word. The constant
+bits are not identical across transports: on the ISO path 44.1 kHz
+returns `0x0884`, while the interrupt-path table below gives `0x0984`.
+The family (bits 11–12) and band (bits 13–14) fields agree. The word
+tracks the device's actual rate during streaming rate changes. The
+state-word rate index (§11.7) is the transport-independent fallback used
+by the driver when the 0x19 word is not available. A family change under
+a band change passes
 through the old family's multiplier state: 44.1 → 192 kHz shows 176.4 kHz
 transiently in the status word.
 
