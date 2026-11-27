@@ -30,6 +30,7 @@ static unsigned int urb_frames = 48;
 static unsigned int nurbs = 2;
 static bool ucx_if5;
 static unsigned int ucx_if5_frames = 16;
+static unsigned int uc_pc_frames = 16;
 static unsigned int fixed_rate;
 /* q48 instrumentation (test/uc-q48-instrumentation).  Poison the PCM rings
  * with 0x00005A5A instead of the inherited memory so that a reader's
@@ -71,6 +72,8 @@ module_param(ucx_if5, bool, 0444);
 MODULE_PARM_DESC(ucx_if5, "Fireface UCX: bind the Windows-style interrupt interface 5 (default false). The default binds the Mac-style ISO interface 0; set Y only for the Windows transport.");
 module_param(ucx_if5_frames, uint, 0444);
 MODULE_PARM_DESC(ucx_if5_frames, "Fireface UCX interrupt transport: frames per URB at 1x rates, doubled at 2x and quadrupled at 4x (8..1024, default 16 = 2 blocks of 8).");
+module_param(uc_pc_frames, uint, 0444);
+MODULE_PARM_DESC(uc_pc_frames, "Fireface UC PC interrupt transport: frames per URB at 1x rates, doubled at 2x and quadrupled at 4x (8..1024, default 16 = 2 blocks of 8).");
 module_param(fixed_rate, uint, 0644);
 MODULE_PARM_DESC(fixed_rate, "Only allow this sample rate (0 = any supported rate).");
 
@@ -3654,6 +3657,19 @@ static int ff_pcm_hw_params(struct snd_pcm_substream *subs,
 	if (params_channels(params) > ff_max_channels(chip, subs->stream, rate))
 		return -EINVAL;
 
+	/* The period rule cannot express a stride; enforce the interrupt
+	 * whole-URB period here, and the buffer minimum, for a host that
+	 * bypasses the interval rules. */
+	if (!chip->iso) {
+		unsigned int urb = ff_urb_frames(chip, rate);
+		unsigned int period = params_period_size(params);
+
+		if (period < urb || period % urb)
+			return -EINVAL;
+	}
+	if (params_buffer_size(params) < ff_buffer_min(chip, rate))
+		return -EINVAL;
+
 	mutex_lock(&chip->mutex);
 	if (rate != chip->rate || !chip->mode) {
 		dev_dbg(&chip->dev->dev,
@@ -4140,6 +4156,8 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 			FF_TCAP_METER_PAIR;
 		if (d->transport == FF_XPORT_ISO)
 			caps |= FF_TCAP_KILL_BOTH;
+		else
+			caps |= FF_TCAP_FIXED_URB;
 		break;
 	case FF_PRODUCT_ID_D:
 		caps |= FF_TCAP_FLASH_GUARD |
@@ -4260,12 +4278,18 @@ static int ff_probe(struct usb_interface *intf,
 	card->private_free = ff_card_free;
 
 	chip->nurbs = clamp(nurbs, 2u, (unsigned int)FF_MAX_URBS);
-	chip->base_urb_frames = clamp(round_up(
-		(chip->caps & FF_TCAP_FIXED_URB) ? ucx_if5_frames : urb_frames, 8),
-		8u, (chip->caps & FF_TCAP_FIXED_URB) ? 1024u : 256u);
-	/* The interrupt transport keeps the configured queue depth.  The
-	 * reference UCX engine queues two short URBs (32 frames at 1x); the
-	 * 64-frame ISO floor would defeat that geometry. */
+	{
+		unsigned int short_frames = desc->product == FF_PRODUCT_ID_D ?
+			ucx_if5_frames : uc_pc_frames;
+
+		chip->base_urb_frames = clamp(round_up(
+			(chip->caps & FF_TCAP_FIXED_URB) ? short_frames : urb_frames,
+			8),
+			8u, (chip->caps & FF_TCAP_FIXED_URB) ? 1024u : 256u);
+	}
+	/* The interrupt transports (UC PC and UCX IF5) keep the configured
+	 * queue depth.  The reference queues two short URBs (32 frames at 1x);
+	 * the 64-frame ISO floor would defeat that geometry. */
 	if (!(chip->caps & FF_TCAP_FIXED_URB) &&
 	    chip->nurbs * chip->base_urb_frames < FF_MIN_QUEUE_FRAMES) {
 		chip->nurbs = DIV_ROUND_UP(FF_MIN_QUEUE_FRAMES,

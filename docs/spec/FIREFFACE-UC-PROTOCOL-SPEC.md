@@ -960,8 +960,10 @@ init sequence does not set it.
 5. The read form of `0x10` outside the options bits and the rate family.
    §9 decodes the bits under `0x05cf` and bits 4–5; the other bits are not
    decoded.
-6. The PC interrupt URB size.  The 48/96/192 sample-frame size is the host's
-   choice; the device contract is the packet size and the rate class.
+6. The PC interrupt URB size. The host chooses the frame count
+   (`uc_pc_frames`, default 16, two 8-frame blocks); the device contract is
+   the packet size and the rate class. The transport carries 16/32/64 frames
+   at 1x/2x/4x and two URBs are queued.
 7. AP header rate-band scaling.  The position width and modulus at 2x/4x
    (16384/32768).  The 1x layout (13-bit position / 8192 wrap, 14-bit phase
    counting 480 MHz ticks) is capture-verified; a 2x/4x ISO capture confirms

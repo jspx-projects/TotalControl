@@ -607,7 +607,10 @@ follower; an unlinked follower is skipped and must recover on its own.
 The host scheduling policy is one (DRIVER-DESIGN §4.1): interrupt scheduling
 with the period-aligned cushion `H = 2·period`, set before each rate/quantum
 change; a non-aligned IRQ wake threshold collapses the ring fill at fractional
-rates. **JACK** opens the PCM directly with a just-in-time fill. The refill
+rates. **JACK** opens the PCM directly with a just-in-time fill. Its `-p`/`-n` are the
+driver period and buffer; the interrupt whole-URB and buffer-minimum rules
+apply, and JACK's real-time scheduling is the favorable case for the short-URB
+queue. The refill
 wake cushion (`api.alsa.headroom`) requires `buffer > period + headroom`; below
 that limit the SPA wake thresholds degenerate and the graph cycles at buffer
 granularity, so the period count keeps the inequality at every quantum.

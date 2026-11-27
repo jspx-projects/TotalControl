@@ -205,6 +205,11 @@ impl RateCaps {
         self
     }
 
+    /// The transport is ISO. Interrupt transports use whole-URB periods.
+    pub fn is_iso(&self) -> bool {
+        self.iso
+    }
+
     /// The supported rates, in the driver's order. Empty means "use the
     /// canonical device rate list" (the mock).
     pub fn rates(&self) -> &[u32] {
@@ -286,6 +291,12 @@ impl ClockFacts {
     /// under timer scheduling; either way the period floor is the quantum floor.
     pub fn quantum_floor(&self, rate: u32) -> u32 {
         self.caps.period_floor(rate)
+    }
+
+    /// The transport is ISO. The interrupt transport accepts whole-URB periods
+    /// only; ISO accepts any period at or above the floor.
+    pub fn is_iso(&self) -> bool {
+        self.caps.is_iso()
     }
 
     /// The safe default quantum: the highest period floor across the device's

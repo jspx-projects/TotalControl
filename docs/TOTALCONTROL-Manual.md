@@ -396,11 +396,13 @@ host stream -> device rate -> graph rate + quantum
 The device clock and the stream run at the same nominal rate. While no stream
 runs, the pickers set the graph defaults and the device keeps the last value
 after a stream stops. The quantum picker offers every quantum at or above the
-running rate's period floor (one URB), plus the exact floor. The safe default —
-the highest period floor across the device's rates — applies when no quantum is
-stored; a chosen quantum may be lower, down to the floor. A quantum at the floor
-is the zero-slack corner: clean at nominal speed, but varispeed needs one period
-of slack at any rate (section 14). While a stream runs, the picker is a grayed
+running rate's period floor (one URB), plus the exact floor. On the UC PC and
+UCX IF5 interrupt transports the quantum must also be a whole multiple of the
+floor; the picker omits the values that are not. The safe default — the highest
+period floor across the device's rates — applies when no quantum is stored; a
+chosen quantum may be lower, down to the floor. A quantum at the floor is the
+zero-slack corner: clean at nominal speed, but varispeed needs one period of
+slack at any rate (section 14). While a stream runs, the picker is a grayed
 report of the stream's quantum. The panel shows "Audio stream can stutter
 below N samples." when the selected quantum is below twice the rate floor,
 where N is twice the rate floor; applying pitch there raises a notice to
@@ -469,13 +471,33 @@ the DAW. The device confirms the rate from its own clock readback.
    there.
 
 **Block size and buffer limits.** The driver accepts a block (period) at or
-above the rate's period floor — one USB transfer: 48 frames at 32–48 kHz, 96 at
-64–96 kHz, 192 at 128–192 kHz — and a buffer (block × periods) large enough to
-cover the transfers in flight plus margin. A block below the floor, or a buffer
-below the minimum, is refused when the DAW opens the device. REAPER's defaults
+above the rate's period floor — one USB transfer. On the UC PC and UCX IF5
+interrupt transports the transfer is 16/32/64 frames at 32–48/64–96/128–192
+kHz, and the block must be a whole multiple of it. On ISO the transfer is
+48/96/192 frames at the same bands, and any block at or above it is accepted.
+A buffer (block × periods) must cover the transfers in flight plus margin. A
+block below the floor, a non-multiple on the interrupt transport, or a buffer
+below the minimum is refused when the DAW opens the device. REAPER's defaults
 (512-frame block, 3 periods, 32-bit) are valid at every device rate. Use 32-bit
 output: the driver accepts 32-bit float and 32-bit integer; a 16/24-bit request
 fails to open.
+
+JACK uses the same limits for `-p` (period) and `-n` (periods): on the
+interrupt transport `-p` must be a whole multiple of the 16/32/64-frame URB,
+and `-p × -n` must be at least the buffer minimum (64/128/256 frames). On ISO
+`-p` may be any value at or above the floor.
+
+| Rate | Valid `-p` | `-p × -n` at least |
+|---|---|---|
+| 32–48 kHz | 16, 32, 48, 64, … | 64 |
+| 64–96 kHz | 32, 64, 96, 128, … | 128 |
+| 128–192 kHz | 64, 128, 192, … | 256 |
+
+Thus `-p 128 -n 3` is valid at every rate. The low-latency choices are
+`-p 32 -n 3` at 48 kHz, `-p 32 -n 4` at 96 kHz and `-p 64 -n 4` at 192 kHz.
+A non-multiple `-p`, or a buffer below the minimum, is refused when `jackd`
+opens the device. The JACK server owns the period; TotalControl reports the
+running value and does not change it.
 
 To change the rate or quantum of a running `jackd`, restart it — the JACK API
 fixes both at server start. TotalControl reports the owner's values while it

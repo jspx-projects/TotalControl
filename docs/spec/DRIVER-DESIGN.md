@@ -259,12 +259,16 @@ restores the 1x multiplier and forces a session replay on PC.
 ### 4.1 URB and buffer geometry
 
 Module parameters: `urb_frames` (default 48), `nurbs` (default 2),
-`ucx_if5_frames` (default 16), `fixed_rate`.
+`uc_pc_frames` (default 16), `ucx_if5_frames` (default 16), `fixed_rate`.
 
-- Interrupt: one URB carries `urb_frames` scaled by the rate band
-  (1x/2x/4x). The UCX IF5 base is `ucx_if5_frames`, two 8-frame blocks;
-  two URBs are queued, so the host queue is 32/64/128 frames. The PCM
-  buffer covers `(nurbs + 2) * urb_frames`, rounded up to whole periods.
+- Interrupt: one URB carries the model's short base scaled by the rate band
+  (1x/2x/4x). The UC PC base is `uc_pc_frames`; the UCX IF5 base is
+  `ucx_if5_frames`; both default to two 8-frame blocks. Two URBs are queued,
+  so the host queue is 32/64/128 frames. The PCM buffer covers
+  `(nurbs + 2) * urb_frames`, rounded up to whole periods.
+- The interrupt engine is one implementation for the UC PC and UCX IF5. The
+  model supplies the frame base, the caps and the transport setup; the ISO
+  engine separately serves UC AP and UCX ISO.
 - ISO: one URB carries up to 8 packets, one per 125 us microframe. The
   feedback delay is `(nurbs + 1) * iso_packets`. The UCX PCM buffer also
   covers the output lead plus two URBs of margin.
@@ -272,9 +276,10 @@ Module parameters: `urb_frames` (default 48), `nurbs` (default 2),
   whole number of URBs; on ISO any period at or above the floor is
   accepted. The graph quantum follows at 48 frames and above.
 
-The measured UCX IF5 round trip is 106/176/320 frames at 1x/2x/4x. The
-two-URB host queue accounts for 32/64/128 frames and the unit for
-74/112/192 frames.
+The measured UCX IF5 round trip is 106/176/320 frames at 1x/2x/4x; the
+UC PC round trip is 151/223/361. The two-URB host queue accounts for
+32/64/128 frames; the UCX IF5 unit is 74/112/192 and the UC PC unit is
+119/159/233.
 
 #### 4.1.1 The achievable envelope
 
@@ -332,11 +337,12 @@ The GUI offers the same envelope on the pitch slider (0.1 % grid).
 ```text
 ISO:           urb = iso_packets * ceil(rate / 8000)
                iso_packets = clamp(ceil(urb_frames / 6), 1, 8)
-interrupt UC:  urb = urb_frames << band(rate)
-interrupt UCX: urb = ucx_if5_frames << band(rate)
-               band = 0 (<=48k), 1 (<=96k), 2 (>96k)
-period_floor   = urb
-buffer_min     = roundup(max((nurbs + 2) * urb, lead + 2 * urb), urb)
+interrupt UC PC: urb = uc_pc_frames << band(rate)
+interrupt UCX:   urb = ucx_if5_frames << band(rate)
+                 band = 0 (<=48k), 1 (<=96k), 2 (>96k)
+period_floor     = urb
+period_step      = urb (interrupt); 1 (ISO)
+buffer_min       = roundup(max((nurbs + 2) * urb, lead + 2 * urb), urb)
                UCX ISO only: lead = round((nurbs + 1) * iso_packets * rate / 8000) + 60
 ```
 
@@ -357,6 +363,29 @@ the envelope ioctl:
 | 128000 | 128 | 768 |
 | 176400 | 184 | 1104 |
 | 192000 | 192 | 1152 |
+
+Interrupt envelope at the defaults (`uc_pc_frames`/`ucx_if5_frames = 16`,
+`nurbs = 2`), as reported by the envelope ioctl:
+
+| Rates | period floor | period step | buffer min |
+|---|---|---|---|
+| 32000 / 44100 / 48000 | 16 | 16 | 64 |
+| 64000 / 88200 / 96000 | 32 | 32 | 128 |
+| 128000 / 176400 / 192000 | 64 | 64 | 256 |
+
+The interrupt period must be a whole multiple of the period floor; the
+envelope reports the floor, and the step is the same value. The GUI offers
+only those multiples.
+
+The ALSA host is rejected with `-EINVAL` for a period below the rate's
+floor, a period that is not a whole multiple of the interrupt URB, a buffer
+below the rate's buffer minimum, channels above the mode's words, and a rate
+outside the supported set or `fixed_rate`. A rate change while the other
+stream is open returns `-EBUSY`. For example 24 at 1x, 48 at 2x and 96 at 4x
+are rejected; 32/48/64 at 1x, 32/64/96 at 2x and 64/128/192 at 4x are
+accepted. The JACK ALSA backend is a host like any other: its `-p` is the
+period and `-p × -n` the buffer, so the same table applies and `jackd` fails to
+open the device on an invalid combination.
 
 The envelope ioctl reply (`struct ff_hwdep_envelope`):
 
@@ -1296,7 +1325,7 @@ driver's transports. The owning sections carry the full detail:
 | Read form of request `0x10` outside the options bits `0x05cf` and the rate family | UC | register reads across rate families and clock states |
 | Status bytes 0 and 1; front-panel events use bytes 2 and 3 | UC PC | a capture correlating bytes 0/1 with a device action |
 | Bulk role of `0x03`/`0x84` at 1x/2x; they are interrupt at 4x | UC PC | a capture of the bulk traffic at 1x/2x |
-| Interrupt URB size: 48/96/192 frames is the host's choice; the device contract is the packet size and the rate class | UC PC | documentation item |
+| Interrupt URB size: the UC PC uses `uc_pc_frames` (default 16); the device contract is the packet size and the rate class | UC PC | documentation item |
 | AP header rate-band scaling: the position width and modulus widen to 16384/32768 at 2x/4x; the phase field is fixed 11-bit (bits 21-31) at every band with a 60 MHz reference (implemented). The 1x layout is capture-verified; the 2x/4x widening and phase field need device confirmation. The modern-UCX modulus is the 8192 family (the 3072 flag is old-firmware UFX/Babyface/UC-Mac only) | UCX IF0, UC IF0, Babyface | a 2x/4x ISO raw-header capture on the device; isolated add/drop events away from the wrap |
 | IF5 alternate selection at 2x/4x: alt 1/2/3 carry 18/14/6 input words; the receive URB uses the current alternate's words (implemented and bench-verified at 88.2/96/176.4/192) | UCX IF5 | the Windows reference host's exact selection order |
 | Optional audible characterization of the rate transition: the protocol is bench-verified (cadence follows, lead intact); an analog output capture across the switch measures the audible gap | UCX | a tone-playing round-trip with the output recorded across each switch |
