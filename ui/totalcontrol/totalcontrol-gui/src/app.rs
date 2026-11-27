@@ -17064,13 +17064,14 @@ fn transport_delta(
     }
 }
 
-/// The output-latency block: the value, then the formula lines. The slot keeps
-/// its height in every state so the settings card never resizes (GUI spec §4).
-/// `value_color` carries the pending colour for the ring fallback; the formula
-/// lines use the secondary colour.
+/// A latency block: the value, then a fixed number of formula lines. The slot
+/// keeps its height in every state so the settings card never resizes (GUI
+/// spec §4). `value_color` carries the pending colour for the ring fallback;
+/// the formula lines use the secondary colour.
 fn rtl_field(
     first_line: String,
     formula: String,
+    formula_lines: f32,
     value_color: Color,
     scale: f32,
 ) -> Element<'static, Message> {
@@ -17079,7 +17080,7 @@ fn rtl_field(
     column![
         line(first_line, value_color),
         container(line(formula, theme::text_sec()).width(Length::Fill))
-            .height(Length::Fixed(3.0 * row_h))
+            .height(Length::Fixed(formula_lines * row_h))
             .width(Length::Fill),
     ]
     .spacing(theme::SPACE_TIGHT * scale)
@@ -17087,13 +17088,24 @@ fn rtl_field(
     .into()
 }
 
+/// The output block reserves three formula lines; the input block needs two.
 fn rtl_block(
     value: String,
     formula: String,
     value_color: Color,
     scale: f32,
 ) -> Element<'static, Message> {
-    rtl_field(value, formula, value_color, scale)
+    rtl_field(value, formula, 3.0, value_color, scale)
+}
+
+fn rtl_block_lines(
+    value: String,
+    formula: String,
+    formula_lines: f32,
+    value_color: Color,
+    scale: f32,
+) -> Element<'static, Message> {
+    rtl_field(value, formula, formula_lines, value_color, scale)
 }
 
 /// The Latency out readout. The live host term is the playback
@@ -17185,9 +17197,9 @@ fn latency_in_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Messa
                 capture,
                 rate,
             };
-            rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale)
+            rtl_block_lines(rtl.summary(), rtl.breakdown(), 2.0, theme::text_sec(), scale)
         }
-        _ => rtl_block("\u{2014}".into(), " ".into(), theme::text_sec(), scale),
+        _ => rtl_block_lines("\u{2014}".into(), " ".into(), 2.0, theme::text_sec(), scale),
     }
 }
 
