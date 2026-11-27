@@ -1173,7 +1173,8 @@ Output packet:
 - URB size 1024 frames is the host's choice.
 
 The reference host selects alt 1 once at connect and streams 1x on it.
-The 2x/4x alternate selection is an open item (§12.4).
+Alt 2/3 carry the 2x/4x bands; the Windows reference host's exact
+selection order is an open item (§12.4).
 
 ### 12.3 Stream setup
 
@@ -1229,9 +1230,12 @@ The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
 
 ### 12.4 Open streaming items
 
-1. The 2x/4x alternate selection on interface 5: alt 1 is the verified
-   1x path; a reference-host capture streaming at 96/192 kHz decides
-   alt 2/3.
+1. The 2x/4x alternate selection on interface 5: the device enumerates
+   alt 1/2/3. Alt 1 carries 18 input words, alt 2 carries 14, and alt 3
+   carries two input endpoints of 6 words. The Linux IF5 path selects
+   alt 2 at 88.2/96 kHz and alt 3 at 176.4/192 kHz and streams duplex
+   cleanly (28/28 checks). The Windows reference host's exact selection
+   order is not captured.
 2. Settings-group field semantics: the `0x10` indices 0x3000/0x0800
    connect sequence, values and the ~110 ms gap are capture-verified
    (§11.3). The captured writes carry bit 11 (`0x0800`) and bit 13

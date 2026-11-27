@@ -2843,10 +2843,12 @@ static void ff_int_setup_urbs(struct ff *chip, unsigned int bytes)
 	unsigned int in_bytes = bytes;
 	int dir, e, i;
 
-	/* The Windows IF5 receive path always uses full 1024-frame URBs. */
+	/* The Windows IF5 receive path always uses full 1024-frame URBs.
+	 * The input word count follows the current alternate setting: 18 at
+	 * 1x, 14 at 2x and 6 per input endpoint at 4x.  Using the maximum
+	 * across all modes mis-sizes the 2x/4x receive URB. */
 	if (chip->caps & FF_TCAP_FIXED_URB)
-		in_bytes = chip->base_urb_frames * ff_max_words(chip) *
-			   FF_SAMPLE_BYTES;
+		in_bytes = chip->base_urb_frames * m->words * FF_SAMPLE_BYTES;
 
 	for (dir = 0; dir < 2; dir++) {
 		for (e = 0; e < m->neps; e++) {
