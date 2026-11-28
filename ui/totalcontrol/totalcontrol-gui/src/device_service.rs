@@ -27,8 +27,8 @@ use tokio::sync::Notify;
 use totalcontrol_core::channel::{EqBandType, InputEq};
 use totalcontrol_core::fireface::abi::HwdepCounters;
 use totalcontrol_core::{
-    ChannelId, DeviceSettings, Dynamics, Echo, Error, InputChannel, InputLevel, OutputChannel,
-    PlaybackChannel, Reverb, RmeDevice, Scene, Sensitivity, TalkbackConfig,
+    ChannelId, DeviceSettings, Dynamics, Echo, Error, InputChannel, InputLevel, InputSyncState,
+    OutputChannel, PlaybackChannel, Reverb, RmeDevice, Scene, Sensitivity, TalkbackConfig,
 };
 
 use crate::app::DeviceHandle;
@@ -317,6 +317,15 @@ impl Mirror {
     /// The rate the unit reports it is set to, as last polled by the service.
     pub fn device_rate(&self) -> Option<u32> {
         self.meters.lock().ok()?.device_rate
+    }
+
+    /// Lock, sync and detected rate for each digital input, as last polled
+    /// by the service.
+    pub fn input_sync_status(&self) -> [Option<InputSyncState>; 3] {
+        self.meters
+            .lock()
+            .map(|m| m.input_sync)
+            .unwrap_or([None; 3])
     }
 
     /// Apply a snapshot published by the service.  Returns false once the
@@ -1317,6 +1326,9 @@ pub struct MeterSnapshot {
     pub counters: Option<HwdepCounters>,
     /// The rate the unit reports it is set to (device status), when known.
     pub device_rate: Option<u32>,
+    /// Lock, sync and detected rate for each digital input, when the
+    /// backend reports them.  `None` means the input carries no signal.
+    pub input_sync: [Option<InputSyncState>; 3],
     /// Whether anything is visibly moving.  The service derives this from
     /// the levels, the held peaks and the FX values; a canvas that sees
     /// `false` stops scheduling frames and waits for [`meter_stream`].
@@ -1570,6 +1582,7 @@ fn run(
     let mut last_overload = [false; 2];
     let mut last_counters = Instant::now() - Duration::from_secs(1);
     let mut last_rate = Instant::now() - Duration::from_secs(1);
+    let mut last_sync = Instant::now() - Duration::from_secs(1);
     let mut peak_at = [[(Instant::now(), 0.0); 18]; 3];
 
     loop {
@@ -1751,6 +1764,12 @@ fn run(
             if last_rate.elapsed() >= Duration::from_millis(50) {
                 last_rate = Instant::now();
                 m.device_rate = device.device_rate();
+            }
+            // Digital-input lock and rate: diagnostic, not a control.  A
+            // quarter-second poll is enough for the Audio Config field.
+            if last_sync.elapsed() >= Duration::from_millis(250) {
+                last_sync = Instant::now();
+                m.input_sync = device.input_sync_status();
             }
             let active = meter_activity(&m);
             m.active = active;

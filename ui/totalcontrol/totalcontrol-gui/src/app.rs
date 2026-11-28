@@ -17,8 +17,8 @@ use totalcontrol_core::fireface::UcxDump;
 #[cfg(feature = "alsa")]
 use totalcontrol_core::{BabyfaceClassic, Fireface, FirefaceModel};
 use totalcontrol_core::{
-    ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockDevice, Reverb, RmeDevice, Scene,
-    Sensitivity, TalkbackConfig,
+    ChannelId, ChannelType, Dynamics, Echo, InputLevel, InputSyncState, MockDevice, Reverb,
+    RmeDevice, Scene, Sensitivity, SyncInput, TalkbackConfig,
 };
 
 use crate::about;
@@ -1319,6 +1319,17 @@ impl DeviceHandle {
             DeviceHandle::Fireface(d) => d.device_rate(),
             DeviceHandle::Mirror(d) => d.device_rate(),
             _ => None,
+        }
+    }
+
+    /// Lock, sync and detected rate for each digital input.  Only the UCX
+    /// reports it; other backends return no rows.
+    pub fn input_sync_status(&self) -> [Option<InputSyncState>; 3] {
+        match self {
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => d.input_sync_status(),
+            DeviceHandle::Mirror(d) => d.input_sync_status(),
+            _ => [None; 3],
         }
     }
 
@@ -16500,6 +16511,37 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
+    }
+    // Digital-input lock and detected rate.  Only UCX reports the status
+    // word, and only inputs that carry a signal get a row, so an unused
+    // unit does not grow a permanent diagnostic block.
+    let sync = state.device.input_sync_status();
+    let present: Vec<_> = sync.iter().flatten().collect();
+    if !present.is_empty() {
+        body = body.push(section("INPUT STATUS"));
+        for sync in present {
+            let label = match sync.input {
+                SyncInput::SpdifCoax => "S/PDIF coax",
+                SyncInput::Optical => "Optical",
+                SyncInput::WordClock => "Word clock",
+            };
+            let state_text = if sync.lock { "Locked" } else { "No lock" };
+            let rate = if sync.lock {
+                sync.rate
+                    .map(rate_label)
+                    .unwrap_or_else(|| "\u{2014}".into())
+            } else {
+                "\u{2014}".into()
+            };
+            body = body.push(
+                row![
+                    caption(label),
+                    readout(format!("{state_text} \u{00b7} {rate}"), text_size),
+                ]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
+            );
+        }
     }
     body.spacing(theme::SPACE_MD * scale)
         .width(Length::Fill)

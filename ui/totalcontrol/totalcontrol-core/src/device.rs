@@ -257,6 +257,36 @@ fn ensure_balance_len(balance: &mut Vec<i8>, block: usize) {
     }
 }
 
+/// One digital input whose sync state the unit reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncInput {
+    /// S/PDIF coaxial input.
+    SpdifCoax,
+    /// Optical ADAT/S/PDIF input.
+    Optical,
+    /// Word-clock input.
+    WordClock,
+}
+
+impl SyncInput {
+    /// The order the Audio Config panel lists the inputs in.
+    pub const ALL: [Self; 3] = [Self::SpdifCoax, Self::Optical, Self::WordClock];
+}
+
+/// Lock, sync and detected rate for one digital input, from the `0x11`
+/// state word.  A `None` rate means no rate is reported (the input carries
+/// no signal).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputSyncState {
+    pub input: SyncInput,
+    /// The receiver has locked to the input.
+    pub lock: bool,
+    /// The input is in sync with the active clock.
+    pub sync: bool,
+    /// The rate detected at the input, when reported.
+    pub rate: Option<u32>,
+}
+
 /// A generic RME audio interface.
 ///
 /// Each implementation maps to a specific hardware model and knows

@@ -1145,8 +1145,11 @@ active clock source and the rate most recently seen on each input.
 Measured on the desk at 48 kHz. On the internal clock the word was
 `0x02f02f11`: active clock 7, coaxial lock and sync set, coaxial rate
 index 2. Selecting the coaxial source changed the active clock field to 1
-while the lock, sync and coaxial rate fields remained set. A source with
-no input reports its rate field as `15`.
+while the lock, sync and coaxial rate fields remained set.
+
+The input status shows a source only when its lock bit is set or its rate
+index is neither `0` nor `15`. The optical field reads `0` with no signal;
+the word-clock field reads `15`. A locked index `0` is a 32 kHz input.
 
 Open items:
 

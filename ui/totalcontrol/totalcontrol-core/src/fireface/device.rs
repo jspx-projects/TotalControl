@@ -23,8 +23,8 @@ use crate::channel::{
     OutputChannel, PlaybackChannel, Reverb, Sensitivity,
 };
 use crate::device::{
-    output_balance_from_volumes, output_balance_to_volumes, DeviceSettings, RmeDevice,
-    TalkbackConfig,
+    output_balance_from_volumes, output_balance_to_volumes, DeviceSettings, InputSyncState,
+    RmeDevice, SyncInput, TalkbackConfig,
 };
 use crate::error::Error;
 use crate::scene::{MatrixOverride, Scene};
@@ -953,6 +953,12 @@ fn width_ms_coefficients(gl: f32, gr: f32, width: f32, ms_proc: bool) -> [f32; 4
     }
 }
 
+/// Rate index table used by the `0x11` state word and its per-input fields.
+const STATE_RATE_MAP: [u32; 12] = [
+    32_000, 44_100, 48_000, 48_000, 64_000, 88_200, 96_000, 96_000, 128_000, 176_400, 192_000,
+    192_000,
+];
+
 /// A Fireface UC or UCX opened over the kernel hwdep transport.
 pub struct Fireface {
     transport: Arc<Mutex<Box<dyn ControlTransport>>>,
@@ -1305,22 +1311,69 @@ impl Fireface {
     /// the internal-style decode) is unverified; the field decode is used
     /// as-is.
     fn decode_state_word_rate(d: &[u8]) -> Option<u32> {
-        const MAP: [u32; 12] = [
-            32000, 44100, 48000, 48000, 64000, 88200, 96000, 96000, 128000, 176400,
-            192000, 192000,
-        ];
         if d.len() < 4 {
             return None;
         }
         let word = u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
-        let internal = || MAP.get(d[3] as usize).copied();
+        let internal = || STATE_RATE_MAP.get(d[3] as usize).copied();
         let index = match (word >> 9) & 7 {
             1 => (word >> 12) & 0xF, // SPDIF coax clock
             2 => (word >> 16) & 0xF, // optical clock
             3 => (word >> 20) & 0xF, // word clock
             _ => return internal(),  // internal (7) or unknown source
         };
-        MAP.get(index as usize).copied().or_else(internal)
+        STATE_RATE_MAP.get(index as usize).copied().or_else(internal)
+    }
+
+    /// The lock, sync and detected rate of each digital input, read from the
+    /// `0x11` state word.  The UC uses a different status layout; its
+    /// inputs are not reported here.
+    pub fn input_sync_status(&self) -> [Option<InputSyncState>; 3] {
+        if self.model != Model::Ucx {
+            return [None; 3];
+        }
+        let Ok(d) = self.vendor_in(protocol::req::STATUS, 0, 0, 4) else {
+            return [None; 3];
+        };
+        if d.len() < 4 {
+            return [None; 3];
+        }
+        Self::decode_ucx_input_sync(u32::from_le_bytes([d[0], d[1], d[2], d[3]]))
+    }
+
+    /// Decode the per-input fields of the UCX `0x11` status word.
+    fn decode_ucx_input_sync(word: u32) -> [Option<InputSyncState>; 3] {
+        let mut out = [None; 3];
+        for (slot, (input, lock_bit, sync_bit, shift)) in [
+            (SyncInput::SpdifCoax, 0u32, 4u32, 12u32),
+            (SyncInput::Optical, 1, 5, 16),
+            (SyncInput::WordClock, 2, 6, 20),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let lock = word & (1 << lock_bit) != 0;
+            let sync = word & (1 << sync_bit) != 0;
+            let index = ((word >> shift) & 0x0f) as usize;
+            // 0 and 15 are the no-signal sentinels for the optical and
+            // word-clock fields.  A locked input at index 0 is a real
+            // 32 kHz signal and stays.
+            let rate = if index == 15 {
+                None
+            } else {
+                STATE_RATE_MAP.get(index).copied()
+            };
+            let signal = lock || (index != 0 && index != 15);
+            if signal {
+                out[slot] = Some(InputSyncState {
+                    input,
+                    lock,
+                    sync,
+                    rate,
+                });
+            }
+        }
+        out
     }
 
     fn from_transport_async(
@@ -12991,5 +13044,49 @@ mod tests {
         // byte (1 -> 44.1 kHz) is the defensive fallback.
         let w = (1 << 9) | (15 << 12) | (1 << 24);
         assert_eq!(Fireface::decode_state_word_rate(&state_word(w)), Some(44_100));
+    }
+
+    #[test]
+    fn ucx_input_sync_reports_locked_coax_only() {
+        // Internal 48 kHz, coax locked and in sync, coax rate 48 kHz.  This
+        // is the desk word measured with the UC feeding the UCX.
+        let w = 0x02f0_2f11;
+        let sync = Fireface::decode_ucx_input_sync(w);
+        let coax = sync[0].expect("coax carries a signal");
+        assert_eq!(coax.input, SyncInput::SpdifCoax);
+        assert!(coax.lock);
+        assert!(coax.sync);
+        assert_eq!(coax.rate, Some(48_000));
+        assert!(sync[1].is_none());
+        assert!(sync[2].is_none());
+    }
+
+    #[test]
+    fn ucx_input_sync_keeps_a_signal_that_is_not_locked() {
+        // Coax has a rate but no lock: the row stays, with no rate shown.
+        let w = (7 << 9) | (1 << 12) | (2 << 24);
+        let sync = Fireface::decode_ucx_input_sync(w);
+        let coax = sync[0].expect("coax carries a signal");
+        assert!(!coax.lock);
+        assert_eq!(coax.rate, Some(44_100));
+    }
+
+    #[test]
+    fn ucx_input_sync_omits_inputs_without_a_signal() {
+        // All three rate fields are the no-signal sentinel 15.
+        let w = (7 << 9) | (15 << 12) | (15 << 16) | (15 << 20) | (2 << 24);
+        assert_eq!(Fireface::decode_ucx_input_sync(w), [None; 3]);
+    }
+
+    #[test]
+    fn ucx_input_sync_reports_optical_and_word_clock() {
+        let w = (7 << 9) | (6 << 16) | (1 << 20) | 0x66;
+        let sync = Fireface::decode_ucx_input_sync(w);
+        let optical = sync[1].expect("optical carries a signal");
+        assert!(optical.lock && optical.sync);
+        assert_eq!(optical.rate, Some(96_000));
+        let word = sync[2].expect("word clock carries a signal");
+        assert!(word.lock && word.sync);
+        assert_eq!(word.rate, Some(44_100));
     }
 }

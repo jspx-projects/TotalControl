@@ -1256,7 +1256,15 @@ and Word.
 The `Clock source` row is a picker of the unit's own clock options only; it
 never lists host engine modes. It is shown on every path. The picker is active
 only while audio is stopped (no PCM owner and no host stream); while audio
-runs it is a read-only report of the actual source. The `Single speed word
+runs it is a read-only report of the actual source.
+
+The `Input status` section lists only the digital inputs that carry a signal,
+in the order S/PDIF coax, Optical and Word clock. Each row shows `Locked` or
+`No lock` and the detected rate in kHz; the rate is an em dash when the input
+is not locked. The section is absent when no input carries a signal. Rows
+appear and disappear as signals arrive, so the controls below them move.
+
+The `Single speed word
 clock` and `Word clock in` (termination) rows are clock-sync controls shown on
 every path. The signal-path settings (Optical and SPDIF format, the UC
 reference levels, EQ for Record) and the Firmware/Serial readouts stay. The `Sample rate` row is the nominal-rate picker

@@ -352,6 +352,13 @@ the nominal rate with your pitch applied; otherwise it is the rate the unit
 reports. The picker always shows the nominal rate in use, and `Current rate`
 always shows the truth, so a pitched clock is displayed correctly.
 
+`Input status` lists the digital inputs that carry a signal, in the order
+S/PDIF coax, Optical, Word clock. Each row shows `Locked` or `No lock` and the
+detected rate. The rate is an em dash when the input is not locked. The section
+is absent when no digital input carries a signal. A row appears when a source
+becomes active, so the panel below it moves down; the row disappears when the
+signal goes away.
+
 TotalControl has one playback policy: interrupt scheduling with a period-aligned
 safety cushion. There is no scheduling mode to choose. The quantum is the buffer
 control.
