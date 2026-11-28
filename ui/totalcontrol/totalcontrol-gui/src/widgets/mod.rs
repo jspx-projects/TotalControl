@@ -10,3 +10,4 @@ pub mod pause_mark;
 pub mod pitch_slider;
 pub mod splitter;
 pub mod strip;
+pub mod strip_canvas;
