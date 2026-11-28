@@ -12,7 +12,7 @@ use super::device::Model;
 pub enum Personality {
     UcPc,
     UcAp,
-    UcxIso,
+    UcxIf0,
     UcxIf5,
 }
 
@@ -21,7 +21,7 @@ impl Personality {
         Some(match (model, iso) {
             (Model::Uc, false) => Personality::UcPc,
             (Model::Uc, true) => Personality::UcAp,
-            (Model::Ucx, true) => Personality::UcxIso,
+            (Model::Ucx, true) => Personality::UcxIf0,
             (Model::Ucx, false) => Personality::UcxIf5,
         })
     }
@@ -29,7 +29,7 @@ impl Personality {
     pub fn model(self) -> Model {
         match self {
             Personality::UcPc | Personality::UcAp => Model::Uc,
-            Personality::UcxIso | Personality::UcxIf5 => Model::Ucx,
+            Personality::UcxIf0 | Personality::UcxIf5 => Model::Ucx,
         }
     }
 
@@ -37,7 +37,7 @@ impl Personality {
         match self {
             Personality::UcPc => "UC PC (interrupt)",
             Personality::UcAp => "UC AP (ISO)",
-            Personality::UcxIso => "UCX ISO",
+            Personality::UcxIf0 => "UCX IF0 (ISO)",
             Personality::UcxIf5 => "UCX IF5 (interrupt)",
         }
     }
@@ -47,7 +47,7 @@ impl Personality {
         match self {
             Personality::UcPc => "PC",
             Personality::UcAp => "AP",
-            Personality::UcxIso => "ISO",
+            Personality::UcxIf0 => "IF0",
             Personality::UcxIf5 => "IF5",
         }
     }
@@ -58,7 +58,7 @@ pub fn profile_for_personality(personality: Personality) -> &'static DeviceProfi
     match personality {
         Personality::UcPc => &crate::profiles::uc::PC,
         Personality::UcAp => &crate::profiles::uc::AP,
-        Personality::UcxIso => &crate::profiles::ucx::ISO,
+        Personality::UcxIf0 => &crate::profiles::ucx::IF0,
         Personality::UcxIf5 => &crate::profiles::ucx::IF5,
     }
 }
@@ -80,7 +80,7 @@ mod tests {
         );
         assert_eq!(
             Personality::from_model(Model::Ucx, true),
-            Some(Personality::UcxIso)
+            Some(Personality::UcxIf0)
         );
         assert_eq!(
             Personality::from_model(Model::Ucx, false),
@@ -92,7 +92,7 @@ mod tests {
     fn personality_short_labels_match_the_device_display() {
         assert_eq!(Personality::UcPc.short_label(), "PC");
         assert_eq!(Personality::UcAp.short_label(), "AP");
-        assert_eq!(Personality::UcxIso.short_label(), "ISO");
+        assert_eq!(Personality::UcxIf0.short_label(), "IF0");
         assert_eq!(Personality::UcxIf5.short_label(), "IF5");
     }
 
@@ -107,8 +107,8 @@ mod tests {
             ProfileId::UcAp
         );
         assert_eq!(
-            profile_for_personality(Personality::UcxIso).id,
-            ProfileId::UcxIso
+            profile_for_personality(Personality::UcxIf0).id,
+            ProfileId::UcxIf0
         );
         assert_eq!(
             profile_for_personality(Personality::UcxIf5).id,

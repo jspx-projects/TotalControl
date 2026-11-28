@@ -248,7 +248,7 @@ channel-init value matches. The driver resolves the format at probe
 always agree. The kernel converts between the wire format and the ALSA
 format.
 
-The transport operation of each personality is defined in §4.3 (AP mode),
+The transport operation of each personality is defined in §4.3 (ISO implicit feedback),
 §4.4 (PC mode) and the comparison in §4.5.
 
 The UC keeps its rate family across personality switches; a USB reset
@@ -270,7 +270,7 @@ Module parameters: `urb_frames` (default 48), `iso_packets` (default 4),
   applies to the interrupt transport.
 - The interrupt engine is one implementation for the UC PC and UCX IF5. The
   model supplies the frame base, the caps and the transport setup; the ISO
-  engine separately serves UC AP and UCX ISO.
+  engine separately serves UC AP and UCX IF0.
 - ISO: one URB carries `iso_packets` packets, one per 125 us microframe.
   The module parameter accepts 1..8; the default 4 makes the URB 0.5 ms at
   every rate. The queue is `nurbs` URBs, so `nurbs * iso_packets` packets
@@ -351,13 +351,13 @@ period_floor     = urb
 period_step      = urb (interrupt); 1 (ISO)
 fb_delay         = max((nurbs + 1) * iso_packets, 6)
 buffer_min       = roundup(max((nurbs + 2) * urb, lead + 2 * urb), urb)
-               UCX ISO only: lead = round(fb_delay * rate / 8000) + 60
+               UCX IF0 only: lead = round(fb_delay * rate / 8000) + 60
 ```
 
 `roundup()` rounds to any multiple. `round_up()` is a power-of-two bitmask and
 mis-aligns a non-power-of-two URB; the buffer rule uses `roundup()`.
 
-UCX ISO envelope at the defaults (`iso_packets = 4`, `nurbs = 2`), as
+UCX IF0 envelope at the defaults (`iso_packets = 4`, `nurbs = 2`), as
 reported by the envelope ioctl:
 
 | Rate | period floor | buffer min |
@@ -377,7 +377,7 @@ The UC AP ISO buffer minimum omits the UCX lead term:
 
 Short ISO URBs at `nurbs = 2`:
 
-| `iso_packets` | Rate | UCX ISO floor / buffer min | UC AP floor / buffer min |
+| `iso_packets` | Rate | UCX IF0 floor / buffer min | UC AP floor / buffer min |
 |---|---:|---:|---:|
 | 4 | 48000 | 24 / 192 | 24 / 96 |
 | 4 | 96000 | 48 / 336 | 48 / 192 |
@@ -682,9 +682,9 @@ Counters: `signal_deferred`, `signal_overdue`, `max_pending`, `delta_zero`,
 The gate adds at most about one URB of latency at equal periods. It is a
 correctness mechanism.
 
-### 4.3 ISO implicit feedback (AP mode)
+### 4.3 ISO implicit feedback (AP and IF0)
 
-![AP implicit feedback loop](ap-implicit-feedback.svg)
+![AP implicit feedback loop](iso-implicit-feedback.svg)
 
 The diagram details K1 on path F1; block IDs continue §1.1. The device
 captures and plays from one clock, so the captured stream is the
@@ -1357,14 +1357,14 @@ driver's transports. The owning sections carry the full detail:
 
 | Item | Scope | Evidence that decides it |
 |---|---|---|
-| AP descriptor: the AP interface and packet rows are the implemented mapping | UC AP | a descriptor capture of the AP personality |
-| AP MIDI: the driver exposes rawmidi where the descriptor carries USB-MIDI | UC AP | the AP descriptor capture; RME documents the ports as class compliant |
+| IF0 descriptor: the IF0 interface and packet rows are the implemented mapping | UC AP | a descriptor capture of the AP personality |
+| IF0 MIDI: the driver exposes rawmidi where the descriptor carries USB-MIDI | UC AP | the IF0 descriptor capture; RME documents the ports as class compliant |
 | Page stream field meanings on IF4; the driver leaves IF4 unclaimed | UC PC | a capture of the page stream with a known device state |
 | Read form of request `0x10` outside the options bits `0x05cf` and the rate family | UC | register reads across rate families and clock states |
 | Status bytes 0 and 1; front-panel events use bytes 2 and 3 | UC PC | a capture correlating bytes 0/1 with a device action |
 | Bulk role of `0x03`/`0x84` at 1x/2x; they are interrupt at 4x | UC PC | a capture of the bulk traffic at 1x/2x |
 | Interrupt URB size: the UC PC uses `uc_pc_frames` (default 16); the device contract is the packet size and the rate class | UC PC | documentation item |
-| AP header rate-band scaling: the position width and modulus widen to 16384/32768 at 2x/4x; the phase field is fixed 11-bit (bits 21-31) at every band with a 60 MHz reference (implemented). The 1x layout is capture-verified; the 2x/4x widening and phase field need device confirmation. The modern-UCX modulus is the 8192 family (the 3072 flag is old-firmware UFX/Babyface/UC-Mac only) | UCX IF0, UC IF0, Babyface | a 2x/4x ISO raw-header capture on the device; isolated add/drop events away from the wrap |
+| IF0 header rate-band scaling: the position width and modulus widen to 16384/32768 at 2x/4x; the phase field is fixed 11-bit (bits 21-31) at every band with a 60 MHz reference (implemented). The 1x layout is capture-verified; the 2x/4x widening and phase field need device confirmation. The modern-UCX modulus is the 8192 family (the 3072 flag is old-firmware UFX/Babyface/UC-Mac only) | UCX IF0, UC AP, Babyface | a 2x/4x ISO raw-header capture on the device; isolated add/drop events away from the wrap |
 | IF5 alternate selection at 2x/4x: alt 1/2/3 carry 18/14/6 input words; the receive URB uses the current alternate's words (implemented and bench-verified at 88.2/96/176.4/192) | UCX IF5 | the Windows reference host's exact selection order |
 | Optional audible characterization of the rate transition: the protocol is bench-verified (cadence follows, lead intact); an analog output capture across the switch measures the audible gap | UCX | a tone-playing round-trip with the output recorded across each switch |
 | UC PC connect init: the shipped 36-slot init is bench-verified; the UC Windows reference uses a 60-slot block | UC PC | a UC Windows connect capture comparison |

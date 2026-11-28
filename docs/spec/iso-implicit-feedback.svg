@@ -23,7 +23,7 @@
     .clock { stroke:#999; stroke-width:1.2; fill:none; stroke-dasharray:4 3; }
   </style>
 
-  <text class="title" x="460" y="28" text-anchor="middle">AP mode: ISO implicit feedback (path F1, detail of K1)</text>
+  <text class="title" x="460" y="28" text-anchor="middle">ISO implicit feedback (AP and IF0, path F1, detail of K1)</text>
   <text class="tiny" x="40" y="48">green A1–A4 = the feedback loop · red A5–A8 = guards · block IDs continue docs/spec/driver-host-architecture.svg; behaviour: DRIVER-DESIGN.md §4.3</text>
 
   <!-- device -->

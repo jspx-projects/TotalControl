@@ -1586,20 +1586,20 @@ direct ALSA.
 
 A and B are the two halves of the measured device span D: `D = A + B`.
 D is measured by the output-5 to input-5 loopback after the capture
-start-alignment correction. On UCX ISO and IF5 the split uses the UCX
+start-alignment correction. On UCX IF0 and IF5 the split uses the UCX
 converters: DA is 7 samples; AD is 14 at 1x/2x and 11 at 4x. On UC the split
 uses the UC converters: DA is 28 samples; AD is 43.2 at 1x/2x and 38.2 at
 4x. The digital remainder is split symmetrically. The live host queue is
 already in `snd_pcm_delay`.
 
-On UCX ISO at 48 kHz with a 128-frame live host term:
+On UCX IF0 at 48 kHz with a 128-frame live host term:
 
 ```text
 Latency out = 128 + 34 = 162 frames = 3.4 ms
 Latency in  =  96 + 42 = 138 frames = 2.9 ms
 ```
 
-UCX ISO device values (frames):
+UCX IF0 device values (frames):
 
 | Rate | A | B | D |
 |---|---:|---:|---:|
@@ -1656,7 +1656,7 @@ The UCX IF5 interrupt transport has its own values (frames):
 `Latency out` uses A at every rate. `Latency in` needs a measured D for the
 rate; where there is none it shows `—`. The UCX **IF5** interrupt transport has
 its own values; the ISO table does not apply to it. The UC split uses the UC
-converter delays; the UCX ISO/IF5 split uses the UCX converter delays; both
+converter delays; the UCX IF0/IF5 split uses the UCX converter delays; both
 use a symmetric digital remainder. A firmware or device-path change needs a
 new measurement.
 

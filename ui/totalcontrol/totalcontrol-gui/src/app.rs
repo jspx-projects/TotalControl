@@ -17245,7 +17245,7 @@ fn latency_out_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Mess
     // The measured splits use the vendor DA delay; the horizon fallback keeps
     // its converter half.
     let converter = match personality {
-        Some(LatencyPersonality::UcxIso | LatencyPersonality::UcxIf5) => dac_frames(rate),
+        Some(LatencyPersonality::UcxIf0 | LatencyPersonality::UcxIf5) => dac_frames(rate),
         Some(LatencyPersonality::UcPc | LatencyPersonality::UcAp) => uc_dac_frames(),
         _ => converter_frames(rate),
     };
@@ -17380,7 +17380,7 @@ impl LatencyIn {
 /// separately.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LatencyPersonality {
-    UcxIso,
+    UcxIf0,
     UcxIf5,
     UcPc,
     UcAp,
@@ -17396,7 +17396,7 @@ fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
     } else if device.is_ucx_model() {
         match device.personality_label() {
             Some("IF5") => Some(LatencyPersonality::UcxIf5),
-            _ => Some(LatencyPersonality::UcxIso),
+            _ => Some(LatencyPersonality::UcxIf0),
         }
     } else {
         None
@@ -17404,22 +17404,22 @@ fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
 }
 
 /// Measured ring-to-ring round trip D = C - P after the capture
-/// start-alignment correction, per personality and rate. The UCX ISO and UC
-/// entries are the probe's raw round trip; the UCX ISO device split is in
-/// `latency_ucx_iso_ab`. UCX IF5 uses `latency_ucx_if5_ab`; its short-URB
+/// start-alignment correction, per personality and rate. The UCX IF0 and UC
+/// entries are the probe's raw round trip; the UCX IF0 device split is in
+/// `latency_ucx_if0_ab`. UCX IF5 uses `latency_ucx_if5_ab`; its short-URB
 /// queue is counted live.
 fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     use LatencyPersonality::*;
     match (personality, rate) {
-        (UcxIso, 32_000) => Some(98),
-        (UcxIso, 44_100) => Some(117),
-        (UcxIso, 48_000) => Some(124),
-        (UcxIso, 64_000) => Some(160),
-        (UcxIso, 88_200) => Some(199),
-        (UcxIso, 96_000) => Some(212),
-        (UcxIso, 128_000) => Some(287),
-        (UcxIso, 176_400) => Some(347),
-        (UcxIso, 192_000) => Some(391),
+        (UcxIf0, 32_000) => Some(98),
+        (UcxIf0, 44_100) => Some(117),
+        (UcxIf0, 48_000) => Some(124),
+        (UcxIf0, 64_000) => Some(160),
+        (UcxIf0, 88_200) => Some(199),
+        (UcxIf0, 96_000) => Some(212),
+        (UcxIf0, 128_000) => Some(287),
+        (UcxIf0, 176_400) => Some(347),
+        (UcxIf0, 192_000) => Some(391),
         (UcPc, 32_000 | 44_100 | 48_000) => Some(151),
         (UcPc, 64_000 | 88_200 | 96_000) => Some(223),
         (UcPc, 128_000 | 176_400 | 192_000) => Some(361),
@@ -17435,17 +17435,17 @@ fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
 }
 
 /// A: the playback horizon (12.5 microframes of bus delivery) plus the
-/// output converter half. This remains the UC split; the UCX ISO split uses
+/// output converter half. This remains the UC split; the UCX IF0 split uses
 /// the measured device span and the vendor converter delays.
 fn latency_a(rate: u32) -> u32 {
     let bus = ((25u64 * rate as u64) + 8_000) / 16_000;
     bus as u32 + converter_frames(rate)
 }
 
-/// UCX ISO device span after the live two-URB queue, in frames. Measured by
+/// UCX IF0 device span after the live two-URB queue, in frames. Measured by
 /// the output-5 to input-5 analog loopback at the nine ISO rates with the
 /// default four-packet URB.
-fn latency_ucx_iso_d(rate: u32) -> Option<u32> {
+fn latency_ucx_if0_d(rate: u32) -> Option<u32> {
     match rate {
         32_000 => Some(66),
         44_100 => Some(73),
@@ -17471,9 +17471,9 @@ fn latency_split(d_span: u32, rate: u32) -> (u32, u32) {
     (a, d_span - a)
 }
 
-/// The UCX ISO output and input halves.
-fn latency_ucx_iso_ab(rate: u32) -> Option<(u32, u32)> {
-    latency_ucx_iso_d(rate).map(|d| latency_split(d, rate))
+/// The UCX IF0 output and input halves.
+fn latency_ucx_if0_ab(rate: u32) -> Option<(u32, u32)> {
+    latency_ucx_if0_d(rate).map(|d| latency_split(d, rate))
 }
 
 /// UCX IF5 unit span: the unit's converters and FIFOs at the rate family.
@@ -17525,11 +17525,11 @@ fn latency_uc_ab(personality: LatencyPersonality, rate: u32) -> Option<(u32, u32
 }
 
 /// The device output term A for a personality: the measured converter-aware
-/// split on UCX ISO, UCX IF5 and UC; the horizon split is the fallback for a
+/// split on UCX IF0, UCX IF5 and UC; the horizon split is the fallback for a
 /// rate without a measured span.
 fn latency_device_a(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     match personality {
-        LatencyPersonality::UcxIso => latency_ucx_iso_ab(rate).map(|(a, _)| a),
+        LatencyPersonality::UcxIf0 => latency_ucx_if0_ab(rate).map(|(a, _)| a),
         LatencyPersonality::UcxIf5 => latency_ucx_if5_ab(rate).map(|(a, _)| a),
         LatencyPersonality::UcPc | LatencyPersonality::UcAp => {
             latency_uc_ab(personality, rate).map(|(a, _)| a)
@@ -17541,7 +17541,7 @@ fn latency_device_a(personality: LatencyPersonality, rate: u32) -> Option<u32> {
 /// aware split; an unmeasured rate returns `None`.
 fn latency_b(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     match personality {
-        LatencyPersonality::UcxIso => latency_ucx_iso_ab(rate).map(|(_, b)| b),
+        LatencyPersonality::UcxIf0 => latency_ucx_if0_ab(rate).map(|(_, b)| b),
         LatencyPersonality::UcxIf5 => latency_ucx_if5_ab(rate).map(|(_, b)| b),
         LatencyPersonality::UcPc | LatencyPersonality::UcAp => {
             latency_uc_ab(personality, rate).map(|(_, b)| b)
@@ -17606,7 +17606,7 @@ fn converter_frames(rate: u32) -> u32 {
 }
 
 /// The vendor DA converter delay: 7 samples at every rate (RME UCX manual
-/// §39.2). The measured UCX ISO/IF5 split uses this value.
+/// §39.2). The measured UCX IF0/IF5 split uses this value.
 fn dac_frames(_rate: u32) -> u32 {
     7
 }
@@ -23383,7 +23383,7 @@ mod tests {
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         LatencyIn, LatencyOut, LatencyPersonality, latency_a, latency_b, latency_d,
         latency_device_a, latency_if5_unit, latency_uc_ab, latency_ucx_if5_ab,
-        latency_ucx_iso_ab, dac_frames, uc_dac_frames,
+        latency_ucx_if0_ab, dac_frames, uc_dac_frames,
         PwClock, ResetMix, RoutingMode, RowMode, StartupMismatch,
         TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,
         FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H,
@@ -24006,7 +24006,7 @@ mod tests {
         assert_eq!(converter_frames(48_000), 13);
         assert_eq!(converter_frames(96_000), 13);
         assert_eq!(converter_frames(192_000), 12);
-        // The measured UCX ISO/IF5 split uses the vendor DA delay.
+        // The measured UCX IF0/IF5 split uses the vendor DA delay.
         assert_eq!(dac_frames(44_100), 7);
         assert_eq!(dac_frames(192_000), 7);
     }
@@ -24021,23 +24021,23 @@ mod tests {
         assert_eq!(latency_a(96_000), 163);
         assert_eq!(latency_a(176_400), 288);
         assert_eq!(latency_a(192_000), 312);
-        // UCX ISO uses the measured device span and the vendor converters:
+        // UCX IF0 uses the measured device span and the vendor converters:
         // DA 7, AD 14 at 1x/2x, 11 at 4x; the digital remainder is symmetric.
-        assert_eq!(latency_ucx_iso_ab(44_100), Some((33, 40)));
-        assert_eq!(latency_ucx_iso_ab(48_000), Some((34, 42)));
-        assert_eq!(latency_ucx_iso_ab(64_000), Some((44, 52)));
-        assert_eq!(latency_ucx_iso_ab(88_200), Some((52, 59)));
-        assert_eq!(latency_ucx_iso_ab(96_000), Some((54, 62)));
-        assert_eq!(latency_ucx_iso_ab(128_000), Some((77, 82)));
-        assert_eq!(latency_ucx_iso_ab(176_400), Some((83, 88)));
-        assert_eq!(latency_ucx_iso_ab(192_000), Some((97, 102)));
-        assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(124));
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(42));
-        assert_eq!(latency_device_a(LatencyPersonality::UcxIso, 48_000), Some(34));
+        assert_eq!(latency_ucx_if0_ab(44_100), Some((33, 40)));
+        assert_eq!(latency_ucx_if0_ab(48_000), Some((34, 42)));
+        assert_eq!(latency_ucx_if0_ab(64_000), Some((44, 52)));
+        assert_eq!(latency_ucx_if0_ab(88_200), Some((52, 59)));
+        assert_eq!(latency_ucx_if0_ab(96_000), Some((54, 62)));
+        assert_eq!(latency_ucx_if0_ab(128_000), Some((77, 82)));
+        assert_eq!(latency_ucx_if0_ab(176_400), Some((83, 88)));
+        assert_eq!(latency_ucx_if0_ab(192_000), Some((97, 102)));
+        assert_eq!(latency_d(LatencyPersonality::UcxIf0, 48_000), Some(124));
+        assert_eq!(latency_b(LatencyPersonality::UcxIf0, 48_000), Some(42));
+        assert_eq!(latency_device_a(LatencyPersonality::UcxIf0, 48_000), Some(34));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(67));
         assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(68));
-        assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), Some(160));
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), Some(52));
+        assert_eq!(latency_d(LatencyPersonality::UcxIf0, 64_000), Some(160));
+        assert_eq!(latency_b(LatencyPersonality::UcxIf0, 64_000), Some(52));
         // IF5 uses the same converter split on its unit span.
         assert_eq!(latency_if5_unit(48_000), Some(74));
         assert_eq!(latency_if5_unit(64_000), Some(112));

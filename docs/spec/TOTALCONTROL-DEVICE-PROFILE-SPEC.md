@@ -34,7 +34,7 @@ the code. It contains one entry per supported profile.
 |---|---|---|---|---|---|
 | `uc_pc` | `uc` | interrupt | Fireface UC, PC | 2 | production |
 | `uc_ap` | `uc` | isochronous | Fireface UC, AP | 2 | production |
-| `ucx_iso` | `ucx` | isochronous | Fireface UCX | 2 | production |
+| `ucx_if0` | `ucx` | isochronous | Fireface UCX | 2 | production |
 | `ucx_if5` | `ucx` | interrupt | Fireface UCX, IF5 | 2 | production |
 | `babyface_classic` | `babyface_classic` | isochronous | Babyface-classic | 1 | experimental |
 
@@ -263,7 +263,7 @@ host operations that gate its field groups.
 | Workspace load | The canonical model must match; a different model refuses the load |
 | Scene apply | Fields gated off by the active profile are skipped and counted |
 | Reporting | The GUI reports the number of skipped settings |
-| Transport switch | PC/AP or ISO/IF5 on the same unit reuses the same workspace |
+| Transport switch | PC/AP or IF0/IF5 on the same unit reuses the same workspace |
 | Profile selection | Uses the unit's existing workspace |
 
 A profile switch preserves the saved state of the other transport mode.
@@ -282,6 +282,6 @@ The implementation is checked by hardware-free tests:
 | Layout reference | Every meter layout and template id resolves |
 | Transport equivalence | Profiles that share a model differ only in the fields the specification classifies as transport-specific |
 
-The equivalence test covers `uc_pc` against `uc_ap`, and `ucx_iso` against
+The equivalence test covers `uc_pc` against `uc_ap`, and `ucx_if0` against
 `ucx_if5`. A new field must be classified as transport-specific before it may
 differ between the two.

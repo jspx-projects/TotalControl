@@ -233,7 +233,7 @@ pub struct DeviceInfo {
     pub is_mock: bool,
     pub kind: crate::app::DeviceKind,
     pub target: crate::app::DeviceTarget,
-    /// Short personality label (`PC`, `AP`, `ISO`, `IF5`), when the
+    /// Short personality label (`PC`, `AP`, `IF0`, `IF5`), when the
     /// connection reports one.
     pub personality: Option<&'static str>,
     pub card_id: String,

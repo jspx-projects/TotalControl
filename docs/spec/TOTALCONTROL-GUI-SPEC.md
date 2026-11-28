@@ -2262,7 +2262,7 @@ Latency out = snd_pcm_delay + A(rate)
 ```
 
 `snd_pcm_delay` is the live playback ring plus the in-flight URBs; A is the
-device output path. On UCX ISO and IF5 it is the vendor DA delay (7 samples)
+device output path. On UCX IF0 and IF5 it is the vendor DA delay (7 samples)
 plus half of the measured digital remainder. On UC it is the horizon model:
 bus delivery plus output converter. The live host term is split into ring fill
 and in-flight queue, so the queue is counted once. The host term's label
@@ -2280,7 +2280,7 @@ B(rate)    = D(rate) - A(rate)
 D is the device span measured by the output-5 to input-5 loopback, after the
 capture start-alignment correction. On every measured personality, D is
 stored after the live host queue is removed, because the queue is already in
-the live playback and capture delays. The UCX ISO and IF5 split uses the UCX
+the live playback and capture delays. The UCX IF0 and IF5 split uses the UCX
 converters: DA is 7 samples; AD is 14 at 1x/2x and 11 at 4x. The UC split uses
 the UC converters: DA is 28 samples; AD is 43.2 at 1x/2x and 38.2 at 4x. The
 digital remainder is split symmetrically. Only D is directly measured; the
@@ -2288,7 +2288,7 @@ converter half is vendor data and the digital remainder is the model. A rate
 without a D measurement shows `—` for `Latency in`; `Latency out` falls back
 to the horizon A.
 
-| Rate | UCX ISO A | UCX ISO B | UCX ISO D |
+| Rate | UCX IF0 A | UCX IF0 B | UCX IF0 D |
 |---|---:|---:|---:|
 | 32 kHz | 29 | 37 | 66 |
 | 44.1 kHz | 33 | 40 | 73 |
@@ -2346,9 +2346,9 @@ unit span alone; A and B use the same vendor converter split.
 
 The calibration is per personality and rate. A firmware or device-path change
 needs a repeat measurement. The UC PC values cover 32–192 kHz; the UC AP
-values cover 32/44.1/48/88.2/96/176.4/192. The UCX ISO values cover
+values cover 32/44.1/48/88.2/96/176.4/192. The UCX IF0 values cover
 32/44.1/48/88.2/96/176.4/192. The UC split uses the UC converter delays; the
-UCX ISO/IF5 split uses the UCX converter delays. Both use a symmetric digital
+UCX IF0/IF5 split uses the UCX converter delays. Both use a symmetric digital
 remainder. The loopback is an electrical output-5 to
 input-5 connection, not an acoustic one.
 
