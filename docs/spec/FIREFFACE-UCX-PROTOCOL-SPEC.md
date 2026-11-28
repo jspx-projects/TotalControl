@@ -430,7 +430,7 @@ value.
 | `0x3d02` | Main Dim amount | 0.1 dB, signed |
 | `0x3d03` | Dim active | 0/1 |
 | `0x3d04` | Main Recall level | 0.1 dB, signed |
-| `0x3d20` | unknown read-only word | stays `0` when the clock source changes through the options word; meaning open |
+| `0x3d20` | clock-source mirror, not used on the USB path | reads `0`; a TotalMix clock change writes only the options word |
 | `0x3d21` | rate index | 0–8 for 32k … 192k |
 | `0x3d22` | word-clock output single speed | 0/1 |
 | `0x3d40` | word-clock input termination | 0/1 |
@@ -503,9 +503,6 @@ flag; the monitor mask and other monitor flags are not changed.
 
 Open items:
 
-- `0x3d20`: the word is read-only and stays `0` through an options-word
-  clock change. It is not written by a Main Out move. A front-panel or
-  stored-setup capture is needed to name it.
 - Dim active `0x3d03` and the Recall trigger: the device holds the words,
   but the TotalMix OSC paths in the 2026-11-28 round did not write them.
   A TotalMix GUI capture of the Dim and Recall buttons decides the writes.
@@ -1576,7 +1573,7 @@ state is not in this snapshot.
 | `0x3d02` | Main Dim amount |
 | `0x3d03` | Dim active |
 | `0x3d04` | Main Recall level |
-| `0x3d20` | clock source |
+| `0x3d20` | clock-source mirror; not written on the USB path |
 | `0x3d21` | rate index |
 | `0x3d22` | word-clock output single speed |
 | `0x3d40` | word-clock input termination |
