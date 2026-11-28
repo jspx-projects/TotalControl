@@ -77,11 +77,11 @@ meters, clock/options and scenes.
 |---|---|---|
 | Fireface UC PC | `0424:3fc5`, `2a39:3fc5`, `2a39:3fce` | interrupt IF0 |
 | Fireface UC AP | `0424:3fc6`, `2a39:3fc6` | isochronous IF0 |
-| Fireface UCX | `0424:3fc9`, `2a39:3fc9` | isochronous IF0 (default) or interrupt IF5 |
+| Fireface UCX | `0424:3fc9`, `2a39:3fc9` | interrupt IF5 (default) or isochronous IF0 |
 
-The UCX uses the isochronous interface by default (`ucx_if5=0`); set
-`ucx_if5=1` for the interrupt interface (this is experimental). We use
-the better isochronous interface that is also used by the Apple RME driver.
+The UCX uses the interrupt IF5 interface by default. Set `ucx_if5=0` to
+bind the isochronous IF0 interface instead. IF5 carries the full state dump
+and the S/PDIF input channel status; ISO remains available as the fallback.
 
 One module instance handles several units.  TotalControl identifies each unit by
 its serial number, remembers the selected unit across restarts, and opens that

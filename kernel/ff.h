@@ -34,7 +34,7 @@
  * Fireface UCX (0424:3fc9 / 2a39:3fc9):
  *   interface 0 has the ISO endpoints 0x0e OUT / 0x8f IN; interface 5 has
  *   the Windows interrupt endpoints 0x01/0x82.  The module parameter
- *   ucx_if5 chooses which personality binds (default ISO IF0).
+ *   ucx_if5 chooses which personality binds (default IF5).
  *
  * Babyface-classic (0424:3fc7 / 2a39:3fc7):
  *   UCX-family layout.  Interface 0 has the ISO endpoints 0x03 OUT /

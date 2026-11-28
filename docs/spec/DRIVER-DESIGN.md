@@ -236,8 +236,8 @@ callback; the shared PCM/URB path stays model-independent.
 |---|---|---|---|
 | UC PC | interrupt IF0 | S32 | status ticker IF5; session words after a live rate change |
 | UC AP | ISO IF0 | float32 | IN header + planar frames; OUT per-frame lead word |
-| UCX IF0 | ISO IF0 | float32 | default UCX path |
-| UCX IF5 | interrupt IF5 | S32 | opt-in `ucx_if5=1`; Windows mode-setup block; alt 1/2/3 for 1x/2x/4x |
+| UCX IF0 | ISO IF0 | float32 | fallback; select with `ucx_if5=0` |
+| UCX IF5 | interrupt IF5 | S32 | default; `ucx_if5=0` selects ISO; Windows mode-setup block; alt 1/2/3 for 1x/2x/4x |
 | Babyface-classic | ISO IF0 | float32 | UCX-family packet format; 12 capture / 14 playback words at 1x |
 
 The wire format is keyed to the transport: interrupt personalities carry

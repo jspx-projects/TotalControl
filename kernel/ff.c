@@ -30,7 +30,7 @@ static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 static unsigned int urb_frames = 48;
 static unsigned int iso_packets = 4;
 static unsigned int nurbs = 2;
-static bool ucx_if5;
+static bool ucx_if5 = true;
 static unsigned int ucx_if5_frames = 16;
 static unsigned int uc_pc_frames = 16;
 static unsigned int fixed_rate;
@@ -73,7 +73,7 @@ MODULE_PARM_DESC(iso_packets, "ISO transport: microframes (USB packets) per URB 
 module_param(nurbs, uint, 0444);
 MODULE_PARM_DESC(nurbs, "URBs in flight per endpoint (2..32, default 2); raised so at least 64 frames stay queued, except on the ISO and UCX IF5 short-URB geometries.");
 module_param(ucx_if5, bool, 0444);
-MODULE_PARM_DESC(ucx_if5, "Fireface UCX: bind the Windows-style interrupt interface 5 (default false). The default binds the Mac-style ISO interface 0; set Y only for the Windows transport.");
+MODULE_PARM_DESC(ucx_if5, "Fireface UCX: bind the interrupt interface 5 (default true). Set N to bind the isochronous interface 0 instead.");
 module_param(ucx_if5_frames, uint, 0444);
 MODULE_PARM_DESC(ucx_if5_frames, "Fireface UCX interrupt transport: frames per URB at 1x rates, doubled at 2x and quadrupled at 4x (8..1024, default 16 = 2 blocks of 8).");
 module_param(uc_pc_frames, uint, 0444);
