@@ -458,6 +458,9 @@ pub struct RateEnvelope {
     pub urb_frames: u32,
     pub nurbs: u32,
     pub iso: bool,
+    /// ISO packets in one URB. The pitch ceiling is one microframe capacity,
+    /// so the per-URB period floor is divided by this count.
+    pub iso_packets: u32,
     pub rates: Vec<RateEnv>,
 }
 
@@ -484,6 +487,7 @@ pub fn query_rate_envelope(card: i32) -> Option<RateEnvelope> {
         urb_frames: env.urb_frames,
         nurbs: env.nurbs,
         iso: env.iso != 0,
+        iso_packets: env.iso_packets,
         rates: env.rates[..n]
             .iter()
             .map(|r| RateEnv {
@@ -513,6 +517,7 @@ mod tests {
             urb_frames: 48,
             nurbs: 2,
             iso: true,
+            iso_packets: 8,
             rates: vec![
                 RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, capture_channels: 18, playback_channels: 18 },
                 RateEnv { rate: 96_000, period_floor: 96, buffer_min: 576, capture_channels: 14, playback_channels: 14 },

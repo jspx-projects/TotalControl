@@ -15617,7 +15617,8 @@ fn rate_caps(state: &TotalControl) -> RateCaps {
                 env.rates.iter().map(|r| (r.rate, r.period_floor)).collect(),
                 fallback,
             )
-            .with_iso(env.iso);
+            .with_iso(env.iso)
+            .with_iso_packets(env.iso_packets);
         }
     }
     // The mock, or a driver that did not report an envelope: the backend's
@@ -23265,6 +23266,7 @@ mod tests {
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
         note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
         safe_default_quantum, minimum_quantum, quantum_allowed, reconcile_device_pitch,
+        pitch_slider_max,
         power_sum_output_meters, quantum_pending, rate_authority_target,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
@@ -28364,6 +28366,7 @@ mod tests {
             urb_frames: 48,
             nurbs: 2,
             iso: true,
+            iso_packets: 8,
             rates: vec![totalcontrol_core::fireface::hwdep::RateEnv {
                 rate: 176_400,
                 period_floor: 184,
@@ -28383,6 +28386,7 @@ mod tests {
             urb_frames: 48,
             nurbs: 2,
             iso: true,
+            iso_packets: 8,
             rates: vec![
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, ..Default::default() },
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 176_400, period_floor: 184, buffer_min: 5888, ..Default::default() },
@@ -28433,13 +28437,14 @@ mod tests {
 
     fn ucx_envelope() -> totalcontrol_core::fireface::hwdep::RateEnvelope {
         totalcontrol_core::fireface::hwdep::RateEnvelope {
-            urb_frames: 48,
+            urb_frames: 24,
             nurbs: 2,
             iso: true,
+            iso_packets: 4,
             rates: [
-                (32_000, 32), (44_100, 48), (48_000, 48), (64_000, 64),
-                (88_200, 96), (96_000, 96), (128_000, 128),
-                (176_400, 184), (192_000, 192),
+                (32_000, 16), (44_100, 24), (48_000, 24), (64_000, 32),
+                (88_200, 48), (96_000, 48), (128_000, 64),
+                (176_400, 92), (192_000, 96),
             ]
             .iter()
             .map(|(rate, floor)| totalcontrol_core::fireface::hwdep::RateEnv {
@@ -28471,6 +28476,14 @@ mod tests {
         state.device.settings_mut().sample_rate = 96_000;
         state.engine_force_rate = 96_000;
         let _ = update(&mut state, Message::PitchChanged(5.0));
+        assert_eq!(state.pro_pitch, 5.0);
+        assert_eq!(state.device.settings().pitch_percent, 5.0);
+        // At 44.1k the four-packet URB floor is 24, but the endpoint still
+        // carries 7 frames per microframe: the full +5% is in envelope.
+        state.device.settings_mut().sample_rate = 44_100;
+        state.engine_force_rate = 44_100;
+        let _ = update(&mut state, Message::PitchChanged(5.0));
+        assert_eq!(pitch_slider_max(&state), 5.0);
         assert_eq!(state.pro_pitch, 5.0);
         assert_eq!(state.device.settings().pitch_percent, 5.0);
         // Negative pitch is always in envelope.
@@ -28506,6 +28519,7 @@ mod tests {
             urb_frames: 48,
             nurbs: 2,
             iso: true,
+            iso_packets: 8,
             rates: vec![
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, ..Default::default() },
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 96_000, period_floor: 96, buffer_min: 672, ..Default::default() },

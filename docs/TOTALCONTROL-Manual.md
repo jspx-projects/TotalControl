@@ -530,8 +530,8 @@ step or mark the workspace dirty. The quantum is remembered in the application
 preferences, not in a workspace.
 
 The `Pitch` slider changes the speed and pitch of the whole interface from
--5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Hold Shift for 0.01 % steps.
-Double-click the slider to return to 0.0 %. Pitch is written to the device
+-5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Double-click the slider to
+return to 0.0 %. Pitch is written to the device
 as soon as it changes. Right after a rate or quantum change, the clock write
 waits until the IRQ policy has applied. The positive end depends on the
 sample rate: the interface's USB transport carries the pitched clock only up
