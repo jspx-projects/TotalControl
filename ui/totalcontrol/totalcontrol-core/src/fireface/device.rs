@@ -687,22 +687,33 @@ fn scene_order_by_name(current: &[String], saved: &[String]) -> Vec<usize> {
 
 /// The device state that can be read back.
 ///
-/// The matrix, masters, loopback, mute, options word, references and the
-/// preamp switches are write-only.  This snapshot is therefore partial:
-/// the UC reads `0x10` and `0x17` completely; both models carry only the
-/// gain/volume channels the front panel or state stream reported.
+/// The UC reads `0x10` and `0x17` completely.  The UCX uses its requested
+/// full dump for the input preamp group and output references, plus the
+/// live gain/volume maps for changes the front panel reports.  The options
+/// word has its own read path.  Matrix masters, loopback and record dry
+/// remain host-cached or scene-written.
 #[derive(Clone, Debug, Default)]
 pub struct ReadableState {
-    /// True for the UCX: only input gain and output volume are read back.
-    /// The clock, format, reference and preamp-switch registers are
-    /// unit-owned and write-only, so they are not compared.
+    /// True for the UCX: the full dump supplies the preamp group and output
+    /// references; the option word still comes from its own read path.
     pub ucx: bool,
+    /// True when the requested full dump is present.  Without it the UCX
+    /// preamp/reference fields are not claimed.
+    pub dump_ready: bool,
     pub clock_source: String,
     pub optical_out_spdif: bool,
     pub spdif_professional: bool,
     pub phantom: [bool; 2],
     pub pad: [bool; 2],
     pub instrument: [bool; 2],
+    /// UCX input Level for inputs 3/4.
+    pub input_level: [Option<InputLevel>; 4],
+    /// UCX AutoSet for inputs 1–4.
+    pub input_autoset: [bool; 4],
+    /// UCX Line In 5–8 reference (`0x0407`).
+    pub input_ref_58: Option<u16>,
+    /// UCX output reference codes, indexed by hardware output channel.
+    pub output_ref: Vec<(usize, u16)>,
     pub input_gain: Vec<(usize, u32)>,
     pub output_volume: Vec<(usize, f32)>,
 }
@@ -781,7 +792,7 @@ impl ReadableState {
                 }
             }
         }
-        if !self.ucx {
+        if !self.ucx || self.dump_ready {
             for &(idx, gain) in &self.input_gain {
                 if let Some(input) = scene.inputs.get(idx) {
                     if input.gain != Some(gain) {
@@ -799,6 +810,85 @@ impl ReadableState {
                         out.push(format!(
                             "AN{} gain: device {dev}, TotalControl {ours}",
                             idx + 1
+                        ));
+                    }
+                }
+            }
+        }
+        if self.ucx && self.dump_ready {
+            for i in 0..2 {
+                if let Some(input) = scene.inputs.get(i) {
+                    if self.phantom[i] != input.phantom {
+                        out.push(format!(
+                            "AN{} 48 V: device {}, TotalControl {}",
+                            i + 1,
+                            self.phantom[i],
+                            input.phantom
+                        ));
+                    }
+                }
+            }
+            for (slot, i) in (2..4).enumerate() {
+                if let Some(input) = scene.inputs.get(i) {
+                    if self.instrument[slot] != input.instrument {
+                        out.push(format!(
+                            "AN{} Inst: device {}, TotalControl {}",
+                            i + 1,
+                            self.instrument[slot],
+                            input.instrument
+                        ));
+                    }
+                    if let Some(level) = self.input_level[i] {
+                        if input.level != Some(level) {
+                            out.push(format!(
+                                "AN{} Level: device {}, TotalControl {}",
+                                i + 1,
+                                level.label(),
+                                input
+                                    .level
+                                    .map(InputLevel::label)
+                                    .unwrap_or("-")
+                            ));
+                        }
+                    }
+                }
+            }
+            for (i, input) in scene.inputs.iter().enumerate().take(4) {
+                if self.input_autoset[i] != input.autoset {
+                    out.push(format!(
+                        "AN{} AutoSet: device {}, TotalControl {}",
+                        i + 1,
+                        self.input_autoset[i],
+                        input.autoset
+                    ));
+                }
+            }
+            if let Some(code) = self.input_ref_58 {
+                if code != scene.settings.line_in_ref_58 {
+                    out.push(format!(
+                        "Line In 5-8 reference: device {code}, TotalControl {}",
+                        scene.settings.line_in_ref_58
+                    ));
+                }
+            }
+            for &(idx, code) in &self.output_ref {
+                if idx % 2 != 0 {
+                    continue;
+                }
+                let expected = match idx / 2 {
+                    0 => Some(scene.settings.phones_ref),
+                    1..=3 => Some(scene.settings.line_out_ref),
+                    _ => None,
+                };
+                if let Some(expected) = expected {
+                    if code != expected {
+                        out.push(format!(
+                            "{} reference: device {code}, TotalControl {expected}",
+                            scene
+                                .outputs
+                                .get(idx)
+                                .map(|o| o.name.as_str())
+                                .unwrap_or("output")
                         ));
                     }
                 }
@@ -3445,23 +3535,88 @@ impl Fireface {
             .iter()
             .map(|(&i, &g)| (i, g))
             .collect();
-        input_gain.sort_unstable_by_key(|(i, _)| *i);
         let mut output_volume: Vec<(usize, f32)> = self
             .device_output_volume
             .iter()
             .map(|(&i, &v)| (i, v))
             .collect();
-        output_volume.sort_unstable_by_key(|(i, _)| *i);
         if !self.is_uc() {
-            // The UCX reports only the gain and output-volume maps.  The
-            // options word, references and preamp switches are write-only.
+            let dump_ready = self.state_words.len() > 1500;
+            if !dump_ready {
+                return Some(ReadableState {
+                    ucx: true,
+                    input_gain,
+                    output_volume,
+                    ..ReadableState::default()
+                });
+            }
+            // The requested full dump is the preamp-readback source.  It
+            // carries 48 V/Level, Inst, AutoSet and the output references
+            // that the sparse running stream does not report.
+            input_gain.clear();
+            output_volume.clear();
+            let mut phantom = [false; 2];
+            let mut instrument = [false; 2];
+            let mut input_level = [None; 4];
+            let mut input_autoset = [false; 4];
+            for idx in 0..4 {
+                let base = (idx as u16) << 8;
+                if let Some(&word) = self.state_words.get(&(base | 0x07)) {
+                    let raw = word as u32;
+                    let gain = if idx < 2 {
+                        ((raw + 5) / 10).min(65)
+                    } else {
+                        ((raw + 2) / 5).min(24)
+                    };
+                    input_gain.push((idx, gain));
+                }
+                if let Some(&word) = self.state_words.get(&(base | 0x08)) {
+                    if idx < 2 {
+                        phantom[idx] = word & 1 != 0;
+                    } else {
+                        input_level[idx] = InputLevel::from_code(word);
+                    }
+                }
+                if let Some(&word) = self.state_words.get(&(base | 0x09)) {
+                    if (2..4).contains(&idx) {
+                        instrument[idx - 2] = word != 0;
+                    }
+                }
+                if let Some(&word) = self.state_words.get(&(base | 0x0a)) {
+                    input_autoset[idx] = word != 0;
+                }
+            }
+            for idx in 0..self.outputs.len() {
+                if let Some(reg) = Self::ucx_output_reg(idx, ucx::offset::MUTE_OR_FADER) {
+                    if let Some(&word) = self.state_words.get(&reg) {
+                        output_volume.push((idx, ucx::tenths_to_linear(word)));
+                    }
+                }
+            }
+            let mut output_ref = Vec::new();
+            for idx in 0..self.outputs.len() {
+                if let Some(reg) = Self::ucx_output_reg(idx, ucx::offset::OUTPUT_REF_LEVEL) {
+                    if let Some(&word) = self.state_words.get(&reg) {
+                        output_ref.push((idx, word));
+                    }
+                }
+            }
             return Some(ReadableState {
                 ucx: true,
+                phantom,
+                instrument,
+                input_level,
+                input_autoset,
+                input_ref_58: self.state_words.get(&0x0407).copied(),
+                output_ref,
                 input_gain,
                 output_volume,
+                dump_ready: true,
                 ..ReadableState::default()
             });
         }
+        input_gain.sort_unstable_by_key(|(i, _)| *i);
+        output_volume.sort_unstable_by_key(|(i, _)| *i);
         Some(ReadableState {
             ucx: false,
             clock_source: self.settings.clock_source.clone(),
@@ -3481,6 +3636,7 @@ impl Fireface {
             ],
             input_gain,
             output_volume,
+            ..ReadableState::default()
         })
     }
 
@@ -3906,8 +4062,30 @@ impl Fireface {
     /// values stay at the TotalControl scene.
     pub fn restore_readable(&mut self, state: &ReadableState) -> Result<(), Error> {
         if !self.is_uc() {
-            // UCX: input gain is not reported at connect, so it stays with
-            // the scene.  Only the output-volume map is restored.
+            if state.dump_ready {
+                for i in 0..2 {
+                    self.set_phantom(i, state.phantom[i])?;
+                    self.set_autoset(i, state.input_autoset[i])?;
+                }
+                for (slot, i) in (2..4).enumerate() {
+                    self.set_instrument(i, state.instrument[slot])?;
+                    if let Some(level) = state.input_level[i] {
+                        self.set_input_level(i, level)?;
+                    }
+                }
+                for &(idx, gain) in &state.input_gain {
+                    self.set_gain(idx, gain)?;
+                }
+                if let Some(code) = state.input_ref_58 {
+                    self.set_line_in_ref_58(code)?;
+                }
+                if let Some((_, code)) = state.output_ref.iter().find(|(idx, _)| *idx == 0) {
+                    self.set_phones_ref(*code)?;
+                }
+                if let Some((_, code)) = state.output_ref.iter().find(|(idx, _)| *idx == 2) {
+                    self.set_line_out_ref(*code)?;
+                }
+            }
             for &(idx, volume) in &state.output_volume {
                 self.set_volume(ChannelId::Output(idx), 0, volume)?;
             }
@@ -12201,6 +12379,67 @@ mod tests {
         dev.apply_scene(&scene).unwrap();
         assert_eq!(dev.inputs()[2].gain, Some(12));
         assert_eq!(dev.inputs()[2].gain_max, Some(24));
+    }
+
+    #[test]
+    fn ucx_full_dump_supplies_preamp_and_reference_state() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        // The full dump is treated as ready above 1500 words.
+        for addr in 0..1600u16 {
+            dev.state_words.insert(addr, 0);
+        }
+        dev.state_words.insert(0x0008, 1);    // AN1 48 V
+        dev.state_words.insert(0x0207, 120);  // AN3 gain, 0.1 dB
+        dev.state_words.insert(0x0208, 2);    // AN3 LoGain
+        dev.state_words.insert(0x0209, 1);    // AN3 Inst
+        dev.state_words.insert(0x000a, 1);    // AN1 AutoSet
+        dev.state_words.insert(0x020a, 1);    // AN3 AutoSet
+        dev.state_words.insert(0x1208, 2);    // Line Out reference
+        dev.state_words.insert(0x1808, 0);    // Phones reference
+        dev.state_words.insert(0x0407, 2);    // Line In 5-8 reference
+
+        let state = dev.readable_state().expect("UCX readable state");
+        assert!(state.dump_ready);
+        assert!(state.phantom[0]);
+        assert_eq!(state.input_level[2], Some(InputLevel::LoGain));
+        assert!(state.instrument[0]);
+        assert!(state.input_autoset[0]);
+        assert!(state.input_autoset[2]);
+        assert!(state.input_gain.contains(&(2, 24)));
+        assert!(state.output_ref.contains(&(2, 2)));
+        assert_eq!(state.input_ref_58, Some(2));
+
+        let scene = dev.capture_scene();
+        let differences = state.differences(&scene);
+        assert!(differences.iter().any(|item| item.contains("AN3 Level")));
+        assert!(differences.iter().any(|item| item.contains("AN1 AutoSet")));
+    }
+
+    #[test]
+    fn ucx_full_dump_supplied_state_restores_the_preamp_group() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut state = ReadableState {
+            ucx: true,
+            dump_ready: true,
+            input_level: [None, None, Some(InputLevel::LoGain), None],
+            input_autoset: [true, false, false, false],
+            input_ref_58: Some(2),
+            ..ReadableState::default()
+        };
+        state.phantom[0] = true;
+        state.instrument[0] = true;
+        state.input_gain = vec![(2, 24)];
+        state.output_ref = vec![(0, 0), (2, 2)];
+
+        dev.restore_readable(&state).unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(0x0008, 1)));
+        assert!(words.contains(&(0x0208, 2)));
+        assert!(words.contains(&(0x0209, 1)));
+        assert!(words.contains(&(0x000a, 1)));
+        assert!(words.contains(&(0x0207, 120)));
+        assert!(words.contains(&(0x0407, 2)));
+        assert!(words.contains(&(0x1208, 2)));
     }
 
     #[test]
