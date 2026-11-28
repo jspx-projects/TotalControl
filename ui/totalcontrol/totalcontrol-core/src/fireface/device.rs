@@ -3375,6 +3375,7 @@ impl Fireface {
     }
 
     fn ucx_write_clock(&self, clock: u16) -> Result<(), Error> {
+        log::info!("UCX clock field write: {clock} (mask 0x0006)");
         self.vendor_out(protocol::req::SETTINGS, clock << 1, 0x0006)
     }
 
@@ -7507,6 +7508,7 @@ impl RmeDevice for Fireface {
     }
 
     fn set_clock_source(&mut self, source: &str) -> Result<(), Error> {
+        log::info!("Fireface set_clock_source: {source}");
         let index = match source {
             "Internal" => 0,
             "SPDIF Coaxial" | "SPDIF" => 1,

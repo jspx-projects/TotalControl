@@ -469,7 +469,24 @@ impl Mirror {
     pub fn sync_settings(&self) {
         let settings = self.scene.settings.clone();
         self.run(move |d| {
-            *d.settings_mut() = settings;
+            // Only the host-model settings travel here.  The device-owned
+            // clock source, options, references and sample rate come from
+            // the unit; a stale scene copy must not overwrite the live
+            // model.  A later scene apply would then write the stale value
+            // back to the unit.
+            let mut live = d.settings().clone();
+            if live.clock_source != settings.clock_source {
+                log::info!(
+                    "sync_settings keeps live clock {} (scene {})",
+                    live.clock_source,
+                    settings.clock_source
+                );
+            }
+            live.input_link = settings.input_link;
+            live.output_link = settings.output_link;
+            live.input_pair_link = settings.input_pair_link;
+            live.mono = settings.mono;
+            *d.settings_mut() = live;
         });
     }
 }
@@ -810,6 +827,7 @@ impl RmeDevice for Mirror {
     }
 
     fn set_clock_source(&mut self, source: &str) -> Result<(), Error> {
+        log::info!("device service set_clock_source: {source}");
         let source = source.to_string();
         self.run_checked(move |d| d.set_clock_source(&source));
         Ok(())
