@@ -1123,10 +1123,35 @@ full nine-rate index sweep is verified on the UC (UC spec §9.1). The rate
 status word (§11.6) carries the same family and band state with the
 readiness bits.
 
+### 11.8 Input sync state
+
+The state word also reports each digital input's lock and sync state, the
+active clock source and the rate most recently seen on each input.
+
+| Bits | Field | Encoding |
+|---|---|---|
+| 0 | S/PDIF coaxial lock | 1 = locked |
+| 1 | optical lock | 1 = locked |
+| 2 | word-clock lock | 1 = locked |
+| 4 | S/PDIF coaxial sync | 1 = in sync |
+| 5 | optical sync | 1 = in sync |
+| 6 | word-clock sync | 1 = in sync |
+| 9–11 | active clock source | 7 internal, 1 S/PDIF coaxial, 2 optical, 3 word clock |
+| 12–15 | S/PDIF coaxial rate index | §11.7 table |
+| 16–19 | optical rate index | §11.7 table |
+| 20–23 | word-clock rate index | §11.7 table |
+| 24–27 | active rate index | §11.7 table |
+
+Measured on the desk at 48 kHz. On the internal clock the word was
+`0x02f02f11`: active clock 7, coaxial lock and sync set, coaxial rate
+index 2. Selecting the coaxial source changed the active clock field to 1
+while the lock, sync and coaxial rate fields remained set. A source with
+no input reports its rate field as `15`.
+
 Open items:
 
-- External-clock rate decode. The per-source index fields need a physical
-  clock source at each digital input; deferred (UC spec §9.1).
+- Optical and word-clock lock, sync and rate fields have no external
+  source measurement yet.
 
 ## 12. Streaming
 
