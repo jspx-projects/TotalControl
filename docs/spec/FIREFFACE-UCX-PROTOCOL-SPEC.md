@@ -434,7 +434,7 @@ value.
 | `0x3d21` | rate index | 0–8 for 32k … 192k |
 | `0x3d22` | word-clock output single speed | 0/1 |
 | `0x3d40` | word-clock input termination | 0/1 |
-| `0x3d41` | optical output format | 0 ADAT, 1 S/PDIF |
+| `0x3d41` | optical output format | 0 S/PDIF, 1 ADAT |
 | `0x3d42` | S/PDIF professional | 0 consumer, 1 professional |
 | `0x3d43` | unknown boolean | writable 0/1 |
 | `0x3d44` | unknown index/sentinel | writable; −1, 0 and 2 accepted |

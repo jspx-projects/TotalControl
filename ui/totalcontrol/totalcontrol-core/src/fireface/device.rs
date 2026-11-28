@@ -3463,6 +3463,9 @@ impl Fireface {
             0x3d20 => {
                 if let Some(source) = self.settings.clock_sources.get(value as usize) {
                     self.settings.clock_source = source.clone();
+                    log::info!("UCX clock mirror 0x3d20 = {value} -> {source}");
+                } else {
+                    log::info!("UCX clock mirror 0x3d20 = {value} -> out of range");
                 }
             }
             0x3d21 => {
@@ -3471,12 +3474,31 @@ impl Fireface {
                 ];
                 if let Some(rate) = RATES.get(value as usize) {
                     self.settings.sample_rate = *rate;
+                    log::info!("UCX rate mirror 0x3d21 = {value} -> {rate} Hz");
+                } else {
+                    log::info!("UCX rate mirror 0x3d21 = {value} -> out of range");
                 }
             }
-            0x3d22 => self.settings.word_clock_single_speed = value != 0,
-            0x3d40 => self.settings.word_clock_termination = value != 0,
-            0x3d41 => self.settings.optical_out_spdif = value != 0,
-            0x3d42 => self.settings.spdif_professional = value != 0,
+            0x3d22 => {
+                self.settings.word_clock_single_speed = value != 0;
+                log::info!("UCX word-clock single-speed 0x3d22 = {value}");
+            }
+            0x3d40 => {
+                self.settings.word_clock_termination = value != 0;
+                log::info!("UCX word-clock termination 0x3d40 = {value}");
+            }
+            0x3d41 => {
+                // The mirror follows options-word bit 10: 0 = SPDIF,
+                // 1 = ADAT.  Confirmed by an EP0 read of the options word
+                // (bit 10 clear) while the mirror read 0 and the unit ran
+                // Optical S/PDIF.
+                self.settings.optical_out_spdif = value == 0;
+                log::info!("UCX optical-format mirror 0x3d41 = {value} -> spdif={}", value == 0);
+            }
+            0x3d42 => {
+                self.settings.spdif_professional = value != 0;
+                log::info!("UCX SPDIF-professional 0x3d42 = {value}");
+            }
             _ => {}
         }
     }
@@ -12444,7 +12466,7 @@ mod tests {
         dev.apply_ucx_state_word(0x3d21, 5); // 96 kHz
         dev.apply_ucx_state_word(0x3d22, 1); // single speed
         dev.apply_ucx_state_word(0x3d40, 1); // termination
-        dev.apply_ucx_state_word(0x3d41, 1); // optical S/PDIF
+        dev.apply_ucx_state_word(0x3d41, 0); // optical S/PDIF (0 = S/PDIF)
         dev.apply_ucx_state_word(0x3d42, 1); // professional
 
         let settings = dev.settings();
@@ -12454,6 +12476,10 @@ mod tests {
         assert!(settings.word_clock_termination);
         assert!(settings.optical_out_spdif);
         assert!(settings.spdif_professional);
+
+        // The mirror is options-word bit 10: 1 = ADAT.
+        dev.apply_ucx_state_word(0x3d41, 1);
+        assert!(!dev.settings().optical_out_spdif);
     }
 
     #[test]
