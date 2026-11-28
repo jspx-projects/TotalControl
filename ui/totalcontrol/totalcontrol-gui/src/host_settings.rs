@@ -170,7 +170,6 @@ pub struct HostSettings {
     pub engine_force_rate: Option<u32>,
     /// The legacy playback mode; read and ignored.
     pub engine_rate_mode: Option<EngineRateMode>,
-    pub engine_force_quantum: Option<u32>,
     /// Consecutive full-scale samples that trigger OVR.  This is a global
     /// meter preference, shared by every channel and unit.
     #[serde(default = "ovr_samples")]
@@ -202,7 +201,6 @@ impl Default for HostSettings {
             mackie: None,
             engine_force_rate: None,
             engine_rate_mode: None,
-            engine_force_quantum: None,
             ovr_full_scale_samples: ovr_samples(),
             keep_in_tray: None,
             audio_performance: false,
@@ -293,7 +291,6 @@ pub fn from_legacy(prefs: &crate::prefs::Prefs) -> HostSettings {
         },
         engine_force_rate: prefs.engine_force_rate,
         engine_rate_mode: prefs.engine_rate_mode,
-        engine_force_quantum: prefs.engine_force_quantum,
         keep_in_tray: prefs.keep_in_tray,
         workspace_last_dir: prefs.workspace_last_dir.clone(),
         ..HostSettings::default()

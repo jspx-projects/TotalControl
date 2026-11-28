@@ -216,7 +216,7 @@ mixer scene, labels, groups, snapshots, layouts or window layout.
 | Active unit | Last selected unit key |
 | OSC | Enabled, dialect, ports and feedback destination address |
 | MIDI controllers | Enabled, debug log, per-device input/output enable and protocol, option values per protocol, key assignments per protocol |
-| Engine | Current rate. The rate is the last value a host stream ran at; a later launch reuses it and does not restore an older value. The host graph quantum is workspace state (§3). While a host stream runs, its running graph rate and quantum win and are used for the period pin and the cushion. The legacy playback-mode key is read, ignored and written back unchanged. |
+| Engine | Current rate, rate mode and audio-performance preference. These are installation settings for the host engine. The host graph quantum is workspace state (§3). While a host stream runs, its running graph rate and quantum win and are used for the period pin and the cushion. The legacy playback-mode key is read, ignored and written back unchanged. |
 | Meters | OVR full-scale sample count (global, 1–15, default 3) |
 | Startup | Session autostart (starts hidden in the tray) and keep in tray |
 | Files | Last workspace folder |

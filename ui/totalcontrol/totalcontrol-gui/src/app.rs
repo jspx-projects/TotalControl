@@ -4242,7 +4242,6 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
     settings.audio_perf_max_sleep_us = state.audio_perf_us;
     settings.engine_force_rate = Some(state.engine_force_rate);
     settings.engine_rate_mode = Some(state.engine_rate_mode);
-    settings.engine_force_quantum = Some(state.engine_force_quantum);
     settings.osc_enabled = state.osc_enabled;
     settings.osc_mode = state.osc_dialect;
     settings.osc_recv_port = state.osc_recv_port;
@@ -4274,7 +4273,6 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
         } else {
             EngineRateMode::Auto
         });
-    state.engine_force_quantum = settings.engine_force_quantum.unwrap_or(0);
     if !state.osc_cli {
         state.osc_recv_port = if settings.osc_recv_port == 0 {
             7001
@@ -27016,22 +27014,18 @@ mod tests {
     }
 
     #[test]
-    fn a_simulated_session_never_changes_the_remembered_engine_choice() {
+    fn a_simulated_session_does_not_persist_a_host_quantum() {
         // A choice made with `--mock` once landed in the preferences and
-        // was forced on the real PipeWire at the next real launch.
+        // was forced on the real PipeWire at the next real launch.  The
+        // quantum is workspace state now, not a host setting.
         let mut state = new(true, None, None);
-        apply_host_settings(
-            &mut state,
-            crate::host_settings::HostSettings {
-                engine_force_quantum: Some(0),
-                ..Default::default()
-            },
-        );
+        apply_host_settings(&mut state, crate::host_settings::HostSettings::default());
         super::restore_engine(&mut state);
         let _ = update(&mut state, Message::EngineQuantum(128));
         assert_eq!(state.engine.unwrap().effective_quantum(), 128, "simulated");
-        assert_eq!(state.engine_force_quantum, 0, "remembered choice untouched");
-        assert_eq!(host_settings_of(&state).engine_force_quantum, Some(0));
+        assert_eq!(state.engine_force_quantum, 0, "runtime choice untouched");
+        let json = serde_json::to_string(&host_settings_of(&state)).unwrap();
+        assert!(!json.contains("engine_force_quantum"));
     }
 
     #[test]
