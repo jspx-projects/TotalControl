@@ -6927,7 +6927,13 @@ impl RmeDevice for Fireface {
         }
         // Control register bit 8 is the inverse of the dialog's option.
         self.ucx_control_bits(if on { 0 } else { 0x0100 }, 0x0100)?;
-        self.settings.eq_for_record = on;
+        // The options-word read form carries the bit; verify the write.
+        self.read_ucx_settings();
+        if self.settings.eq_for_record != on {
+            return Err(Error::Io(std::io::Error::other(
+                "EQ + D for record did not read back",
+            )));
+        }
         Ok(())
     }
 
@@ -7674,6 +7680,7 @@ impl RmeDevice for Fireface {
         let device_phones = self.settings.phones_ref;
         let device_wc_single = self.settings.word_clock_single_speed;
         let device_wc_term = self.settings.word_clock_termination;
+        let device_eq_for_record = self.settings.eq_for_record;
         let device_reverb = self.settings.reverb;
         let device_echo = self.settings.echo;
         // The sample rate is device-owned: a scene does not move the clock.
@@ -7851,6 +7858,7 @@ impl RmeDevice for Fireface {
             self.settings.spdif_professional = device_spdif_pro;
             self.settings.word_clock_single_speed = device_wc_single;
             self.settings.word_clock_termination = device_wc_term;
+            self.settings.eq_for_record = device_eq_for_record;
         }
         if self.settings.reverb.is_none() {
             self.settings.reverb = device_reverb;
@@ -8325,6 +8333,17 @@ mod tests {
             if request == protocol::req::SETTINGS && direction == Direction::In {
                 if let Some(word) = *self.settings.lock().unwrap() {
                     return Ok(word.to_le_bytes().to_vec());
+                }
+            }
+            if request == protocol::req::SETTINGS && direction == Direction::Out {
+                // Mirror the options word the way the unit does: index 1487
+                // replaces the full word; any other index is the write mask.
+                let mut word = self.settings.lock().unwrap();
+                if index == 1487 {
+                    *word = Some(value as u32);
+                } else if index != 48 {
+                    let current = word.unwrap_or(0);
+                    *word = Some((current & !index as u32) | (value as u32 & index as u32));
                 }
             }
             Ok(Vec::new())
@@ -12491,24 +12510,29 @@ mod tests {
     }
 
     #[test]
-    fn ucx_scene_apply_writes_record_dry_from_the_scene() {
+    fn ucx_scene_apply_keeps_the_live_record_dry() {
+        // Record dry is device-owned: the options word read form reports it,
+        // so a scene that predates a change made on the unit does not write
+        // it back over the live value.
         let (mut dev, writes) = open(Model::Ucx);
+        dev.set_eq_for_record(true).unwrap();
         let mut scene = dev.capture_scene();
 
         scene.settings.eq_for_record = false;
         writes.lock().unwrap().clear();
         dev.apply_scene(&scene).unwrap();
-        assert!(!dev.settings().eq_for_record);
-        assert!(writes.lock().unwrap().iter().any(|w| matches!(
+        assert!(dev.settings().eq_for_record);
+        assert!(!writes.lock().unwrap().iter().any(|w| matches!(
             w,
             Write::Vendor(protocol::req::SETTINGS, value, 1487) if value & 0x0100 != 0
         )));
 
+        dev.set_eq_for_record(false).unwrap();
         scene.settings.eq_for_record = true;
         writes.lock().unwrap().clear();
         dev.apply_scene(&scene).unwrap();
-        assert!(dev.settings().eq_for_record);
-        assert!(writes.lock().unwrap().iter().any(|w| matches!(
+        assert!(!dev.settings().eq_for_record);
+        assert!(!writes.lock().unwrap().iter().any(|w| matches!(
             w,
             Write::Vendor(protocol::req::SETTINGS, value, 1487) if value & 0x0100 == 0
         )));
@@ -12731,10 +12755,10 @@ mod tests {
         // The UCX options word read form returns the live options under mask
         // 0x05cf (measured on firmware 46), so the device-owned options are
         // read at open and win over a scene that may predate a change made
-        // elsewhere, as on the UC. Record dry has no mirror, so the scene is
-        // its only source. Device word 0x00CE: Word Clock clock, optical
-        // SPDIF, SPDIF professional, single speed, termination on, EQ + D for
-        // Record enabled.
+        // elsewhere, as on the UC. Record dry is bit 8 of the same word.
+        // Device word 0x00CE: Word Clock clock, optical SPDIF, SPDIF
+        // professional, single speed, termination on, EQ + D for Record
+        // enabled.
         let (mut dev, writes) = open_ucx_with_settings(0x00CE);
         let mut scene = dev.capture_scene();
         scene.settings.clock_source = "Internal".into();
@@ -12755,7 +12779,7 @@ mod tests {
         assert!(settings.spdif_professional);
         assert!(settings.word_clock_single_speed);
         assert!(settings.word_clock_termination);
-        assert!(!settings.eq_for_record);
+        assert!(settings.eq_for_record);
         // The reference levels are device-owned and unreadable, so the scene
         // is written at connect to keep the GUI and hardware in step.
         let words = written_words(&writes);
@@ -12770,12 +12794,12 @@ mod tests {
         assert_eq!(last(0x1808), Some(2));
         assert_eq!(last(0x0407), Some(3));
         // The options word written at connect carries the device values,
-        // except record dry, which has no mirror and uses the scene.
+        // including record dry, which the options read form reports.
         assert!(writes
             .lock()
             .unwrap()
             .iter()
-            .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x01CE, 1487))));
+            .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x00CE, 1487))));
     }
 
     #[test]

@@ -1340,7 +1340,7 @@ music.
 
 ## 14. State and scenes
 
-The host scene is authoritative.
+The host scene is authoritative for the mixer state.
 
 A scene stores:
 
@@ -1354,9 +1354,11 @@ A scene stores:
 
 The backend writes the mixer scene at connect and after relevant rate or
 stream changes.  The preamp group (input gain and right gain, 48 V, Inst,
-Level and AutoSet), the reference levels and the options word (clock source,
-optical format, SPDIF professional, word-clock rate and termination, EQ + D for
-Record) are also written from the saved scene at connect.
+Level and AutoSet) and the reference levels are also written from the saved
+scene at connect. The options word (clock source, optical format, SPDIF
+professional, word-clock rate and termination, EQ + D for Record) is
+device-owned: the backend reads it from the unit at connect and keeps the live
+value. A connect write of the options word carries the live value.
 
 The unit retains input gain and the main output fader across a power cycle.
 The user guide also states that the unit permanently stores its configuration

@@ -111,12 +111,12 @@ pub struct DeviceSettings {
     #[serde(default)]
     pub an12: bool,
     /// EQ + D for record: whether the hardware DSP EQ is applied to the
-    /// recorded signal too, not just the monitor mix. Settings
-    /// keepalive bit 6 (`PROTOCOL.md`'s `cap_eqr.pcap`, hardware-
-    /// verified) — an RME-specific setting, distinct from the generic
-    /// `spdif_*` fields above. The setting has no REG1 mirror, so this
-    /// scene value is the unverified host cache and stays serialized.
-    #[serde(default)]
+    /// recorded signal too, not just the monitor mix. Options-word bit 8
+    /// (`PROTOCOL.md`'s `cap_eqr.pcap`, hardware-verified) — an
+    /// RME-specific setting, distinct from the generic `spdif_*` fields
+    /// above. The UCX options word read form reports the bit, so the
+    /// field is device-owned and is not serialized.
+    #[serde(default, skip_serializing)]
     pub eq_for_record: bool,
     /// Optical Out format: `true` = SPDIF (2-channel), `false` = ADAT
     /// (8-channel, the device default). Settings keepalive bit 10
