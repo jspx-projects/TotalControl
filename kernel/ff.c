@@ -4434,11 +4434,14 @@ static void ff_disconnect(struct usb_interface *intf)
 		return;
 	usb_set_intfdata(intf, NULL);
 
+	/* Mark the card dead before ALSA tears it down.  An hwdep ioctl that
+	 * starts after this point returns -ENODEV instead of touching a
+	 * runtime that is being dismantled. */
+	WRITE_ONCE(chip->disconnected, true);
 	snd_card_disconnect(chip->card);
 	debugfs_remove_recursive(chip->debugfs);
 	chip->debugfs = NULL;
 	mutex_lock(&chip->mutex);
-	WRITE_ONCE(chip->disconnected, true);
 	WRITE_ONCE(chip->engine_running, false);
 	ff_kill_urbs(chip, true);
 	mutex_unlock(&chip->mutex);

@@ -1169,10 +1169,20 @@ rate-change sequence and is desk-verified on the UCX only.
   direction was running.
 - Resume re-runs hardware init and restarts the engine if prepared. A USB
   reset forces alt reselection and a UC session replay.
-- Disconnect marks the card disconnected, kills URBs, cancels recovery
-  and quiesces the control transport. The hwdep event FIFO and URB
-  buffers are freed when the card is released after the last close, so
-  an active reader never races a free.
+- Disconnect marks the card disconnected before ALSA teardown, kills URBs,
+  cancels recovery and quiesces the control transport. A new hwdep open
+  returns `-ENODEV`; hwdep ioctls return `-ENODEV`; `read()` drains any
+  events already queued and then returns `-ENODEV`; `poll()` reports
+  `EPOLLERR | EPOLLHUP`.
+- An open hwdep node keeps the card and module referenced until its last
+  close. Module unload therefore waits for hwdep users, which is the normal
+  lifecycle contract. The hwdep event FIFO and URB buffers are freed when
+  the card is released after the last close, so an active reader never
+  races a free.
+- The live snapshot reads each PCM runtime under the stream lock and skips
+  a runtime that is not fully initialised. A snapshot racing PCM teardown
+  therefore returns a partial snapshot, not a divide-by-zero or a stale
+  runtime pointer.
 
 ### 8.1 Host recognition, incompatibility and fallback
 
