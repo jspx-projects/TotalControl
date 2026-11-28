@@ -425,16 +425,17 @@ value.
 | `0x3c25` | Echo volume | 0.1 dB, signed |
 | `0x3c26` | Echo width | 0..100 |
 | `NN02` | output mode word | bit 0 mute; bit 1 monitor-muted (the inactive Main/Speaker B pair) |
-| `0x3d00` | Speaker B active | 0/1 |
+| `0x3d00` | Speaker B pair index | DSP output pair 0–8 while Speaker B is active; 0 while off |
 | `0x3d01` | Mute Enable flag | 0/1; writable, audio effect not measured |
 | `0x3d02` | Main Dim amount | 0.1 dB, signed |
 | `0x3d03` | Dim active | 0/1 |
 | `0x3d04` | Main Recall level | 0.1 dB, signed |
-| `0x3d20` | control-room Main pair | read-only; 0 = AN1/2 in the tested state |
-| `0x3d21` | control-room Speaker B pair | read-only; 2 = AN3/4 in the normal state |
-| `0x3d22` | unknown | 0 in the tested states |
-| `0x3d40` | host-session/runtime flag | read-only; 0 in a Linux-only session, 1 after a host-application session |
-| `0x3d41`, `0x3d42` | unknown | read-only, 0 in the tested states |
+| `0x3d20` | clock source | 0 Internal, 1 S/PDIF coaxial, 2 optical, 3 word clock |
+| `0x3d21` | rate index | 0–8 for 32k … 192k |
+| `0x3d22` | word-clock output single speed | 0/1 |
+| `0x3d40` | word-clock input termination | 0/1 |
+| `0x3d41` | optical output format | 0 ADAT, 1 S/PDIF |
+| `0x3d42` | S/PDIF professional | 0 consumer, 1 professional |
 | `0x3d43` | unknown boolean | writable 0/1 |
 | `0x3d44` | unknown index/sentinel | writable; −1, 0 and 2 accepted |
 | `0x3d45`, `0x3d46` | unknown | writable words |
@@ -459,16 +460,15 @@ values are not changed. Releasing Dim restores the saved fader values and
 writes `0x3d03 = 0`.
 
 Main Out and Speaker B assignment are host-side monitor bookkeeping. They
-write no `NN02` mode word. `0x3d20` reports the Main pair and `0x3d21` the
-Speaker B pair; neither assignment changes the physical output's normal
-submix.
+write no `NN02` mode word. `0x3d00` carries the Speaker B pair index while
+Speaker B is active; it is zero while Speaker B is off.
 
 Switching Speaker B on writes `NN02` bit 1 on the Main pair and clears it on
-the Speaker B pair, then writes `0x3d00 = 1`. Switching it off clears bit 1 on
-the Main pair and sets it on the Speaker B pair, then writes `0x3d00 = 0`.
-Assigning Speaker B while inactive sets bit 1 on the new pair. Clearing or
-moving the assignment clears bit 1 on the old pair. Bit 0 is the output mute
-and is preserved in every mode-word write.
+the Speaker B pair, then writes `0x3d00` with the Speaker B pair index.
+Switching it off clears bit 1 on the Main pair and sets it on the Speaker B
+pair, then writes `0x3d00 = 0`. Assigning Speaker B while inactive sets bit 1
+on the new pair. Clearing or moving the assignment clears bit 1 on the old
+pair. Bit 0 is the output mute and is preserved in every mode-word write.
 
 Mute FX is host-driven. It saves the FX-return levels (`NN03`) of both sides
 of the assigned Main Out pair, writes `0xFD76` (−65 dB) to them, and restores
@@ -1520,14 +1520,17 @@ state is not in this snapshot.
 | `0x3c01`..`0x3c0d` | Reverb parameters |
 | `0x3c20` | Echo enable |
 | `0x3c21`..`0x3c26` | Echo parameters |
-| `0x3d00` | Speaker B active |
+| `0x3d00` | Speaker B pair index while active; 0 while off |
 | `0x3d01` | Mute Enable flag |
 | `0x3d02` | Main Dim amount |
 | `0x3d03` | Dim active |
 | `0x3d04` | Main Recall level |
-| `0x3d20` | control-room Main pair |
-| `0x3d21` | control-room Speaker B pair |
-| `0x3d22` | unknown |
+| `0x3d20` | clock source |
+| `0x3d21` | rate index |
+| `0x3d22` | word-clock output single speed |
+| `0x3d40` | word-clock input termination |
+| `0x3d41` | optical output format |
+| `0x3d42` | S/PDIF professional |
 | `0x3d40` | host-session/runtime flag |
 | `0x3d41`–`0x3d42` | unknown/read-only |
 | `0x3d43`–`0x3d46` | unknown/writable |

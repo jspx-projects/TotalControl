@@ -2059,7 +2059,7 @@ destinations in this order, using the same names as the Control Room channels:
 | Destination | Device |
 |---|---|
 | Main | output mode word `0xNN02` bit 1 on the chosen pair |
-| Speaker B | the same bit, plus control-room state word `0x3d00 = 1` while active |
+| Speaker B | the same bit, plus control-room state word `0x3d00` = the Speaker B pair index while active, 0 while off |
 | Phones 1..4 | host-side; the unit receives nothing |
 | Cue/PFL to | host-side; selects the Cue/PFL monitoring target |
 

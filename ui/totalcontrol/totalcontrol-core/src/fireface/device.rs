@@ -2091,11 +2091,23 @@ impl Fireface {
         Ok(())
     }
 
+    /// The device's Speaker B pair word: the B pair index while Speaker B is
+    /// active, zero while it is off. The value is a DSP output-pair index,
+    /// not a boolean; the capture with B on pair 6 writes 6.
+    fn ucx_speaker_b_pair_word(&self) -> u16 {
+        self.settings
+            .main_b_out
+            .and_then(ucx::output_pair_dsp)
+            .map(|dsp| (dsp / 2) as u16)
+            .unwrap_or(0)
+    }
+
     /// Write the device-specific Speaker B active word.  The UC keeps this
     /// state host-side.
     fn control_room_write_speaker_b_state(&mut self, on: bool) -> Result<(), Error> {
         if !self.is_uc() {
-            self.write_word(0x3d00, on as u16)?;
+            let value = if on { self.ucx_speaker_b_pair_word() } else { 0 };
+            self.write_word(0x3d00, value)?;
         }
         Ok(())
     }
@@ -6382,7 +6394,7 @@ impl RmeDevice for Fireface {
         if pair.is_none() {
             self.settings.speaker_b = false;
         }
-        self.write_word(0x3d00, if self.settings.speaker_b { 1 } else { 0 })?;
+        self.control_room_write_speaker_b_state(self.settings.speaker_b)?;
         self.reconcile_control_room();
         Ok(())
     }
@@ -9088,6 +9100,43 @@ mod tests {
         assert!((dev.outputs()[6].volume - before.0).abs() < 1e-6);
         assert!((dev.outputs()[7].volume - before.1).abs() < 1e-6);
         assert!(!dev.settings().dim);
+    }
+
+    #[test]
+    fn ucx_speaker_b_word_carries_the_b_pair_index() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();      // AN 1/2
+        dev.set_main_out_b(Some(6)).unwrap();    // B pair index 6
+        writes.lock().unwrap().clear();
+
+        dev.set_speaker_b(true).unwrap();
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Words(vec![(0x3d00, 6)])));
+
+        writes.lock().unwrap().clear();
+        dev.set_speaker_b(false).unwrap();
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Words(vec![(0x3d00, 0)])));
+    }
+
+    #[test]
+    fn ucx_main_out_change_does_not_write_the_speaker_b_word() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_speaker_b(false).unwrap();
+        writes.lock().unwrap().clear();
+
+        dev.set_main_out(Some(2)).unwrap();
+        assert!(!writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|w| matches!(w, Write::Words(v) if v.iter().any(|(r, _)| *r == 0x3d00))));
     }
 
     #[test]
