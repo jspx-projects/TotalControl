@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
-use crate::channel::InputLevel;
+use crate::channel::{
+    Dynamics, Echo, EqBandType, InputEq, InputLevel, Reverb,
+};
 use crate::scene::Scene;
 
 /// Output pairs in the requested dump.  TotalControl's pair 0 is Phones;
@@ -204,31 +206,11 @@ impl UcxDump {
                     input.ms_proc = ms;
                 }
             }
-            if let Some(word) = self.input(idx, 0x20) {
-                if let Some(eq) = input.eq.as_mut() {
-                    let on = word != 0;
-                    if eq.low_cut_enabled != on {
-                        out.push(format!(
-                            "AN{} low cut: device {on}, TotalControl {}",
-                            idx + 1,
-                            eq.low_cut_enabled
-                        ));
-                        eq.low_cut_enabled = on;
-                    }
-                }
+            if let Some(eq) = input.eq.as_mut() {
+                apply_eq(&|off| self.input(idx, off), &format!("AN{}", idx + 1), eq, &mut out);
             }
-            if let Some(word) = self.input(idx, 0x40) {
-                if let Some(eq) = input.eq.as_mut() {
-                    let on = word != 0;
-                    if eq.enabled != on {
-                        out.push(format!(
-                            "AN{} EQ: device {on}, TotalControl {}",
-                            idx + 1,
-                            eq.enabled
-                        ));
-                        eq.enabled = on;
-                    }
-                }
+            if let Some(dyn_) = input.dynamics.as_mut() {
+                apply_dynamics(&|off| self.input(idx, off), &format!("AN{}", idx + 1), dyn_, &mut out);
             }
 
             // The dump stores the post-trim, post-pan send.  Compare it
@@ -338,34 +320,37 @@ impl UcxDump {
                 }
                 if let Some(word) = self.output(pair, side, 0x07) {
                     let phase = word != 0;
-                    if output.phase_l != phase {
+                    if side == 0 {
+                        if output.phase_l != phase {
+                            out.push(format!(
+                                "output {idx} phase L: device {phase}, TotalControl {}",
+                                output.phase_l
+                            ));
+                            output.phase_l = phase;
+                        }
+                    } else if output.phase_r != phase {
                         out.push(format!(
-                            "output {idx} phase: device {phase}, TotalControl {}",
-                            output.phase_l
+                            "output {idx} phase R: device {phase}, TotalControl {}",
+                            output.phase_r
                         ));
-                        output.phase_l = phase;
+                        output.phase_r = phase;
                     }
+                }
+                let label = format!("output {idx}");
+                if let Some(eq) = output.eq.as_mut() {
+                    apply_eq(&|off| self.output(pair, side, off), &label, eq, &mut out);
+                }
+                if let Some(dyn_) = output.dynamics.as_mut() {
+                    apply_dynamics(&|off| self.output(pair, side, off), &label, dyn_, &mut out);
                 }
             }
         }
 
-        if let Some(word) = self.words.get(&0x3c00).copied() {
-            if let Some(reverb) = scene.settings.reverb.as_mut() {
-                let on = word != 0;
-                if reverb.on != on {
-                    out.push(format!("Reverb: device {on}, TotalControl {}", reverb.on));
-                    reverb.on = on;
-                }
-            }
+        if let Some(reverb) = scene.settings.reverb.as_mut() {
+            apply_reverb(&self.words, reverb, &mut out);
         }
-        if let Some(word) = self.words.get(&0x3c20).copied() {
-            if let Some(echo) = scene.settings.echo.as_mut() {
-                let on = word != 0;
-                if echo.on != on {
-                    out.push(format!("Echo: device {on}, TotalControl {}", echo.on));
-                    echo.on = on;
-                }
-            }
+        if let Some(echo) = scene.settings.echo.as_mut() {
+            apply_echo(&self.words, echo, &mut out);
         }
 
         out
@@ -373,6 +358,347 @@ impl UcxDump {
 
     pub fn apply_to_scene(&self, scene: &mut Scene) -> Vec<String> {
         self.differences_into(scene)
+    }
+}
+
+fn apply_eq(
+    word: &dyn Fn(u16) -> Option<u16>,
+    label: &str,
+    eq: &mut InputEq,
+    out: &mut Vec<String>,
+) {
+    if let Some(w) = word(0x20) {
+        let on = w != 0;
+        if eq.low_cut_enabled != on {
+            out.push(format!("{label} low cut: device {on}, TotalControl {}", eq.low_cut_enabled));
+            eq.low_cut_enabled = on;
+        }
+    }
+    if let Some(w) = word(0x21) {
+        if eq.low_cut_freq_hz != w {
+            out.push(format!(
+                "{label} low cut frequency: device {w} Hz, TotalControl {} Hz",
+                eq.low_cut_freq_hz
+            ));
+            eq.low_cut_freq_hz = w;
+        }
+    }
+    if let Some(w) = word(0x22) {
+        let slope = match w {
+            0 => 6,
+            1 => 12,
+            2 => 18,
+            3 => 24,
+            _ => 6,
+        };
+        if eq.low_cut_slope_db_oct != slope {
+            out.push(format!(
+                "{label} low cut slope: device {slope} dB/oct, TotalControl {} dB/oct",
+                eq.low_cut_slope_db_oct
+            ));
+            eq.low_cut_slope_db_oct = slope;
+        }
+    }
+    if let Some(w) = word(0x40) {
+        let on = w != 0;
+        if eq.enabled != on {
+            out.push(format!("{label} EQ: device {on}, TotalControl {}", eq.enabled));
+            eq.enabled = on;
+        }
+    }
+    for band in 0..3 {
+        let (type_off, gain_off, freq_off, q_off) = match band {
+            0 => (0x41, 0x42, 0x43, 0x44),
+            1 => (0x40, 0x45, 0x46, 0x47),
+            _ => (0x48, 0x49, 0x4a, 0x4b),
+        };
+        if band != 1 {
+            if let Some(w) = word(type_off) {
+                let kind = match (band, w) {
+                    (0, 1) => EqBandType::LowShelf,
+                    (2, 1) => EqBandType::HighShelf,
+                    (2, 2) => EqBandType::LowPass,
+                    _ => EqBandType::Bell,
+                };
+                if eq.bands[band].band_type != kind {
+                    out.push(format!(
+                        "{label} EQ band {} type: device {:?}, TotalControl {:?}",
+                        band + 1,
+                        kind,
+                        eq.bands[band].band_type
+                    ));
+                    eq.bands[band].band_type = kind;
+                }
+            }
+        }
+        if let Some(w) = word(gain_off) {
+            let db = (w as i16) as f32 / 10.0;
+            if (eq.bands[band].gain_db - db).abs() > 0.05 {
+                out.push(format!(
+                    "{label} EQ band {} gain: device {db:.1} dB, TotalControl {:.1} dB",
+                    band + 1,
+                    eq.bands[band].gain_db
+                ));
+                eq.bands[band].gain_db = db;
+            }
+        }
+        if let Some(w) = word(freq_off) {
+            if eq.bands[band].freq_hz != w {
+                out.push(format!(
+                    "{label} EQ band {} frequency: device {w} Hz, TotalControl {} Hz",
+                    band + 1,
+                    eq.bands[band].freq_hz
+                ));
+                eq.bands[band].freq_hz = w;
+            }
+        }
+        if let Some(w) = word(q_off) {
+            let q = w as f32 / 10.0;
+            if (eq.bands[band].q - q).abs() > 0.05 {
+                out.push(format!(
+                    "{label} EQ band {} Q: device {q:.1}, TotalControl {:.1}",
+                    band + 1,
+                    eq.bands[band].q
+                ));
+                eq.bands[band].q = q;
+            }
+        }
+    }
+}
+
+fn apply_dynamics(
+    word: &dyn Fn(u16) -> Option<u16>,
+    label: &str,
+    dyn_: &mut Dynamics,
+    out: &mut Vec<String>,
+) {
+    if let Some(w) = word(0x60) {
+        let on = w != 0;
+        if dyn_.on != on {
+            out.push(format!("{label} dynamics: device {on}, TotalControl {}", dyn_.on));
+            dyn_.on = on;
+        }
+    }
+    if let Some(w) = word(0x61) {
+        let db = (w as i16) as f32 / 10.0;
+        if (dyn_.gain_db - db).abs() > 0.05 {
+            out.push(format!("{label} dynamics gain: device {db:.1} dB, TotalControl {:.1} dB", dyn_.gain_db));
+            dyn_.gain_db = db;
+        }
+    }
+    if let Some(w) = word(0x62) {
+        if dyn_.attack_ms != w {
+            out.push(format!("{label} dynamics attack: device {w} ms, TotalControl {} ms", dyn_.attack_ms));
+            dyn_.attack_ms = w;
+        }
+    }
+    if let Some(w) = word(0x63) {
+        if dyn_.release_ms != w {
+            out.push(format!("{label} dynamics release: device {w} ms, TotalControl {} ms", dyn_.release_ms));
+            dyn_.release_ms = w;
+        }
+    }
+    if let Some(w) = word(0x64) {
+        let db = (w as i16) as f32 / 10.0;
+        if (dyn_.comp_threshold_db - db).abs() > 0.05 {
+            out.push(format!("{label} compressor threshold: device {db:.1} dB, TotalControl {:.1} dB", dyn_.comp_threshold_db));
+            dyn_.comp_threshold_db = db;
+        }
+    }
+    if let Some(w) = word(0x65) {
+        let ratio = w as f32 / 10.0;
+        if (dyn_.comp_ratio - ratio).abs() > 0.05 {
+            out.push(format!("{label} compressor ratio: device {ratio:.1}, TotalControl {:.1}", dyn_.comp_ratio));
+            dyn_.comp_ratio = ratio;
+        }
+    }
+    if let Some(w) = word(0x66) {
+        let db = (w as i16) as f32 / 10.0;
+        if (dyn_.exp_threshold_db - db).abs() > 0.05 {
+            out.push(format!("{label} expander threshold: device {db:.1} dB, TotalControl {:.1} dB", dyn_.exp_threshold_db));
+            dyn_.exp_threshold_db = db;
+        }
+    }
+    if let Some(w) = word(0x67) {
+        let ratio = w as f32 / 10.0;
+        if (dyn_.exp_ratio - ratio).abs() > 0.05 {
+            out.push(format!("{label} expander ratio: device {ratio:.1}, TotalControl {:.1}", dyn_.exp_ratio));
+            dyn_.exp_ratio = ratio;
+        }
+    }
+    if let Some(w) = word(0x80) {
+        let on = w != 0;
+        if dyn_.auto_level != on {
+            out.push(format!("{label} AutoLevel: device {on}, TotalControl {}", dyn_.auto_level));
+            dyn_.auto_level = on;
+        }
+    }
+    if let Some(w) = word(0x81) {
+        let db = w as f32 / 10.0;
+        if (dyn_.auto_max_gain_db - db).abs() > 0.05 {
+            out.push(format!("{label} AutoLevel max gain: device {db:.1} dB, TotalControl {:.1} dB", dyn_.auto_max_gain_db));
+            dyn_.auto_max_gain_db = db;
+        }
+    }
+    if let Some(w) = word(0x82) {
+        let db = w as f32 / 10.0;
+        if (dyn_.auto_headroom_db - db).abs() > 0.05 {
+            out.push(format!("{label} AutoLevel headroom: device {db:.1} dB, TotalControl {:.1} dB", dyn_.auto_headroom_db));
+            dyn_.auto_headroom_db = db;
+        }
+    }
+    if let Some(w) = word(0x83) {
+        let rise = w as f32 / 10.0;
+        if (dyn_.auto_rise_s - rise).abs() > 0.05 {
+            out.push(format!("{label} AutoLevel rise: device {rise:.1} s, TotalControl {:.1} s", dyn_.auto_rise_s));
+            dyn_.auto_rise_s = rise;
+        }
+    }
+}
+
+fn apply_reverb(words: &HashMap<u16, u16>, reverb: &mut Reverb, out: &mut Vec<String>) {
+    let get = |addr: u16| words.get(&addr).copied();
+    if let Some(w) = get(0x3c00) {
+        let on = w != 0;
+        if reverb.on != on {
+            out.push(format!("Reverb: device {on}, TotalControl {}", reverb.on));
+            reverb.on = on;
+        }
+    }
+    if let Some(w) = get(0x3c01) {
+        let kind = w as u8;
+        if reverb.kind != kind {
+            out.push(format!("Reverb type: device {kind}, TotalControl {}", reverb.kind));
+            reverb.kind = kind;
+        }
+    }
+    if let Some(w) = get(0x3c02) {
+        if reverb.pre_delay_ms != w {
+            out.push(format!("Reverb pre-delay: device {w} ms, TotalControl {} ms", reverb.pre_delay_ms));
+            reverb.pre_delay_ms = w;
+        }
+    }
+    if let Some(w) = get(0x3c03) {
+        if reverb.low_cut_hz != w {
+            out.push(format!("Reverb low cut: device {w} Hz, TotalControl {} Hz", reverb.low_cut_hz));
+            reverb.low_cut_hz = w;
+        }
+    }
+    if let Some(w) = get(0x3c04) {
+        let scale = w as f32 / 100.0;
+        if (reverb.room_scale - scale).abs() > 0.005 {
+            out.push(format!("Reverb room scale: device {scale:.2}, TotalControl {:.2}", reverb.room_scale));
+            reverb.room_scale = scale;
+        }
+    }
+    if let Some(w) = get(0x3c05) {
+        if reverb.attack_ms != w {
+            out.push(format!("Reverb attack: device {w} ms, TotalControl {} ms", reverb.attack_ms));
+            reverb.attack_ms = w;
+        }
+    }
+    if let Some(w) = get(0x3c06) {
+        if reverb.hold_ms != w {
+            out.push(format!("Reverb hold: device {w} ms, TotalControl {} ms", reverb.hold_ms));
+            reverb.hold_ms = w;
+        }
+    }
+    if let Some(w) = get(0x3c07) {
+        if reverb.release_ms != w {
+            out.push(format!("Reverb release: device {w} ms, TotalControl {} ms", reverb.release_ms));
+            reverb.release_ms = w;
+        }
+    }
+    if let Some(w) = get(0x3c08) {
+        if reverb.high_cut_hz != w {
+            out.push(format!("Reverb high cut: device {w} Hz, TotalControl {} Hz", reverb.high_cut_hz));
+            reverb.high_cut_hz = w;
+        }
+    }
+    if let Some(w) = get(0x3c09) {
+        if reverb.reverb_time_ds != w {
+            out.push(format!("Reverb time: device {w} (0.1 s), TotalControl {}", reverb.reverb_time_ds));
+            reverb.reverb_time_ds = w;
+        }
+    }
+    if let Some(w) = get(0x3c0a) {
+        if reverb.high_damp_hz != w {
+            out.push(format!("Reverb high damp: device {w} Hz, TotalControl {} Hz", reverb.high_damp_hz));
+            reverb.high_damp_hz = w;
+        }
+    }
+    if let Some(w) = get(0x3c0b) {
+        let smooth = w as u8;
+        if reverb.smoothness != smooth {
+            out.push(format!("Reverb smoothness: device {smooth}, TotalControl {}", reverb.smoothness));
+            reverb.smoothness = smooth;
+        }
+    }
+    if let Some(w) = get(0x3c0c) {
+        let db = (w as i16) as f32 / 10.0;
+        if (reverb.volume_db - db).abs() > 0.05 {
+            out.push(format!("Reverb volume: device {db:.1} dB, TotalControl {:.1} dB", reverb.volume_db));
+            reverb.volume_db = db;
+        }
+    }
+    if let Some(w) = get(0x3c0d) {
+        let width = w as f32 / 100.0;
+        if (reverb.width - width).abs() > 0.005 {
+            out.push(format!("Reverb width: device {width:.2}, TotalControl {:.2}", reverb.width));
+            reverb.width = width;
+        }
+    }
+}
+
+fn apply_echo(words: &HashMap<u16, u16>, echo: &mut Echo, out: &mut Vec<String>) {
+    let get = |addr: u16| words.get(&addr).copied();
+    if let Some(w) = get(0x3c20) {
+        let on = w != 0;
+        if echo.on != on {
+            out.push(format!("Echo: device {on}, TotalControl {}", echo.on));
+            echo.on = on;
+        }
+    }
+    if let Some(w) = get(0x3c21) {
+        let kind = w as u8;
+        if echo.kind != kind {
+            out.push(format!("Echo type: device {kind}, TotalControl {}", echo.kind));
+            echo.kind = kind;
+        }
+    }
+    if let Some(w) = get(0x3c22) {
+        if echo.delay_ms != w {
+            out.push(format!("Echo delay: device {w} (0.01 s), TotalControl {}", echo.delay_ms));
+            echo.delay_ms = w;
+        }
+    }
+    if let Some(w) = get(0x3c23) {
+        let feedback = w as u8;
+        if echo.feedback != feedback {
+            out.push(format!("Echo feedback: device {feedback}, TotalControl {}", echo.feedback));
+            echo.feedback = feedback;
+        }
+    }
+    if let Some(w) = get(0x3c24) {
+        let cut = w as u8;
+        if echo.high_cut != cut {
+            out.push(format!("Echo high cut: device {cut}, TotalControl {}", echo.high_cut));
+            echo.high_cut = cut;
+        }
+    }
+    if let Some(w) = get(0x3c25) {
+        let db = (w as i16) as f32 / 10.0;
+        if (echo.volume_db - db).abs() > 0.05 {
+            out.push(format!("Echo volume: device {db:.1} dB, TotalControl {:.1} dB", echo.volume_db));
+            echo.volume_db = db;
+        }
+    }
+    if let Some(w) = get(0x3c26) {
+        let width = w as f32 / 100.0;
+        if (echo.width - width).abs() > 0.005 {
+            out.push(format!("Echo width: device {width:.2}, TotalControl {:.2}", echo.width));
+            echo.width = width;
+        }
     }
 }
 
@@ -502,6 +828,76 @@ mod tests {
 
         let diff = UcxDump::new(words).differences_into(&mut scene);
         assert!(diff.is_empty(), "{diff:?}");
+    }
+
+    #[test]
+    fn dump_decodes_dsp_and_globals() {
+        let mut scene = scene();
+        scene.inputs[0].eq = Some(InputEq::default());
+        scene.inputs[0].dynamics = Some(Dynamics::default());
+        scene.settings.reverb = Some(Reverb::default());
+        scene.settings.echo = Some(Echo::default());
+        let mut words = HashMap::new();
+        words.insert(0x0020, 1);
+        words.insert(0x0021, 120);
+        words.insert(0x0022, 2);
+        words.insert(0x0040, 1);
+        words.insert(0x0041, 1);
+        words.insert(0x0042, 30);
+        words.insert(0x0043, 100);
+        words.insert(0x0044, 10);
+        words.insert(0x0060, 1);
+        words.insert(0x0061, (-30i16) as u16);
+        words.insert(0x0062, 20);
+        words.insert(0x0063, 300);
+        words.insert(0x0064, (-200i16) as u16);
+        words.insert(0x0065, 20);
+        words.insert(0x0066, (-600i16) as u16);
+        words.insert(0x0067, 15);
+        words.insert(0x0080, 1);
+        words.insert(0x0081, 60);
+        words.insert(0x0082, 80);
+        words.insert(0x0083, 50);
+        words.insert(0x3c00, 1);
+        words.insert(0x3c01, 3);
+        words.insert(0x3c02, 50);
+        words.insert(0x3c04, 150);
+        words.insert(0x3c0d, 75);
+        words.insert(0x3c20, 1);
+        words.insert(0x3c21, 2);
+        words.insert(0x3c22, 700);
+        words.insert(0x3c23, 30);
+        words.insert(0x3c25, (-120i16) as u16);
+
+        let diff = UcxDump::new(words).differences_into(&mut scene);
+        assert!(!diff.is_empty());
+        let eq = scene.inputs[0].eq.unwrap();
+        assert!(eq.low_cut_enabled);
+        assert_eq!(eq.low_cut_freq_hz, 120);
+        assert_eq!(eq.low_cut_slope_db_oct, 18);
+        assert_eq!(eq.bands[0].band_type, EqBandType::LowShelf);
+        assert!((eq.bands[0].gain_db - 3.0).abs() < 0.01);
+        assert_eq!(eq.bands[0].freq_hz, 100);
+        assert!((eq.bands[0].q - 1.0).abs() < 0.01);
+        let dyn_ = scene.inputs[0].dynamics.unwrap();
+        assert!(dyn_.on && dyn_.auto_level);
+        assert!((dyn_.gain_db + 3.0).abs() < 0.01);
+        assert_eq!(dyn_.attack_ms, 20);
+        assert_eq!(dyn_.release_ms, 300);
+        assert!((dyn_.comp_ratio - 2.0).abs() < 0.01);
+        assert!((dyn_.exp_ratio - 1.5).abs() < 0.01);
+        let reverb = scene.settings.reverb.unwrap();
+        assert!(reverb.on);
+        assert_eq!(reverb.kind, 3);
+        assert_eq!(reverb.pre_delay_ms, 50);
+        assert!((reverb.room_scale - 1.5).abs() < 0.01);
+        assert!((reverb.width - 0.75).abs() < 0.01);
+        let echo = scene.settings.echo.unwrap();
+        assert!(echo.on);
+        assert_eq!(echo.kind, 2);
+        assert_eq!(echo.delay_ms, 700);
+        assert_eq!(echo.feedback, 30);
+        assert!((echo.volume_db + 12.0).abs() < 0.01);
     }
 
     #[test]
