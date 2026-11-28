@@ -248,6 +248,25 @@ channel-init value matches. The driver resolves the format at probe
 always agree. The kernel converts between the wire format and the ALSA
 format.
 
+### 3.1 S/PDIF input channel status
+
+The UCX IF5 interrupt capture stream carries the S/PDIF input's 192-bit
+channel status in the low byte of stream channel 8. Bit `0x04` is one C
+bit; bit `0x10` marks the block start. The status is always present in the
+stream; the Windows “TMS” setting is a driver option and is never sent to
+the unit.
+
+The driver assembles 192 consecutive C bits, compensates the two-frame
+block-start delay, and exposes the last complete block as the standard
+read-only ALSA `IEC958 Capture Default` control (24 bytes). It is zero
+until a capture stream has produced a complete block. `tools/fireface-spdif-cs`
+decodes it.
+
+The ISO stream's low byte is zero in the same desk capture, so the control
+is exposed on the UCX IF5 personality only. The other low-byte bits are
+not decoded; `0x08` was observed set in the IF5 capture and needs a source
+that carries a known P/U/V value.
+
 The transport operation of each personality is defined in §4.3 (ISO implicit feedback),
 §4.4 (PC mode) and the comparison in §4.5.
 
