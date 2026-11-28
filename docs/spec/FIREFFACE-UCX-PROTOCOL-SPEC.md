@@ -426,7 +426,7 @@ value.
 | `0x3c26` | Echo width | 0..100 |
 | `NN02` | output mode word | bit 0 mute; bit 1 monitor-muted (the inactive Main/Speaker B pair) |
 | `0x3d00` | Speaker B pair index | DSP output pair 0–8 while Speaker B is active; 0 while off |
-| `0x3d01` | Mute Enable flag | 0/1; writable, audio effect not measured |
+| `0x3d01` | Output mute enable | 0 = the unit ignores every output mute; 1 = output mutes act |
 | `0x3d02` | Main Dim amount | 0.1 dB, signed |
 | `0x3d03` | Dim active | 0/1 |
 | `0x3d04` | Main Recall level | 0.1 dB, signed |
@@ -449,6 +449,10 @@ The unknown words are preserved in the raw dump and are not written by the
 backend.
 
 Echo BPM is a host-side field: changing it rewrites `0x3c22`.
+
+The global Mute master writes `0x3d01`: `1` lets every output mute act, `0`
+makes the unit ignore all output mutes. The reference names the word
+`Output Mute Enable Switch`.
 
 Mono Main Out writes `0x3f9e` bit 1 and `0x3f98 = 0x83ff`; switching it off
 writes `0x3f9e` bit 1 clear and `0x3f98 = 0xffff`. It mixes the assigned
@@ -1568,7 +1572,7 @@ state is not in this snapshot.
 | `0x3c20` | Echo enable |
 | `0x3c21`..`0x3c26` | Echo parameters |
 | `0x3d00` | Speaker B pair index while active; 0 while off |
-| `0x3d01` | Mute Enable flag |
+| `0x3d01` | Output mute enable (0 = all output mutes ignored) |
 | `0x3d02` | Main Dim amount |
 | `0x3d03` | Dim active |
 | `0x3d04` | Main Recall level |
