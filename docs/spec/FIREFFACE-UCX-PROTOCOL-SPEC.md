@@ -459,6 +459,10 @@ Speaker B follows only while Link to Main is enabled. The Phones output fader
 values are not changed. Releasing Dim restores the saved fader values and
 writes `0x3d03 = 0`.
 
+Recall writes the Main output fader values (`0x1200`/`0x1300`) to the Main
+Recall level in `0x3d04`; it has no trigger register. Speaker B follows only
+while Link to Main is enabled.
+
 Main Out and Speaker B assignment are host-side monitor bookkeeping. They
 write no assignment word. A change writes the monitor-mute bit 1 of the
 affected `NN02` mode words. `0x3d00` carries the Speaker B pair index while
