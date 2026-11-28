@@ -1023,7 +1023,7 @@ Request `0x10`, index 1487, carries the unit's options as one full word:
 | 3 | `0x0008` | word-clock input termination |
 | 6 | `0x0040` | word-clock output single speed |
 | 7 | `0x0080` | SPDIF professional |
-| 8 | `0x0100` | EQ+D for Record disabled (active low) |
+| 8 | `0x0100` | EQ + D for record disabled (active low) |
 | 10 | `0x0400` | optical output ADAT (0 = SPDIF) |
 
 Every option change writes the word under mask `0x05cf` (index 1487),
@@ -1355,7 +1355,7 @@ A scene stores:
 The backend writes the mixer scene at connect and after relevant rate or
 stream changes.  The preamp group (input gain and right gain, 48 V, Inst,
 Level and AutoSet), the reference levels and the options word (clock source,
-optical format, SPDIF professional, word-clock rate and termination, EQ+D for
+optical format, SPDIF professional, word-clock rate and termination, EQ + D for
 Record) are also written from the saved scene at connect.
 
 The unit retains input gain and the main output fader across a power cycle.
@@ -1407,7 +1407,7 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | MS processing | yes, `NN05` and matrix |
 | AN 1>2 | no |
 | Input Link | host setting |
-| EQ for Record | yes |
+| EQ + D for record | yes |
 | Optical output format | yes |
 | SPDIF professional | yes |
 | Word clock output single speed | yes |

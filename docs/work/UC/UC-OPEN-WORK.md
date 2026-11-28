@@ -157,7 +157,7 @@ design specification. Do not duplicate them here.
 | Lock bit layout | needs-capture | Bits for optical, S/PDIF coax, word clock and LTC lock. |
 | LTC transport | needs-capture | LTC packet format, rate and endpoint; current captures show no LTC payload. |
 | GUI lock mapping | open | How the status maps to the clock-source picker and the lock indicator. |
-| UCX `0x19` constant bits 2/7/8 | needs-capture | Invariant across rate, engine state and reset (UCX spec §11.6). Hypotheses: bit 7 = SPDIF professional mirror, bit 8 = EQ+D active (inverted options bit 8), bit 2 = clock locked. Deciding captures: external clock with no signal, SPDIF pro toggle, optical format toggle, EQ toggle. Scene-affecting: needs approval; capture the options word first and restore exactly. |
+| UCX `0x19` constant bits 2/7/8 | needs-capture | Invariant across rate, engine state and reset (UCX spec §11.6). Hypotheses: bit 7 = SPDIF professional mirror, bit 8 = EQ + D active (inverted options bit 8), bit 2 = clock locked. Deciding captures: external clock with no signal, SPDIF pro toggle, optical format toggle, EQ toggle. Scene-affecting: needs approval; capture the options word first and restore exactly. |
 | `0x19` busy window (bits 0–1) | open | Never asserted on UCX firmware 49 or on either UC personality. A model/firmware that asserts it, or the pre-probe window via a libusb probe racing the kernel bind, decides it. |
 
 ### Front panel

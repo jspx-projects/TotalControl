@@ -110,7 +110,7 @@ pub struct DeviceSettings {
     /// AN 1>2 engaged (0x17 wIdx=0x1000 flag).
     #[serde(default)]
     pub an12: bool,
-    /// EQ for Record: whether the hardware DSP EQ is applied to the
+    /// EQ + D for record: whether the hardware DSP EQ is applied to the
     /// recorded signal too, not just the monitor mix. Settings
     /// keepalive bit 6 (`PROTOCOL.md`'s `cap_eqr.pcap`, hardware-
     /// verified) — an RME-specific setting, distinct from the generic
@@ -1010,11 +1010,11 @@ pub trait RmeDevice {
         ))
     }
 
-    /// EQ for Record toggle (settings keepalive bit 6).
+    /// EQ + D for record toggle (settings keepalive bit 6).
     fn set_eq_for_record(&mut self, on: bool) -> Result<(), Error> {
         let _ = on;
         Err(Error::InvalidChannel(
-            "EQ for Record is not supported on this backend".into(),
+            "EQ + D for record is not supported on this backend".into(),
         ))
     }
 

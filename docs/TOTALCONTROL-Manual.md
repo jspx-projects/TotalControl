@@ -1887,7 +1887,7 @@ list gets its own scrollbar and a fixed height so the dialog does not grow
 beyond the window.
 
 The dump does not include the options word (clock source, optical format,
-SPDIF professional, word-clock rate and termination, EQ+D for Record), channel
+SPDIF professional, word-clock rate and termination, EQ + D for record), channel
 names, trims or loopback. Those stay with the saved mix. On the UCX the
 `48 V`, Inst, Level and reference settings are in the dump and are compared.
 

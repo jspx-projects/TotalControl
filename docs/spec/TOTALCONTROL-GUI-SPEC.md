@@ -1241,7 +1241,7 @@ sheet shows that value. A value is written when it changes there.
 | SPDIF | yes | yes |
 | Single speed:<br>word clock | yes | yes |
 | Word clock in<br>75 Ohm termination | — | yes |
-| EQ for Record | — | yes |
+| EQ + D for record | — | yes |
 | Pitch | yes | yes |
 | Firmware | yes | yes |
 | Serial | yes | yes |
@@ -1273,7 +1273,7 @@ The `Single speed word clock` row and the `Word clock in` row with its
 `75 Ohm termination` label are clock-sync controls shown on every path. The
 label names the internal 75 Ohm resistor that terminates the word-clock
 input. The signal-path settings (Optical and SPDIF format, the UC
-reference levels, EQ for Record) and the Firmware/Serial readouts stay. The `Sample rate` row is the nominal-rate picker
+reference levels, EQ + D for record) and the Firmware/Serial readouts stay. The `Sample rate` row is the nominal-rate picker
 with three states, derived from the detected audio path and the host stream:
 
 | State | Condition | Presentation |

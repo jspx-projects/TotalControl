@@ -2886,7 +2886,7 @@ impl Fireface {
                 self.settings.word_clock_termination = v & 0x0008 != 0;
                 self.settings.word_clock_single_speed = v & 0x0040 != 0;
                 self.settings.spdif_professional = v & 0x0080 != 0;
-                // EQ+D for Record is active low; optical bit set means ADAT.
+                // EQ + D for record is active low; optical bit set means ADAT.
                 self.settings.eq_for_record = v & 0x0100 == 0;
                 self.settings.optical_out_spdif = v & 0x0400 == 0;
             }
@@ -3775,7 +3775,7 @@ impl Fireface {
     /// Measured bits (H69–H101), and no others were ever observed:
     /// bits 1–2 clock source, `0x008` word-clock input termination, `0x040`
     /// word-clock out single speed, `0x080` SPDIF professional, `0x100`
-    /// EQ for Record *disabled* (active low), `0x400` optical out ADAT
+    /// EQ + D for record *disabled* (active low), `0x400` optical out ADAT
     /// (0 = SPDIF).
     fn ucx_options_word(&self) -> u16 {
         // Index 1487 is a full-word update: leave the clock source in place
@@ -5061,7 +5061,7 @@ impl Fireface {
 
     /// Write the UCX device group that has no host readback: the line and
     /// phones reference levels and the options word (clock source, optical
-    /// format, SPDIF professional, word clock and EQ+D).
+    /// format, SPDIF professional, word clock and EQ + D).
     fn apply_ucx_device_settings(&mut self) -> Result<(), Error> {
         self.set_line_out_ref(self.settings.line_out_ref)?;
         self.set_phones_ref(self.settings.phones_ref)?;
@@ -6922,7 +6922,7 @@ impl RmeDevice for Fireface {
     fn set_eq_for_record(&mut self, on: bool) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
-                "EQ for Record does not exist on the UC".into(),
+                "EQ + D for record does not exist on the UC".into(),
             ));
         }
         // Control register bit 8 is the inverse of the dialog's option.
@@ -12647,7 +12647,7 @@ mod tests {
         dev.set_word_clock_single_speed(true).unwrap();
         dev.set_eq_for_record(true).unwrap();
         dev.set_optical_out_format(true).unwrap();
-        // EQ+D on clears bit 8; SPDIF optical clears bit 10.
+        // EQ + D on clears bit 8; SPDIF optical clears bit 10.
         assert!(writes.lock().unwrap().contains(&Write::Vendor(
             protocol::req::SETTINGS,
             0x00C8,
@@ -12670,7 +12670,7 @@ mod tests {
         writes.lock().unwrap().clear();
         dev.set_optical_out_format(true).unwrap();
         dev.set_word_clock_termination(true).unwrap();
-        // Word Clock = index 3 (bits 1–2), EQ+D off, SPDIF optical,
+        // Word Clock = index 3 (bits 1–2), EQ + D off, SPDIF optical,
         // termination on.
         let w = writes.lock().unwrap();
         assert!(w.contains(&Write::Vendor(protocol::req::SETTINGS, 0x0106, 1487)));
@@ -12733,7 +12733,7 @@ mod tests {
         // read at open and win over a scene that may predate a change made
         // elsewhere, as on the UC. Record dry has no mirror, so the scene is
         // its only source. Device word 0x00CE: Word Clock clock, optical
-        // SPDIF, SPDIF professional, single speed, termination on, EQ+D for
+        // SPDIF, SPDIF professional, single speed, termination on, EQ + D for
         // Record enabled.
         let (mut dev, writes) = open_ucx_with_settings(0x00CE);
         let mut scene = dev.capture_scene();

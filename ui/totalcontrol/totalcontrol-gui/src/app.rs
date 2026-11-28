@@ -14528,7 +14528,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
         // host-side modes stay here.
         if caps.eq_for_record && !state.device.is_uc_family() {
             flags.push((
-                "EQ for Record",
+                "EQ + D for record",
                 settings.eq_for_record,
                 Message::EqForRecordChanged,
             ));
@@ -14567,7 +14567,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
         body = body.push(
             text(
                 "Class Compliant mode: routing, preamps, gains and clock only. \
-                 Pitch, Width, MS Proc, AN 1>2, Input Link, EQ for Record and \
+                 Pitch, Width, MS Proc, AN 1>2, Input Link, EQ + D for record and \
                  the optical-out format are RME-protocol features, and the \
                  strips drop EQ, Trim, Phase \u{00d8}, Split and Loopback for the \
                  same reason.",
@@ -16120,7 +16120,7 @@ pub(crate) fn sidebar_px(state: &TotalControl) -> f32 {
 /// reference levels (`0x17`) and its options word; the UCX has no global
 /// reference register (they are per channel) and its options word carries
 /// the optical format, SPDIF professional, word-clock output rate and
-/// termination, and EQ+D for Record (`docs/spec/UCX-CONTROL-SPEC.md` §11).
+/// termination, and EQ + D for record (`docs/spec/UCX-CONTROL-SPEC.md` §11).
 fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
@@ -16413,7 +16413,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     }
     if uc || ucx {
         // Both options words carry the output format and word-clock input
-        // termination (UC bit 0, UCX 0x008).  The UCX adds EQ+D for Record
+        // termination (UC bit 0, UCX 0x008).  The UCX adds EQ + D for record
         // (H67/H68/H75, H71/H101).
         // Single-speed word clock is a clock-sync control: a Device-path
         // option, kept as a same-height filler in convenience (GUI spec §4).
@@ -16445,7 +16445,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             ));
         if ucx {
             body = body.push(check_row(
-                "EQ for Record",
+                "EQ + D for record",
                 settings.eq_for_record,
                 Message::EqForRecordChanged(!settings.eq_for_record),
             ));
