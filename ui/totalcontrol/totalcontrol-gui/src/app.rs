@@ -16507,6 +16507,25 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .into()
 }
 
+/// The playable cushion of the current playback ring in nanoseconds: the
+/// queued audio above the period being consumed, from the live stream's own
+/// rate, period and buffer. `None` when no stream runs, so the max stall has
+/// no current geometry to judge it against.
+fn ring_cushion_ns(stream: Option<totalcontrol_core::pw_clock::CardStream>) -> Option<u64> {
+    stream
+        .filter(|s| s.rate > 0 && s.period > 0 && s.buffer > s.period)
+        .map(|s| (s.buffer - s.period) as u64 * 1_000_000_000 / s.rate as u64)
+}
+
+/// True when the current stream's worst host write stall exceeds its own
+/// playable cushion. No stream means no colour judgement.
+fn max_stall_is_red(
+    stream: Option<totalcontrol_core::pw_clock::CardStream>,
+    max_stall_ns: u64,
+) -> bool {
+    ring_cushion_ns(stream).is_some_and(|cushion| max_stall_ns > cushion)
+}
+
 fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
@@ -16766,11 +16785,13 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     );
     // Transport diagnostics in three sections by reset behaviour:
     //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
-    //  - This stream: per-run transport detail, cleared on stream restart
-    //    (rate/quantum change or recovery), not by player start/stop.
+    //  - This stream: ring stall and per-run transport detail, cleared on
+    //    stream restart (rate/quantum change or recovery), not by player
+    //    start/stop.
     //  - Session: cumulative counters, cleared only by reset.
-    // `reset` rebaselines every section. Counting runs on every tick,
-    // independent of this drawer. The manual explains meaning and mitigation.
+    // `reset` rebaselines the counted rows; max stall follows the stream.
+    // Counting runs on every tick, independent of this drawer. The manual
+    // explains meaning and mitigation.
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
         // Per-run detail since the last reset (or engine-run start). The
@@ -16790,7 +16811,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::ResetTransportErrors),
-                    "Clear counters; max stall clears when the stream restarts.",
+                    "Clear counters.",
                     scale,
                 ),
             ]
@@ -16809,12 +16830,26 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             + perrun.out_fb_stale;
         // Section 3 values: cumulative session counters.
         let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
-        let period_ns = state
-            .card_stream
-            .filter(|s| s.rate > 0 && s.period > 0)
-            .map(|s| s.period as u64 * 1_000_000_000 / s.rate as u64)
-            .unwrap_or(0);
-        let max_stall_ns = now.ring_max_stall_ns;
+        // The max stall is a per-stream watermark. Judge it only against the
+        // stream that produced it: the playable ring cushion is the queued
+        // audio above the next period, in time. No stream means no judgement.
+        let (stall_value, stall_bad, stall_tip) =
+            if ring_cushion_ns(state.card_stream).is_some() {
+                (
+                    format!("{:.1} ms", now.ring_max_stall_ns as f64 / 1_000_000.0),
+                    u32::from(max_stall_is_red(
+                        state.card_stream,
+                        now.ring_max_stall_ns,
+                    )),
+                    "Current stream. Longest host write stall after startup; red when it exceeds the playable ring cushion (buffer minus one period) at the current rate. Correlate with underrun/overrun.",
+                )
+            } else {
+                (
+                    "unavailable".into(),
+                    0,
+                    "No playback stream: max stall is measured only while a stream runs.",
+                )
+            };
         let sections: [(
             &'static str,
             &'static str,
@@ -16822,26 +16857,19 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         ); 3] = [
             (
                 "Scheduling",
-                "Underrun/overrun are cumulative and cleared by reset. Max stall is the current stream's longest host write stall and resets when the stream restarts.",
-                vec![
-                    (
-                        "underrun / overrun",
-                        format!("{} / {}", delta.out_underruns, delta.in_overruns),
-                        delta.out_underruns + delta.in_overruns,
-                        "Cumulative. Playback ring ran dry / capture ring overflowed.",
-                    ),
-                    (
-                        "max stall",
-                        format!("{:.1} ms", max_stall_ns as f64 / 1_000_000.0),
-                        u32::from(period_ns > 0 && max_stall_ns > period_ns),
-                        "Current stream. Longest host write stall; red when it exceeds one period. Correlate with underrun/overrun.",
-                    ),
-                ],
+                "Underrun/overrun are cumulative and cleared by reset: the metric for tuning quantum and host load. Never cleared by a stream restart.",
+                vec![(
+                    "underrun / overrun",
+                    format!("{} / {}", delta.out_underruns, delta.in_overruns),
+                    delta.out_underruns + delta.in_overruns,
+                    "Cumulative. Playback ring ran dry / capture ring overflowed.",
+                )],
             ),
             (
                 "This stream",
-                "Cleared when the stream restarts: a rate or quantum change, or a recovery. Not cleared by starting or stopping a player. Packet-level transport detail for the current stream.",
+                "Cleared when the stream restarts: a rate or quantum change, or a recovery. Not cleared by starting or stopping a player. Ring stall and packet-level transport detail for the current stream.",
                 vec![
+                    ("max stall", stall_value, stall_bad, stall_tip),
                     (
                         "usb",
                         usb_run.to_string(),
@@ -23280,7 +23308,7 @@ mod tests {
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
         note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
         safe_default_quantum, minimum_quantum, quantum_allowed, reconcile_device_pitch,
-        pitch_slider_max,
+        pitch_slider_max, ring_cushion_ns, max_stall_is_red,
         power_sum_output_meters, quantum_pending, rate_authority_target,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
@@ -23792,6 +23820,34 @@ mod tests {
         track_engine_run(&mut state, Some(new_run));
         assert_eq!(state.transport_perrun_base, Some(new_run));
         assert_eq!(state.last_run_seq, Some(2));
+    }
+
+    #[test]
+    fn max_stall_uses_the_current_stream_cushion() {
+        use totalcontrol_core::pw_clock::{CardStream, PcmFormat};
+        let stream = |period, buffer| CardStream {
+            rate: 44_100,
+            period,
+            buffer,
+            channels: 18,
+            format: PcmFormat::Unknown,
+        };
+        // The user's 1024/32768 stream: the cushion is about 720 ms, so a
+        // 74.5 ms stall is absorbed and stays gray.
+        let large = Some(stream(1024, 32_768));
+        let cushion = ring_cushion_ns(large).unwrap();
+        assert!((cushion as f64 / 1e6 - 719.8).abs() < 1.0);
+        assert!(!max_stall_is_red(large, 74_500_000));
+        // The small 48/1536 stream: the cushion is about 34 ms, so the same
+        // stall is red.
+        let small = Some(stream(48, 1536));
+        let cushion = ring_cushion_ns(small).unwrap();
+        assert!((cushion as f64 / 1e6 - 33.7).abs() < 1.0);
+        assert!(max_stall_is_red(small, 74_500_000));
+        // Without a live stream there is nothing to judge.
+        assert_eq!(ring_cushion_ns(None), None);
+        assert!(!max_stall_is_red(None, 74_500_000));
+        assert_eq!(ring_cushion_ns(Some(stream(48, 48))), None);
     }
 
     #[test]

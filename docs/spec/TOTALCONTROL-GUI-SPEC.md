@@ -1481,21 +1481,23 @@ in small caps like the level-1 `DEVICE` / `AUDIO ENGINE` headers but at normal
 text size and without a rule; `Scheduling`, `This stream` and `Session` are
 level-3 headers in italic, without underline.
 
-`reset` clears the cumulative and per-run counters. Counting runs on every
+`reset` clears the cumulative and per-run counted rows. Counting runs on every
 tick, independent of whether the drawer is open.
 
-- **Scheduling** — `underrun / overrun` (host ring) and `max stall` (the
-  longest host write stall in the current stream). Underrun/overrun are
-  cumulative, cleared only by `reset`; never cleared by a stream restart.
-  Max stall is a current-stream watermark: it resets when the stream
-  restarts and turns red when it exceeds one period. Compare it with the
-  underrun/overrun count. The pair is the metric for tuning quantum and host
-  load.
-- **This stream** — `usb` (packet status errors), `bad packets` (short,
-  malformed, misaligned or dropped) and `feedback` (clock-tracking packet
-  detail). Per-run: cleared when the stream restarts (a rate or quantum
-  change, or a recovery), not by player start/stop (§13). The startup and
-  rate-switch packet burst is excluded by the per-run reset.
+- **Scheduling** — `underrun / overrun` (host ring). Cumulative, cleared only
+  by `reset`; never cleared by a stream restart. The metric for tuning
+  quantum and host load.
+- **This stream** — `max stall` (the longest host write stall), `usb` (packet
+  status errors), `bad packets` (short, malformed, misaligned or dropped) and
+  `feedback` (clock-tracking packet detail). Per-run: cleared when the stream
+  restarts (a rate or quantum change, or a recovery), not by player
+  start/stop (§13). The startup and rate-switch packet burst is excluded by
+  the per-run reset.
+  `max stall` is measured after the startup mute window. It reads
+  `unavailable` while no stream runs. It turns red when it exceeds the current
+  stream's playable ring cushion, `(buffer − period)` frames at the stream's
+  rate, and stays gray otherwise. The cushion comes from that stream's own
+  period and buffer, never from an earlier stream.
 - **Session** — `recover` (engine restarts), `gaps` (missing packets),
   `rate mismatch` (sustained cadence disagreement), `pointer` (driver/core
   pointer divergence) and `events dropped` (hwdep event overflow).
@@ -1503,7 +1505,9 @@ tick, independent of whether the drawer is open.
 
 `underrun / overrun`, `gaps` and `bad packets` show `in / out`; the rest
 are totals. `in` is device-to-host (capture), `out` is host-to-device
-(playback); the host is the computer. A non-zero row is red. Row labels
+(playback); the host is the computer. A non-zero error row is red;
+`max stall` is red only when it exceeds the current stream's playable
+cushion. Row labels
 are plain; each row and header carries a tooltip with its meaning and
 reset class. The manual carries the full meaning and mitigation. The
 section is absent when the backend does not expose counters.
