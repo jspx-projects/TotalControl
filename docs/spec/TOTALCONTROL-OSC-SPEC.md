@@ -596,7 +596,7 @@ literal dB value. The authoritative RME OSC table is
 | `/1/mainTalkback` | `0x3f9e` bit 0, read-modify-write | host/device monitor flags; preserve bit 1 (Mono Main Out) |
 | `/1/mainSpeakerB` | Main and Speaker B `NN02`, `0x3d00` (Speaker B pair index while active, 0 while off) | device monitor routing |
 | `/1/speakerBLinked` | none | host-side link state |
-| `/1/mainMuteFx` | control-room `NN03` | FX return level |
+| `/1/mainMuteFx` | Main Out and Speaker B `NN03` | FX return level |
 | `/1/mastervolume` | Main Out `NN00` | normalized fader value through the documented curve |
 
 ### 12.3 Page 3 global FX

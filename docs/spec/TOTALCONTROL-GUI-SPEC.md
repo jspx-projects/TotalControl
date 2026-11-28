@@ -2045,15 +2045,18 @@ left and right sides by 6 dB, sums them and feeds the result to both sides of
 that pair. It does not raise a centred signal. It does not mix the Phones
 outputs. Mono is stored in the device scene.
 
-Mute FX is a latching scene control. It saves the FX-return levels of Main
-Out, writes `-65 dB`, and restores the exact saved levels; it does not switch
-the Reverb or Echo processors off. Speaker B and Phones are not modified.
+Mute FX is a latching scene control. It saves the FX-return levels of the
+Main Out and Speaker B pairs, writes `-65 dB`, and restores the exact saved
+levels; it does not switch the Reverb or Echo processors off. Phones is not
+modified. Both monitor pairs are muted so the action stays in effect when
+Main and Speaker B switch.
 
-Ext. input is a latching runtime control. It replaces the Main Out submix
-with the stereo hardware-input pair selected in Control Room Settings at the
-configured gain. Releasing restores the normal Main Out submix. Speaker B
-and Phones keep their own mixes. The button is disabled until a source pair
-is configured. Changing the source or gain while active re-engages the path.
+Ext. input is a latching runtime control. It replaces the Main Out and
+Speaker B submixes with the stereo hardware-input pair selected in Control
+Room Settings at the configured gain, and mutes their FX returns. Releasing
+restores the normal monitor submixes. Phones keeps its own mix. The button is
+disabled until a source pair is configured. Changing the source or gain while
+active re-engages the path.
 
 With `PFL replaces Solo`, each input strip's Solo button is labelled `PFL`
 and routes the input pre-fader at unity to the Cue/PFL target, with the

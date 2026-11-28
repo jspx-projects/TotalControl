@@ -2404,11 +2404,12 @@ impl Fireface {
         if !on {
             return Ok(());
         }
-        let Some(main) = self.settings.main_out else {
+        let pairs = self.control_room_monitor_pairs();
+        if pairs.is_empty() {
             return Err(Error::InvalidChannel(
                 "External Input needs an assigned Main Out".into(),
             ));
-        };
+        }
         let source = source
             .ok_or_else(|| Error::InvalidChannel("External Input needs a source pair".into()))?;
         let left = source * 2;
@@ -2421,9 +2422,9 @@ impl Fireface {
         if self.settings.mute_fx {
             self.set_mute_fx(false)?;
         }
-        // External Input replaces the Main Out mix only.  Speaker B and
-        // Phones keep their own submixes.
-        let pairs = vec![main];
+        // External Input replaces both monitor mixes, Main Out and Speaker B,
+        // so the replacement stays in effect when the engineer switches
+        // between them.  Phones and the other outputs keep their submixes.
         let gain = 10f32.powf(gain_db.clamp(-65.0, 0.0) / 20.0).clamp(0.0, 1.0);
         let mut writes = Vec::new();
         let mut fx_saved = Vec::new();
@@ -5291,6 +5292,22 @@ impl Fireface {
             self.routed_pairs.remove(&(source, pair));
         }
     }
+
+    /// Output pairs on the active monitor path: the Main Out pair and, when
+    /// assigned, the Speaker B pair.  Mute FX and External Input apply to
+    /// both so the action stays in effect when Main and Speaker B switch.
+    fn control_room_monitor_pairs(&self) -> Vec<usize> {
+        let mut pairs = Vec::new();
+        if let Some(main) = self.settings.main_out {
+            pairs.push(main);
+        }
+        if let Some(b) = self.settings.main_b_out {
+            if !pairs.contains(&b) {
+                pairs.push(b);
+            }
+        }
+        pairs
+    }
 }
 
 impl Fireface {
@@ -6694,14 +6711,16 @@ impl RmeDevice for Fireface {
                 "Mute FX is not decoded on the UC".into(),
             ));
         }
-        let Some(main) = self.settings.main_out else {
+        // Mute FX acts on the active monitor path: the Main Out pair and,
+        // when assigned, the Speaker B pair.  The mute stays in effect when
+        // the engineer switches between Main and Speaker B.  Phones and the
+        // other outputs keep their own FX-return levels.
+        let pairs = self.control_room_monitor_pairs();
+        if pairs.is_empty() {
             self.settings.mute_fx = false;
             self.mute_fx_saved = None;
             return Ok(());
-        };
-        // Mute FX acts on Main Out.  Speaker B and Phones keep their own
-        // FX-return levels.
-        let pairs = vec![main];
+        }
         if on == self.settings.mute_fx {
             return Ok(());
         }
@@ -6740,8 +6759,9 @@ impl RmeDevice for Fireface {
     }
 
     /// Control Room External Input: route the selected hardware input pair
-    /// into the Main Out submix at the configured gain, mute the Main FX
-    /// returns, and set monitor flag bit 5.  Speaker B keeps its mix.
+    /// into both monitor submixes (Main Out and Speaker B) at the configured
+    /// gain, mute their FX returns, and set monitor flag bit 5.  Phones and
+    /// the other outputs keep their mixes.
     fn set_external_input(
         &mut self,
         on: bool,
@@ -9884,6 +9904,7 @@ mod tests {
     fn ucx_scene_apply_restores_mono_and_mute_fx() {
         let (mut dev, writes) = open(Model::Ucx);
         dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
         dev.settings.mono = true;
         dev.settings.mute_fx = true;
         let scene = dev.capture_scene();
@@ -9895,17 +9916,21 @@ mod tests {
         assert!(words.contains(&(0x3f9e, 2)));
         assert!(words.contains(&(0x3f98, 0x83ff)));
         assert!(words.contains(&(0x1203, 0xfd76)));
+        assert!(words.contains(&(0x1403, 0xfd76)));
         assert!(dev.settings().mono);
         assert!(dev.settings().mute_fx);
     }
 
     #[test]
-    fn ucx_mute_fx_restores_main_fx_returns_only() {
+    fn ucx_mute_fx_mutes_both_monitor_pairs() {
         let (mut dev, writes) = open(Model::Ucx);
         dev.set_main_out(Some(1)).unwrap();
         dev.set_main_out_b(Some(2)).unwrap();
-        // Internal order is Phones, AN1/2, AN3/4...; main is AN1/2 and
-        // Speaker B is AN3/4, so Phones must not be touched.
+        // Internal order is Phones, AN1/2, AN3/4...; Main is AN1/2 and
+        // Speaker B is AN3/4. Phones must not be touched. Mute FX covers
+        // both monitor pairs so it survives a Main/Speaker B switch.
+        dev.outputs[0].fx_return_db = -60.0;
+        dev.outputs[1].fx_return_db = -60.0;
         dev.outputs[2].fx_return_db = -12.3;
         dev.outputs[3].fx_return_db = -12.3;
         dev.outputs[4].fx_return_db = -45.5;
@@ -9916,7 +9941,8 @@ mod tests {
         let words = written_words(&writes);
         assert!(words.contains(&(0x1203, (-123i16) as u16)));
         assert!(words.contains(&(0x1303, (-123i16) as u16)));
-        assert!(!words.iter().any(|(r, _)| *r == 0x1403 || *r == 0x1503));
+        assert!(words.contains(&(0x1403, (-455i16) as u16)));
+        assert!(words.contains(&(0x1503, (-455i16) as u16)));
         assert!(!words.iter().any(|(r, _)| *r == 0x1803 || *r == 0x1903));
     }
 
@@ -9928,24 +9954,23 @@ mod tests {
         writes.lock().unwrap().clear();
         dev.set_external_input(true, Some(0), -6.0).unwrap();
         let words = written_words(&writes);
-        // Only Main (AN1/2) carries the selected Mic 1/2 pair at -6 dB; the
-        // Source A side goes to the left block, Source B to the right.
+        // Both monitor pairs (Main AN1/2 and Speaker B AN3/4) carry the
+        // selected source pair at -6 dB; the Source A side goes to the left
+        // block, Source B to the right.
         let gain = ucx::matrix_gain(10f64.powf(-6.0 / 20.0));
-        assert!(words.contains(&(ucx::matrix_reg(0, Source::Input(0)), gain)));
-        assert!(words.contains(&(ucx::matrix_reg(1, Source::Input(1)), gain)));
-        assert!(!words
-            .iter()
-            .any(|(reg, _)| *reg == ucx::matrix_reg(2, Source::Input(0))));
-        assert!(!words
-            .iter()
-            .any(|(reg, _)| *reg == ucx::matrix_reg(3, Source::Input(1))));
-        // Both Main FX returns are muted; Speaker B FX returns are untouched.
-        for reg in [0x1203, 0x1303] {
+        for dsp in [0u8, 2] {
+            assert!(words.contains(&(ucx::matrix_reg(dsp, Source::Input(0)), gain)));
+        }
+        for dsp in [1u8, 3] {
+            assert!(words.contains(&(ucx::matrix_reg(dsp, Source::Input(1)), gain)));
+        }
+        // Both monitor pairs mute their FX returns; Phones is untouched.
+        for reg in [0x1203, 0x1303, 0x1403, 0x1503] {
             assert!(words.contains(&(reg, 0xfd76)), "missing FX mute {reg:04x}");
         }
         assert!(!words
             .iter()
-            .any(|(reg, _)| *reg == 0x1403 || *reg == 0x1503));
+            .any(|(reg, _)| *reg == 0x1803 || *reg == 0x1903));
         assert!(words.contains(&(0x3f9e, 0x20)));
         assert!(dev.settings().external_input);
 

@@ -1024,8 +1024,8 @@ The monitor actions apply as follows:
 | Speaker B | Switches to Speaker B | Switches to Main | No |
 | Mono | Active monitor output | Active monitor output | No |
 | Talkback | Listenback path | Talkback receiver only | Talkback path |
-| External Input | Yes | No | No |
-| Mute FX | Yes | No | No |
+| External Input | Yes | Yes (monitor path) | No |
+| Mute FX | Yes | Yes (monitor path) | No |
 | Cue/PFL | Target only | Target only | Target only |
 
 Speaker B is a second monitor path. Exactly one of the two monitor outputs
@@ -1211,20 +1211,22 @@ the Talkback button and the receive switches.
 ### Mute FX
 
 **Mute FX** is a latching control. It silences the Reverb and Echo returns on
-Main Out without switching either effect off. Releasing it restores the
-previous return levels.
+both monitor paths, Main Out and Speaker B, without switching either effect
+off. Releasing it restores the previous return levels.
 
-Mute FX saves the Main Out FX-return levels, writes −65 dB, and restores the
-exact saved levels when the button is released. Speaker B and Phones are not
-part of this path. Mute FX is part of the mixer scene and a snapshot.
+Mute FX saves the Main Out and Speaker B FX-return levels, writes −65 dB, and
+restores the exact saved levels when the button is released. Both monitor
+pairs are muted so the action stays in effect when you switch between Main
+and Speaker B. Phones is not part of this path. Mute FX is part of the mixer
+scene and a snapshot.
 
 ### External input
 
-**Ext. input** replaces the Main Out mix with the stereo hardware-input pair
-selected in Control Room Settings. It applies the configured gain and
-latches the button. Releasing it restores the normal Main Out mix. Speaker B
-and the Phones outputs keep their own mixes. The source list contains
-hardware inputs only.
+**Ext. input** replaces both monitor mixes, Main Out and Speaker B, with the
+stereo hardware-input pair selected in Control Room Settings. It applies the
+configured gain, mutes their FX returns, and latches the button. Releasing it
+restores the normal monitor mixes. The Phones outputs keep their own mixes.
+The source list contains hardware inputs only.
 
 The button is available when a source pair is configured and a Main Out is
 assigned. Changing the source or gain while External Input is active
