@@ -458,6 +458,12 @@ impl UcxDump {
             }
         }
 
+        if let Some(word) = self.words.get(&ucx::global::MUTE_ENABLE).copied() {
+            if word == 0 {
+                out.push("Output mutes: disabled on the unit".into());
+            }
+        }
+
         out
     }
 
@@ -982,6 +988,18 @@ mod tests {
         assert!(diff.iter().any(|s| s.contains("Mono: device true")), "{diff:?}");
         assert!(!diff.iter().any(|s| s.contains("Mono monitor mask")), "{diff:?}");
         assert!(scene.settings.mono);
+    }
+
+    #[test]
+    fn control_room_output_mute_enable_is_reported() {
+        let mut scene = scene();
+        let mut words = HashMap::new();
+        words.insert(0x3d01, 0);
+        let diff = UcxDump::new(words).differences_into(&mut scene);
+        assert!(
+            diff.iter().any(|s| s.contains("Output mutes: disabled")),
+            "{diff:?}"
+        );
     }
 
     #[test]
