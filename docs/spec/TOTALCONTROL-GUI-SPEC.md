@@ -1480,12 +1480,17 @@ Headers grow quieter as their level deepens and use the secondary label colour
 in small caps like the level-1 `DEVICE` / `AUDIO ENGINE` headers but at normal
 text size and without a rule; `Scheduling`, `This stream` and `Session` are
 level-3 headers in italic, without underline.
-`reset` (tooltip "Clear all counters") clears every section. Counting runs
-on every tick, independent of whether the drawer is open.
 
-- **Scheduling** — `underrun / overrun` (host ring). Cumulative, cleared
-  only by `reset`; never cleared by a stream restart. The metric for tuning
-  quantum and host load.
+`reset` clears the cumulative and per-run counters. Counting runs on every
+tick, independent of whether the drawer is open.
+
+- **Scheduling** — `underrun / overrun` (host ring) and `max stall` (the
+  longest host write stall in the current stream). Underrun/overrun are
+  cumulative, cleared only by `reset`; never cleared by a stream restart.
+  Max stall is a current-stream watermark: it resets when the stream
+  restarts and turns red when it exceeds one period. Compare it with the
+  underrun/overrun count. The pair is the metric for tuning quantum and host
+  load.
 - **This stream** — `usb` (packet status errors), `bad packets` (short,
   malformed, misaligned or dropped) and `feedback` (clock-tracking packet
   detail). Per-run: cleared when the stream restarts (a rate or quantum

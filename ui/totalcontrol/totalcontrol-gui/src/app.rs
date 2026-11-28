@@ -16790,7 +16790,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::ResetTransportErrors),
-                    "Clear all counters",
+                    "Clear counters; max stall clears when the stream restarts.",
                     scale,
                 ),
             ]
@@ -16809,6 +16809,12 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             + perrun.out_fb_stale;
         // Section 3 values: cumulative session counters.
         let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
+        let period_ns = state
+            .card_stream
+            .filter(|s| s.rate > 0 && s.period > 0)
+            .map(|s| s.period as u64 * 1_000_000_000 / s.rate as u64)
+            .unwrap_or(0);
+        let max_stall_ns = now.ring_max_stall_ns;
         let sections: [(
             &'static str,
             &'static str,
@@ -16816,13 +16822,21 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         ); 3] = [
             (
                 "Scheduling",
-                "Cumulative, cleared by reset. Host ring underruns (playback) and overruns (capture): the metric for tuning quantum and host load. Never cleared by a stream restart.",
-                vec![(
-                    "underrun / overrun",
-                    format!("{} / {}", delta.out_underruns, delta.in_overruns),
-                    delta.out_underruns + delta.in_overruns,
-                    "Cumulative. Playback ring ran dry / capture ring overflowed.",
-                )],
+                "Underrun/overrun are cumulative and cleared by reset. Max stall is the current stream's longest host write stall and resets when the stream restarts.",
+                vec![
+                    (
+                        "underrun / overrun",
+                        format!("{} / {}", delta.out_underruns, delta.in_overruns),
+                        delta.out_underruns + delta.in_overruns,
+                        "Cumulative. Playback ring ran dry / capture ring overflowed.",
+                    ),
+                    (
+                        "max stall",
+                        format!("{:.1} ms", max_stall_ns as f64 / 1_000_000.0),
+                        u32::from(period_ns > 0 && max_stall_ns > period_ns),
+                        "Current stream. Longest host write stall; red when it exceeds one period. Correlate with underrun/overrun.",
+                    ),
+                ],
             ),
             (
                 "This stream",
