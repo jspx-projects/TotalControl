@@ -57,6 +57,7 @@ The file uses the `.tcws` workspace schema. It contains:
 | Masters | The mute and solo master sets, including suspended state |
 | Temporary group | The `F` membership and its ganged flag |
 | View | View, row mode, sidebar, panels, FX panel, zoom, quick channel, matrix mode |
+| Engine | The host graph quantum. Zero keeps the host/engine default; a running stream or conducting node wins. |
 | Window | Size, position, fullscreen/maximised state and scroll positions |
 | Panels | Open channel panels/flyouts and collapsed strips |
 | Selection | Selected output and split side, focused strip and temporary selection |
@@ -212,7 +213,7 @@ mixer scene, labels, groups, snapshots, layouts or window layout.
 | Active unit | Last selected unit key |
 | OSC | Enabled, dialect, ports and feedback destination address |
 | MIDI controllers | Enabled, debug log, per-device input/output enable and protocol, option values per protocol, key assignments per protocol |
-| Engine | Current rate and quantum. The quantum is the buffer setting and is pinned as the ALSA period on both directions; there is no playback mode. The current values are the last values a host stream ran at; a later launch reuses them and does not restore an older value. While a host stream runs, its running graph quantum wins and is used for the period pin and the cushion. The legacy playback-mode key is read, ignored and written back unchanged. |
+| Engine | Current rate. The rate is the last value a host stream ran at; a later launch reuses it and does not restore an older value. The host graph quantum is workspace state (§3). While a host stream runs, its running graph rate and quantum win and are used for the period pin and the cushion. The legacy playback-mode key is read, ignored and written back unchanged. |
 | Meters | OVR full-scale sample count (global, 1–15, default 3) |
 | Startup | Session autostart (starts hidden in the tray) and keep in tray |
 | Files | Last workspace folder |

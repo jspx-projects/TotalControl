@@ -526,8 +526,8 @@ jackd at the new rate. Pitch is held at 0 % under an external clock.
 
 The `Graph` line always shows the rate the card is running at, in every state.
 A rate change while no stream runs is a runtime change, so it does not add an undo
-step or mark the workspace dirty. The quantum is remembered in the application
-preferences, not in a workspace.
+step or mark the workspace dirty. The quantum is stored in the workspace and
+restored when no stream or conducting node owns the graph.
 
 The `Pitch` slider changes the speed and pitch of the whole interface from
 -5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Double-click the slider to
@@ -549,10 +549,11 @@ TotalControl re-applies it after a client rate change, clamped to the new
 rate's ceiling. TotalControl re-applies the current pitch after a stream
 restart.
 
-Pitch always starts from a clean slate (0 %). Changing the clock source,
-starting TotalControl, or loading a workspace resets pitch to 0 %. A saved
-pitch is not restored automatically; set it again from the slider after the
-change.
+Pitch is restored from a workspace or the startup scene when the clock and
+scheduling preconditions allow it. Changing the clock source or the
+rate-follow mode resets it to 0 %. Set it again from the slider after such a
+change. The device loses the DDS word at power-off, so TotalControl keeps the
+value in the workspace rather than reading it back.
 
 ### About dialog
 

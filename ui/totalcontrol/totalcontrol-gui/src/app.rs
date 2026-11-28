@@ -3170,10 +3170,9 @@ pub struct TotalControl {
     /// The user's pro pitch intent, owned by the GUI. A scene reapply clones
     /// the device settings and can clobber `settings.pitch_percent`, so the
     /// slider, the Device-path clock and persistence use this instead. Set by
-    /// the pitch slider only. Clean slate: reset to 0 on a clock-source change,
-    /// a rate-follow-mode change, startup and workspace load — a saved pitch is
-    /// never auto-restored, and it is writable only in Device mode on the
-    /// internal clock.
+    /// the pitch slider and restored from the workspace/startup scene when
+    /// compatible. A clock-source or rate-follow-mode change resets it to 0;
+    /// it is writable only in Device mode on the internal clock.
     pub pro_pitch: f32,
     /// The audio-path worker's re-prepare completion fact (copied from the
     /// engine snapshot each poll): a generation counter and whether the last
@@ -4420,6 +4419,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         assign: state.assign,
         surround_51: state.surround_51,
         surround_71: state.surround_71,
+        quantum: state.engine_force_quantum,
         vu_release_db_s: state.vu_release_db_s,
         window_size: state.window_size,
     }
@@ -4581,7 +4581,6 @@ fn apply_workspace_state(
         .apply_scene(&scene)
         .map_err(|e| e.to_string())?;
 
-    state.host_scene = Some(scene.clone());
     apply_workspace_gui(state, workspace);
     state.workspace_path = path;
     state.workspace_dirty = false;
@@ -4593,18 +4592,29 @@ fn apply_workspace_state(
     apply_workspace_external_input(state, workspace)?;
     apply_workspace_pfl(state, workspace)?;
     apply_workspace_sample_rate(state, &scene);
+    apply_workspace_quantum(state, workspace);
     apply_workspace_monitor_state(state, &scene)?;
     if state.device.capabilities().pitch {
-        // Clean slate: a workspace load starts at nominal pitch. The saved
-        // scene pitch is not restored to the clock.
-        state.pro_pitch = 0.0;
-        state
-            .device
-            .set_pitch(0.0)
-            .map_err(|e| e.to_string())?;
+        // Pitch is host intent: the unit does not report it and loses the
+        // DDS word at power-off. Restore the workspace value when the
+        // scheduling precondition allows it; reconcile defers otherwise.
+        let max = pitch_slider_max(state);
+        state.pro_pitch = scene.settings.pitch_percent.clamp(-5.0, max);
+        state.pitch_clock_dirty = true;
+        reconcile_device_pitch(state);
     }
     state.talkback_on = false;
     sync_surround_bridge(state);
+    // The saved scene is not the device truth after apply: device-owned
+    // Audio Config values stay live. Keep the host scene in step so the next
+    // save cannot write values that were never applied. The mock has no
+    // separate device transport, so keep its applied scene including the
+    // matrix overrides.
+    state.host_scene = Some(if state.device.is_mock() {
+        scene.clone()
+    } else {
+        state.device.capture_scene()
+    });
     Ok(())
 }
 
@@ -4673,6 +4683,28 @@ fn apply_workspace_pfl(state: &mut TotalControl, workspace: &Workspace) -> Resul
         }
     }
     Ok(())
+}
+
+/// Apply the host quantum stored in a workspace.  Zero keeps the engine
+/// default. A running stream or a conducting node owns the graph; the stored
+/// value is then applied at the next safe re-prepare instead of overriding
+/// the stream.
+fn apply_workspace_quantum(state: &mut TotalControl, workspace: &Workspace) {
+    let quantum = workspace.quantum;
+    if quantum == 0 {
+        return;
+    }
+    state.engine_force_quantum = quantum;
+    if let Some(engine) = state.engine.as_mut() {
+        engine.force_quantum = quantum;
+    }
+    if state.device.is_mock() {
+        return;
+    }
+    if state.device.rate_follows_sound_server() && graph_writable(state) {
+        write_quantum(state, quantum);
+        force_engine_reprepare(state);
+    }
 }
 
 /// Apply the rate stored in a workspace.  The scene writer sets the device
@@ -5682,11 +5714,13 @@ fn schedule_startup_full_reapply(state: &mut TotalControl) {
 }
 
 fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
-    // Clean slate: pitch starts at nominal on connect. A saved scene pitch is
-    // not restored to the clock; the user sets pitch from the slider in Device
-    // mode on the internal clock.
+    // Pitch is host intent: the unit does not report it and loses the DDS
+    // word at power-off. Restore the saved value; reconcile writes it only
+    // after the IRQ scheduling precondition is confirmed.
     if state.device.capabilities().pitch {
-        state.pro_pitch = 0.0;
+        let max = pitch_slider_max(state);
+        state.pro_pitch = scene.settings.pitch_percent.clamp(-5.0, max);
+        state.pitch_clock_dirty = true;
     }
     // Correctness: establish the Control Room assignment before the scene
     // write, so the scene's monitor flags (Speaker B, Dim) restore against a
@@ -28863,6 +28897,7 @@ mod tests {
         source.device.settings_mut().sample_rate = 44_100;
         source.device.settings_mut().pitch_percent = 1.5;
         source.pro_pitch = 1.5;
+        source.engine_force_quantum = 128;
         let workspace = capture_workspace(&source);
 
         let mut target = new(true, None, None);
@@ -28878,10 +28913,10 @@ mod tests {
         assert!(target.snapshots[2].is_some());
         assert!(!target.talkback_on);
         assert_eq!(target.device.settings().sample_rate, 44_100);
-        // Clean slate: a workspace load resets pitch to nominal; the saved
-        // scene pitch (1.5) is not restored to the clock.
-        assert_eq!(target.device.settings().pitch_percent, 0.0);
-        assert_eq!(target.pro_pitch, 0.0);
+        // Pitch is host intent and is restored from the workspace.
+        assert_eq!(target.device.settings().pitch_percent, 1.5);
+        assert_eq!(target.pro_pitch, 1.5);
+        assert_eq!(target.engine_force_quantum, 128);
         assert_eq!(target.workspace_path, Some(PathBuf::from("/tmp/test.tcws")));
         assert!(!target.workspace_dirty);
     }
