@@ -1881,8 +1881,9 @@ lets you choose, with a dialog:
 
 On the UCX the window appears first. TotalControl then requests the pre-connect
 state dump and compares input and output levels, mute, EQ, dynamics, FX
-returns and matrix sends. The dialog appears when the comparison is ready, so
-the startup is not held back by the dump.
+returns, matrix sends and the device-backed Control Room effects: the active
+Speaker B pair, the monitor mutes, Mono and Dim. The dialog appears when the
+comparison is ready, so the startup is not held back by the dump.
 
 The dialog lists every decoded difference. When more than six are shown, the
 list gets its own scrollbar and a fixed height so the dialog does not grow

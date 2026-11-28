@@ -2391,9 +2391,13 @@ configuration, and **device setup** for the unit’s six slots.
 
 The startup mismatch dialog lists the decoded differences as a bullet list.
 On the UCX it appears after the asynchronous pre-connect dump has been
-compared; the window itself is shown first. More than six differences are
-shown in a fixed-height scrollable list box instead of letting the dialog grow
-beyond the window.
+compared; the window itself is shown first. The comparison covers the mixer,
+preamp, references and the device-backed Control Room effects: the active
+Speaker B pair, the monitor mutes, Mono and Dim. The Main Out and Speaker B
+assignments, the External Input and Talkback/Listenback sources, and the Mute
+FX flag are host-side and are not device differences. More than six
+differences are shown in a fixed-height scrollable list box instead of letting
+the dialog grow beyond the window.
 
 ## 15. Control invariants
 

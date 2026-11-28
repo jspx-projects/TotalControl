@@ -10,6 +10,8 @@ use crate::channel::{
 };
 use crate::scene::Scene;
 
+use super::protocol::ucx;
+
 /// Output pairs in the requested dump.  TotalControl's pair 0 is Phones;
 /// the dump stores Phones at 0x18 and AN1/2 at 0x12.
 const OUTPUT_BLOCKS: [u16; 9] = [0x18, 0x12, 0x14, 0x16, 0x1a, 0x1c, 0x1e, 0x20, 0x22];
@@ -353,11 +355,154 @@ impl UcxDump {
             apply_echo(&self.words, echo, &mut out);
         }
 
+        // Control Room. The unit holds the effects of the monitor state; the
+        // Main Out and Speaker B assignments and the talkback/listenback
+        // sources are host-side. Compare only what the dump can read.
+        let expected_b = if scene.settings.speaker_b {
+            scene
+                .settings
+                .main_b_out
+                .and_then(ucx::output_pair_dsp)
+                .map(|dsp| (dsp / 2) as u16)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        if let Some(word) = self.words.get(&0x3d00).copied() {
+            if word != expected_b {
+                let device = if word == 0 {
+                    "off".to_string()
+                } else {
+                    dsp_pair_label(word)
+                };
+                let total = if expected_b == 0 {
+                    "off".to_string()
+                } else {
+                    dsp_pair_label(expected_b)
+                };
+                out.push(format!(
+                    "Speaker B active: device {device}, TotalControl {total}"
+                ));
+            }
+            if word == 0 {
+                scene.settings.speaker_b = false;
+            } else if let Some(pair) = host_pair_for_dsp(word) {
+                scene.settings.main_b_out = Some(pair);
+                scene.settings.speaker_b = true;
+            }
+        }
+
+        // The inactive monitor pair must be monitor-muted and the active pair
+        // audible. Bit 1 of the output mode word is the monitor mute.
+        let active_monitor = if scene.settings.speaker_b {
+            scene.settings.main_b_out
+        } else {
+            scene.settings.main_out
+        };
+        for pair in [scene.settings.main_out, scene.settings.main_b_out]
+            .into_iter()
+            .flatten()
+        {
+            let expected_muted = Some(pair) != active_monitor;
+            let mut mismatch = false;
+            for side in 0..2 {
+                if let Some(word) = self.output(pair, side, 0x02) {
+                    if (word & 0x0002 != 0) != expected_muted {
+                        mismatch = true;
+                    }
+                }
+            }
+            if mismatch {
+                let (device, total) = if expected_muted {
+                    ("audible", "muted")
+                } else {
+                    ("muted", "audible")
+                };
+                out.push(format!(
+                    "{} monitor mute: device {device}, TotalControl {total}",
+                    output_pair_label(pair)
+                ));
+            }
+        }
+
+        if let Some(flags) = self.words.get(&0x3f9e).copied() {
+            let device_mono = flags & 0x0002 != 0;
+            if device_mono != scene.settings.mono {
+                out.push(format!(
+                    "Mono: device {device_mono}, TotalControl {}",
+                    scene.settings.mono
+                ));
+                scene.settings.mono = device_mono;
+            }
+            if !scene.outputs.iter().any(|output| output.cue) {
+                if let Some(mask) = self.words.get(&0x3f98).copied() {
+                    let expected = if scene.settings.mono { 0x83ff } else { 0xffff };
+                    if mask != expected {
+                        out.push(format!(
+                            "Mono monitor mask: device 0x{mask:04x}, TotalControl 0x{expected:04x}"
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(word) = self.words.get(&0x3d03).copied() {
+            let device_dim = word != 0;
+            if device_dim != scene.settings.dim {
+                out.push(format!(
+                    "Dim: device {device_dim}, TotalControl {}",
+                    scene.settings.dim
+                ));
+                // Not applied: the dump carries the dimmed fader levels, not
+                // the saved undimmed levels.
+            }
+        }
+
         out
     }
 
     pub fn apply_to_scene(&self, scene: &mut Scene) -> Vec<String> {
         self.differences_into(scene)
+    }
+}
+
+/// The GUI's output-pair label, in TotalControl's Phones-first pair order.
+fn output_pair_label(pair: usize) -> &'static str {
+    match pair {
+        0 => "Phones 7/8",
+        1 => "AN 1/2",
+        2 => "AN 3/4",
+        3 => "AN 5/6",
+        4 => "SPDIF",
+        5 => "AS 1/2",
+        6 => "ADAT 3/4",
+        7 => "ADAT 5/6",
+        8 => "ADAT 7/8",
+        _ => "output pair",
+    }
+}
+
+/// `0x3d00` carries the DSP output pair index (0 = AN 1/2, 3 = Phones).
+fn dsp_pair_label(word: u16) -> String {
+    match host_pair_for_dsp(word) {
+        Some(pair) => output_pair_label(pair).to_string(),
+        None => format!("pair {word}"),
+    }
+}
+
+/// The inverse of `ucx::output_pair_dsp`: DSP pair index to host pair.
+fn host_pair_for_dsp(dsp_pair: u16) -> Option<usize> {
+    match dsp_pair {
+        0 => Some(1), // AN 1/2
+        1 => Some(2), // AN 3/4
+        2 => Some(3), // AN 5/6
+        3 => Some(0), // Phones 7/8
+        4 => Some(4), // SPDIF
+        5 => Some(5), // AS 1/2
+        6 => Some(6), // ADAT 3/4
+        7 => Some(7), // ADAT 5/6
+        8 => Some(8), // ADAT 7/8
+        _ => None,
     }
 }
 
@@ -787,6 +932,67 @@ mod tests {
 
         let diff = UcxDump::new(words).differences_into(&mut scene);
         assert!(diff.is_empty(), "{diff:?}");
+    }
+
+    #[test]
+    fn control_room_speaker_b_is_compared_and_applied() {
+        let mut scene = scene();
+        scene.settings.main_out = Some(1);
+        scene.settings.main_b_out = Some(2);
+        scene.settings.speaker_b = false;
+        let mut words = HashMap::new();
+        // DSP pair 1 = AN 3/4 = host pair 2.
+        words.insert(0x3d00, 1);
+        let diff = UcxDump::new(words).differences_into(&mut scene);
+        assert!(diff.iter().any(|s| s.contains("Speaker B active")), "{diff:?}");
+        assert!(scene.settings.speaker_b);
+        assert_eq!(scene.settings.main_b_out, Some(2));
+    }
+
+    #[test]
+    fn control_room_monitor_mutes_are_compared() {
+        let mut scene = scene();
+        scene.settings.main_out = Some(1);
+        scene.settings.main_b_out = Some(2);
+        scene.settings.speaker_b = false;
+        let mut words = HashMap::new();
+        // Main AN 1/2 audible, Speaker B AN 3/4 also audible: a leak.
+        for addr in [0x1202, 0x1302, 0x1402, 0x1502] {
+            words.insert(addr, 0);
+        }
+        let diff = UcxDump::new(words).differences_into(&mut scene);
+        assert!(
+            diff.iter().any(|s| s.contains("AN 3/4 monitor mute")),
+            "{diff:?}"
+        );
+        assert!(
+            !diff.iter().any(|s| s.contains("AN 1/2 monitor mute")),
+            "{diff:?}"
+        );
+    }
+
+    #[test]
+    fn control_room_mono_is_compared_and_applied() {
+        let mut scene = scene();
+        scene.settings.mono = false;
+        let mut words = HashMap::new();
+        words.insert(0x3f9e, 0x0002);
+        words.insert(0x3f98, 0x83ff);
+        let diff = UcxDump::new(words).differences_into(&mut scene);
+        assert!(diff.iter().any(|s| s.contains("Mono: device true")), "{diff:?}");
+        assert!(!diff.iter().any(|s| s.contains("Mono monitor mask")), "{diff:?}");
+        assert!(scene.settings.mono);
+    }
+
+    #[test]
+    fn control_room_dim_is_reported_not_applied() {
+        let mut scene = scene();
+        scene.settings.dim = false;
+        let mut words = HashMap::new();
+        words.insert(0x3d03, 1);
+        let diff = UcxDump::new(words).differences_into(&mut scene);
+        assert!(diff.iter().any(|s| s.contains("Dim: device true")), "{diff:?}");
+        assert!(!scene.settings.dim);
     }
 
     #[test]
