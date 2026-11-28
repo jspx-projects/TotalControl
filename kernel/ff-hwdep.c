@@ -155,6 +155,10 @@ static int ff_hwdep_open(struct snd_hwdep *hwdep, struct file *file)
 {
 	struct ff *chip = hwdep->private_data;
 
+	/* A disconnected card may still have the hwdep node open for
+	 * diagnostics; do not let a new reader start its transports. */
+	if (READ_ONCE(chip->disconnected))
+		return -ENODEV;
 	if (atomic_inc_return(&chip->hwdep_users) == 1)
 		ff_transport_start(chip);
 	return 0;
@@ -355,15 +359,28 @@ static int ff_hwdep_snapshot(struct ff *chip,
 		struct snd_pcm_runtime *rt;
 		u64 boundary;
 
-		if (!subs || !(rt = subs->runtime))
+		if (!subs)
 			continue;
+		/* Serialise with PCM teardown: a disconnect or hw_free can
+		 * clear the runtime while this ioctl is in flight.  Reading
+		 * it under the stream lock keeps the pointer and the sizes
+		 * consistent, and a runtime that is not fully initialised is
+		 * skipped instead of divided by a zero boundary. */
+		snd_pcm_stream_lock_irqsave(subs, flags);
+		rt = subs->runtime;
+		boundary = rt ? rt->boundary : 0;
+		if (!rt || !rt->status || !rt->period_size ||
+		    !rt->buffer_size || !boundary ||
+		    READ_ONCE(chip->disconnected)) {
+			snd_pcm_stream_unlock_irqrestore(subs, flags);
+			continue;
+		}
 		st->present = 1;
 		st->state = rt->status->state;
 		st->appl_ptr = READ_ONCE(rt->control->appl_ptr);
 		st->hw_ptr = fs->hw_ptr;
 		st->period = rt->period_size;
 		st->buffer = rt->buffer_size;
-		boundary = rt->boundary;
 		if (dir == SNDRV_PCM_STREAM_PLAYBACK)
 			st->fill = (st->appl_ptr + boundary - st->hw_ptr) %
 				   boundary;
@@ -384,6 +401,7 @@ static int ff_hwdep_snapshot(struct ff *chip,
 		st->xruns = dir == SNDRV_PCM_STREAM_CAPTURE ?
 			    atomic_read(&chip->in_overruns) :
 			    atomic_read(&chip->out_underruns);
+		snd_pcm_stream_unlock_irqrestore(subs, flags);
 	}
 	if (copy_to_user(arg, &s, size))
 		return -EFAULT;
