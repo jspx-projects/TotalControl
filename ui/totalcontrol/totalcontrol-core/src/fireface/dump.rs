@@ -418,25 +418,9 @@ fn apply_eq(
             1 => (0x40, 0x45, 0x46, 0x47),
             _ => (0x48, 0x49, 0x4a, 0x4b),
         };
-        if band != 1 {
-            if let Some(w) = word(type_off) {
-                let kind = match (band, w) {
-                    (0, 1) => EqBandType::LowShelf,
-                    (2, 1) => EqBandType::HighShelf,
-                    (2, 2) => EqBandType::LowPass,
-                    _ => EqBandType::Bell,
-                };
-                if eq.bands[band].band_type != kind {
-                    out.push(format!(
-                        "{label} EQ band {} type: device {:?}, TotalControl {:?}",
-                        band + 1,
-                        kind,
-                        eq.bands[band].band_type
-                    ));
-                    eq.bands[band].band_type = kind;
-                }
-            }
-        }
+        // Read the gain first: an Off band is the host's bypass and the unit
+        // encodes it as Bell at 0 dB, so the type comparison needs the
+        // device gain.
         if let Some(w) = word(gain_off) {
             let db = (w as i16) as f32 / 10.0;
             if (eq.bands[band].gain_db - db).abs() > 0.05 {
@@ -446,6 +430,28 @@ fn apply_eq(
                     eq.bands[band].gain_db
                 ));
                 eq.bands[band].gain_db = db;
+            }
+        }
+        if band != 1 {
+            if let Some(w) = word(type_off) {
+                let kind = match (band, w) {
+                    (0, 1) => EqBandType::LowShelf,
+                    (2, 1) => EqBandType::HighShelf,
+                    (2, 2) => EqBandType::LowPass,
+                    _ => EqBandType::Bell,
+                };
+                let off_is_bell = eq.bands[band].band_type == EqBandType::Off
+                    && kind == EqBandType::Bell
+                    && eq.bands[band].gain_db.abs() < 0.05;
+                if !off_is_bell && eq.bands[band].band_type != kind {
+                    out.push(format!(
+                        "{label} EQ band {} type: device {:?}, TotalControl {:?}",
+                        band + 1,
+                        kind,
+                        eq.bands[band].band_type
+                    ));
+                    eq.bands[band].band_type = kind;
+                }
             }
         }
         if let Some(w) = word(freq_off) {
