@@ -3455,7 +3455,34 @@ impl Fireface {
         );
     }
 
+    /// Apply a REG1 mirror word from the requested dump or live state stream.
+    /// The unit reports clock source, rate index, word-clock single speed,
+    /// termination, optical format and SPDIF professional here.
+    fn apply_ucx_global_word(&mut self, addr: u16, value: u16) {
+        match addr {
+            0x3d20 => {
+                if let Some(source) = self.settings.clock_sources.get(value as usize) {
+                    self.settings.clock_source = source.clone();
+                }
+            }
+            0x3d21 => {
+                const RATES: [u32; 9] = [
+                    32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 128_000, 176_400, 192_000,
+                ];
+                if let Some(rate) = RATES.get(value as usize) {
+                    self.settings.sample_rate = *rate;
+                }
+            }
+            0x3d22 => self.settings.word_clock_single_speed = value != 0,
+            0x3d40 => self.settings.word_clock_termination = value != 0,
+            0x3d41 => self.settings.optical_out_spdif = value != 0,
+            0x3d42 => self.settings.spdif_professional = value != 0,
+            _ => {}
+        }
+    }
+
     fn record_ucx_readable_word(&mut self, addr: u16, value: u16) {
+        self.apply_ucx_global_word(addr, value);
         if let Some(idx) = ucx::input_gain_index(addr) {
             let raw = value as u32;
             let (gain, max) = if idx < 2 {
@@ -4504,6 +4531,7 @@ impl Fireface {
 
     fn apply_ucx_state_word(&mut self, addr: u16, value: u16) {
         self.state_words.insert(addr, value);
+        self.apply_ucx_global_word(addr, value);
         if self.startup_dump_pending {
             // Pre-connect snapshot only.  Do not let late dump words
             // overwrite the scene loaded into the model.  Speaker B is a
@@ -12379,6 +12407,25 @@ mod tests {
         dev.apply_scene(&scene).unwrap();
         assert_eq!(dev.inputs()[2].gain, Some(12));
         assert_eq!(dev.inputs()[2].gain_max, Some(24));
+    }
+
+    #[test]
+    fn ucx_state_mirrors_update_the_audio_config_model() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.apply_ucx_state_word(0x3d20, 3); // Word Clock
+        dev.apply_ucx_state_word(0x3d21, 5); // 96 kHz
+        dev.apply_ucx_state_word(0x3d22, 1); // single speed
+        dev.apply_ucx_state_word(0x3d40, 1); // termination
+        dev.apply_ucx_state_word(0x3d41, 1); // optical S/PDIF
+        dev.apply_ucx_state_word(0x3d42, 1); // professional
+
+        let settings = dev.settings();
+        assert_eq!(settings.clock_source, "Word Clock");
+        assert_eq!(settings.sample_rate, 96_000);
+        assert!(settings.word_clock_single_speed);
+        assert!(settings.word_clock_termination);
+        assert!(settings.optical_out_spdif);
+        assert!(settings.spdif_professional);
     }
 
     #[test]
