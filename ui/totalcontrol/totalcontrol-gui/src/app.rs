@@ -4226,7 +4226,7 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
             .device_target
             .as_ref()
             .and_then(|target| target.serial.as_deref());
-        settings.set_active(key, state.device.canonical_model(), serial);
+        settings.upsert_unit(key, state.device.canonical_model(), serial);
         if let Some(path) = state.current_workspace_path.clone() {
             settings.set_current_workspace(key, path);
         }
@@ -4295,17 +4295,31 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
     state.show_controller_log = state.controller_settings.show_log;
     refresh_controller_devices(state);
     rebuild_controller_workers(state);
-    if let Some((key, unit)) = settings.active() {
+    let opened_key = current_unit_key(state);
+    // The opened unit wins over the saved active unit.  A fallback unit
+    // (the remembered unit is absent) keeps the remembered unit as the
+    // active preference, so it is chosen again when it returns.  An
+    // explicit simulation has no unit at all.
+    let key = if state.explicit_mock {
+        None
+    } else {
+        opened_key.or_else(|| settings.active_unit.clone())
+    };
+    if let Some(key) = key.as_deref() {
         state.current_unit_key = Some(key.to_string());
-        state.always_init_device = unit.always_init_device;
+        let unit = settings.units.get(key);
+        state.always_init_device = unit.is_some_and(|u| u.always_init_device);
         state.sync_direction = if state.device.needs_scene_restore() {
             SyncDirection::GuiToDevice
         } else if state.device.device_state_is_authoritative() {
             SyncDirection::DeviceToGui
         } else {
-            unit.sync_direction.unwrap_or(SyncDirection::DeviceToGui)
+            unit.and_then(|u| u.sync_direction)
+                .unwrap_or(SyncDirection::DeviceToGui)
         };
     } else {
+        state.current_unit_key = None;
+        state.always_init_device = false;
         state.sync_direction = if state.device.needs_scene_restore() {
             SyncDirection::GuiToDevice
         } else if state.device.device_state_is_authoritative() {
@@ -16525,7 +16539,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 SyncInput::Optical => "Optical",
                 SyncInput::WordClock => "Word clock",
             };
-            let state_text = if sync.lock { "Locked" } else { "No lock" };
+            let state_text = if sync.lock { "Lock" } else { "No lock" };
             let rate = if sync.lock {
                 sync.rate
                     .map(rate_label)

@@ -268,11 +268,6 @@ pub enum SyncInput {
     WordClock,
 }
 
-impl SyncInput {
-    /// The order the Audio Config panel lists the inputs in.
-    pub const ALL: [Self; 3] = [Self::SpdifCoax, Self::Optical, Self::WordClock];
-}
-
 /// Lock, sync and detected rate for one digital input, from the `0x11`
 /// state word.  A `None` rate means no rate is reported (the input carries
 /// no signal).

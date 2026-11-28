@@ -1769,7 +1769,11 @@ fn run(
             // quarter-second poll is enough for the Audio Config field.
             if last_sync.elapsed() >= Duration::from_millis(250) {
                 last_sync = Instant::now();
-                m.input_sync = device.input_sync_status();
+                let sync = device.input_sync_status();
+                if sync != m.input_sync {
+                    log::info!("digital input sync: {sync:?}");
+                }
+                m.input_sync = sync;
             }
             let active = meter_activity(&m);
             m.active = active;

@@ -250,6 +250,12 @@ impl HostSettings {
     /// Remember a connected unit and make it active.
     pub fn set_active(&mut self, key: &str, model: &str, serial: Option<&str>) {
         self.active_unit = Some(key.to_string());
+        self.upsert_unit(key, model, serial);
+    }
+
+    /// Update one unit's identity without changing the active preference.
+    /// A fallback unit must not replace the unit the user last selected.
+    pub fn upsert_unit(&mut self, key: &str, model: &str, serial: Option<&str>) {
         let unit = self.units.entry(key.to_string()).or_default();
         unit.model = model.to_string();
         unit.serial = serial.map(str::to_string);
@@ -393,5 +399,14 @@ mod tests {
             Some(PathBuf::from("current.tcws"))
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn upsert_unit_does_not_change_the_active_preference() {
+        let mut settings = HostSettings::default();
+        settings.set_active("Fireface-UCX-1", "Fireface UCX", Some("1"));
+        settings.upsert_unit("Fireface-UC-2", "Fireface UC", Some("2"));
+        assert_eq!(settings.active_unit.as_deref(), Some("Fireface-UCX-1"));
+        assert!(settings.units.contains_key("Fireface-UC-2"));
     }
 }
