@@ -1706,14 +1706,14 @@ The counters are grouped into three sections by **when they clear**:
   reset.
 
 **reset** clears the cumulative and per-run counted rows. It does not clear
-`max stall`, which follows the running stream and is unavailable when no
-stream runs.
+`max stall`, which follows the running stream and shows `—` when no stream
+runs.
 
 ### Max stall
 
 `max stall` is the longest interval between two host writes to the playback
-ring during the current stream, after the startup mute window. It is shown as
-`unavailable` while no playback stream runs.
+ring during the current stream, after the startup mute window. It shows `—`
+while no playback stream runs.
 
 The comparison uses the current stream's own playable cushion: the queued
 frames above the period being consumed, `buffer − period`, converted to time
@@ -1794,7 +1794,7 @@ detail.
 | Section | Row | Meaning | What to do |
 |---|---|---|---|
 | Scheduling | underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). On an underrun the driver sends silence for the dry chunk; a single late write is heard as a brief gap. At stream start and after a rate change the startup mute window (see above) holds the output muted while the host fills the ring; starvation inside that window is intended and is not counted here. If the ring stays dry for two consecutive chunks outside that window the driver stops the playback stream and the audio graph restarts it. A dry ring is never heard as stale audio. An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
-| This stream | max stall | The longest the host took to feed the playback ring during the current stream, after the startup mute window. It is `unavailable` while no stream runs. The row is red when it exceeds the current stream's playable ring cushion, `buffer − period` frames at the stream's rate; it is gray otherwise. It resets when the stream restarts. | If max stall is red, reduce the stall or increase the cushion: raise the quantum, use a local file, use the performance governor, or use real-time scheduling. If it stays gray, the ring absorbed the stall; compare with underrun / overrun to see whether it actually dropped out. |
+| This stream | max stall | The longest the host took to feed the playback ring during the current stream, after the startup mute window. It shows `—` while no stream runs. The row is red when it exceeds the current stream's playable ring cushion, `buffer − period` frames at the stream's rate; it is gray otherwise. It resets when the stream restarts. | If max stall is red, reduce the stall or increase the cushion: raise the quantum, use a local file, use the performance governor, or use real-time scheduling. If it stays gray, the ring absorbed the stall; compare with underrun / overrun to see whether it actually dropped out. |
 | This stream | usb | USB packet status errors in the current stream. | Try another USB port or cable; avoid hubs; check for bandwidth contention. |
 | This stream | bad packets | Short, malformed, misaligned or dropped packets in the current stream. The startup and rate-switch burst is excluded by the per-run reset. | Usually accompanies a USB link problem; see `usb` and `gaps`. |
 | This stream | feedback | Clock-tracking packet detail in the current stream: a position discontinuity, a header frame-count mismatch, or feedback unavailable. The device's one-time start resync at a stream start is expected and is not counted. | Check the clock source and sample rate; a growing value indicates a device clock or USB timing fault. |

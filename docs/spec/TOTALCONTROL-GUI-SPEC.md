@@ -1493,8 +1493,8 @@ tick, independent of whether the drawer is open.
   restarts (a rate or quantum change, or a recovery), not by player
   start/stop (§13). The startup and rate-switch packet burst is excluded by
   the per-run reset.
-  `max stall` is measured after the startup mute window. It reads
-  `unavailable` while no stream runs. It turns red when it exceeds the current
+  `max stall` is measured after the startup mute window. It shows `—` while no
+  stream runs. It turns red when it exceeds the current
   stream's playable ring cushion, `(buffer − period)` frames at the stream's
   rate, and stays gray otherwise. The cushion comes from that stream's own
   period and buffer, never from an earlier stream.

@@ -16845,7 +16845,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 )
             } else {
                 (
-                    "unavailable".into(),
+                    "\u{2014}".into(),
                     0,
                     "No playback stream: max stall is measured only while a stream runs.",
                 )
