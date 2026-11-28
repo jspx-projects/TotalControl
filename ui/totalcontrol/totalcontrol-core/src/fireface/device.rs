@@ -3481,20 +3481,33 @@ impl Fireface {
         }
     }
 
+    /// Decode an input-gain state word.  Inputs 1/2 use whole dB; inputs 3/4
+    /// use 0.5 dB steps.
+    fn ucx_gain_from_state(addr: u16, value: u16) -> Option<(usize, u32)> {
+        let idx = ucx::input_gain_index(addr)?;
+        let raw = value as u32;
+        let (gain, max) = if idx < 2 {
+            ((raw + 5) / 10, 65)
+        } else {
+            ((raw + 2) / 5, 24)
+        };
+        Some((idx, gain.min(max)))
+    }
+
+    /// Decode an output-volume state word into its internal output index and
+    /// linear level.
+    fn ucx_volume_from_state(addr: u16, value: u16) -> Option<(usize, f32)> {
+        let idx = ucx::output_index_from_state(addr)?;
+        Some((idx, ucx::tenths_to_linear(value)))
+    }
+
     fn record_ucx_readable_word(&mut self, addr: u16, value: u16) {
         self.apply_ucx_global_word(addr, value);
-        if let Some(idx) = ucx::input_gain_index(addr) {
-            let raw = value as u32;
-            let (gain, max) = if idx < 2 {
-                ((raw + 5) / 10, 65)
-            } else {
-                ((raw + 2) / 5, 24)
-            };
-            self.device_input_gain.insert(idx, gain.min(max));
+        if let Some((idx, gain)) = Self::ucx_gain_from_state(addr, value) {
+            self.device_input_gain.insert(idx, gain);
             return;
         }
-        if let Some(idx) = ucx::output_index_from_state(addr) {
-            let volume = ucx::tenths_to_linear(value);
+        if let Some((idx, volume)) = Self::ucx_volume_from_state(addr, value) {
             self.device_output_volume.insert(idx, volume);
         }
     }
@@ -4547,16 +4560,7 @@ impl Fireface {
             }
             return;
         }
-        if let Some(idx) = ucx::input_gain_index(addr) {
-            // The unit reports physical gain moves here in 0.1 dB units.
-            // Inputs 1/2 use whole dB; inputs 3/4 use 0.5 dB steps.
-            let raw = value as u32;
-            let (gain, max) = if idx < 2 {
-                ((raw + 5) / 10, 65)
-            } else {
-                ((raw + 2) / 5, 24)
-            };
-            let gain = gain.min(max);
+        if let Some((idx, gain)) = Self::ucx_gain_from_state(addr, value) {
             if let Some(input) = self.inputs.get_mut(idx) {
                 input.gain = Some(gain);
             }
@@ -4571,8 +4575,7 @@ impl Fireface {
             self.device_input_gain.insert(idx, gain);
             return;
         }
-        if let Some(idx) = ucx::output_index_from_state(addr) {
-            let volume = ucx::tenths_to_linear(value);
+        if let Some((idx, volume)) = Self::ucx_volume_from_state(addr, value) {
             log::debug!("UCX state {addr:#06x} = {value:#06x}: output {idx} volume {volume:.4}");
             if let Some(output) = self.outputs.get_mut(idx) {
                 output.volume = volume;

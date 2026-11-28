@@ -49,7 +49,7 @@ The file uses the `.tcws` workspace schema. It contains:
 
 | Field group | Contents |
 |---|---|
-| Scene | The current mixer model and device settings |
+| Scene | The current mixer model. Device-owned Audio Config settings are read from the unit and are not serialized. EQ for Record, which has no mirror, is serialized as an unverified host cache. |
 | Snapshots | The eight Mix slots and their names |
 | Groups | The four mute/solo/fader groups |
 | Layout slots | The six layout presets and the active slot |

@@ -91,6 +91,9 @@ pub struct CommandInbox {
     queue: Mutex<VecDeque<Command>>,
     cv: Condvar,
     stop: AtomicBool,
+    /// Write errors reported by the service thread's command closures.  The
+    /// UI drains them from the next published snapshot.
+    errors: Mutex<VecDeque<String>>,
 }
 
 const COMMAND_CAP: usize = 256;
@@ -101,6 +104,7 @@ impl CommandInbox {
             queue: Mutex::new(VecDeque::new()),
             cv: Condvar::new(),
             stop: AtomicBool::new(false),
+            errors: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -155,6 +159,20 @@ impl CommandInbox {
         cmds
     }
 
+    fn report_error(&self, message: String) {
+        let mut errors = self.errors.lock().unwrap();
+        // Keep the notice bounded; the oldest unwritten error is the least
+        // useful when a burst of writes fails.
+        while errors.len() >= 8 {
+            errors.pop_front();
+        }
+        errors.push_back(message);
+    }
+
+    fn drain_errors(&self) -> Vec<String> {
+        self.errors.lock().unwrap().drain(..).collect()
+    }
+
     fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.cv.notify_all();
@@ -181,6 +199,10 @@ impl CommandSender {
         } else {
             Err(())
         }
+    }
+
+    fn report_error(&self, message: String) {
+        self.0.report_error(message);
     }
 
     fn request_stop(&self) {
@@ -238,6 +260,9 @@ pub struct Snapshot {
     pub hardware_volume: Option<f32>,
     pub panel_selection: Option<(bool, usize, usize)>,
     pub at: Instant,
+    /// Device write errors since the previous snapshot.  The UI turns each
+    /// one into a visible notice instead of the service discarding it.
+    pub errors: Vec<String>,
 }
 
 /// The UI-side copy of the model.
@@ -254,6 +279,8 @@ pub struct Mirror {
     connected: bool,
     hardware_volume: Option<f32>,
     panel_selection: Option<(bool, usize, usize)>,
+    /// Write errors waiting for the UI to show them.
+    errors: VecDeque<String>,
 }
 
 impl Mirror {
@@ -270,6 +297,7 @@ impl Mirror {
             connected: initial.connected,
             hardware_volume: initial.hardware_volume,
             panel_selection: initial.panel_selection,
+            errors: initial.errors.into(),
         }
     }
 
@@ -299,7 +327,14 @@ impl Mirror {
         self.connected = snapshot.connected;
         self.hardware_volume = snapshot.hardware_volume;
         self.panel_selection = snapshot.panel_selection;
+        self.errors.extend(snapshot.errors);
         true
+    }
+
+    /// The next device write error, if the service reported one.  The UI
+    /// shows it as a notice and calls this until it returns `None`.
+    pub fn take_error(&mut self) -> Option<String> {
+        self.errors.pop_front()
     }
 
     pub fn inputs(&self) -> &[totalcontrol_core::InputChannel] {
@@ -344,15 +379,28 @@ impl Mirror {
         let _ = self.commands.send(Command::Run(Box::new(command)));
     }
 
+    /// Run a write on the device thread and report its error through the
+    /// next snapshot.  A command that the queue rejects is a stopped
+    /// service, so there is nothing left to report.
+    fn run_checked(
+        &self,
+        command: impl FnOnce(&mut DeviceHandle) -> Result<(), Error> + Send + 'static,
+    ) {
+        let sender = self.commands.clone();
+        self.run(move |d| {
+            if let Err(e) = command(d) {
+                sender.report_error(e.to_string());
+            }
+        });
+    }
+
     /// The server-free idle device-rate write (the JACK / direct-ALSA pro
     /// path). Updates the local scene rate at once — the rate-change reapply
     /// captures the mirror scene immediately after this call — and queues the
     /// idle write on the service thread. The device readback confirms the rate.
     pub fn set_sample_rate_idle(&mut self, rate: u32) -> Result<(), Error> {
         self.scene.settings.sample_rate = rate;
-        self.run(move |d| {
-            let _ = d.set_sample_rate_idle(rate);
-        });
+        self.run_checked(move |d| d.set_sample_rate_idle(rate));
         Ok(())
     }
 
@@ -361,64 +409,44 @@ impl Mirror {
     pub fn apply_scene_at_connect(&mut self, scene: &Scene) -> Result<(), Error> {
         self.scene = scene.clone();
         let scene = scene.clone();
-        self.run(move |d| {
-            let _ = d.apply_scene_at_connect(&scene);
-        });
+        self.run_checked(move |d| d.apply_scene_at_connect(&scene));
         Ok(())
     }
 
     pub fn set_line_in_ref(&self, code: u16) {
-        self.run(move |d| {
-            let _ = d.set_line_in_ref(code);
-        });
+        self.run_checked(move |d| d.set_line_in_ref(code));
     }
 
     pub fn set_line_out_ref(&self, code: u16) {
-        self.run(move |d| {
-            let _ = d.set_line_out_ref(code);
-        });
+        self.run_checked(move |d| d.set_line_out_ref(code));
     }
 
     pub fn set_phones_ref(&self, code: u16) {
-        self.run(move |d| {
-            let _ = d.set_phones_ref(code);
-        });
+        self.run_checked(move |d| d.set_phones_ref(code));
     }
 
     pub fn set_line_in_ref_58(&self, code: u16) {
-        self.run(move |d| {
-            let _ = d.set_line_in_ref_58(code);
-        });
+        self.run_checked(move |d| d.set_line_in_ref_58(code));
     }
 
     pub fn set_spdif_professional(&self, on: bool) {
-        self.run(move |d| {
-            let _ = d.set_spdif_professional(on);
-        });
+        self.run_checked(move |d| d.set_spdif_professional(on));
     }
 
     pub fn set_word_clock_single_speed(&self, on: bool) {
-        self.run(move |d| {
-            let _ = d.set_word_clock_single_speed(on);
-        });
+        self.run_checked(move |d| d.set_word_clock_single_speed(on));
     }
 
     pub fn set_word_clock_termination(&self, on: bool) {
-        self.run(move |d| {
-            let _ = d.set_word_clock_termination(on);
-        });
+        self.run_checked(move |d| d.set_word_clock_termination(on));
     }
 
     pub fn set_input_ms_proc(&self, idx: usize, on: bool) {
-        self.run(move |d| {
-            let _ = d.set_input_ms_proc(idx, on);
-        });
+        self.run_checked(move |d| d.set_input_ms_proc(idx, on));
     }
 
     pub fn set_playback_ms_proc(&self, idx: usize, on: bool) {
-        self.run(move |d| {
-            let _ = d.set_playback_ms_proc(idx, on);
-        });
+        self.run_checked(move |d| d.set_playback_ms_proc(idx, on));
     }
 
     pub fn set_talkback(&self, on: bool) {
@@ -427,15 +455,11 @@ impl Mirror {
 
     pub fn set_talkback_with(&self, on: bool, config: &TalkbackConfig) {
         let config = *config;
-        self.run(move |d| {
-            let _ = d.set_talkback_with(on, &config);
-        });
+        self.run_checked(move |d| d.set_talkback_with(on, &config));
     }
 
     pub fn set_talkback_receive(&self, output: usize, on: bool) {
-        self.run(move |d| {
-            let _ = d.set_talkback_receive(output, on);
-        });
+        self.run_checked(move |d| d.set_talkback_receive(output, on));
     }
 
     /// Push the local settings block to the service.  Link groupings and
@@ -612,9 +636,7 @@ impl RmeDevice for Mirror {
         block: usize,
         gain: f32,
     ) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_matrix_cell(channel, block, gain);
-        });
+        self.run_checked(move |d| d.set_matrix_cell(channel, block, gain));
         Ok(())
     }
 
@@ -709,9 +731,7 @@ impl RmeDevice for Mirror {
     }
 
     fn set_pan(&mut self, channel: ChannelId, output: usize, pan: i8) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_pan(channel, output, pan);
-        });
+        self.run_checked(move |d| d.set_pan(channel, output, pan));
         Ok(())
     }
 
@@ -757,9 +777,7 @@ impl RmeDevice for Mirror {
     }
 
     fn set_solo(&mut self, channel: ChannelId, solo: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_solo(channel, solo);
-        });
+        self.run_checked(move |d| d.set_solo(channel, solo));
         Ok(())
     }
 
@@ -782,9 +800,7 @@ impl RmeDevice for Mirror {
     fn apply_scene(&mut self, scene: &Scene) -> Result<(), Error> {
         self.scene = scene.clone();
         let scene = scene.clone();
-        self.run(move |d| {
-            let _ = d.apply_scene(&scene);
-        });
+        self.run_checked(move |d| d.apply_scene(&scene));
         Ok(())
     }
 
@@ -795,30 +811,22 @@ impl RmeDevice for Mirror {
 
     fn set_clock_source(&mut self, source: &str) -> Result<(), Error> {
         let source = source.to_string();
-        self.run(move |d| {
-            let _ = d.set_clock_source(&source);
-        });
+        self.run_checked(move |d| d.set_clock_source(&source));
         Ok(())
     }
 
     fn set_sensitivity(&mut self, idx: usize, sensitivity: Sensitivity) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_sensitivity(idx, sensitivity);
-        });
+        self.run_checked(move |d| d.set_sensitivity(idx, sensitivity));
         Ok(())
     }
 
     fn set_pitch(&mut self, pitch_percent: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_pitch(pitch_percent);
-        });
+        self.run_checked(move |d| d.set_pitch(pitch_percent));
         Ok(())
     }
 
     fn write_pitch_clock(&mut self, pitch_percent: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.write_pitch_clock(pitch_percent);
-        });
+        self.run_checked(move |d| d.write_pitch_clock(pitch_percent));
         Ok(())
     }
 
@@ -843,9 +851,7 @@ impl RmeDevice for Mirror {
             self.scene.settings.output_link.resize(pair + 1, true);
         }
         self.scene.settings.output_link[pair] = linked;
-        self.run(move |d| {
-            let _ = d.set_output_linked(pair, linked);
-        });
+        self.run_checked(move |d| d.set_output_linked(pair, linked));
         Ok(())
     }
 
@@ -854,9 +860,7 @@ impl RmeDevice for Mirror {
             self.scene.settings.input_pair_link.resize(pair + 1, true);
         }
         self.scene.settings.input_pair_link[pair] = linked;
-        self.run(move |d| {
-            let _ = d.set_input_pair_linked(pair, linked);
-        });
+        self.run_checked(move |d| d.set_input_pair_linked(pair, linked));
         Ok(())
     }
 
@@ -866,30 +870,22 @@ impl RmeDevice for Mirror {
                 playback.split = !linked;
             }
         }
-        self.run(move |d| {
-            let _ = d.set_playback_linked(pair, linked);
-        });
+        self.run_checked(move |d| d.set_playback_linked(pair, linked));
         Ok(())
     }
 
     fn set_output_volume(&mut self, pair: usize, which: usize, volume: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_output_volume(pair, which, volume);
-        });
+        self.run_checked(move |d| d.set_output_volume(pair, which, volume));
         Ok(())
     }
 
     fn set_output_mute(&mut self, pair: usize, which: usize, mute: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_output_mute(pair, which, mute);
-        });
+        self.run_checked(move |d| d.set_output_mute(pair, which, mute));
         Ok(())
     }
 
     fn set_output_solo(&mut self, pair: usize, which: usize, solo: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_output_solo(pair, which, solo);
-        });
+        self.run_checked(move |d| d.set_output_solo(pair, which, solo));
         Ok(())
     }
 
@@ -900,16 +896,12 @@ impl RmeDevice for Mirror {
         output: usize,
         volume: f32,
     ) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_volume(pair, which, output, volume);
-        });
+        self.run_checked(move |d| d.set_input_volume(pair, which, output, volume));
         Ok(())
     }
 
     fn set_input_balance(&mut self, pair: usize, output: usize, balance: i8) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_balance(pair, output, balance);
-        });
+        self.run_checked(move |d| d.set_input_balance(pair, output, balance));
         Ok(())
     }
 
@@ -919,23 +911,17 @@ impl RmeDevice for Mirror {
         block: usize,
         balance: i8,
     ) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_pair_block_balance(channel, block, balance);
-        });
+        self.run_checked(move |d| d.set_pair_block_balance(channel, block, balance));
         Ok(())
     }
 
     fn set_input_mute(&mut self, pair: usize, which: usize, mute: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_mute(pair, which, mute);
-        });
+        self.run_checked(move |d| d.set_input_mute(pair, which, mute));
         Ok(())
     }
 
     fn set_input_solo(&mut self, pair: usize, which: usize, solo: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_solo(pair, which, solo);
-        });
+        self.run_checked(move |d| d.set_input_solo(pair, which, solo));
         Ok(())
     }
 
@@ -946,9 +932,7 @@ impl RmeDevice for Mirror {
         output: usize,
         volume: f32,
     ) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_playback_volume(pair, which, output, volume);
-        });
+        self.run_checked(move |d| d.set_playback_volume(pair, which, output, volume));
         Ok(())
     }
 
@@ -958,294 +942,212 @@ impl RmeDevice for Mirror {
         output: usize,
         balance: i8,
     ) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_playback_balance(pair, output, balance);
-        });
+        self.run_checked(move |d| d.set_playback_balance(pair, output, balance));
         Ok(())
     }
 
     fn set_playback_mute(&mut self, pair: usize, which: usize, mute: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_playback_mute(pair, which, mute);
-        });
+        self.run_checked(move |d| d.set_playback_mute(pair, which, mute));
         Ok(())
     }
 
     fn set_playback_solo(&mut self, pair: usize, which: usize, solo: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_playback_solo(pair, which, solo);
-        });
+        self.run_checked(move |d| d.set_playback_solo(pair, which, solo));
         Ok(())
     }
 
     fn set_phantom(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_phantom(idx, on);
-        });
+        self.run_checked(move |d| d.set_phantom(idx, on));
         Ok(())
     }
 
     fn set_pad(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_pad(idx, on);
-        });
+        self.run_checked(move |d| d.set_pad(idx, on));
         Ok(())
     }
 
     fn set_gain(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_gain(idx, gain);
-        });
+        self.run_checked(move |d| d.set_gain(idx, gain));
         Ok(())
     }
 
     fn set_input_gain(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_gain(idx, gain);
-        });
+        self.run_checked(move |d| d.set_input_gain(idx, gain));
         Ok(())
     }
 
     fn set_input_gain_right(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_gain_right(idx, gain);
-        });
+        self.run_checked(move |d| d.set_input_gain_right(idx, gain));
         Ok(())
     }
 
     fn set_autoset(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_autoset(idx, on);
-        });
+        self.run_checked(move |d| d.set_autoset(idx, on));
         Ok(())
     }
 
     fn set_instrument(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_instrument(idx, on);
-        });
+        self.run_checked(move |d| d.set_instrument(idx, on));
         Ok(())
     }
 
     fn set_input_instrument(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_instrument(idx, on);
-        });
+        self.run_checked(move |d| d.set_input_instrument(idx, on));
         Ok(())
     }
 
     fn set_input_phantom(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_phantom(idx, on);
-        });
+        self.run_checked(move |d| d.set_input_phantom(idx, on));
         Ok(())
     }
 
     fn set_input_pad(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_pad(idx, on);
-        });
+        self.run_checked(move |d| d.set_input_pad(idx, on));
         Ok(())
     }
 
     fn set_input_level(&mut self, idx: usize, level: InputLevel) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_level(idx, level);
-        });
+        self.run_checked(move |d| d.set_input_level(idx, level));
         Ok(())
     }
 
     fn set_ref_level(&mut self, idx: usize, raw: u16) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_ref_level(idx, raw);
-        });
+        self.run_checked(move |d| d.set_ref_level(idx, raw));
         Ok(())
     }
 
     fn set_stereo_split(&mut self, pb: usize, split: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_stereo_split(pb, split);
-        });
+        self.run_checked(move |d| d.set_stereo_split(pb, split));
         Ok(())
     }
 
     fn set_channel_fx_send(&mut self, channel: ChannelId, db: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_channel_fx_send(channel, db);
-        });
+        self.run_checked(move |d| d.set_channel_fx_send(channel, db));
         Ok(())
     }
 
     fn set_fx_send(&mut self, db: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_fx_send(db);
-        });
+        self.run_checked(move |d| d.set_fx_send(db));
         Ok(())
     }
 
     fn set_fx_return(&mut self, output: usize, db: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_fx_return(output, db);
-        });
+        self.run_checked(move |d| d.set_fx_return(output, db));
         Ok(())
     }
 
     fn set_trim(&mut self, channel: ChannelId, db: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_trim(channel, db);
-        });
+        self.run_checked(move |d| d.set_trim(channel, db));
         Ok(())
     }
 
     fn set_phase(&mut self, idx: usize, invert: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_phase(idx, invert);
-        });
+        self.run_checked(move |d| d.set_phase(idx, invert));
         Ok(())
     }
 
     fn set_output_phase(&mut self, idx: usize, invert: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_output_phase(idx, invert);
-        });
+        self.run_checked(move |d| d.set_output_phase(idx, invert));
         Ok(())
     }
 
     fn set_no_trim(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_no_trim(idx, on);
-        });
+        self.run_checked(move |d| d.set_no_trim(idx, on));
         Ok(())
     }
 
     fn set_width(&mut self, width: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_width(width);
-        });
+        self.run_checked(move |d| d.set_width(width));
         Ok(())
     }
 
     fn set_channel_width(&mut self, channel: ChannelId, width: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_channel_width(channel, width);
-        });
+        self.run_checked(move |d| d.set_channel_width(channel, width));
         Ok(())
     }
 
     fn set_ms_proc(&mut self, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_ms_proc(on);
-        });
+        self.run_checked(move |d| d.set_ms_proc(on));
         Ok(())
     }
 
     fn set_an12(&mut self, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_an12(on);
-        });
+        self.run_checked(move |d| d.set_an12(on));
         Ok(())
     }
 
     fn set_input_link(&mut self, linked: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_input_link(linked);
-        });
+        self.run_checked(move |d| d.set_input_link(linked));
         Ok(())
     }
 
     fn set_eq_enabled(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_enabled(idx, on);
-        });
+        self.run_checked(move |d| d.set_eq_enabled(idx, on));
         Ok(())
     }
 
     fn set_eq_band_freq(&mut self, idx: usize, band: usize, freq: u16) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_band_freq(idx, band, freq);
-        });
+        self.run_checked(move |d| d.set_eq_band_freq(idx, band, freq));
         Ok(())
     }
 
     fn set_eq_band_q(&mut self, idx: usize, band: usize, q: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_band_q(idx, band, q);
-        });
+        self.run_checked(move |d| d.set_eq_band_q(idx, band, q));
         Ok(())
     }
 
     fn set_eq_band_gain(&mut self, idx: usize, band: usize, gain: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_band_gain(idx, band, gain);
-        });
+        self.run_checked(move |d| d.set_eq_band_gain(idx, band, gain));
         Ok(())
     }
 
     fn set_eq_band_type(&mut self, idx: usize, band: usize, kind: EqBandType) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_band_type(idx, band, kind);
-        });
+        self.run_checked(move |d| d.set_eq_band_type(idx, band, kind));
         Ok(())
     }
 
     fn set_eq_low_cut_enabled(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_low_cut_enabled(idx, on);
-        });
+        self.run_checked(move |d| d.set_eq_low_cut_enabled(idx, on));
         Ok(())
     }
 
     fn set_eq_low_cut_freq(&mut self, idx: usize, freq: u16) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_low_cut_freq(idx, freq);
-        });
+        self.run_checked(move |d| d.set_eq_low_cut_freq(idx, freq));
         Ok(())
     }
 
     fn set_eq_low_cut_slope(&mut self, idx: usize, slope: u8) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_low_cut_slope(idx, slope);
-        });
+        self.run_checked(move |d| d.set_eq_low_cut_slope(idx, slope));
         Ok(())
     }
 
     fn set_output_eq(&mut self, idx: usize, eq: &InputEq) -> Result<(), Error> {
         let eq = eq.clone();
-        self.run(move |d| {
-            let _ = d.set_output_eq(idx, &eq);
-        });
+        self.run_checked(move |d| d.set_output_eq(idx, &eq));
         Ok(())
     }
 
     fn apply_input_eq(&mut self, idx: usize, eq: &InputEq) -> Result<(), Error> {
         let eq = eq.clone();
-        self.run(move |d| {
-            let _ = d.apply_input_eq(idx, &eq);
-        });
+        self.run_checked(move |d| d.apply_input_eq(idx, &eq));
         Ok(())
     }
 
     fn set_dynamics(&mut self, channel: ChannelId, dynamics: &Dynamics) -> Result<(), Error> {
         let dynamics = dynamics.clone();
-        self.run(move |d| {
-            let _ = d.set_dynamics(channel, &dynamics);
-        });
+        self.run_checked(move |d| d.set_dynamics(channel, &dynamics));
         Ok(())
     }
 
     fn set_reverb(&mut self, reverb: &Reverb) -> Result<(), Error> {
         let reverb = reverb.clone();
-        self.run(move |d| {
-            let _ = d.set_reverb(&reverb);
-        });
+        self.run_checked(move |d| d.set_reverb(&reverb));
         Ok(())
     }
 
     fn set_echo(&mut self, echo: &Echo) -> Result<(), Error> {
         let echo = echo.clone();
-        self.run(move |d| {
-            let _ = d.set_echo(&echo);
-        });
+        self.run_checked(move |d| d.set_echo(&echo));
         Ok(())
     }
 
@@ -1254,86 +1156,62 @@ impl RmeDevice for Mirror {
         // mirror scene immediately after this call.  A stale rate in that
         // capture would be written back to the unit when the reapply fires.
         self.scene.settings.sample_rate = rate;
-        self.run(move |d| {
-            let _ = d.set_sample_rate(rate);
-        });
+        self.run_checked(move |d| d.set_sample_rate(rate));
         Ok(())
     }
 
     fn set_optical_out_format(&mut self, spdif: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_optical_out_format(spdif);
-        });
+        self.run_checked(move |d| d.set_optical_out_format(spdif));
         Ok(())
     }
 
     fn set_eq_for_record(&mut self, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_eq_for_record(on);
-        });
+        self.run_checked(move |d| d.set_eq_for_record(on));
         Ok(())
     }
 
     fn set_loopback(&mut self, out: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_loopback(out, on);
-        });
+        self.run_checked(move |d| d.set_loopback(out, on));
         Ok(())
     }
 
     fn set_loopback_channel(&mut self, channel: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_loopback_channel(channel, on);
-        });
+        self.run_checked(move |d| d.set_loopback_channel(channel, on));
         Ok(())
     }
 
     fn set_cue(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_cue(idx, on);
-        });
+        self.run_checked(move |d| d.set_cue(idx, on));
         Ok(())
     }
 
     fn set_dim(&mut self, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_dim(on);
-        });
+        self.run_checked(move |d| d.set_dim(on));
         Ok(())
     }
 
     fn set_dim_with(&mut self, on: bool, amount_db: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_dim_with(on, amount_db);
-        });
+        self.run_checked(move |d| d.set_dim_with(on, amount_db));
         Ok(())
     }
 
     fn set_main_recall(&mut self, db: f32) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_main_recall(db);
-        });
+        self.run_checked(move |d| d.set_main_recall(db));
         Ok(())
     }
 
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_main_out(pair);
-        });
+        self.run_checked(move |d| d.set_main_out(pair));
         Ok(())
     }
 
     fn set_main_out_b(&mut self, pair: Option<usize>) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_main_out_b(pair);
-        });
+        self.run_checked(move |d| d.set_main_out_b(pair));
         Ok(())
     }
 
     fn set_mute_fx(&mut self, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_mute_fx(on);
-        });
+        self.run_checked(move |d| d.set_mute_fx(on));
         Ok(())
     }
 
@@ -1343,51 +1221,37 @@ impl RmeDevice for Mirror {
         source: Option<usize>,
         gain_db: f32,
     ) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_external_input(on, source, gain_db);
-        });
+        self.run_checked(move |d| d.set_external_input(on, source, gain_db));
         Ok(())
     }
 
     fn set_cue_target(&mut self, pair: Option<usize>) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_cue_target(pair);
-        });
+        self.run_checked(move |d| d.set_cue_target(pair));
         Ok(())
     }
 
     fn set_pfl(&mut self, channel: ChannelId, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_pfl(channel, on);
-        });
+        self.run_checked(move |d| d.set_pfl(channel, on));
         Ok(())
     }
 
     fn set_pfl_mode(&mut self, pfl: bool, exclusive: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_pfl_mode(pfl, exclusive);
-        });
+        self.run_checked(move |d| d.set_pfl_mode(pfl, exclusive));
         Ok(())
     }
 
     fn set_speaker_b(&mut self, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_speaker_b(on);
-        });
+        self.run_checked(move |d| d.set_speaker_b(on));
         Ok(())
     }
 
     fn set_mono(&mut self, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_mono(on);
-        });
+        self.run_checked(move |d| d.set_mono(on));
         Ok(())
     }
 
     fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), Error> {
-        self.run(move |d| {
-            let _ = d.set_speaker_b_linked(on);
-        });
+        self.run_checked(move |d| d.set_speaker_b_linked(on));
         Ok(())
     }
 }
@@ -1524,6 +1388,7 @@ impl DeviceService {
             hardware_volume: device.hardware_volume(),
             panel_selection: device.panel_selection(),
             at: Instant::now(),
+            errors: Vec::new(),
         }));
         let meters = Arc::new(Mutex::new(MeterSnapshot::default()));
         let inbox = Arc::new(CommandInbox::new());
@@ -1697,7 +1562,7 @@ fn run(
         // waking immediately for a command.
         match inbox.recv_timeout(Duration::from_millis(8)) {
             Some(Command::Stop) => break,
-            Some(command) => apply(device, command),
+            Some(command) => apply(device, command, &inbox),
             None => {}
         }
         for command in inbox.drain() {
@@ -1707,10 +1572,28 @@ fn run(
             if inbox.stopped() || matches!(command, Command::Stop) {
                 return;
             }
-            apply(device, command);
+            apply(device, command, &inbox);
         }
         if inbox.stopped() {
             break;
+        }
+
+        // A write that failed on the service thread is published with the
+        // next snapshot so the UI can show it.  The error list is cleared
+        // from the stored snapshot so a later scene publish does not repeat
+        // the notice.
+        let errors = inbox.drain_errors();
+        if !errors.is_empty() {
+            let update = {
+                let mut s = snapshot.lock().unwrap();
+                s.errors = errors;
+                s.at = Instant::now();
+                let mut update = s.clone();
+                s.errors.clear();
+                update
+            };
+            let _ = updates.send(update);
+            snapshot_notify().notify_one();
         }
 
         // State/status events feed the model and the front panel.
@@ -1889,7 +1772,9 @@ fn run(
                     s.hardware_volume = hardware_volume;
                     s.panel_selection = panel_selection;
                     s.at = Instant::now();
-                    s.clone()
+                    let mut update = s.clone();
+                    s.errors.clear();
+                    update
                 };
                 let _ = updates.send(update);
                 snapshot_notify().notify_one();
@@ -1945,16 +1830,22 @@ fn hold_peaks(
     }
 }
 
-fn apply(device: &mut DeviceHandle, command: Command) {
+fn apply(device: &mut DeviceHandle, command: Command, inbox: &CommandInbox) {
     match command {
         Command::SetVolume(channel, output, value) => {
-            let _ = device.set_volume(channel, output, value);
+            if let Err(e) = device.set_volume(channel, output, value) {
+                inbox.report_error(e.to_string());
+            }
         }
         Command::SetMute(channel, mute) => {
-            let _ = device.set_mute(channel, mute);
+            if let Err(e) = device.set_mute(channel, mute) {
+                inbox.report_error(e.to_string());
+            }
         }
         Command::ApplyScene(scene) => {
-            let _ = device.apply_scene(&scene);
+            if let Err(e) = device.apply_scene(&scene) {
+                inbox.report_error(e.to_string());
+            }
         }
         Command::Run(f) => f(device),
         Command::Stop => {}
@@ -2020,6 +1911,39 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         false
+    }
+
+    #[test]
+    fn a_failed_device_write_reaches_the_mirror() {
+        let mut service = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| !service.snapshot().scene.outputs.is_empty()),
+            "the initial snapshot arrives"
+        );
+        let mut updates = service.take_updates().expect("the update receiver");
+        let mut mirror = Mirror::new(
+            service.snapshot(),
+            service.command_sender(),
+            service.meter_bus(),
+        );
+        let report = service.command_sender();
+        assert!(service.send(Command::Run(Box::new(move |_| {
+            report.report_error("write rejected".into());
+        }))));
+
+        let start = Instant::now();
+        let mut seen = None;
+        while start.elapsed() < Duration::from_secs(2) {
+            if let Ok(snapshot) = updates.recv_timeout(Duration::from_millis(50)) {
+                mirror.update(snapshot);
+                if let Some(error) = mirror.take_error() {
+                    seen = Some(error);
+                    break;
+                }
+            }
+        }
+        assert_eq!(seen.as_deref(), Some("write rejected"));
+        service.stop();
     }
 
     #[test]

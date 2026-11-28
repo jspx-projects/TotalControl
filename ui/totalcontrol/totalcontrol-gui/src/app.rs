@@ -10295,6 +10295,17 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 while let Ok(snapshot) = rx.try_recv() {
                     m.update(snapshot);
                 }
+                // A rejected device write is shown, not discarded.
+                let mut errors = Vec::new();
+                while let Some(error) = m.take_error() {
+                    errors.push(error);
+                }
+                if !errors.is_empty() {
+                    state.notice = Some((
+                        format!("Device write failed: {}", errors.join("; ")),
+                        Instant::now(),
+                    ));
+                }
             }
             // The mirror now holds the confirmed values.  Merge the host
             // change that was waiting for them; keep waiting if this was a

@@ -60,17 +60,21 @@ pub(crate) fn output_balance_to_volumes(volume: f32, balance: i8) -> (f32, f32) 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DeviceSettings {
     /// Current clock source (e.g. "Internal", "AutoSync").
+    /// Device-owned: read from the unit's state mirrors and not serialized in
+    /// a workspace or scene.
+    #[serde(default, skip_serializing)]
     pub clock_source: String,
     /// Every valid value for `clock_source`, as reported by the
     /// hardware's own enum control (not hardcoded — a different model
     /// could expose a different set). Empty until a real device has
     /// been attached; `#[serde(default)]` for old Scene JSON.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub clock_sources: Vec<String>,
     /// SPDIF optical mode (true = optical, false = coaxial). No
     /// matching ALSA control was found on the Babyface Pro FS (its
     /// SPDIF I/O appears to be optical-only, with no toggle) — this
     /// field is currently unmapped and always `false`.
+    #[serde(default, skip_serializing)]
     pub spdif_optical: bool,
     /// SPDIF emphasis (`IEC958 Emphasis`).
     ///
@@ -83,9 +87,11 @@ pub struct DeviceSettings {
     /// note next to `set_optical_out_format`). Kept as fields so scenes
     /// written before that date keep round-tripping unchanged; the
     /// card's real optical/SPDIF state is `optical_out_spdif`.
+    #[serde(default, skip_serializing)]
     pub spdif_emphasis: bool,
     /// SPDIF professional/consumer format flag (`IEC958 Pro Mask`).
     /// Vestigial — see [`DeviceSettings::spdif_emphasis`].
+    #[serde(default, skip_serializing)]
     pub spdif_professional: bool,
     /// Whether the SPDIF output is actively transmitting (`IEC958
     /// Switch`, shown as `"IEC958"` in the simple-mixer view — the
@@ -93,7 +99,7 @@ pub struct DeviceSettings {
     /// Vestigial — see [`DeviceSettings::spdif_emphasis`].
     /// `#[serde(default)]` so scenes saved before this field existed
     /// still deserialize (same pattern as `Scene::model`).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub spdif_enabled: bool,
     /// Pitch/varispeed in percent (-5..+5). 0 = nominal.
     #[serde(default)]
@@ -108,7 +114,8 @@ pub struct DeviceSettings {
     /// recorded signal too, not just the monitor mix. Settings
     /// keepalive bit 6 (`PROTOCOL.md`'s `cap_eqr.pcap`, hardware-
     /// verified) — an RME-specific setting, distinct from the generic
-    /// `spdif_*` fields above.
+    /// `spdif_*` fields above. The setting has no REG1 mirror, so this
+    /// scene value is the unverified host cache and stays serialized.
     #[serde(default)]
     pub eq_for_record: bool,
     /// Optical Out format: `true` = SPDIF (2-channel), `false` = ADAT
@@ -117,8 +124,8 @@ pub struct DeviceSettings {
     /// RME-specific setting for the single physical optical port,
     /// distinct from the generic `spdif_*` fields above (which target
     /// the standard ALSA S/PDIF control surface this device doesn't
-    /// expose).
-    #[serde(default)]
+    /// expose). Device-owned; read from the state mirror.
+    #[serde(default, skip_serializing)]
     pub optical_out_spdif: bool,
     /// Control-room Dim engaged.  The attenuation is applied to the
     /// assigned Main Out and Speaker B pairs; the Phones outputs are not
@@ -180,20 +187,20 @@ pub struct DeviceSettings {
     pub sample_rate: u32,
     /// UC Gain-tab reference codes.  These are device-owned: read from
     /// `0x17` and written only when the user changes them.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub line_in_ref: u16,
     /// UCX Line In reference for inputs 5-8 (one shared group).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub line_in_ref_58: u16,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub line_out_ref: u16,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub phones_ref: u16,
     /// Word-clock output single-speed option (UCX options bit 6).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub word_clock_single_speed: bool,
     /// Word-clock input termination (UCX options bit 3).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub word_clock_termination: bool,
     /// Input-strip stereo link mirror, kept in sync by
     /// [`RmeDevice::set_input_link`] so it's readable (the trait itself
