@@ -159,6 +159,11 @@ transitory state is marked (orange). A state that is known not to be
 transitory is never shown as pending: the actual value is displayed and a
 notice states the change.
 
+**Label capitalization.** Multi-word labels and values use sentence case:
+the first word is capitalized and the remaining words are lower case,
+except acronyms and proper names. Examples: `Sample rate`, `Clock source`,
+`No lock`, `Word clock in`. Section headings keep their upper-case style.
+
 **Settings-dialog behaviour.** Every settings dialog follows one rule:
 changes apply as they are made, the dialog stays open so the effect can be
 tried live, and a single `Close` dismisses it. There is no `OK`, `Cancel`
