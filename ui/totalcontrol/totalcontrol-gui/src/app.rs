@@ -13063,7 +13063,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.reprepare_gen = snap.reprepare_gen;
                 state.reprepare_ok = snap.reprepare_ok;
                 if snap.kernel_at.is_some() {
-                    state.card_stream = snap.stream;
                     state.pcm_delay = snap.delay;
                     state.pcm_fill = snap.fill;
                     state.pcm_capture_delay = snap.capture_delay;
@@ -13082,7 +13081,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state,
                     Message::EngineRead(
                         state.engine,
-                        state.card_stream,
+                        snap.stream,
                         sink_running,
                         state.host_volume,
                         state.graph_quantum,
@@ -13141,6 +13140,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             );
         }
         Message::EngineRead(clock, stream, sink_running, host_volume, graph_quantum, conductor) => {
+            let stream_ended = state.card_stream.is_some() && stream.is_none();
             state.conductor = conductor;
             if let Some(quantum) = graph_quantum {
                 state.graph_quantum = Some(quantum);
@@ -13251,6 +13251,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         // The cushion aligns to the stream's actual quantum.
                         apply_engine_policy(state, running_rate(state));
                     }
+                }
+                // The PCM node keeps the last `period-size`/`headroom` props
+                // across a stream close. Re-apply the idle policy so a later
+                // player opens at the selected quantum, not the period the
+                // previous conductor requested.
+                if stream_ended && !detected_path(state).is_external() {
+                    apply_engine_policy(state, running_rate(state));
                 }
                 // While an external owner (JACK / direct ALSA) holds the PCM,
                 // the stored PipeWire mode must not determine the rate or
@@ -15610,7 +15617,8 @@ fn rate_caps(state: &TotalControl) -> RateCaps {
                 env.rates.iter().map(|r| (r.rate, r.period_floor)).collect(),
                 fallback,
             )
-            .with_iso(env.iso);
+            .with_iso(env.iso)
+            .with_iso_packets(env.iso_packets);
         }
     }
     // The mock, or a driver that did not report an envelope: the backend's
@@ -16499,6 +16507,25 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .into()
 }
 
+/// The playable cushion of the current playback ring in nanoseconds: the
+/// queued audio above the period being consumed, from the live stream's own
+/// rate, period and buffer. `None` when no stream runs, so the max stall has
+/// no current geometry to judge it against.
+fn ring_cushion_ns(stream: Option<totalcontrol_core::pw_clock::CardStream>) -> Option<u64> {
+    stream
+        .filter(|s| s.rate > 0 && s.period > 0 && s.buffer > s.period)
+        .map(|s| (s.buffer - s.period) as u64 * 1_000_000_000 / s.rate as u64)
+}
+
+/// True when the current stream's worst host write stall exceeds its own
+/// playable cushion. No stream means no colour judgement.
+fn max_stall_is_red(
+    stream: Option<totalcontrol_core::pw_clock::CardStream>,
+    max_stall_ns: u64,
+) -> bool {
+    ring_cushion_ns(stream).is_some_and(|cushion| max_stall_ns > cushion)
+}
+
 fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
@@ -16720,10 +16747,10 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .align_y(iced::Alignment::Center),
         );
     }
-    // The output latency is a labelled row: the caption column carries
-    // `Output`, the value column carries the total (`x.x ms`) with the formula
-    // wrapping below. The input row follows it; it is not measured yet and
-    // shows `—` so the panel keeps a stable height.
+    // Both latency rows use the same top-aligned caption and fixed-height
+    // block: the first line carries the total (`x.x ms`) and the formula
+    // lines follow below. The input row shows `—` when it is not measured so
+    // the panel keeps a stable height.
     let rtl_clock = clock.unwrap_or(PwClock {
         rate: 0,
         quantum: 0,
@@ -16742,7 +16769,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             ),
         ]
         .spacing(theme::SPACE_MD * scale)
-        .align_y(iced::Alignment::Center),
+        .align_y(iced::Alignment::Start),
     );
     body = body.push(
         row![
@@ -16758,11 +16785,13 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     );
     // Transport diagnostics in three sections by reset behaviour:
     //  - Scheduling: underrun/overrun, cumulative, cleared only by reset.
-    //  - This stream: per-run transport detail, cleared on stream restart
-    //    (rate/quantum change or recovery), not by player start/stop.
+    //  - This stream: ring stall and per-run transport detail, cleared on
+    //    stream restart (rate/quantum change or recovery), not by player
+    //    start/stop.
     //  - Session: cumulative counters, cleared only by reset.
-    // `reset` rebaselines every section. Counting runs on every tick,
-    // independent of this drawer. The manual explains meaning and mitigation.
+    // `reset` rebaselines the counted rows; max stall follows the stream.
+    // Counting runs on every tick, independent of this drawer. The manual
+    // explains meaning and mitigation.
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
         // Per-run detail since the last reset (or engine-run start). The
@@ -16782,7 +16811,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                     .style(theme::ghost_button)
                     .on_press(Message::ResetTransportErrors),
-                    "Clear all counters",
+                    "Clear counters.",
                     scale,
                 ),
             ]
@@ -16801,6 +16830,26 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             + perrun.out_fb_stale;
         // Section 3 values: cumulative session counters.
         let pointer = delta.hw_ptr_mismatch + delta.delta_zero;
+        // The max stall is a per-stream watermark. Judge it only against the
+        // stream that produced it: the playable ring cushion is the queued
+        // audio above the next period, in time. No stream means no judgement.
+        let (stall_value, stall_bad, stall_tip) =
+            if ring_cushion_ns(state.card_stream).is_some() {
+                (
+                    format!("{:.1} ms", now.ring_max_stall_ns as f64 / 1_000_000.0),
+                    u32::from(max_stall_is_red(
+                        state.card_stream,
+                        now.ring_max_stall_ns,
+                    )),
+                    "Current stream. Longest host write stall after startup; red when it exceeds the playable ring cushion (buffer minus one period) at the current rate. Correlate with underrun/overrun.",
+                )
+            } else {
+                (
+                    "\u{2014}".into(),
+                    0,
+                    "No playback stream: max stall is measured only while a stream runs.",
+                )
+            };
         let sections: [(
             &'static str,
             &'static str,
@@ -16808,7 +16857,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         ); 3] = [
             (
                 "Scheduling",
-                "Cumulative, cleared by reset. Host ring underruns (playback) and overruns (capture): the metric for tuning quantum and host load. Never cleared by a stream restart.",
+                "Underrun/overrun are cumulative and cleared by reset: the metric for tuning quantum and host load. Never cleared by a stream restart.",
                 vec![(
                     "underrun / overrun",
                     format!("{} / {}", delta.out_underruns, delta.in_overruns),
@@ -16818,8 +16867,9 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             ),
             (
                 "This stream",
-                "Cleared when the stream restarts: a rate or quantum change, or a recovery. Not cleared by starting or stopping a player. Packet-level transport detail for the current stream.",
+                "Cleared when the stream restarts: a rate or quantum change, or a recovery. Not cleared by starting or stopping a player. Ring stall and packet-level transport detail for the current stream.",
                 vec![
+                    ("max stall", stall_value, stall_bad, stall_tip),
                     (
                         "usb",
                         usb_run.to_string(),
@@ -17064,13 +17114,14 @@ fn transport_delta(
     }
 }
 
-/// The output-latency block: the value, then the formula lines. The slot keeps
-/// its height in every state so the settings card never resizes (GUI spec §4).
-/// `value_color` carries the pending colour for the ring fallback; the formula
-/// lines use the secondary colour.
+/// A latency block: the value, then a fixed number of formula lines. The slot
+/// keeps its height in every state so the settings card never resizes (GUI
+/// spec §4). `value_color` carries the pending colour for the ring fallback;
+/// the formula lines use the secondary colour.
 fn rtl_field(
     first_line: String,
     formula: String,
+    formula_lines: f32,
     value_color: Color,
     scale: f32,
 ) -> Element<'static, Message> {
@@ -17079,7 +17130,7 @@ fn rtl_field(
     column![
         line(first_line, value_color),
         container(line(formula, theme::text_sec()).width(Length::Fill))
-            .height(Length::Fixed(3.0 * row_h))
+            .height(Length::Fixed(formula_lines * row_h))
             .width(Length::Fill),
     ]
     .spacing(theme::SPACE_TIGHT * scale)
@@ -17087,13 +17138,24 @@ fn rtl_field(
     .into()
 }
 
+/// The output block reserves three formula lines; the input block needs two.
 fn rtl_block(
     value: String,
     formula: String,
     value_color: Color,
     scale: f32,
 ) -> Element<'static, Message> {
-    rtl_field(value, formula, value_color, scale)
+    rtl_field(value, formula, 3.0, value_color, scale)
+}
+
+fn rtl_block_lines(
+    value: String,
+    formula: String,
+    formula_lines: f32,
+    value_color: Color,
+    scale: f32,
+) -> Element<'static, Message> {
+    rtl_field(value, formula, formula_lines, value_color, scale)
 }
 
 /// The Latency out readout. The live host term is the playback
@@ -17185,9 +17247,9 @@ fn latency_in_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Messa
                 capture,
                 rate,
             };
-            rtl_block(rtl.summary(), rtl.breakdown(), theme::text_sec(), scale)
+            rtl_block_lines(rtl.summary(), rtl.breakdown(), 2.0, theme::text_sec(), scale)
         }
-        _ => rtl_block("\u{2014}".into(), " ".into(), theme::text_sec(), scale),
+        _ => rtl_block_lines("\u{2014}".into(), " ".into(), 2.0, theme::text_sec(), scale),
     }
 }
 
@@ -17284,23 +17346,25 @@ fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
 fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     use LatencyPersonality::*;
     match (personality, rate) {
-        (UcxIso, 32_000) => Some(158),
-        (UcxIso, 44_100) => Some(201),
-        (UcxIso, 48_000) => Some(216),
-        (UcxIso, 88_200) => Some(373),
-        (UcxIso, 96_000) => Some(401),
-        (UcxIso, 176_400) => Some(586),
-        (UcxIso, 192_000) => Some(643),
+        (UcxIso, 32_000) => Some(98),
+        (UcxIso, 44_100) => Some(117),
+        (UcxIso, 48_000) => Some(124),
+        (UcxIso, 64_000) => Some(160),
+        (UcxIso, 88_200) => Some(199),
+        (UcxIso, 96_000) => Some(212),
+        (UcxIso, 128_000) => Some(287),
+        (UcxIso, 176_400) => Some(347),
+        (UcxIso, 192_000) => Some(391),
         (UcPc, 32_000 | 44_100 | 48_000) => Some(151),
         (UcPc, 64_000 | 88_200 | 96_000) => Some(223),
         (UcPc, 128_000 | 176_400 | 192_000) => Some(361),
-        (UcAp, 32_000) => Some(207),
-        (UcAp, 44_100) => Some(250),
-        (UcAp, 48_000) => Some(265),
-        (UcAp, 88_200) => Some(359),
-        (UcAp, 96_000) => Some(387),
-        (UcAp, 176_400) => Some(632),
-        (UcAp, 192_000) => Some(689),
+        (UcAp, 32_000) => Some(143),
+        (UcAp, 44_100) => Some(162),
+        (UcAp, 48_000) => Some(169),
+        (UcAp, 88_200) => Some(246),
+        (UcAp, 96_000) => Some(259),
+        (UcAp, 176_400) => Some(400),
+        (UcAp, 192_000) => Some(433),
         _ => None,
     }
 }
@@ -17314,20 +17378,19 @@ fn latency_a(rate: u32) -> u32 {
 }
 
 /// UCX ISO device span after the live two-URB queue, in frames. Measured by
-/// the output-5 to input-5 analog loopback at the nine ISO rates. The 128 kHz
-/// direct reading was one URB high; 226 is interpolated between 96 and
-/// 192 kHz.
+/// the output-5 to input-5 analog loopback at the nine ISO rates with the
+/// default four-packet URB.
 fn latency_ucx_iso_d(rate: u32) -> Option<u32> {
     match rate {
-        32_000 => Some(94),
-        44_100 => Some(114),
-        48_000 => Some(120),
-        64_000 => Some(157),
-        88_200 => Some(196),
-        96_000 => Some(209),
-        128_000 => Some(226),
-        176_400 => Some(233),
-        192_000 => Some(259),
+        32_000 => Some(66),
+        44_100 => Some(73),
+        48_000 => Some(76),
+        64_000 => Some(96),
+        88_200 => Some(111),
+        96_000 => Some(116),
+        128_000 => Some(159),
+        176_400 => Some(171),
+        192_000 => Some(199),
         _ => None,
     }
 }
@@ -17367,20 +17430,20 @@ fn latency_ucx_if5_ab(rate: u32) -> Option<(u32, u32)> {
 
 /// UC device spans after the queue. The PC transport carries two URBs; the
 /// 4x path has two endpoint pairs, and the span uses one pair's queue. The
-/// AP transport uses the ISO queue. The PC values are per rate family; the
-/// AP values are the measured 32/44.1/48/88.2/96/176.4/192 rates.
+/// AP transport uses the default four-packet ISO URB. The PC values are per
+/// rate family; the AP values are measured at all supported rates.
 fn latency_uc_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     match (personality, rate) {
         (LatencyPersonality::UcPc, 32_000 | 44_100 | 48_000) => Some(119),
         (LatencyPersonality::UcPc, 64_000 | 88_200 | 96_000) => Some(159),
         (LatencyPersonality::UcPc, 128_000 | 176_400 | 192_000) => Some(233),
-        (LatencyPersonality::UcAp, 32_000) => Some(143),
-        (LatencyPersonality::UcAp, 44_100) => Some(161),
-        (LatencyPersonality::UcAp, 48_000) => Some(169),
-        (LatencyPersonality::UcAp, 88_200) => Some(182),
-        (LatencyPersonality::UcAp, 96_000) => Some(195),
-        (LatencyPersonality::UcAp, 176_400) => Some(279),
-        (LatencyPersonality::UcAp, 192_000) => Some(305),
+        (LatencyPersonality::UcAp, 32_000) => Some(111),
+        (LatencyPersonality::UcAp, 44_100) => Some(118),
+        (LatencyPersonality::UcAp, 48_000) => Some(121),
+        (LatencyPersonality::UcAp, 88_200) => Some(157),
+        (LatencyPersonality::UcAp, 96_000) => Some(163),
+        (LatencyPersonality::UcAp, 176_400) => Some(223),
+        (LatencyPersonality::UcAp, 192_000) => Some(241),
         _ => None,
     }
 }
@@ -17457,8 +17520,8 @@ fn uc_min_buffer_frames(rate: u32, queue: (u32, u32)) -> u32 {
     usb + 2 * endpoint
 }
 
-/// Frames in one UCX USB URB: up to eight 1 ms ISO packets of
-/// `ceil(rate / 8000)` frames each.
+/// Legacy helper for an eight-packet UCX URB derived from a 48-frame base;
+/// production reads the driver envelope instead.
 fn ucx_urb_frames(rate: u32, urb_frames: u32) -> u32 {
     let iso_packets = 8.min(urb_frames.max(1).div_ceil(6));
     iso_packets * rate.max(1).div_ceil(8000)
@@ -23245,6 +23308,7 @@ mod tests {
         input_gain_knob_label, is_control_room_cid, is_undoable, mute_armed, new, new_with_device,
         note_observed_rate_switch, track_engine_run, arm_engine_run_reapply,
         safe_default_quantum, minimum_quantum, quantum_allowed, reconcile_device_pitch,
+        pitch_slider_max, ring_cushion_ns, max_stall_is_red,
         power_sum_output_meters, quantum_pending, rate_authority_target,
         reorder_pair_volumes, running_graph_quantum, save_workspace_to, solo_armed,
         strength_snapshot, strip_params, strip_target_pair, sync_control_room_runtime,
@@ -23759,6 +23823,34 @@ mod tests {
     }
 
     #[test]
+    fn max_stall_uses_the_current_stream_cushion() {
+        use totalcontrol_core::pw_clock::{CardStream, PcmFormat};
+        let stream = |period, buffer| CardStream {
+            rate: 44_100,
+            period,
+            buffer,
+            channels: 18,
+            format: PcmFormat::Unknown,
+        };
+        // The user's 1024/32768 stream: the cushion is about 720 ms, so a
+        // 74.5 ms stall is absorbed and stays gray.
+        let large = Some(stream(1024, 32_768));
+        let cushion = ring_cushion_ns(large).unwrap();
+        assert!((cushion as f64 / 1e6 - 719.8).abs() < 1.0);
+        assert!(!max_stall_is_red(large, 74_500_000));
+        // The small 48/1536 stream: the cushion is about 34 ms, so the same
+        // stall is red.
+        let small = Some(stream(48, 1536));
+        let cushion = ring_cushion_ns(small).unwrap();
+        assert!((cushion as f64 / 1e6 - 33.7).abs() < 1.0);
+        assert!(max_stall_is_red(small, 74_500_000));
+        // Without a live stream there is nothing to judge.
+        assert_eq!(ring_cushion_ns(None), None);
+        assert!(!max_stall_is_red(None, 74_500_000));
+        assert_eq!(ring_cushion_ns(Some(stream(48, 48))), None);
+    }
+
+    #[test]
     fn a_host_edit_reaches_the_saved_scene_with_the_service() {
         let mut state = new(true, None, None);
         attach_device_service(&mut state);
@@ -23838,7 +23930,7 @@ mod tests {
 
     #[test]
     fn ucx_latency_chain_keeps_the_urb_and_converter_geometry() {
-        // Eight 1 ms ISO packets per URB at the default 48-frame size.
+        // Legacy eight-packet geometry from a 48-frame base.
         assert_eq!(ucx_urb_frames(48_000, 48), 48);
         assert_eq!(ucx_urb_frames(96_000, 48), 96);
         // nurbs + 2 URBs of ring margin.
@@ -23866,21 +23958,21 @@ mod tests {
         assert_eq!(latency_a(192_000), 312);
         // UCX ISO uses the measured device span and the vendor converters:
         // DA 7, AD 14 at 1x/2x, 11 at 4x; the digital remainder is symmetric.
-        assert_eq!(latency_ucx_iso_ab(44_100), Some((53, 61)));
-        assert_eq!(latency_ucx_iso_ab(48_000), Some((56, 64)));
-        assert_eq!(latency_ucx_iso_ab(64_000), Some((75, 82)));
-        assert_eq!(latency_ucx_iso_ab(88_200), Some((94, 102)));
-        assert_eq!(latency_ucx_iso_ab(96_000), Some((101, 108)));
-        assert_eq!(latency_ucx_iso_ab(128_000), Some((111, 115)));
-        assert_eq!(latency_ucx_iso_ab(176_400), Some((114, 119)));
-        assert_eq!(latency_ucx_iso_ab(192_000), Some((127, 132)));
-        assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(216));
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(64));
-        assert_eq!(latency_device_a(LatencyPersonality::UcxIso, 48_000), Some(56));
+        assert_eq!(latency_ucx_iso_ab(44_100), Some((33, 40)));
+        assert_eq!(latency_ucx_iso_ab(48_000), Some((34, 42)));
+        assert_eq!(latency_ucx_iso_ab(64_000), Some((44, 52)));
+        assert_eq!(latency_ucx_iso_ab(88_200), Some((52, 59)));
+        assert_eq!(latency_ucx_iso_ab(96_000), Some((54, 62)));
+        assert_eq!(latency_ucx_iso_ab(128_000), Some((77, 82)));
+        assert_eq!(latency_ucx_iso_ab(176_400), Some((83, 88)));
+        assert_eq!(latency_ucx_iso_ab(192_000), Some((97, 102)));
+        assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(124));
+        assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(42));
+        assert_eq!(latency_device_a(LatencyPersonality::UcxIso, 48_000), Some(34));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(67));
-        assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(92));
-        assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), None);
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), Some(82));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(68));
+        assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), Some(160));
+        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), Some(52));
         // IF5 uses the same converter split on its unit span.
         assert_eq!(latency_if5_unit(48_000), Some(74));
         assert_eq!(latency_if5_unit(64_000), Some(112));
@@ -23906,16 +23998,16 @@ mod tests {
         assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 176_400), Some((111, 122)));
         assert_eq!(latency_uc_ab(LatencyPersonality::UcPc, 192_000), Some((111, 122)));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 44_100), Some(67));
-        assert_eq!(latency_d(LatencyPersonality::UcAp, 44_100), Some(250));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 32_000), Some((64, 79)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 44_100), Some((73, 88)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 48_000), Some((77, 92)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 88_200), Some((83, 99)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 96_000), Some((90, 105)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 176_400), Some((134, 145)));
-        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 192_000), Some((147, 158)));
-        assert_eq!(latency_d(LatencyPersonality::UcAp, 192_000), Some(689));
-        assert_eq!(latency_b(LatencyPersonality::UcAp, 192_000), Some(158));
+        assert_eq!(latency_d(LatencyPersonality::UcAp, 44_100), Some(162));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 32_000), Some((48, 63)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 44_100), Some((51, 67)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 48_000), Some((53, 68)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 88_200), Some((71, 86)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 96_000), Some((74, 89)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 176_400), Some((106, 117)));
+        assert_eq!(latency_uc_ab(LatencyPersonality::UcAp, 192_000), Some((115, 126)));
+        assert_eq!(latency_d(LatencyPersonality::UcAp, 192_000), Some(433));
+        assert_eq!(latency_b(LatencyPersonality::UcAp, 192_000), Some(126));
         assert_eq!(latency_d(LatencyPersonality::UcPc, 64_000), Some(223));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 64_000), Some(87));
     }
@@ -28344,6 +28436,7 @@ mod tests {
             urb_frames: 48,
             nurbs: 2,
             iso: true,
+            iso_packets: 8,
             rates: vec![totalcontrol_core::fireface::hwdep::RateEnv {
                 rate: 176_400,
                 period_floor: 184,
@@ -28363,6 +28456,7 @@ mod tests {
             urb_frames: 48,
             nurbs: 2,
             iso: true,
+            iso_packets: 8,
             rates: vec![
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, ..Default::default() },
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 176_400, period_floor: 184, buffer_min: 5888, ..Default::default() },
@@ -28413,13 +28507,14 @@ mod tests {
 
     fn ucx_envelope() -> totalcontrol_core::fireface::hwdep::RateEnvelope {
         totalcontrol_core::fireface::hwdep::RateEnvelope {
-            urb_frames: 48,
+            urb_frames: 24,
             nurbs: 2,
             iso: true,
+            iso_packets: 4,
             rates: [
-                (32_000, 32), (44_100, 48), (48_000, 48), (64_000, 64),
-                (88_200, 96), (96_000, 96), (128_000, 128),
-                (176_400, 184), (192_000, 192),
+                (32_000, 16), (44_100, 24), (48_000, 24), (64_000, 32),
+                (88_200, 48), (96_000, 48), (128_000, 64),
+                (176_400, 92), (192_000, 96),
             ]
             .iter()
             .map(|(rate, floor)| totalcontrol_core::fireface::hwdep::RateEnv {
@@ -28451,6 +28546,14 @@ mod tests {
         state.device.settings_mut().sample_rate = 96_000;
         state.engine_force_rate = 96_000;
         let _ = update(&mut state, Message::PitchChanged(5.0));
+        assert_eq!(state.pro_pitch, 5.0);
+        assert_eq!(state.device.settings().pitch_percent, 5.0);
+        // At 44.1k the four-packet URB floor is 24, but the endpoint still
+        // carries 7 frames per microframe: the full +5% is in envelope.
+        state.device.settings_mut().sample_rate = 44_100;
+        state.engine_force_rate = 44_100;
+        let _ = update(&mut state, Message::PitchChanged(5.0));
+        assert_eq!(pitch_slider_max(&state), 5.0);
         assert_eq!(state.pro_pitch, 5.0);
         assert_eq!(state.device.settings().pitch_percent, 5.0);
         // Negative pitch is always in envelope.
@@ -28486,6 +28589,7 @@ mod tests {
             urb_frames: 48,
             nurbs: 2,
             iso: true,
+            iso_packets: 8,
             rates: vec![
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 48_000, period_floor: 48, buffer_min: 336, ..Default::default() },
                 totalcontrol_core::fireface::hwdep::RateEnv { rate: 96_000, period_floor: 96, buffer_min: 672, ..Default::default() },

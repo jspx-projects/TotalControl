@@ -120,6 +120,11 @@
  * requested future start frame, so the margin is a submission delay. */
 #define FF_ISO_START_MARGIN_MS	20
 #define FF_MAX_ISO_PACKETS	8	/* per URB, one per 125 us microframe */
+/* The feedback read offset is (nurbs + 1) * iso_packets packets, floored at
+ * six packets (0.75 ms).  A one-packet URB would otherwise reduce it to
+ * three microframes, and the OUT fill can outrun the IN feedback at 96 kHz.
+ */
+#define FF_MIN_FB_PACKETS	6	/* feedback delay floor, USB packets */
 #define FF_ISO_IN_HEADER	4
 #define FF_ISO_COUNTER_MOD	0x2000
 #define FF_FB_SIZE		1024

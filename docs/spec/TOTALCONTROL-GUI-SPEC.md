@@ -1371,7 +1371,9 @@ runs it reports the actual source read-only.
 
 The quantum picker offers every quantum at or above the running rate's period
 floor (one URB), plus the exact floor; on the interrupt transport it offers
-only whole multiples of the floor. The safe default — the highest period floor
+only whole multiples of the floor. On ISO the floor is the driver's
+`iso_packets` URB: a shorter URB lowers the floor and the buffer minimum, and
+the picker follows the reported envelope. The safe default — the highest period floor
 across the device's supported rates — applies when no quantum is stored; a
 chosen quantum may be lower, down to the rate floor. A selected
 quantum below twice the rate floor shows the warning line "Audio stream can
@@ -1478,17 +1480,24 @@ Headers grow quieter as their level deepens and use the secondary label colour
 in small caps like the level-1 `DEVICE` / `AUDIO ENGINE` headers but at normal
 text size and without a rule; `Scheduling`, `This stream` and `Session` are
 level-3 headers in italic, without underline.
-`reset` (tooltip "Clear all counters") clears every section. Counting runs
-on every tick, independent of whether the drawer is open.
 
-- **Scheduling** — `underrun / overrun` (host ring). Cumulative, cleared
-  only by `reset`; never cleared by a stream restart. The metric for tuning
+`reset` clears the cumulative and per-run counted rows. Counting runs on every
+tick, independent of whether the drawer is open.
+
+- **Scheduling** — `underrun / overrun` (host ring). Cumulative, cleared only
+  by `reset`; never cleared by a stream restart. The metric for tuning
   quantum and host load.
-- **This stream** — `usb` (packet status errors), `bad packets` (short,
-  malformed, misaligned or dropped) and `feedback` (clock-tracking packet
-  detail). Per-run: cleared when the stream restarts (a rate or quantum
-  change, or a recovery), not by player start/stop (§13). The startup and
-  rate-switch packet burst is excluded by the per-run reset.
+- **This stream** — `max stall` (the longest host write stall), `usb` (packet
+  status errors), `bad packets` (short, malformed, misaligned or dropped) and
+  `feedback` (clock-tracking packet detail). Per-run: cleared when the stream
+  restarts (a rate or quantum change, or a recovery), not by player
+  start/stop (§13). The startup and rate-switch packet burst is excluded by
+  the per-run reset.
+  `max stall` is measured after the startup mute window. It shows `—` while no
+  stream runs. It turns red when it exceeds the current
+  stream's playable ring cushion, `(buffer − period)` frames at the stream's
+  rate, and stays gray otherwise. The cushion comes from that stream's own
+  period and buffer, never from an earlier stream.
 - **Session** — `recover` (engine restarts), `gaps` (missing packets),
   `rate mismatch` (sustained cadence disagreement), `pointer` (driver/core
   pointer divergence) and `events dropped` (hwdep event overflow).
@@ -1496,7 +1505,9 @@ on every tick, independent of whether the drawer is open.
 
 `underrun / overrun`, `gaps` and `bad packets` show `in / out`; the rest
 are totals. `in` is device-to-host (capture), `out` is host-to-device
-(playback); the host is the computer. A non-zero row is red. Row labels
+(playback); the host is the computer. A non-zero error row is red;
+`max stall` is red only when it exceeds the current stream's playable
+cushion. Row labels
 are plain; each row and header carries a tooltip with its meaning and
 reset class. The manual carries the full meaning and mitigation. The
 section is absent when the backend does not expose counters.
@@ -2264,18 +2275,17 @@ to the horizon A.
 
 | Rate | UCX ISO A | UCX ISO B | UCX ISO D |
 |---|---:|---:|---:|
-| 32 kHz | 43 | 51 | 94 |
-| 44.1 kHz | 53 | 61 | 114 |
-| 48 kHz | 56 | 64 | 120 |
-| 64 kHz | 75 | 82 | 157 |
-| 88.2 kHz | 94 | 102 | 196 |
-| 96 kHz | 101 | 108 | 209 |
-| 128 kHz | 111 | 115 | 226 |
-| 176.4 kHz | 114 | 119 | 233 |
-| 192 kHz | 127 | 132 | 259 |
+| 32 kHz | 29 | 37 | 66 |
+| 44.1 kHz | 33 | 40 | 73 |
+| 48 kHz | 34 | 42 | 76 |
+| 64 kHz | 44 | 52 | 96 |
+| 88.2 kHz | 52 | 59 | 111 |
+| 96 kHz | 54 | 62 | 116 |
+| 128 kHz | 77 | 82 | 159 |
+| 176.4 kHz | 83 | 88 | 171 |
+| 192 kHz | 97 | 102 | 199 |
 
-The 128 kHz D is interpolated between 96 and 192 kHz; its direct reading
-was one URB high.
+The values are measured at the four-packet ISO default.
 
 | Rate | UC PC A | UC PC B | UC PC D |
 |---|---:|---:|---:|
@@ -2291,13 +2301,13 @@ was one URB high.
 
 | Rate | UC AP A | UC AP B | UC AP D |
 |---|---:|---:|---:|
-| 32 kHz | 64 | 79 | 143 |
-| 44.1 kHz | 73 | 88 | 161 |
-| 48 kHz | 77 | 92 | 169 |
-| 88.2 kHz | 83 | 99 | 182 |
-| 96 kHz | 90 | 105 | 195 |
-| 176.4 kHz | 134 | 145 | 279 |
-| 192 kHz | 147 | 158 | 305 |
+| 32 kHz | 48 | 63 | 111 |
+| 44.1 kHz | 51 | 67 | 118 |
+| 48 kHz | 53 | 68 | 121 |
+| 88.2 kHz | 71 | 86 | 157 |
+| 96 kHz | 74 | 89 | 163 |
+| 176.4 kHz | 106 | 117 | 223 |
+| 192 kHz | 115 | 126 | 241 |
 
 The UC PC 192 kHz D uses one endpoint pair's queue; the reported backlog uses
 the pair that is behind. The UC PC table covers 32–192 kHz; the UC AP table

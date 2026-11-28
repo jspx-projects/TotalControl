@@ -27,6 +27,7 @@ static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
 static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 static unsigned int urb_frames = 48;
+static unsigned int iso_packets = 4;
 static unsigned int nurbs = 2;
 static bool ucx_if5;
 static unsigned int ucx_if5_frames = 16;
@@ -65,9 +66,11 @@ MODULE_PARM_DESC(id, "ID string for the Fireface sound card.");
 module_param_array(enable, bool, NULL, 0444);
 MODULE_PARM_DESC(enable, "Enable the Fireface sound card.");
 module_param(urb_frames, uint, 0444);
-MODULE_PARM_DESC(urb_frames, "Frames per URB at 32-48 kHz, multiple of 8 (8..256); doubled at 2x and quadrupled at 4x on the interrupt transport.");
+MODULE_PARM_DESC(urb_frames, "Interrupt transport: frames per URB at 32-48 kHz, multiple of 8 (8..256); doubled at 2x and quadrupled at 4x.");
+module_param(iso_packets, uint, 0444);
+MODULE_PARM_DESC(iso_packets, "ISO transport: microframes (USB packets) per URB (1..8, default 4 = 0.5 ms at every rate).");
 module_param(nurbs, uint, 0444);
-MODULE_PARM_DESC(nurbs, "URBs in flight per endpoint (2..32, default 2); raised so at least 64 frames stay queued, except on the UCX IF5 short-URB geometry.");
+MODULE_PARM_DESC(nurbs, "URBs in flight per endpoint (2..32, default 2); raised so at least 64 frames stay queued, except on the ISO and UCX IF5 short-URB geometries.");
 module_param(ucx_if5, bool, 0444);
 MODULE_PARM_DESC(ucx_if5, "Fireface UCX: bind the Windows-style interrupt interface 5 (default false). The default binds the Mac-style ISO interface 0; set Y only for the Windows transport.");
 module_param(ucx_if5_frames, uint, 0444);
@@ -174,18 +177,6 @@ static unsigned int ff_max_channels(struct ff *chip, int stream,
 	       ff_desc_playback(chip->desc) : chip->desc->max_channels;
 }
 
-static unsigned int ff_max_words(struct ff *chip)
-{
-	unsigned int i, n = 0;
-
-	for (i = 0; i < chip->desc->n_modes; i++) {
-		const struct ff_mode *m = &chip->modes[i];
-
-		n = max(n, m->neps * max(m->words, ff_mode_out_words(m)));
-	}
-	return n;
-}
-
 static unsigned int ff_urb_frames(struct ff *chip, unsigned int rate)
 {
 	if (chip->iso)
@@ -194,6 +185,15 @@ static unsigned int ff_urb_frames(struct ff *chip, unsigned int rate)
 	 * quadruples with the rate family, like the reference UCX engine: a
 	 * block is 8/16/32 frames and a URB is a fixed number of blocks. */
 	return chip->base_urb_frames << ff_mode_index(rate);
+}
+
+/* The feedback read offset: three URBs, floored so a one- or two-packet
+ * URB cannot place the OUT fill ahead of the IN feedback.
+ */
+static unsigned int ff_iso_fb_delay(const struct ff *chip)
+{
+	return max((chip->nurbs + 1) * chip->iso_packets,
+		   (unsigned int)FF_MIN_FB_PACKETS);
 }
 
 /* AP-mode ISO header layout per rate band (1x/2x/4x).  The position field
@@ -242,6 +242,19 @@ unsigned int ff_iso_wrap(struct ff *chip)
 	 * 1x, 16384 at 2x, 32768 at 4x.  It is a power of two, so the field
 	 * mask and the modulo reduction agree. */
 	return ff_iso_layout(chip)->modulus;
+}
+
+/* The OUT lead word: the feedback offset plus the reference bias.  The
+ * lead_margin parameter overrides the bias for A/B; the steady word is
+ * re-aligned once at engine start (ff_iso_align).
+ */
+static unsigned int ff_iso_out_lead(struct ff *chip)
+{
+	const struct ff_mode *m = chip->mode;
+	int margin = lead_margin >= 0 ? lead_margin : (2 * m->max_frames - 2);
+
+	return (DIV_ROUND_CLOSEST(ff_iso_fb_delay(chip) * chip->rate, 8000) +
+		margin) % ff_iso_wrap(chip);
 }
 
 unsigned int ff_rate_from_index(unsigned int idx)
@@ -1195,7 +1208,8 @@ static void ff_ring_event(struct ff *chip, struct snd_pcm_substream *subs,
  * clamps the fill to zero and sets FF_RING_F_BEHIND. */
 static void ff_ring_trace(struct ff *chip, struct snd_pcm_substream *subs,
 			    unsigned long read_pos, unsigned long appl,
-			    unsigned long status_hw, unsigned int total)
+			    unsigned long status_hw, unsigned int total,
+			    bool measure_stall)
 {
 	struct snd_pcm_runtime *rt = subs->runtime;
 	unsigned long span = (appl + rt->boundary - read_pos) % rt->boundary;
@@ -1237,7 +1251,7 @@ static void ff_ring_trace(struct ff *chip, struct snd_pcm_substream *subs,
 		} else {
 			u64 gap = now - chip->ring_last_appl_ts;
 
-			if (gap > chip->ring_max_stall_ns)
+			if (measure_stall && gap > chip->ring_max_stall_ns)
 				chip->ring_max_stall_ns = gap;
 		}
 	}
@@ -1617,6 +1631,7 @@ static bool ff_prefill_gate(struct ff *chip, struct ff_stream *s,
 		return false;
 	if (!prefill) {
 		s->out_prefill_pending = false;
+		chip->ring_max_stall_ns = 0;
 		return true;
 	}
 	if (!starved && anchored)
@@ -1628,11 +1643,13 @@ static bool ff_prefill_gate(struct ff *chip, struct ff_stream *s,
 	if (age >= s->out_prefill_min &&
 	    s->out_prefill_stable >= s->out_prefill_need) {
 		s->out_prefill_pending = false;
+		chip->ring_max_stall_ns = 0;
 		atomic_inc(&chip->out_prefills);
 		return true;
 	}
 	if (s->out_prefill_bound == 0) {
 		s->out_prefill_pending = false;
+		chip->ring_max_stall_ns = 0;
 		atomic_inc(&chip->out_prefill_timeouts);
 		return true;
 	}
@@ -1703,12 +1720,14 @@ static void ff_playback_urb(struct ff_ep *ep, struct urb *urb)
 		} else {
 			s->out_starve_streak = 0;
 		}
+		bool measure_stall = !s->out_prefill_pending;
+
 		if (ff_prefill_gate(chip, s, starved, true))
 			unmute = true;
 		if (s->out_start_urbs)
 			s->out_start_urbs--;
 		ff_ring_trace(chip, subs, s->pos[ep->index], appl, own,
-				frames);
+				frames, measure_stall);
 		if (starved) {
 			memset(urb->transfer_buffer, 0,
 			       urb->transfer_buffer_length);
@@ -2265,11 +2284,14 @@ static void ff_iso_playback_fill(struct ff_ep *ep, struct urb *urb)
 		} else {
 			s->out_starve_streak = 0;
 		}
+		bool measure_stall = !s->out_prefill_pending;
+
 		if (ff_prefill_gate(chip, s, starved, s->out_counter_valid))
 			unmute = true;
 		if (s->out_start_urbs)
 			s->out_start_urbs--;
-		ff_ring_trace(chip, subs, s->hw_ptr, appl, own, total);
+		ff_ring_trace(chip, subs, s->hw_ptr, appl, own, total,
+				measure_stall);
 	}
 	/* The seed needs a real device timestamp: ts_pos_valid means at
 	 * least one capture header arrived.  Priming frames are nominal, so
@@ -2543,7 +2565,7 @@ static int ff_clock_show(struct seq_file *m, void *v)
 	seq_printf(m, "ts_valid %d\n", valid);
 	seq_printf(m, "ts_ns %llu\nts_pos %llu\nts_phase %u\nts_frac_q32 %llu\n",
 		   (unsigned long long)ns, (unsigned long long)pos, phase,
-		   (unsigned long long)chip->ts_frac_q32);
+		   (unsigned long long)frac);
 	seq_printf(m, "rate_meas %u\n", rate);
 	seq_printf(m, "clock_rate %u\n", ff_programmed_clock(chip));
 	seq_printf(m, "win_ns %llu\nwin_pos %llu\n",
@@ -2900,7 +2922,7 @@ static void ff_int_setup_urbs(struct ff *chip, unsigned int bytes)
 static void ff_iso_setup_urbs(struct ff *chip)
 {
 	const struct ff_mode *m = chip->mode;
-	int dir, i, p, margin;
+	int dir, i, p;
 
 	chip->in_pkts = chip->out_pkts = 0;
 	chip->streams[SNDRV_PCM_STREAM_PLAYBACK].out_counter_valid = false;
@@ -2909,7 +2931,7 @@ static void ff_iso_setup_urbs(struct ff *chip)
 	chip->in_start_resync = false;
 	chip->fb_acc = 0;
 	chip->out_prime_acc = 0;
-	chip->fb_delay = (chip->nurbs + 1) * chip->iso_packets;
+	chip->fb_delay = ff_iso_fb_delay(chip);
 	chip->out_lag_min = 0x7fffffff;
 	chip->out_lag_max = -0x7fffffff;
 	/* Device timestamp: the stream-side state restarts with the device
@@ -2968,10 +2990,7 @@ static void ff_iso_setup_urbs(struct ff *chip)
 	 * and set at engine start; it is the same for UC, UCX and
 	 * Babyface-classic.  A bias below it underruns.  The lead_margin
 	 * parameter overrides for A/B.  Reduce modulo the wrap (8192 at 1x). */
-	margin = lead_margin >= 0 ? lead_margin : (2 * m->max_frames - 2);
-	chip->out_lead = (DIV_ROUND_CLOSEST(chip->fb_delay * chip->rate,
-					    8000) + margin) %
-			 ff_iso_wrap(chip);
+	chip->out_lead = ff_iso_out_lead(chip);
 
 	for (dir = 0; dir < 2; dir++) {
 		struct ff_ep *ep = &chip->eps[dir][0];
@@ -3441,8 +3460,8 @@ static unsigned int ff_buffer_min(struct ff *chip, unsigned int rate)
 	 * the in-flight URBs plus margin. */
 	if ((chip->caps & FF_TCAP_LEAD_HORIZON) &&
 	    !(chip->caps & FF_TCAP_FIXED_URB)) {
-		unsigned int fb_delay = (chip->nurbs + 1) * chip->iso_packets;
-		unsigned int lead = DIV_ROUND_CLOSEST(fb_delay * rate, 8000) + 60;
+		unsigned int lead = DIV_ROUND_CLOSEST(
+			ff_iso_fb_delay(chip) * rate, 8000) + 60;
 
 		min = max(min, lead + 2 * urb);
 	}
@@ -3479,8 +3498,9 @@ void ff_query_envelope(struct ff *chip, struct ff_hwdep_envelope *env)
 	env->nurbs = chip->nurbs;
 	env->iso = chip->iso ? 1 : 0;
 	env->iso_packets = chip->iso_packets;
-	env->fb_delay = chip->fb_delay;
-	env->out_lead = chip->out_lead;
+	env->fb_delay = chip->iso ? ff_iso_fb_delay(chip) : chip->fb_delay;
+	env->out_lead = chip->iso && !READ_ONCE(chip->engine_running) ?
+		ff_iso_out_lead(chip) : chip->out_lead;
 	env->lead_bias = chip->mode ? 2 * chip->mode->max_frames - 2 : 0;
 	for (i = 0; i < ARRAY_SIZE(ff_rates) && n < FF_HWDEP_MAX_RATES; i++) {
 		unsigned int rate = ff_rates[i];
@@ -4130,7 +4150,7 @@ static int ff_hw_setup(struct ff *chip)
 
 static void ff_read_identity(struct ff *chip)
 {
-	u32 rev = 0;
+	__le32 rev = 0;
 
 	if (ff_vendor_recv(chip, FF_REQ_REVISION, 0, 0, &rev,
 			     sizeof(rev)) == 0)
@@ -4195,7 +4215,6 @@ static int ff_probe(struct usb_interface *intf,
 	struct snd_card *card;
 	struct ff *chip;
 	unsigned int iface_no = intf->cur_altsetting->desc.bInterfaceNumber;
-	unsigned int max_words;
 	u32 caps;
 	int dev_idx, ret;
 
@@ -4278,28 +4297,39 @@ static int ff_probe(struct usb_interface *intf,
 	card->private_free = ff_card_free;
 
 	chip->nurbs = clamp(nurbs, 2u, (unsigned int)FF_MAX_URBS);
+	chip->iso_packets = clamp(iso_packets, 1u,
+				  (unsigned int)FF_MAX_ISO_PACKETS);
 	{
 		unsigned int short_frames = desc->product == FF_PRODUCT_ID_D ?
 			ucx_if5_frames : uc_pc_frames;
+		unsigned int base;
 
-		chip->base_urb_frames = clamp(round_up(
-			(chip->caps & FF_TCAP_FIXED_URB) ? short_frames : urb_frames,
-			8),
-			8u, (chip->caps & FF_TCAP_FIXED_URB) ? 1024u : 256u);
+		if (chip->iso) {
+			/* The ISO URB is iso_packets microframes; at 48 kHz
+			 * one microframe carries six frames.  Keep the base
+			 * exact so the envelope reports the real URB.
+			 */
+			base = chip->iso_packets * DIV_ROUND_UP(48000, 8000);
+			chip->base_urb_frames = base;
+		} else {
+			base = (chip->caps & FF_TCAP_FIXED_URB) ?
+				short_frames : urb_frames;
+			chip->base_urb_frames = clamp(round_up(base, 8), 8u,
+				(chip->caps & FF_TCAP_FIXED_URB) ? 1024u : 256u);
+		}
 	}
 	/* The interrupt transports (UC PC and UCX IF5) keep the configured
 	 * queue depth.  The reference queues two short URBs (32 frames at 1x);
-	 * the 64-frame ISO floor would defeat that geometry. */
-	if (!(chip->caps & FF_TCAP_FIXED_URB) &&
+	 * the 64-frame ISO floor would defeat that geometry.  The ISO queue
+	 * is the configured nurbs at the chosen iso_packets.
+	 */
+	if (!chip->iso && !(chip->caps & FF_TCAP_FIXED_URB) &&
 	    chip->nurbs * chip->base_urb_frames < FF_MIN_QUEUE_FRAMES) {
 		chip->nurbs = DIV_ROUND_UP(FF_MIN_QUEUE_FRAMES,
 					   chip->base_urb_frames);
 		dev_dbg(&intf->dev, "using %u URBs to keep %u frames queued\n",
 			chip->nurbs, FF_MIN_QUEUE_FRAMES);
 	}
-	chip->iso_packets = clamp(DIV_ROUND_UP(chip->base_urb_frames, 6), 1u,
-				  (unsigned int)FF_MAX_ISO_PACKETS);
-	max_words = ff_max_words(chip);
 	if (chip->iso) {
 		chip->urb_bytes_max = chip->iso_packets *
 				      max(chip->modes[0].in_mps,
@@ -4318,22 +4348,23 @@ static int ff_probe(struct usb_interface *intf,
 				       ff_mode_out_words(&chip->modes[i])));
 		}
 		chip->urb_bytes_max = span * FF_SAMPLE_BYTES;
-		if (chip->iso) {
-			const struct ff_mode *im;
-			unsigned int k;
+	}
+	if (chip->iso) {
+		const struct ff_mode *im;
+		unsigned int k;
 
-			for (k = 0; k < chip->desc->n_modes; k++) {
-				im = &chip->modes[k];
-				/* The feedback frames field is 5 bits and the
-				 * packet arithmetic must stay inside it. */
-				WARN_ON(im->max_frames > 31);
-				WARN_ON(im->neps != 1);
-				WARN_ON(im->max_frames * (im->words + 1) *
-					FF_SAMPLE_BYTES > im->out_mps);
-				WARN_ON(FF_ISO_IN_HEADER +
-					im->max_frames * im->words *
-					FF_SAMPLE_BYTES > im->in_mps);
-			}
+		for (k = 0; k < chip->desc->n_modes; k++) {
+			im = &chip->modes[k];
+			/* The feedback frames field is 5 bits and the packet
+			 * arithmetic must stay inside it.
+			 */
+			WARN_ON(im->max_frames > 31);
+			WARN_ON(im->neps != 1);
+			WARN_ON(im->out_mps < im->max_frames *
+				(im->words + 1) * FF_SAMPLE_BYTES);
+			WARN_ON(im->in_mps < FF_ISO_IN_HEADER +
+				im->max_frames * im->words *
+				FF_SAMPLE_BYTES);
 		}
 	}
 	chip->rate = 48000;
@@ -4368,7 +4399,7 @@ static int ff_probe(struct usb_interface *intf,
 	dev_info(&intf->dev, "firmware %u, %s samples on the wire\n",
 		 chip->firmware, chip->s32_samples ? "S32" : "float");
 	{
-		u32 st = 0;
+		__le32 st = 0;
 
 		if (ff_vendor_recv(chip, FF_REQ_STATUS, 0, 0, &st,
 				     sizeof(st)) == 0)

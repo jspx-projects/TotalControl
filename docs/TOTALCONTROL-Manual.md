@@ -474,8 +474,11 @@ the DAW. The device confirms the rate from its own clock readback.
 above the rate's period floor — one USB transfer. On the UC PC and UCX IF5
 interrupt transports the transfer is 16/32/64 frames at 32–48/64–96/128–192
 kHz, and the block must be a whole multiple of it. On ISO the transfer is
-48/96/192 frames at the same bands, and any block at or above it is accepted.
-A buffer (block × periods) must cover the transfers in flight plus margin. A
+24/48/96 frames at the same bands by default, and any block at or above it is
+accepted. The ISO URB is the driver parameter `iso_packets` (1..8, default 4 =
+0.5 ms); a lower value lowers the period floor and the buffer minimum, and the
+picker reports the result. A buffer (block × periods) must cover the
+transfers in flight plus margin. A
 block below the floor, a non-multiple on the interrupt transport, or a buffer
 below the minimum is refused when the DAW opens the device. REAPER's defaults
 (512-frame block, 3 periods, 32-bit) are valid at every device rate. Use 32-bit
@@ -527,8 +530,8 @@ step or mark the workspace dirty. The quantum is remembered in the application
 preferences, not in a workspace.
 
 The `Pitch` slider changes the speed and pitch of the whole interface from
--5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Hold Shift for 0.01 % steps.
-Double-click the slider to return to 0.0 %. Pitch is written to the device
+-5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Double-click the slider to
+return to 0.0 %. Pitch is written to the device
 as soon as it changes. Right after a rate or quantum change, the clock write
 waits until the IRQ policy has applied. The positive end depends on the
 sample rate: the interface's USB transport carries the pitched clock only up
@@ -1583,26 +1586,25 @@ already in `snd_pcm_delay`.
 On UCX ISO at 48 kHz with a 128-frame live host term:
 
 ```text
-Latency out = 128 + 49 + 7 = 184 frames = 3.8 ms
-Latency in  =  96 + 64     = 160 frames = 3.3 ms
+Latency out = 128 + 34 = 162 frames = 3.4 ms
+Latency in  =  96 + 42 = 138 frames = 2.9 ms
 ```
 
 UCX ISO device values (frames):
 
 | Rate | A | B | D |
 |---|---:|---:|---:|
-| 32 kHz | 43 | 51 | 94 |
-| 44.1 kHz | 53 | 61 | 114 |
-| 48 kHz | 56 | 64 | 120 |
-| 64 kHz | 75 | 82 | 157 |
-| 88.2 kHz | 94 | 102 | 196 |
-| 96 kHz | 101 | 108 | 209 |
-| 128 kHz | 111 | 115 | 226 |
-| 176.4 kHz | 114 | 119 | 233 |
-| 192 kHz | 127 | 132 | 259 |
+| 32 kHz | 29 | 37 | 66 |
+| 44.1 kHz | 33 | 40 | 73 |
+| 48 kHz | 34 | 42 | 76 |
+| 64 kHz | 44 | 52 | 96 |
+| 88.2 kHz | 52 | 59 | 111 |
+| 96 kHz | 54 | 62 | 116 |
+| 128 kHz | 77 | 82 | 159 |
+| 176.4 kHz | 83 | 88 | 171 |
+| 192 kHz | 97 | 102 | 199 |
 
-The 128 kHz D is interpolated between 96 and 192 kHz; its direct reading
-was one URB high.
+All nine rates are measured at the four-packet default.
 
 UC PC device values (frames):
 
@@ -1622,13 +1624,13 @@ UC AP device values (frames):
 
 | Rate | A | B | D |
 |---|---:|---:|---:|
-| 32 kHz | 64 | 79 | 143 |
-| 44.1 kHz | 73 | 88 | 161 |
-| 48 kHz | 77 | 92 | 169 |
-| 88.2 kHz | 83 | 99 | 182 |
-| 96 kHz | 90 | 105 | 195 |
-| 176.4 kHz | 134 | 145 | 279 |
-| 192 kHz | 147 | 158 | 305 |
+| 32 kHz | 48 | 63 | 111 |
+| 44.1 kHz | 51 | 67 | 118 |
+| 48 kHz | 53 | 68 | 121 |
+| 88.2 kHz | 71 | 86 | 157 |
+| 96 kHz | 74 | 89 | 163 |
+| 176.4 kHz | 106 | 117 | 223 |
+| 192 kHz | 115 | 126 | 241 |
 
 The UC PC 192 kHz D uses one endpoint pair's queue. The UC PC table covers
 32–192 kHz; the UC AP table covers 32/44.1/48/88.2/96/176.4/192. Other rates
@@ -1690,20 +1692,71 @@ Below the latency line, **Diagnostics** lists the kernel transport error
 counters. They are counted continuously whether or not this panel is open.
 `in` is device-to-host (capture) and `out` is host-to-device (playback);
 the host is the computer running TotalControl. The tooltips are deliberately
-short; this section is the full reference. **reset** (tooltip "Clear all
-counters") clears every row without changing the device or the audio graph.
+short; this section is the full reference. **reset** (tooltip "Clear counters")
+clears the counted rows without changing the device or the audio graph.
 
 The counters are grouped into three sections by **when they clear**:
 
 - **Scheduling** — `underrun / overrun`. Cumulative: counts since the driver
-  attached or the last reset. A stream restart never clears it.
-- **This stream** — `usb`, `bad packets`, `feedback`. Per-run: clears when
-  the audio stream restarts (see below).
+  attached or the last reset, never cleared by a stream restart.
+- **This stream** — `max stall`, `usb`, `bad packets`, `feedback`. Per-run:
+  clears when the audio stream restarts (see below).
 - **Session** — `recover`, `gaps`, `rate mismatch`, `pointer`,
   `events dropped`. Cumulative: counts since the driver attached or the last
   reset.
 
-**reset** clears all three sections, so every row reads zero after a reset.
+**reset** clears the cumulative and per-run counted rows. It does not clear
+`max stall`, which follows the running stream and shows `—` when no stream
+runs.
+
+### Max stall
+
+`max stall` is the longest interval between two host writes to the playback
+ring during the current stream, after the startup mute window. It shows `—`
+while no playback stream runs.
+
+The comparison uses the current stream's own playable cushion: the queued
+frames above the period being consumed, `buffer − period`, converted to time
+at the stream's rate. The row is gray while the stall fits inside that
+cushion and red when it exceeds it. The cushion therefore follows the
+stream's actual quantum and buffer, not an earlier setting.
+
+Read it together with `underrun / overrun`:
+
+- `max stall` red and `underrun / overrun` rising — the host writer was
+  late, the ring ran dry, and the driver sent silence for the dry chunk.
+- `max stall` large but no underrun — the ring cushion absorbed the stall; a
+  larger cushion or fewer stalls would add margin.
+- `max stall` small while underruns still occur — the stall is inside the
+  device or USB path, not in host scheduling.
+
+`max stall` clears when the audio stream restarts: a sample-rate change, a
+buffer-size change, or a recovery. The startup mute window is excluded, so
+the first value describes steady-state delivery rather than the prefill.
+To measure a fresh worst case, change the buffer size and back, then play the
+passage that hiccups. The value includes
+the player's own write pattern, so a player that hands over very large blocks
+less often can show a larger value than the audio path itself.
+
+To measure host scheduling latency independently, run `cyclictest` under the
+same load as the audio session:
+
+```sh
+sudo dnf install rt-tests
+sudo cyclictest -m -S -p80 -i200 -h400 -D5m
+```
+
+The reported **max** is the worst wake-up delay in microseconds. Compare it
+with the ring cushion: a max of several milliseconds explains a multi-
+millisecond `max stall`. `hwlatdetect` covers hardware and firmware stalls
+that `cyclictest` cannot see:
+
+```sh
+sudo hwlatdetect --duration=60
+```
+
+Load shown in a system monitor does not predict either value: a nearly idle
+machine can still stall for milliseconds.
 
 ### What "this stream" means — and what it does not
 
@@ -1741,6 +1794,7 @@ detail.
 | Section | Row | Meaning | What to do |
 |---|---|---|---|
 | Scheduling | underrun / overrun | The host playback ring ran dry (underrun) or the capture ring overflowed (overrun). On an underrun the driver sends silence for the dry chunk; a single late write is heard as a brief gap. At stream start and after a rate change the startup mute window (see above) holds the output muted while the host fills the ring; starvation inside that window is intended and is not counted here. If the ring stays dry for two consecutive chunks outside that window the driver stops the playback stream and the audio graph restarts it. A dry ring is never heard as stale audio. An underrun is the usual cause of a periodic tick or dropout at a small quantum. | Raise the quantum or buffer size, or reduce system load (CPU spikes, other USB traffic, interrupt storms). |
+| This stream | max stall | The longest the host took to feed the playback ring during the current stream, after the startup mute window. It shows `—` while no stream runs. The row is red when it exceeds the current stream's playable ring cushion, `buffer − period` frames at the stream's rate; it is gray otherwise. It resets when the stream restarts. | If max stall is red, reduce the stall or increase the cushion: raise the quantum, use a local file, use the performance governor, or use real-time scheduling. If it stays gray, the ring absorbed the stall; compare with underrun / overrun to see whether it actually dropped out. |
 | This stream | usb | USB packet status errors in the current stream. | Try another USB port or cable; avoid hubs; check for bandwidth contention. |
 | This stream | bad packets | Short, malformed, misaligned or dropped packets in the current stream. The startup and rate-switch burst is excluded by the per-run reset. | Usually accompanies a USB link problem; see `usb` and `gaps`. |
 | This stream | feedback | Clock-tracking packet detail in the current stream: a position discontinuity, a header frame-count mismatch, or feedback unavailable. The device's one-time start resync at a stream start is expected and is not counted. | Check the clock source and sample rate; a growing value indicates a device clock or USB timing fault. |

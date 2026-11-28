@@ -192,16 +192,32 @@ pub struct RateCaps {
     /// ISO transport: the pitch envelope derives from the per-band packet
     /// capacity. Interrupt transports carry no per-microframe frame ceiling.
     iso: bool,
+    /// ISO packets in one URB from the driver envelope. The period floor is
+    /// one URB, so this converts it back to a per-microframe capacity.
+    iso_packets: u32,
 }
 
 impl RateCaps {
     pub fn new(rates: Vec<u32>, floors: Vec<(u32, u32)>, fallback_floor: u32) -> Self {
-        Self { rates, floors, fallback_floor: fallback_floor.max(1), iso: false }
+        Self {
+            rates,
+            floors,
+            fallback_floor: fallback_floor.max(1),
+            iso: false,
+            iso_packets: 8,
+        }
     }
 
     /// Mark the transport ISO (the driver-reported envelope carries the flag).
     pub fn with_iso(mut self, iso: bool) -> Self {
         self.iso = iso;
+        self
+    }
+
+    /// Set the ISO packets per URB the driver reports. The pitch ceiling is
+    /// independent of the URB length; only the per-microframe capacity counts.
+    pub fn with_iso_packets(mut self, packets: u32) -> Self {
+        self.iso_packets = packets.max(1);
         self
     }
 
@@ -313,12 +329,13 @@ impl ClockFacts {
 
     /// The pitch envelope: the highest varispeed percent the transport carries
     /// at `rate`. The ISO endpoint delivers at most `max_frames` frames per
-    /// microframe packet — the band's highest period floor / 8 + 1 — so the
-    /// programmed clock `rate * (1 + pitch/100)` must stay at or below
-    /// `8000 * max_frames`. The driver clamps every DDS write to the same
-    /// ceiling (`ff_dds_clamp`); the slider offers the envelope so the
-    /// displayed value is what the device runs. Non-ISO transports carry no
-    /// per-microframe frame ceiling and keep the full ±5 % range.
+    /// microframe packet — the band's per-URB period floor divided by the URB's
+    /// packet count, plus one — so the programmed clock
+    /// `rate * (1 + pitch/100)` must stay at or below `8000 * max_frames`. The
+    /// driver clamps every DDS write to the same ceiling (`ff_dds_clamp`); the
+    /// slider offers the envelope so the displayed value is what the device
+    /// runs. Non-ISO transports carry no per-microframe frame ceiling and keep
+    /// the full ±5 % range.
     pub fn pitch_max_percent(&self, rate: u32) -> f32 {
         if !self.caps.iso || rate == 0 {
             return 5.0;
@@ -331,8 +348,10 @@ impl ClockFacts {
             .map(|r| self.quantum_floor(*r))
             .max()
             .unwrap_or_else(|| self.quantum_floor(rate));
-        // 8000 * (band_floor / 8 + 1), the band's packet capacity in frames/s.
-        let capacity = 1000 * band_floor + 8000;
+        let packets = self.caps.iso_packets.max(1);
+        // The period floor is one ISO URB: packets × frames per microframe.
+        let max_frames = band_floor / packets + 1;
+        let capacity = 8000 * max_frames;
         let max = (capacity as f64 / rate as f64 - 1.0) * 100.0;
         (max.min(5.0).max(0.0)) as f32
     }
@@ -535,6 +554,7 @@ mod tests {
             48,
         )
         .with_iso(true)
+        .with_iso_packets(8)
     }
 
     fn facts() -> ClockFacts {
@@ -718,6 +738,32 @@ mod tests {
         );
         assert_eq!(interrupt.pitch_max_percent(192_000), 5.0);
         assert_eq!(f.pitch_max_percent(0), 5.0);
+    }
+
+    #[test]
+    fn pitch_envelope_does_not_depend_on_the_urb_length() {
+        // The same UCX at four ISO packets per URB: the period floors halve,
+        // but the per-microframe endpoint capacity is unchanged. Deriving it
+        // from the URB length without dividing by the packet count made the
+        // 1x ceiling zero and pinned the slider at its right end at 0 %.
+        let p4 = RateCaps::new(
+            DEVICE_SAMPLE_RATES.to_vec(),
+            vec![
+                (32_000, 16), (44_100, 24), (48_000, 24), (64_000, 32),
+                (88_200, 48), (96_000, 48), (128_000, 64),
+                (176_400, 92), (192_000, 96),
+            ],
+            24,
+        )
+        .with_iso(true)
+        .with_iso_packets(4);
+        let mut f4 = facts();
+        f4.caps = p4;
+        for rate in [32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 128_000, 176_400] {
+            assert_eq!(f4.pitch_max_percent(rate), 5.0, "rate {rate}");
+        }
+        let max = f4.pitch_max_percent(192_000);
+        assert!((max - 4.166667).abs() < 0.001, "192k max {max}");
     }
 
     #[test]

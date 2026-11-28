@@ -456,7 +456,9 @@ host ring -> USB URB queue -> device lead -> converters
 ```
 
 The host ring is the ALSA buffer managed by PipeWire or the application. The
-USB queue is the driver's feedback delay and queued URBs. The device lead is a
+USB queue is the driver's feedback delay and queued URBs. The ISO URB is
+`iso_packets` microframes (1..8, default 4 = 0.5 ms); the queue is `nurbs` URBs
+and the feedback horizon is floored at six packets. The device lead is a
 fixed vendor-path delay. The converters add a fixed small delay.
 
 ### Host audio path

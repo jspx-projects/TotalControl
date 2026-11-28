@@ -888,8 +888,9 @@ Every OUT sample frame starts with a lead word.  The UC uses the first lead
 word in a packet; the remaining lead words are padding.  The first lead word
 is the stream position modulo 8192.
 
-One ISO URB carries up to eight packets, one per USB microframe.  Two URBs are
-in flight.  The AP sample word is float32.
+One ISO URB carries `iso_packets` packets, one per USB microframe; the driver
+parameter accepts 1..8 and defaults to 4.  Two URBs are in flight.  The AP
+sample word is float32.
 
 ### 11.7 ALSA PCM
 

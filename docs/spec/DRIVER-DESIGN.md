@@ -86,7 +86,7 @@ holds at the moment of measurement. Three quantities belong to three layers:
 |---|---|---|
 | quantum `Q` | host (PipeWire) | the graph cycle in frames; the application callback chunk ("samples" in a driver panel) |
 | period `P` | ALSA / driver | the buffer chunk whose completion raises a period signal; the driver minimum is one URB (the period floor) |
-| URB | USB | one transfer; ISO bundles `iso_packets` microframes (1 ms at the shipped geometry) |
+| URB | USB | one transfer; ISO bundles `iso_packets` microframes (0.5 ms at the default 4) |
 
 The device output buffer and the converter delay are fixed device terms. The
 quantum and the period are host/driver choices that set the scheduling margin
@@ -258,23 +258,30 @@ restores the 1x multiplier and forces a session replay on PC.
 
 ### 4.1 URB and buffer geometry
 
-Module parameters: `urb_frames` (default 48), `nurbs` (default 2),
-`uc_pc_frames` (default 16), `ucx_if5_frames` (default 16), `fixed_rate`.
+Module parameters: `urb_frames` (default 48), `iso_packets` (default 4),
+`nurbs` (default 2), `uc_pc_frames` (default 16), `ucx_if5_frames` (default
+16), `fixed_rate`.
 
 - Interrupt: one URB carries the model's short base scaled by the rate band
   (1x/2x/4x). The UC PC base is `uc_pc_frames`; the UCX IF5 base is
   `ucx_if5_frames`; both default to two 8-frame blocks. Two URBs are queued,
   so the host queue is 32/64/128 frames. The PCM buffer covers
-  `(nurbs + 2) * urb_frames`, rounded up to whole periods.
+  `(nurbs + 2) * urb_frames`, rounded up to whole periods. `urb_frames`
+  applies to the interrupt transport.
 - The interrupt engine is one implementation for the UC PC and UCX IF5. The
   model supplies the frame base, the caps and the transport setup; the ISO
   engine separately serves UC AP and UCX ISO.
-- ISO: one URB carries up to 8 packets, one per 125 us microframe. The
-  feedback delay is `(nurbs + 1) * iso_packets`. The UCX PCM buffer also
-  covers the output lead plus two URBs of margin.
+- ISO: one URB carries `iso_packets` packets, one per 125 us microframe.
+  The module parameter accepts 1..8; the default 4 makes the URB 0.5 ms at
+  every rate. The queue is `nurbs` URBs, so `nurbs * iso_packets` packets
+  are in flight. The feedback delay is `max((nurbs + 1) * iso_packets, 6)`
+  packets. A one-packet URB reduces the feedback delay to three packets; the
+  floor raises it to six, the minimum that keeps the OUT fill behind the IN
+  feedback at 96 kHz. The UCX PCM buffer also covers the output lead plus two
+  URBs of margin.
 - The period floor is one URB. On the interrupt transport the period is a
   whole number of URBs; on ISO any period at or above the floor is
-  accepted. The graph quantum follows at 48 frames and above.
+  accepted. The graph quantum follows at the rate's floor and above.
 
 The measured UCX IF5 round trip is 106/176/320 frames at 1x/2x/4x; the
 UC PC round trip is 151/223/361. The two-URB host queue accounts for
@@ -306,8 +313,8 @@ sets the buffer.
 
 USB high-speed carries 8000 microframes per second (125 µs each). At rate R a
 microframe carries R/8000 frames. The ISO engine bundles `iso_packets`
-microframes into one URB; at `urb_frames=48`, `iso_packets=8`, so one URB spans
-1 ms and carries `8 × ceil(R/8000)` frames. The driver signals completion one
+microframes into one URB; at the default `iso_packets=4`, one URB spans
+0.5 ms and carries `4 × ceil(R/8000)` frames. The driver signals completion one
 URB at a time, so the period floor is one URB. The ceiling packs whole frames
 per microframe; the fractional remainder is the feedback add/drop (§4.3).
 
@@ -336,33 +343,51 @@ The GUI offers the same envelope on the pitch slider (0.1 % grid).
 
 ```text
 ISO:           urb = iso_packets * ceil(rate / 8000)
-               iso_packets = clamp(ceil(urb_frames / 6), 1, 8)
+               iso_packets = clamp(module parameter, 1, 8)
 interrupt UC PC: urb = uc_pc_frames << band(rate)
 interrupt UCX:   urb = ucx_if5_frames << band(rate)
                  band = 0 (<=48k), 1 (<=96k), 2 (>96k)
 period_floor     = urb
 period_step      = urb (interrupt); 1 (ISO)
+fb_delay         = max((nurbs + 1) * iso_packets, 6)
 buffer_min       = roundup(max((nurbs + 2) * urb, lead + 2 * urb), urb)
-               UCX ISO only: lead = round((nurbs + 1) * iso_packets * rate / 8000) + 60
+               UCX ISO only: lead = round(fb_delay * rate / 8000) + 60
 ```
 
 `roundup()` rounds to any multiple. `round_up()` is a power-of-two bitmask and
 mis-aligns a non-power-of-two URB; the buffer rule uses `roundup()`.
 
-ISO envelope at the defaults (`urb_frames = 48`, `nurbs = 2`), as reported by
-the envelope ioctl:
+UCX ISO envelope at the defaults (`iso_packets = 4`, `nurbs = 2`), as
+reported by the envelope ioctl:
 
 | Rate | period floor | buffer min |
 |---|---|---|
-| 32000 | 32 | 224 |
-| 44100 | 48 | 288 |
-| 48000 | 48 | 336 |
-| 64000 | 64 | 384 |
-| 88200 | 96 | 576 |
-| 96000 | 96 | 576 |
-| 128000 | 128 | 768 |
-| 176400 | 184 | 1104 |
-| 192000 | 192 | 1152 |
+| 32000 | 16 | 144 |
+| 44100 | 24 | 192 |
+| 48000 | 24 | 192 |
+| 64000 | 32 | 224 |
+| 88200 | 48 | 288 |
+| 96000 | 48 | 336 |
+| 128000 | 64 | 384 |
+| 176400 | 92 | 552 |
+| 192000 | 96 | 576 |
+
+The UC AP ISO buffer minimum omits the UCX lead term:
+`buffer_min = (nurbs + 2) * urb`, rounded to the URB.
+
+Short ISO URBs at `nurbs = 2`:
+
+| `iso_packets` | Rate | UCX ISO floor / buffer min | UC AP floor / buffer min |
+|---|---:|---:|---:|
+| 4 | 48000 | 24 / 192 | 24 / 96 |
+| 4 | 96000 | 48 / 336 | 48 / 192 |
+| 4 | 192000 | 96 / 576 | 96 / 384 |
+| 2 | 48000 | 12 / 120 | 12 / 48 |
+| 2 | 96000 | 24 / 192 | 24 / 96 |
+| 2 | 192000 | 48 / 336 | 48 / 192 |
+| 1 | 48000 | 6 / 108 | 6 / 24 |
+| 1 | 96000 | 12 / 156 | 12 / 48 |
+| 1 | 192000 | 24 / 252 | 24 / 96 |
 
 Interrupt envelope at the defaults (`uc_pc_frames`/`ucx_if5_frames = 16`,
 `nurbs = 2`), as reported by the envelope ioctl:
@@ -528,7 +553,7 @@ Three quantities are distinct and must not be conflated:
 | ALSA period `P` | driver/host | the frames per period: the chunk whose completion raises a period signal and advances the pointer |
 | ALSA ring | driver | `P × periods` frames between the application and the driver |
 | ring fill | driver/host | `appl_ptr − hw_ptr`; the queued reserve, equal to the steady ring latency |
-| URB | USB | one transfer of `iso_packets` microframes; 1 ms at the shipped geometry |
+| URB | USB | one transfer of `iso_packets` microframes; 0.5 ms at the default 4 |
 | period floor | driver | the smallest accepted period: one URB |
 | in-flight queue | driver | frames handed to USB and not yet completed (`nurbs` URBs) |
 | `out_lead` | driver | the scheduling horizon added to the mirrored position; a scheduling margin, not held audio |
@@ -589,8 +614,9 @@ startup mechanism: steady-state delivery and latency are unchanged.
 | `prefill` | module param, bool, default on | enables the gate; off clears an armed gate at the next fill |
 
 The constants are milliseconds. At arm time they scale to completion
-counts by the URB duration (`urb_frames * 1000 / rate`, minimum 1 ms): an
-ISO URB is 1 ms at every rate, an interrupt URB is rate-dependent. The
+counts by the URB duration (`urb_frames * 1000 / rate`, minimum 1 ms): the
+default 4-packet ISO URB is 0.5 ms and uses the 1 ms floor, an 8-packet
+ISO URB is 1 ms, and an interrupt URB is rate-dependent. The
 minimum window is at least one completion; the bound exceeds the minimum.
 
 The gate arms in the common playback trigger and is evaluated at each
@@ -860,7 +886,7 @@ Status and watchdog:
 | Playback clock reference | interrupt handshake: the device accepts OUT URBs at its own rate | implicit feedback: the position anchors the lead word, the frame count locks the rate (§4.3) |
 | OUT payload | sample words | lead word + sample words |
 | IN payload | sample words | header (position, phase, frame count) + planar frames |
-| URB granularity | `urb_frames` per URB, scaled by rate band | up to 8 packets per URB, one per microframe |
+| URB granularity | `urb_frames` per URB, scaled by rate band | `iso_packets` per URB (1..8), one per microframe |
 | UC rate sequence | generic (§7); session close/reopen with `WIN_SESSION` gaps | generic (§7); session words back-to-back |
 | UCX rate sequence | generic (§7) | generic (§7) |
 | UC status transport | interrupt ticker IF5, always open | bulk IF4 |
@@ -885,7 +911,9 @@ The hwdep ABI is versioned (`FF_ABI_VERSION`, currently 9). The host checks
 it at open. The `DIAGNOSTICS` reply carries accumulated history: cumulative
 counters (zeroed on reattach), per-run counters (reset on every engine start),
 and watermarks (`ring_min_filled`, `ring_max_stall_ns`, `out_lag`) with their
-reset class. `run_seq` is the re-base epoch; it increments on every engine
+reset class. `ring_max_stall_ns` is measured after the startup prefill gate
+clears, so the muted startup transient is not the reported worst stall.
+`run_seq` is the re-base epoch; it increments on every engine
 start and on a confirmed idle device-rate write (`SET_RATE`). `urb_errors` is
 a consecutive-error gauge rather than a total.
 
