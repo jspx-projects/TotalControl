@@ -324,13 +324,14 @@ opens the Audio Configuration panel immediately left of the CONTROLS sidebar,
 which carries clock source, sample rate, pitch, the digital input formats, the
 word clock options and firmware and serial information.
 
-`Word clock in` switches the word-clock input termination. The option appears
-only on devices that support software termination. If it is not shown, your
-unit sets termination with a switch on the back panel. The UC exists in two
-hardware revisions: the earlier has a recessed mechanical switch (with a 75 Ω
-LED) and no software control; the later revision supports the software setting.
-On the UCX, termination is always software-controlled. TotalControl reads the
-setting from the unit when it connects.
+`Word clock in 75 Ohm termination` switches the internal 75 Ohm resistor that
+terminates the word-clock input. The option appears only on devices that
+support software termination. If it is not shown, your unit sets termination
+with a switch on the back panel. The UC exists in two hardware revisions: the
+earlier has a recessed mechanical switch (with a 75 Ω LED) and no software
+control; the later revision supports the software setting. On the UCX,
+termination is always software-controlled. TotalControl reads the setting from
+the unit when it connects.
 
 The panel separates what the device owns from what the host engine drives. In
 the device group, `Clock source` picks one of the unit's own clock options

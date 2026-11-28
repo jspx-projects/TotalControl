@@ -1234,15 +1234,15 @@ sheet shows that value. A value is written when it changes there.
 | Clock source | yes | yes |
 | Sample rate | yes | yes, when the device owns the rate |
 | Current rate | yes | yes |
-| Pitch | yes | yes |
 | Line In reference | yes | — |
 | Line Out reference | yes | — |
 | Phones reference | yes | — |
 | Optical | yes | yes |
 | SPDIF | yes | yes |
 | Single speed:<br>word clock | yes | yes |
-| Word clock in | — | yes |
+| Word clock in<br>75 Ohm termination | — | yes |
 | EQ for Record | — | yes |
+| Pitch | yes | yes |
 | Firmware | yes | yes |
 | Serial | yes | yes |
 
@@ -1269,9 +1269,10 @@ in the order S/PDIF coax, Optical and Word clock. Each row shows `Lock` or
 is not locked. The section is absent when no input carries a signal. Rows
 appear and disappear as signals arrive, so the controls below them move.
 
-The `Single speed word
-clock` and `Word clock in` (termination) rows are clock-sync controls shown on
-every path. The signal-path settings (Optical and SPDIF format, the UC
+The `Single speed word clock` row and the `Word clock in` row with its
+`75 Ohm termination` label are clock-sync controls shown on every path. The
+label names the internal 75 Ohm resistor that terminates the word-clock
+input. The signal-path settings (Optical and SPDIF format, the UC
 reference levels, EQ for Record) and the Firmware/Serial readouts stay. The `Sample rate` row is the nominal-rate picker
 with three states, derived from the detected audio path and the host stream:
 
@@ -1300,7 +1301,8 @@ Read-only reports (the current rate, Graph and the latency readout) use the
 secondary text colour; editable controls use the primary colour; a grayed
 owner-controlled value uses the disabled text colour.
 
-Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
+Pitch is a -5.0 % … +5.0 % slider at the end of the device controls, directly
+above the Firmware readout. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
 fine enough). Double-click resets to 0.0 %. Every change is stored immediately
 and written to the device clock at once. While the IRQ policy is still being

@@ -16385,41 +16385,6 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .align_y(iced::Alignment::Center)
         .width(Length::Fill),
     );
-    if state.device.capabilities().pitch {
-        // The pitch slider is always shown. It is active on the internal
-        // clock; under an external clock the unit is slaved, the slider is
-        // disabled at 0 % and the tooltip says why.
-        let value = if internal { state.pro_pitch } else { 0.0 };
-        let slider = crate::widgets::pitch_slider::pitch_slider(
-            value,
-            scale,
-            (-5.0, pitch_slider_max(state)),
-            internal,
-            Message::PitchChanged,
-            || Message::PitchChanged(0.0),
-        );
-        let slider = strip::hint(
-            slider,
-            if internal {
-                "Pitch"
-            } else {
-                "External clock: pitch is held at 0 %."
-            },
-            scale,
-        );
-        body = body.push(
-            row![
-                caption("Pitch"),
-                slider,
-                text(format!("{value:+.1} %"))
-                    .color(theme::text_sec())
-                    .size(text_size)
-                    .width(Length::Fixed(58.0 * scale)),
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
-        );
-    }
     if uc {
         // UC-only: the Gain tab's reference levels are one word (`0x17`).
         // The UCX sets them per channel, in the channel panels.
@@ -16493,11 +16458,20 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         // Word-clock input termination is a clock-sync control: a Device-path
         // option, kept as a same-height filler in convenience (GUI spec §4).
         if device_controls {
-            body = body.push(check_row(
-                "Word clock in",
-                settings.word_clock_termination,
-                Message::WordClockTerminationChanged(!settings.word_clock_termination),
-            ));
+            body = body.push(
+                row![
+                    caption("Word clock in"),
+                    checkbox(
+                        settings.word_clock_termination,
+                        Message::WordClockTerminationChanged(!settings.word_clock_termination),
+                    ),
+                    text("75 Ohm termination")
+                        .color(theme::text_sec())
+                        .size(text_size),
+                ]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
+            );
         } else {
             body = body.push(
                 iced::widget::Space::new()
@@ -16505,6 +16479,42 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     .height(Length::Fixed(SETTINGS_CONTROL_H * scale)),
             );
         }
+    }
+    // The pitch slider is the last control in the device section, directly
+    // above the firmware and serial readouts.  It is active on the internal
+    // clock; under an external clock the unit is slaved, the slider is
+    // disabled at 0 % and the tooltip says why.
+    if state.device.capabilities().pitch {
+        let value = if internal { state.pro_pitch } else { 0.0 };
+        let slider = crate::widgets::pitch_slider::pitch_slider(
+            value,
+            scale,
+            (-5.0, pitch_slider_max(state)),
+            internal,
+            Message::PitchChanged,
+            || Message::PitchChanged(0.0),
+        );
+        let slider = strip::hint(
+            slider,
+            if internal {
+                "Pitch"
+            } else {
+                "External clock: pitch is held at 0 %."
+            },
+            scale,
+        );
+        body = body.push(
+            row![
+                caption("Pitch"),
+                slider,
+                text(format!("{value:+.1} %"))
+                    .color(theme::text_sec())
+                    .size(text_size)
+                    .width(Length::Fixed(58.0 * scale)),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
     }
     if state.device.firmware().is_some() {
         body = body.push(
