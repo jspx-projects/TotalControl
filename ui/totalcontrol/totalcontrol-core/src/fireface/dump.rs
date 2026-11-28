@@ -406,6 +406,12 @@ fn apply_eq(
             eq.enabled = on;
         }
     }
+    // The band registers keep their last type and values while the EQ is
+    // disabled.  They are not part of the active scene then, so a disabled
+    // EQ must not report its retained bands as a mismatch.
+    if !eq.enabled {
+        return;
+    }
     for band in 0..3 {
         let (type_off, gain_off, freq_off, q_off) = match band {
             0 => (0x41, 0x42, 0x43, 0x44),
@@ -487,15 +493,18 @@ fn apply_dynamics(
         }
     }
     if let Some(w) = word(0x62) {
-        if dyn_.attack_ms != w {
-            out.push(format!("{label} dynamics attack: device {w} ms, TotalControl {} ms", dyn_.attack_ms));
-            dyn_.attack_ms = w;
+        // The wire value is milliseconds + 1.
+        let ms = w.saturating_sub(1);
+        if dyn_.attack_ms != ms {
+            out.push(format!("{label} dynamics attack: device {ms} ms, TotalControl {} ms", dyn_.attack_ms));
+            dyn_.attack_ms = ms;
         }
     }
     if let Some(w) = word(0x63) {
-        if dyn_.release_ms != w {
-            out.push(format!("{label} dynamics release: device {w} ms, TotalControl {} ms", dyn_.release_ms));
-            dyn_.release_ms = w;
+        let ms = w.saturating_sub(1);
+        if dyn_.release_ms != ms {
+            out.push(format!("{label} dynamics release: device {ms} ms, TotalControl {} ms", dyn_.release_ms));
+            dyn_.release_ms = ms;
         }
     }
     if let Some(w) = word(0x64) {
@@ -642,8 +651,8 @@ fn apply_reverb(words: &HashMap<u16, u16>, reverb: &mut Reverb, out: &mut Vec<St
         }
     }
     if let Some(w) = get(0x3c0d) {
-        let width = w as f32 / 100.0;
-        if (reverb.width - width).abs() > 0.005 {
+        let width = w as f32;
+        if (reverb.width - width).abs() > 0.05 {
             out.push(format!("Reverb width: device {width:.2}, TotalControl {:.2}", reverb.width));
             reverb.width = width;
         }
@@ -667,9 +676,11 @@ fn apply_echo(words: &HashMap<u16, u16>, echo: &mut Echo, out: &mut Vec<String>)
         }
     }
     if let Some(w) = get(0x3c22) {
-        if echo.delay_ms != w {
-            out.push(format!("Echo delay: device {w} (0.01 s), TotalControl {}", echo.delay_ms));
-            echo.delay_ms = w;
+        // Register 0x3c22 is 0.01 s units; the model stores milliseconds.
+        let ms = w.saturating_mul(10);
+        if echo.delay_ms != ms {
+            out.push(format!("Echo delay: device {ms} ms, TotalControl {} ms", echo.delay_ms));
+            echo.delay_ms = ms;
         }
     }
     if let Some(w) = get(0x3c23) {
@@ -694,8 +705,8 @@ fn apply_echo(words: &HashMap<u16, u16>, echo: &mut Echo, out: &mut Vec<String>)
         }
     }
     if let Some(w) = get(0x3c26) {
-        let width = w as f32 / 100.0;
-        if (echo.width - width).abs() > 0.005 {
+        let width = w as f32;
+        if (echo.width - width).abs() > 0.05 {
             out.push(format!("Echo width: device {width:.2}, TotalControl {:.2}", echo.width));
             echo.width = width;
         }
@@ -848,8 +859,8 @@ mod tests {
         words.insert(0x0044, 10);
         words.insert(0x0060, 1);
         words.insert(0x0061, (-30i16) as u16);
-        words.insert(0x0062, 20);
-        words.insert(0x0063, 300);
+        words.insert(0x0062, 21);
+        words.insert(0x0063, 301);
         words.insert(0x0064, (-200i16) as u16);
         words.insert(0x0065, 20);
         words.insert(0x0066, (-600i16) as u16);
@@ -865,9 +876,10 @@ mod tests {
         words.insert(0x3c0d, 75);
         words.insert(0x3c20, 1);
         words.insert(0x3c21, 2);
-        words.insert(0x3c22, 700);
+        words.insert(0x3c22, 70);
         words.insert(0x3c23, 30);
         words.insert(0x3c25, (-120i16) as u16);
+        words.insert(0x3c26, 80);
 
         let diff = UcxDump::new(words).differences_into(&mut scene);
         assert!(!diff.is_empty());
@@ -891,13 +903,14 @@ mod tests {
         assert_eq!(reverb.kind, 3);
         assert_eq!(reverb.pre_delay_ms, 50);
         assert!((reverb.room_scale - 1.5).abs() < 0.01);
-        assert!((reverb.width - 0.75).abs() < 0.01);
+        assert!((reverb.width - 75.0).abs() < 0.01);
         let echo = scene.settings.echo.unwrap();
         assert!(echo.on);
         assert_eq!(echo.kind, 2);
         assert_eq!(echo.delay_ms, 700);
         assert_eq!(echo.feedback, 30);
         assert!((echo.volume_db + 12.0).abs() < 0.01);
+        assert!((echo.width - 80.0).abs() < 0.01);
     }
 
     #[test]
