@@ -173,9 +173,10 @@ pub struct DeviceSettings {
     #[serde(default)]
     pub width: f32,
     /// Active sample rate in Hz (proprietary USB mode; the ALSA backend
-    /// leaves it to the kernel driver). `#[serde(default = …)]` so old
-    /// Scene JSON (and scenes from the ALSA backend) still deserialize.
-    #[serde(default = "default_sample_rate")]
+    /// leaves it to the kernel driver). Device-owned: read from the unit and
+    /// never serialized in a workspace. `#[serde(default)]` keeps old Scene
+    /// JSON loadable.
+    #[serde(default = "default_sample_rate", skip_serializing)]
     pub sample_rate: u32,
     /// UC Gain-tab reference codes.  These are device-owned: read from
     /// `0x17` and written only when the user changes them.

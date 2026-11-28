@@ -65,6 +65,9 @@ The file uses the `.tcws` workspace schema. It contains:
 | Surround | Virtual-surround state |
 | Name | The workspace display name |
 
+The sample rate is read from the device and is not part of the workspace.
+The host graph quantum is workspace state.
+
 The file does not store the source workspace path. After a recovered start,
 Save uses Save As until the user chooses a file.
 

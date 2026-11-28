@@ -4327,10 +4327,8 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         .clone()
         .unwrap_or_else(|| state.device.capture_scene());
     // The host scene deliberately does not let device-reported values
-    // overwrite the saved mix.  The live rate and Dim amount are workspace
-    // settings, so take their current values at save time.  A workspace
-    // stores the graph's current rate.
-    scene.settings.sample_rate = current_graph_rate(state);
+    // overwrite the saved mix.  The live Dim amount is a workspace setting,
+    // so take its current value at save time.
     scene.settings.pitch_percent = state.pro_pitch;
     scene.settings.dim_amount_db = state.control_room.main_dim_db;
     // The Control Room assignment is the source of truth for Main and
@@ -4560,6 +4558,9 @@ fn apply_workspace_state(
         ));
     }
     let mut scene = workspace.scene.clone();
+    // The sample rate is device-owned: a workspace never moves the clock.
+    // Keep the live model value for both the real backend and the mock.
+    scene.settings.sample_rate = state.device.settings().sample_rate;
     // The Dim amount is both a Control Room preference and part of the
     // active workspace state.  Older files may only carry the preference.
     scene.settings.dim_amount_db = workspace.control_room.main_dim_db;
@@ -4591,7 +4592,6 @@ fn apply_workspace_state(
     apply_control_room_assignments(state).map_err(|e| e.to_string())?;
     apply_workspace_external_input(state, workspace)?;
     apply_workspace_pfl(state, workspace)?;
-    apply_workspace_sample_rate(state, &scene);
     apply_workspace_quantum(state, workspace);
     apply_workspace_monitor_state(state, &scene)?;
     if state.device.capabilities().pitch {
@@ -4705,52 +4705,6 @@ fn apply_workspace_quantum(state: &mut TotalControl, workspace: &Workspace) {
         write_quantum(state, quantum);
         force_engine_reprepare(state);
     }
-}
-
-/// Apply the rate stored in a workspace.  The scene writer sets the device
-/// model/register; this also moves the PipeWire graph when the sound server
-/// owns the card, then schedules a scene reapply for the stream restart.
-fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
-    // The device rate is the external clock's under an external source; a
-    // running host owns the rate. A workspace load does not override either.
-    if state.device.settings().clock_source != "Internal" {
-        return;
-    }
-    if state.card_stream.is_some() || !matches!(state.pcm_owner, audio_path::PcmOwner::Idle) {
-        return;
-    }
-    let rate = scene.settings.sample_rate;
-    if rate == 0 {
-        return;
-    }
-    if state.device.is_mock() {
-        let _ = state.device.set_sample_rate(rate);
-        state.engine_force_rate = rate;
-        if let Some(engine) = state.engine.as_mut() {
-            engine.force_rate = rate;
-        }
-        return;
-    }
-    if !state.device.rate_follows_sound_server() {
-        return;
-    }
-    let current = state.card_stream.map(|stream| stream.rate);
-    if current == Some(rate) || (current.is_none() && state.engine_force_rate == rate) {
-        return;
-    }
-    state.engine_force_rate = rate;
-    write_rate(state, rate);
-    state.device.set_meter_rate(rate);
-    state.pending_device_rate = state
-        .card_stream
-        .is_some()
-        .then_some((rate, Instant::now()));
-    if let Some(engine) = state.engine.as_mut() {
-        engine.force_rate = rate;
-    }
-    state.startup_scene = Some(scene.clone());
-    state.startup_scene_full_rewrite = true;
-    state.startup_scene_due = Some(Instant::now() + Duration::from_millis(1_500));
 }
 
 /// Apply the workspace's Control Room monitor state after its assignments
@@ -28201,7 +28155,6 @@ mod tests {
         state.talkback_on = true;
 
         let workspace = capture_workspace(&state);
-        assert_eq!(workspace.scene.settings.sample_rate, 44_100);
         assert_eq!(workspace.scene.settings.pitch_percent, 1.5);
         assert!(workspace.scene.settings.dim);
         assert_eq!(workspace.scene.settings.dim_amount_db, -12.0);
@@ -28223,7 +28176,6 @@ mod tests {
             force_quantum: 0,
         });
         let workspace = capture_workspace(&state);
-        assert_eq!(workspace.scene.settings.sample_rate, 48_000);
         assert_eq!(state.engine_force_rate, 96_000, "the fixed choice is kept");
         assert_eq!(
             host_settings_of(&state).engine_rate_mode,
@@ -28912,7 +28864,9 @@ mod tests {
         assert_eq!(target.snapshot_names[2], "Stereo");
         assert!(target.snapshots[2].is_some());
         assert!(!target.talkback_on);
-        assert_eq!(target.device.settings().sample_rate, 44_100);
+        // The device rate is read from the device, not restored from the
+        // workspace; the target keeps its current value.
+        assert_eq!(target.device.settings().sample_rate, 48_000);
         // Pitch is host intent and is restored from the workspace.
         assert_eq!(target.device.settings().pitch_percent, 1.5);
         assert_eq!(target.pro_pitch, 1.5);

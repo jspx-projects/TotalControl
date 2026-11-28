@@ -1391,7 +1391,7 @@ term for a mixer state; the interface uses the terms below.
 
 | Layer | Contains | Stored |
 |---|---|---|
-| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the global fader group), layouts, view state, Control Room assignments and complete GUI state | A `.tcws` file chosen by you, or the current workspace file |
+| **Workspace** | The portable host-side configuration: current mix, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the global fader group), layouts, view state, Control Room assignments and complete GUI state | A `.tcws` file chosen by you, or the current workspace file |
 | **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace and explicit workspaces |
 | **Current workspace** | The live workspace for the connected unit, saved every minute while it changes and on close, hide, disconnect and unit switch | The current workspace file |
 | **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
@@ -1462,7 +1462,7 @@ submix.
 
 A workspace contains:
 
-- the current mix, including sample rate, pitch/varispeed and Dim/Speaker B state;
+- the current mix, including pitch/varispeed and Dim/Speaker B state;
 - all eight snapshots and their names;
 - user channel labels;
 - the four mute/solo/fader groups, the global fader group and the mute/solo masters with their held state;

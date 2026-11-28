@@ -7596,6 +7596,8 @@ impl RmeDevice for Fireface {
         let device_wc_term = self.settings.word_clock_termination;
         let device_reverb = self.settings.reverb;
         let device_echo = self.settings.echo;
+        // The sample rate is device-owned: a scene does not move the clock.
+        let live_sample_rate = self.settings.sample_rate;
 
         // Keep the live topology authoritative.  Older scene files can
         // carry a different row order (notably the UCX software-playback
@@ -7674,6 +7676,7 @@ impl RmeDevice for Fireface {
         let live_main_b_out = self.settings.main_b_out;
         let live_speaker_b = self.settings.speaker_b;
         self.settings = scene.settings.clone();
+        self.settings.sample_rate = live_sample_rate;
         self.settings.main_out = live_main_out;
         self.settings.main_b_out = live_main_b_out;
         // A linked pair is one control: the left side is authoritative for
@@ -12702,18 +12705,19 @@ mod tests {
     }
 
     #[test]
-    fn ucx_scene_apply_adopts_saved_rate_without_writing_the_family_word() {
+    fn ucx_scene_apply_keeps_the_device_rate() {
         let (mut dev, writes) = open(Model::Ucx);
+        let before = dev.settings().sample_rate;
         let mut scene = dev.capture_scene();
         scene.settings.sample_rate = 44_100;
         writes.lock().unwrap().clear();
 
         dev.apply_scene(&scene).unwrap();
 
-        // The scene's rate is adopted into the model. The device family word is
-        // committed by the kernel at engine start; a scene apply must not write
-        // it into a running stream (a cross-family word moves the clock).
-        assert_eq!(dev.settings().sample_rate, 44_100);
+        // The rate is device-owned: a scene apply does not move the model or
+        // write the family word. The host moves the clock through the rate
+        // path.
+        assert_eq!(dev.settings().sample_rate, before);
         assert!(!writes
             .lock()
             .unwrap()
