@@ -7594,7 +7594,6 @@ impl RmeDevice for Fireface {
         let device_phones = self.settings.phones_ref;
         let device_wc_single = self.settings.word_clock_single_speed;
         let device_wc_term = self.settings.word_clock_termination;
-        let device_eq_for_record = self.settings.eq_for_record;
         let device_reverb = self.settings.reverb;
         let device_echo = self.settings.echo;
 
@@ -7769,7 +7768,6 @@ impl RmeDevice for Fireface {
             self.settings.spdif_professional = device_spdif_pro;
             self.settings.word_clock_single_speed = device_wc_single;
             self.settings.word_clock_termination = device_wc_term;
-            self.settings.eq_for_record = device_eq_for_record;
         }
         if self.settings.reverb.is_none() {
             self.settings.reverb = device_reverb;
@@ -12410,6 +12408,30 @@ mod tests {
     }
 
     #[test]
+    fn ucx_scene_apply_writes_record_dry_from_the_scene() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut scene = dev.capture_scene();
+
+        scene.settings.eq_for_record = false;
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        assert!(!dev.settings().eq_for_record);
+        assert!(writes.lock().unwrap().iter().any(|w| matches!(
+            w,
+            Write::Vendor(protocol::req::SETTINGS, value, 1487) if value & 0x0100 != 0
+        )));
+
+        scene.settings.eq_for_record = true;
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        assert!(dev.settings().eq_for_record);
+        assert!(writes.lock().unwrap().iter().any(|w| matches!(
+            w,
+            Write::Vendor(protocol::req::SETTINGS, value, 1487) if value & 0x0100 == 0
+        )));
+    }
+
+    #[test]
     fn ucx_state_mirrors_update_the_audio_config_model() {
         let (mut dev, _writes) = open(Model::Ucx);
         dev.apply_ucx_state_word(0x3d20, 3); // Word Clock
@@ -12618,14 +12640,14 @@ mod tests {
     }
 
     #[test]
-    fn ucx_device_group_wins_over_a_stale_scene() {
+    fn ucx_device_group_readback_uses_scene_for_record_dry() {
         // The UCX options word read form returns the live options under mask
         // 0x05cf (measured on firmware 46), so the device-owned options are
         // read at open and win over a scene that may predate a change made
-        // elsewhere, as on the UC. The reference levels have no readback and
-        // still come from the scene. Device word 0x00CE: Word Clock clock,
-        // optical SPDIF, SPDIF professional, single speed, termination on,
-        // EQ+D for Record enabled.
+        // elsewhere, as on the UC. Record dry has no mirror, so the scene is
+        // its only source. Device word 0x00CE: Word Clock clock, optical
+        // SPDIF, SPDIF professional, single speed, termination on, EQ+D for
+        // Record enabled.
         let (mut dev, writes) = open_ucx_with_settings(0x00CE);
         let mut scene = dev.capture_scene();
         scene.settings.clock_source = "Internal".into();
@@ -12646,7 +12668,7 @@ mod tests {
         assert!(settings.spdif_professional);
         assert!(settings.word_clock_single_speed);
         assert!(settings.word_clock_termination);
-        assert!(settings.eq_for_record);
+        assert!(!settings.eq_for_record);
         // The reference levels are device-owned and unreadable, so the scene
         // is written at connect to keep the GUI and hardware in step.
         let words = written_words(&writes);
@@ -12660,12 +12682,13 @@ mod tests {
         assert_eq!(last(0x1208), Some(1));
         assert_eq!(last(0x1808), Some(2));
         assert_eq!(last(0x0407), Some(3));
-        // The options word written at connect carries the device values.
+        // The options word written at connect carries the device values,
+        // except record dry, which has no mirror and uses the scene.
         assert!(writes
             .lock()
             .unwrap()
             .iter()
-            .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x00CE, 1487))));
+            .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x01CE, 1487))));
     }
 
     #[test]
