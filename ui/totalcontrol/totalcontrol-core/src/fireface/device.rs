@@ -3516,12 +3516,10 @@ impl Fireface {
     fn apply_ucx_global_word(&mut self, addr: u16, value: u16) {
         match addr {
             0x3d20 => {
-                if let Some(source) = self.settings.clock_sources.get(value as usize) {
-                    self.settings.clock_source = source.clone();
-                    log::info!("UCX clock mirror 0x3d20 = {value} -> {source}");
-                } else {
-                    log::info!("UCX clock mirror 0x3d20 = {value} -> out of range");
-                }
+                // Not a reliable clock-source mirror: changing the clock
+                // through the options word leaves this word unchanged. The
+                // clock source comes from the options-word read form.
+                log::debug!("UCX 0x3d20 = {value} (not the clock source)");
             }
             0x3d21 => {
                 const RATES: [u32; 9] = [
@@ -12566,7 +12564,9 @@ mod tests {
     #[test]
     fn ucx_state_mirrors_update_the_audio_config_model() {
         let (mut dev, _writes) = open(Model::Ucx);
-        dev.apply_ucx_state_word(0x3d20, 3); // Word Clock
+        dev.settings.clock_source = "SPDIF Coaxial".into();
+        // 0x3d20 is not a reliable clock mirror; the options-word read wins.
+        dev.apply_ucx_state_word(0x3d20, 3);
         dev.apply_ucx_state_word(0x3d21, 5); // 96 kHz
         dev.apply_ucx_state_word(0x3d22, 1); // single speed
         dev.apply_ucx_state_word(0x3d40, 1); // termination
@@ -12574,7 +12574,7 @@ mod tests {
         dev.apply_ucx_state_word(0x3d42, 1); // professional
 
         let settings = dev.settings();
-        assert_eq!(settings.clock_source, "Word Clock");
+        assert_eq!(settings.clock_source, "SPDIF Coaxial");
         assert_eq!(settings.sample_rate, 96_000);
         assert!(settings.word_clock_single_speed);
         assert!(settings.word_clock_termination);

@@ -430,7 +430,7 @@ value.
 | `0x3d02` | Main Dim amount | 0.1 dB, signed |
 | `0x3d03` | Dim active | 0/1 |
 | `0x3d04` | Main Recall level | 0.1 dB, signed |
-| `0x3d20` | clock source | 0 Internal, 1 S/PDIF coaxial, 2 optical, 3 word clock |
+| `0x3d20` | unknown read-only word | stays `0` when the clock source changes through the options word; meaning open |
 | `0x3d21` | rate index | 0–8 for 32k … 192k |
 | `0x3d22` | word-clock output single speed | 0/1 |
 | `0x3d40` | word-clock input termination | 0/1 |
@@ -460,7 +460,8 @@ values are not changed. Releasing Dim restores the saved fader values and
 writes `0x3d03 = 0`.
 
 Main Out and Speaker B assignment are host-side monitor bookkeeping. They
-write no `NN02` mode word. `0x3d00` carries the Speaker B pair index while
+write no assignment word. A change writes the monitor-mute bit 1 of the
+affected `NN02` mode words. `0x3d00` carries the Speaker B pair index while
 Speaker B is active; it is zero while Speaker B is off.
 
 Switching Speaker B on writes `NN02` bit 1 on the Main pair and clears it on
@@ -471,16 +472,19 @@ on the new pair. Clearing or moving the assignment clears bit 1 on the old
 pair. Bit 0 is the output mute and is preserved in every mode-word write.
 
 Mute FX is host-driven. It saves the FX-return levels (`NN03`) of both sides
-of the assigned Main Out pair, writes `0xFD76` (−65 dB) to them, and restores
-the saved levels when released. Speaker B and Phones keep their FX returns.
+of the assigned Main Out pair and the assigned Speaker B pair, writes
+`0xFD76` (−65 dB) to them, and restores the saved levels when released. Both
+monitor pairs are muted so the action stays in effect when Main and Speaker B
+switch. Phones and the other outputs keep their FX returns.
 
-External Input replaces the Main Out submix with a hardware input pair. It
-zeroes every Main input and playback crosspoint, routes the selected input
-pair's left and right sources at the configured gain, writes `0xFD76` to both
-Main FX returns, and sets `0x3f9e` bit 5. Releasing restores the Main submix
-from the channel model, restores the saved FX-return levels and clears bit 5.
-Speaker B and Phones keep their own mixes. The source is a stereo
-hardware-input pair; playback sources are not eligible.
+External Input replaces both monitor submixes, Main Out and Speaker B, with a
+hardware input pair. It zeroes every input and playback crosspoint of both
+pairs, routes the selected input pair's left and right sources at the
+configured gain, writes `0xFD76` to both FX returns of both pairs, and sets
+`0x3f9e` bit 5. Releasing restores the monitor submixes from the channel
+model, restores the saved FX-return levels and clears bit 5. Phones and the
+other outputs keep their own mixes. The source is a stereo hardware-input
+pair; playback sources are not eligible.
 
 PFL is a host-driven alternative to Solo for input channels. The selected
 Cue/PFL output pair is rewritten to contain only the active PFL inputs at
@@ -488,6 +492,15 @@ unity; every other input and playback crosspoint in that pair is zeroed and
 both FX returns are set to `0xFD76`. Releasing the last PFL input restores the
 pair from the channel model and restores its FX returns. PFL has no device
 flag; the monitor mask and other monitor flags are not changed.
+
+Open items:
+
+- `0x3d20`: the word is read-only and stays `0` through an options-word
+  clock change. It is not written by a Main Out move. A front-panel or
+  stored-setup capture is needed to name it.
+- Dim active `0x3d03` and the Recall trigger: the device holds the words,
+  but the TotalMix OSC paths in the 2026-11-28 round did not write them.
+  A TotalMix GUI capture of the Dim and Recall buttons decides the writes.
 
 ### 4.5 Setup store
 
