@@ -177,18 +177,6 @@ static unsigned int ff_max_channels(struct ff *chip, int stream,
 	       ff_desc_playback(chip->desc) : chip->desc->max_channels;
 }
 
-static unsigned int ff_max_words(struct ff *chip)
-{
-	unsigned int i, n = 0;
-
-	for (i = 0; i < chip->desc->n_modes; i++) {
-		const struct ff_mode *m = &chip->modes[i];
-
-		n = max(n, m->neps * max(m->words, ff_mode_out_words(m)));
-	}
-	return n;
-}
-
 static unsigned int ff_urb_frames(struct ff *chip, unsigned int rate)
 {
 	if (chip->iso)
@@ -200,7 +188,8 @@ static unsigned int ff_urb_frames(struct ff *chip, unsigned int rate)
 }
 
 /* The feedback read offset: three URBs, floored so a one- or two-packet
- * URB cannot place the OUT fill ahead of the IN feedback. */
+ * URB cannot place the OUT fill ahead of the IN feedback.
+ */
 static unsigned int ff_iso_fb_delay(const struct ff *chip)
 {
 	return max((chip->nurbs + 1) * chip->iso_packets,
@@ -257,7 +246,8 @@ unsigned int ff_iso_wrap(struct ff *chip)
 
 /* The OUT lead word: the feedback offset plus the reference bias.  The
  * lead_margin parameter overrides the bias for A/B; the steady word is
- * re-aligned once at engine start (ff_iso_align). */
+ * re-aligned once at engine start (ff_iso_align).
+ */
 static unsigned int ff_iso_out_lead(struct ff *chip)
 {
 	const struct ff_mode *m = chip->mode;
@@ -2566,7 +2556,7 @@ static int ff_clock_show(struct seq_file *m, void *v)
 	seq_printf(m, "ts_valid %d\n", valid);
 	seq_printf(m, "ts_ns %llu\nts_pos %llu\nts_phase %u\nts_frac_q32 %llu\n",
 		   (unsigned long long)ns, (unsigned long long)pos, phase,
-		   (unsigned long long)chip->ts_frac_q32);
+		   (unsigned long long)frac);
 	seq_printf(m, "rate_meas %u\n", rate);
 	seq_printf(m, "clock_rate %u\n", ff_programmed_clock(chip));
 	seq_printf(m, "win_ns %llu\nwin_pos %llu\n",
@@ -4151,7 +4141,7 @@ static int ff_hw_setup(struct ff *chip)
 
 static void ff_read_identity(struct ff *chip)
 {
-	u32 rev = 0;
+	__le32 rev = 0;
 
 	if (ff_vendor_recv(chip, FF_REQ_REVISION, 0, 0, &rev,
 			     sizeof(rev)) == 0)
@@ -4216,7 +4206,6 @@ static int ff_probe(struct usb_interface *intf,
 	struct snd_card *card;
 	struct ff *chip;
 	unsigned int iface_no = intf->cur_altsetting->desc.bInterfaceNumber;
-	unsigned int max_words;
 	u32 caps;
 	int dev_idx, ret;
 
@@ -4309,7 +4298,8 @@ static int ff_probe(struct usb_interface *intf,
 		if (chip->iso) {
 			/* The ISO URB is iso_packets microframes; at 48 kHz
 			 * one microframe carries six frames.  Keep the base
-			 * exact so the envelope reports the real URB. */
+			 * exact so the envelope reports the real URB.
+			 */
 			base = chip->iso_packets * DIV_ROUND_UP(48000, 8000);
 			chip->base_urb_frames = base;
 		} else {
@@ -4322,7 +4312,8 @@ static int ff_probe(struct usb_interface *intf,
 	/* The interrupt transports (UC PC and UCX IF5) keep the configured
 	 * queue depth.  The reference queues two short URBs (32 frames at 1x);
 	 * the 64-frame ISO floor would defeat that geometry.  The ISO queue
-	 * is the configured nurbs at the chosen iso_packets. */
+	 * is the configured nurbs at the chosen iso_packets.
+	 */
 	if (!chip->iso && !(chip->caps & FF_TCAP_FIXED_URB) &&
 	    chip->nurbs * chip->base_urb_frames < FF_MIN_QUEUE_FRAMES) {
 		chip->nurbs = DIV_ROUND_UP(FF_MIN_QUEUE_FRAMES,
@@ -4330,7 +4321,6 @@ static int ff_probe(struct usb_interface *intf,
 		dev_dbg(&intf->dev, "using %u URBs to keep %u frames queued\n",
 			chip->nurbs, FF_MIN_QUEUE_FRAMES);
 	}
-	max_words = ff_max_words(chip);
 	if (chip->iso) {
 		chip->urb_bytes_max = chip->iso_packets *
 				      max(chip->modes[0].in_mps,
@@ -4349,22 +4339,23 @@ static int ff_probe(struct usb_interface *intf,
 				       ff_mode_out_words(&chip->modes[i])));
 		}
 		chip->urb_bytes_max = span * FF_SAMPLE_BYTES;
-		if (chip->iso) {
-			const struct ff_mode *im;
-			unsigned int k;
+	}
+	if (chip->iso) {
+		const struct ff_mode *im;
+		unsigned int k;
 
-			for (k = 0; k < chip->desc->n_modes; k++) {
-				im = &chip->modes[k];
-				/* The feedback frames field is 5 bits and the
-				 * packet arithmetic must stay inside it. */
-				WARN_ON(im->max_frames > 31);
-				WARN_ON(im->neps != 1);
-				WARN_ON(im->max_frames * (im->words + 1) *
-					FF_SAMPLE_BYTES > im->out_mps);
-				WARN_ON(FF_ISO_IN_HEADER +
-					im->max_frames * im->words *
-					FF_SAMPLE_BYTES > im->in_mps);
-			}
+		for (k = 0; k < chip->desc->n_modes; k++) {
+			im = &chip->modes[k];
+			/* The feedback frames field is 5 bits and the packet
+			 * arithmetic must stay inside it.
+			 */
+			WARN_ON(im->max_frames > 31);
+			WARN_ON(im->neps != 1);
+			WARN_ON(im->out_mps < im->max_frames *
+				(im->words + 1) * FF_SAMPLE_BYTES);
+			WARN_ON(im->in_mps < FF_ISO_IN_HEADER +
+				im->max_frames * im->words *
+				FF_SAMPLE_BYTES);
 		}
 	}
 	chip->rate = 48000;
@@ -4399,7 +4390,7 @@ static int ff_probe(struct usb_interface *intf,
 	dev_info(&intf->dev, "firmware %u, %s samples on the wire\n",
 		 chip->firmware, chip->s32_samples ? "S32" : "float");
 	{
-		u32 st = 0;
+		__le32 st = 0;
 
 		if (ff_vendor_recv(chip, FF_REQ_STATUS, 0, 0, &st,
 				     sizeof(st)) == 0)
