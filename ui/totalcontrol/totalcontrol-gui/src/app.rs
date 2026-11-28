@@ -17,8 +17,8 @@ use totalcontrol_core::fireface::UcxDump;
 #[cfg(feature = "alsa")]
 use totalcontrol_core::{BabyfaceClassic, Fireface, FirefaceModel};
 use totalcontrol_core::{
-    ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockDevice, Reverb, RmeDevice, Scene,
-    Sensitivity, TalkbackConfig,
+    ChannelId, ChannelType, Dynamics, Echo, InputLevel, InputSyncState, MockDevice, Reverb,
+    RmeDevice, Scene, Sensitivity, SyncInput, TalkbackConfig,
 };
 
 use crate::about;
@@ -1319,6 +1319,17 @@ impl DeviceHandle {
             DeviceHandle::Fireface(d) => d.device_rate(),
             DeviceHandle::Mirror(d) => d.device_rate(),
             _ => None,
+        }
+    }
+
+    /// Lock, sync and detected rate for each digital input.  Only the UCX
+    /// reports it; other backends return no rows.
+    pub fn input_sync_status(&self) -> [Option<InputSyncState>; 3] {
+        match self {
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => d.input_sync_status(),
+            DeviceHandle::Mirror(d) => d.input_sync_status(),
+            _ => [None; 3],
         }
     }
 
@@ -3170,10 +3181,9 @@ pub struct TotalControl {
     /// The user's pro pitch intent, owned by the GUI. A scene reapply clones
     /// the device settings and can clobber `settings.pitch_percent`, so the
     /// slider, the Device-path clock and persistence use this instead. Set by
-    /// the pitch slider only. Clean slate: reset to 0 on a clock-source change,
-    /// a rate-follow-mode change, startup and workspace load — a saved pitch is
-    /// never auto-restored, and it is writable only in Device mode on the
-    /// internal clock.
+    /// the pitch slider and restored from the workspace/startup scene when
+    /// compatible. A clock-source or rate-follow-mode change resets it to 0;
+    /// it is writable only in Device mode on the internal clock.
     pub pro_pitch: f32,
     /// The audio-path worker's re-prepare completion fact (copied from the
     /// engine snapshot each poll): a generation counter and whether the last
@@ -4216,7 +4226,7 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
             .device_target
             .as_ref()
             .and_then(|target| target.serial.as_deref());
-        settings.set_active(key, state.device.canonical_model(), serial);
+        settings.upsert_unit(key, state.device.canonical_model(), serial);
         if let Some(path) = state.current_workspace_path.clone() {
             settings.set_current_workspace(key, path);
         }
@@ -4232,7 +4242,6 @@ pub fn host_settings_of(state: &TotalControl) -> crate::host_settings::HostSetti
     settings.audio_perf_max_sleep_us = state.audio_perf_us;
     settings.engine_force_rate = Some(state.engine_force_rate);
     settings.engine_rate_mode = Some(state.engine_rate_mode);
-    settings.engine_force_quantum = Some(state.engine_force_quantum);
     settings.osc_enabled = state.osc_enabled;
     settings.osc_mode = state.osc_dialect;
     settings.osc_recv_port = state.osc_recv_port;
@@ -4264,7 +4273,6 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
         } else {
             EngineRateMode::Auto
         });
-    state.engine_force_quantum = settings.engine_force_quantum.unwrap_or(0);
     if !state.osc_cli {
         state.osc_recv_port = if settings.osc_recv_port == 0 {
             7001
@@ -4285,17 +4293,31 @@ pub fn apply_host_settings(state: &mut TotalControl, settings: crate::host_setti
     state.show_controller_log = state.controller_settings.show_log;
     refresh_controller_devices(state);
     rebuild_controller_workers(state);
-    if let Some((key, unit)) = settings.active() {
+    let opened_key = current_unit_key(state);
+    // The opened unit wins over the saved active unit.  A fallback unit
+    // (the remembered unit is absent) keeps the remembered unit as the
+    // active preference, so it is chosen again when it returns.  An
+    // explicit simulation has no unit at all.
+    let key = if state.explicit_mock {
+        None
+    } else {
+        opened_key.or_else(|| settings.active_unit.clone())
+    };
+    if let Some(key) = key.as_deref() {
         state.current_unit_key = Some(key.to_string());
-        state.always_init_device = unit.always_init_device;
+        let unit = settings.units.get(key);
+        state.always_init_device = unit.is_some_and(|u| u.always_init_device);
         state.sync_direction = if state.device.needs_scene_restore() {
             SyncDirection::GuiToDevice
         } else if state.device.device_state_is_authoritative() {
             SyncDirection::DeviceToGui
         } else {
-            unit.sync_direction.unwrap_or(SyncDirection::DeviceToGui)
+            unit.and_then(|u| u.sync_direction)
+                .unwrap_or(SyncDirection::DeviceToGui)
         };
     } else {
+        state.current_unit_key = None;
+        state.always_init_device = false;
         state.sync_direction = if state.device.needs_scene_restore() {
             SyncDirection::GuiToDevice
         } else if state.device.device_state_is_authoritative() {
@@ -4328,10 +4350,8 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         .clone()
         .unwrap_or_else(|| state.device.capture_scene());
     // The host scene deliberately does not let device-reported values
-    // overwrite the saved mix.  The live rate and Dim amount are workspace
-    // settings, so take their current values at save time.  A workspace
-    // stores the graph's current rate.
-    scene.settings.sample_rate = current_graph_rate(state);
+    // overwrite the saved mix.  The live Dim amount is a workspace setting,
+    // so take its current value at save time.
     scene.settings.pitch_percent = state.pro_pitch;
     scene.settings.dim_amount_db = state.control_room.main_dim_db;
     // The Control Room assignment is the source of truth for Main and
@@ -4420,6 +4440,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         assign: state.assign,
         surround_51: state.surround_51,
         surround_71: state.surround_71,
+        quantum: state.engine_force_quantum,
         vu_release_db_s: state.vu_release_db_s,
         window_size: state.window_size,
     }
@@ -4560,6 +4581,9 @@ fn apply_workspace_state(
         ));
     }
     let mut scene = workspace.scene.clone();
+    // The sample rate is device-owned: a workspace never moves the clock.
+    // Keep the live model value for both the real backend and the mock.
+    scene.settings.sample_rate = state.device.settings().sample_rate;
     // The Dim amount is both a Control Room preference and part of the
     // active workspace state.  Older files may only carry the preference.
     scene.settings.dim_amount_db = workspace.control_room.main_dim_db;
@@ -4581,7 +4605,6 @@ fn apply_workspace_state(
         .apply_scene(&scene)
         .map_err(|e| e.to_string())?;
 
-    state.host_scene = Some(scene.clone());
     apply_workspace_gui(state, workspace);
     state.workspace_path = path;
     state.workspace_dirty = false;
@@ -4592,19 +4615,29 @@ fn apply_workspace_state(
     apply_control_room_assignments(state).map_err(|e| e.to_string())?;
     apply_workspace_external_input(state, workspace)?;
     apply_workspace_pfl(state, workspace)?;
-    apply_workspace_sample_rate(state, &scene);
+    apply_workspace_quantum(state, workspace);
     apply_workspace_monitor_state(state, &scene)?;
     if state.device.capabilities().pitch {
-        // Clean slate: a workspace load starts at nominal pitch. The saved
-        // scene pitch is not restored to the clock.
-        state.pro_pitch = 0.0;
-        state
-            .device
-            .set_pitch(0.0)
-            .map_err(|e| e.to_string())?;
+        // Pitch is host intent: the unit does not report it and loses the
+        // DDS word at power-off. Restore the workspace value when the
+        // scheduling precondition allows it; reconcile defers otherwise.
+        let max = pitch_slider_max(state);
+        state.pro_pitch = scene.settings.pitch_percent.clamp(-5.0, max);
+        state.pitch_clock_dirty = true;
+        reconcile_device_pitch(state);
     }
     state.talkback_on = false;
     sync_surround_bridge(state);
+    // The saved scene is not the device truth after apply: device-owned
+    // Audio Config values stay live. Keep the host scene in step so the next
+    // save cannot write values that were never applied. The mock has no
+    // separate device transport, so keep its applied scene including the
+    // matrix overrides.
+    state.host_scene = Some(if state.device.is_mock() {
+        scene.clone()
+    } else {
+        state.device.capture_scene()
+    });
     Ok(())
 }
 
@@ -4675,50 +4708,26 @@ fn apply_workspace_pfl(state: &mut TotalControl, workspace: &Workspace) -> Resul
     Ok(())
 }
 
-/// Apply the rate stored in a workspace.  The scene writer sets the device
-/// model/register; this also moves the PipeWire graph when the sound server
-/// owns the card, then schedules a scene reapply for the stream restart.
-fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
-    // The device rate is the external clock's under an external source; a
-    // running host owns the rate. A workspace load does not override either.
-    if state.device.settings().clock_source != "Internal" {
+/// Apply the host quantum stored in a workspace.  Zero keeps the engine
+/// default. A running stream or a conducting node owns the graph; the stored
+/// value is then applied at the next safe re-prepare instead of overriding
+/// the stream.
+fn apply_workspace_quantum(state: &mut TotalControl, workspace: &Workspace) {
+    let quantum = workspace.quantum;
+    if quantum == 0 {
         return;
     }
-    if state.card_stream.is_some() || !matches!(state.pcm_owner, audio_path::PcmOwner::Idle) {
-        return;
-    }
-    let rate = scene.settings.sample_rate;
-    if rate == 0 {
-        return;
+    state.engine_force_quantum = quantum;
+    if let Some(engine) = state.engine.as_mut() {
+        engine.force_quantum = quantum;
     }
     if state.device.is_mock() {
-        let _ = state.device.set_sample_rate(rate);
-        state.engine_force_rate = rate;
-        if let Some(engine) = state.engine.as_mut() {
-            engine.force_rate = rate;
-        }
         return;
     }
-    if !state.device.rate_follows_sound_server() {
-        return;
+    if state.device.rate_follows_sound_server() && graph_writable(state) {
+        write_quantum(state, quantum);
+        force_engine_reprepare(state);
     }
-    let current = state.card_stream.map(|stream| stream.rate);
-    if current == Some(rate) || (current.is_none() && state.engine_force_rate == rate) {
-        return;
-    }
-    state.engine_force_rate = rate;
-    write_rate(state, rate);
-    state.device.set_meter_rate(rate);
-    state.pending_device_rate = state
-        .card_stream
-        .is_some()
-        .then_some((rate, Instant::now()));
-    if let Some(engine) = state.engine.as_mut() {
-        engine.force_rate = rate;
-    }
-    state.startup_scene = Some(scene.clone());
-    state.startup_scene_full_rewrite = true;
-    state.startup_scene_due = Some(Instant::now() + Duration::from_millis(1_500));
 }
 
 /// Apply the workspace's Control Room monitor state after its assignments
@@ -5682,11 +5691,13 @@ fn schedule_startup_full_reapply(state: &mut TotalControl) {
 }
 
 fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
-    // Clean slate: pitch starts at nominal on connect. A saved scene pitch is
-    // not restored to the clock; the user sets pitch from the slider in Device
-    // mode on the internal clock.
+    // Pitch is host intent: the unit does not report it and loses the DDS
+    // word at power-off. Restore the saved value; reconcile writes it only
+    // after the IRQ scheduling precondition is confirmed.
     if state.device.capabilities().pitch {
-        state.pro_pitch = 0.0;
+        let max = pitch_slider_max(state);
+        state.pro_pitch = scene.settings.pitch_percent.clamp(-5.0, max);
+        state.pitch_clock_dirty = true;
     }
     // Correctness: establish the Control Room assignment before the scene
     // write, so the scene's monitor flags (Speaker B, Dim) restore against a
@@ -10307,6 +10318,17 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 while let Ok(snapshot) = rx.try_recv() {
                     m.update(snapshot);
                 }
+                // A rejected device write is shown, not discarded.
+                let mut errors = Vec::new();
+                while let Some(error) = m.take_error() {
+                    errors.push(error);
+                }
+                if !errors.is_empty() {
+                    state.notice = Some((
+                        format!("Device write failed: {}", errors.join("; ")),
+                        Instant::now(),
+                    ));
+                }
             }
             // The mirror now holds the confirmed values.  Merge the host
             // change that was waiting for them; keep waiting if this was a
@@ -14504,7 +14526,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
         // host-side modes stay here.
         if caps.eq_for_record && !state.device.is_uc_family() {
             flags.push((
-                "EQ for Record",
+                "EQ + D for record",
                 settings.eq_for_record,
                 Message::EqForRecordChanged,
             ));
@@ -14543,7 +14565,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
         body = body.push(
             text(
                 "Class Compliant mode: routing, preamps, gains and clock only. \
-                 Pitch, Width, MS Proc, AN 1>2, Input Link, EQ for Record and \
+                 Pitch, Width, MS Proc, AN 1>2, Input Link, EQ + D for record and \
                  the optical-out format are RME-protocol features, and the \
                  strips drop EQ, Trim, Phase \u{00d8}, Split and Loopback for the \
                  same reason.",
@@ -16096,7 +16118,7 @@ pub(crate) fn sidebar_px(state: &TotalControl) -> f32 {
 /// reference levels (`0x17`) and its options word; the UCX has no global
 /// reference register (they are per channel) and its options word carries
 /// the optical format, SPDIF professional, word-clock output rate and
-/// termination, and EQ+D for Record (`docs/spec/UCX-CONTROL-SPEC.md` §11).
+/// termination, and EQ + D for record (`docs/spec/UCX-CONTROL-SPEC.md` §11).
 fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let text_size = theme::TEXT_DIALOG * scale;
@@ -16361,41 +16383,6 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .align_y(iced::Alignment::Center)
         .width(Length::Fill),
     );
-    if state.device.capabilities().pitch {
-        // The pitch slider is always shown. It is active on the internal
-        // clock; under an external clock the unit is slaved, the slider is
-        // disabled at 0 % and the tooltip says why.
-        let value = if internal { state.pro_pitch } else { 0.0 };
-        let slider = crate::widgets::pitch_slider::pitch_slider(
-            value,
-            scale,
-            (-5.0, pitch_slider_max(state)),
-            internal,
-            Message::PitchChanged,
-            || Message::PitchChanged(0.0),
-        );
-        let slider = strip::hint(
-            slider,
-            if internal {
-                "Pitch"
-            } else {
-                "External clock: pitch is held at 0 %."
-            },
-            scale,
-        );
-        body = body.push(
-            row![
-                caption("Pitch"),
-                slider,
-                text(format!("{value:+.1} %"))
-                    .color(theme::text_sec())
-                    .size(text_size)
-                    .width(Length::Fixed(58.0 * scale)),
-            ]
-            .spacing(theme::SPACE_MD * scale)
-            .align_y(iced::Alignment::Center),
-        );
-    }
     if uc {
         // UC-only: the Gain tab's reference levels are one word (`0x17`).
         // The UCX sets them per channel, in the channel panels.
@@ -16424,7 +16411,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     }
     if uc || ucx {
         // Both options words carry the output format and word-clock input
-        // termination (UC bit 0, UCX 0x008).  The UCX adds EQ+D for Record
+        // termination (UC bit 0, UCX 0x008).  The UCX adds EQ + D for record
         // (H67/H68/H75, H71/H101).
         // Single-speed word clock is a clock-sync control: a Device-path
         // option, kept as a same-height filler in convenience (GUI spec §4).
@@ -16456,7 +16443,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             ));
         if ucx {
             body = body.push(check_row(
-                "EQ for Record",
+                "EQ + D for record",
                 settings.eq_for_record,
                 Message::EqForRecordChanged(!settings.eq_for_record),
             ));
@@ -16469,11 +16456,20 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         // Word-clock input termination is a clock-sync control: a Device-path
         // option, kept as a same-height filler in convenience (GUI spec §4).
         if device_controls {
-            body = body.push(check_row(
-                "Word clock in",
-                settings.word_clock_termination,
-                Message::WordClockTerminationChanged(!settings.word_clock_termination),
-            ));
+            body = body.push(
+                row![
+                    caption("Word clock in"),
+                    checkbox(
+                        settings.word_clock_termination,
+                        Message::WordClockTerminationChanged(!settings.word_clock_termination),
+                    ),
+                    text("75 Ohm termination")
+                        .color(theme::text_sec())
+                        .size(text_size),
+                ]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
+            );
         } else {
             body = body.push(
                 iced::widget::Space::new()
@@ -16481,6 +16477,42 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                     .height(Length::Fixed(SETTINGS_CONTROL_H * scale)),
             );
         }
+    }
+    // The pitch slider is the last control in the device section, directly
+    // above the firmware and serial readouts.  It is active on the internal
+    // clock; under an external clock the unit is slaved, the slider is
+    // disabled at 0 % and the tooltip says why.
+    if state.device.capabilities().pitch {
+        let value = if internal { state.pro_pitch } else { 0.0 };
+        let slider = crate::widgets::pitch_slider::pitch_slider(
+            value,
+            scale,
+            (-5.0, pitch_slider_max(state)),
+            internal,
+            Message::PitchChanged,
+            || Message::PitchChanged(0.0),
+        );
+        let slider = strip::hint(
+            slider,
+            if internal {
+                "Pitch"
+            } else {
+                "External clock: pitch is held at 0 %."
+            },
+            scale,
+        );
+        body = body.push(
+            row![
+                caption("Pitch"),
+                slider,
+                text(format!("{value:+.1} %"))
+                    .color(theme::text_sec())
+                    .size(text_size)
+                    .width(Length::Fixed(58.0 * scale)),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
     }
     if state.device.firmware().is_some() {
         body = body.push(
@@ -16501,6 +16533,37 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
+    }
+    // Digital-input lock and detected rate.  Only UCX reports the status
+    // word, and only inputs that carry a signal get a row, so an unused
+    // unit does not grow a permanent diagnostic block.
+    let sync = state.device.input_sync_status();
+    let present: Vec<_> = sync.iter().flatten().collect();
+    if !present.is_empty() {
+        body = body.push(section("INPUT STATUS"));
+        for sync in present {
+            let label = match sync.input {
+                SyncInput::SpdifCoax => "S/PDIF coax",
+                SyncInput::Optical => "Optical",
+                SyncInput::WordClock => "Word clock",
+            };
+            let state_text = if sync.lock { "Lock" } else { "No lock" };
+            let rate = if sync.lock {
+                sync.rate
+                    .map(rate_label)
+                    .unwrap_or_else(|| "\u{2014}".into())
+            } else {
+                "\u{2014}".into()
+            };
+            body = body.push(
+                row![
+                    caption(label),
+                    readout(format!("{state_text} \u{00b7} {rate}"), text_size),
+                ]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
+            );
+        }
     }
     body.spacing(theme::SPACE_MD * scale)
         .width(Length::Fill)
@@ -17180,7 +17243,7 @@ fn latency_out_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Mess
     // The measured splits use the vendor DA delay; the horizon fallback keeps
     // its converter half.
     let converter = match personality {
-        Some(LatencyPersonality::UcxIso | LatencyPersonality::UcxIf5) => dac_frames(rate),
+        Some(LatencyPersonality::UcxIf0 | LatencyPersonality::UcxIf5) => dac_frames(rate),
         Some(LatencyPersonality::UcPc | LatencyPersonality::UcAp) => uc_dac_frames(),
         _ => converter_frames(rate),
     };
@@ -17315,7 +17378,7 @@ impl LatencyIn {
 /// separately.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LatencyPersonality {
-    UcxIso,
+    UcxIf0,
     UcxIf5,
     UcPc,
     UcAp,
@@ -17331,7 +17394,7 @@ fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
     } else if device.is_ucx_model() {
         match device.personality_label() {
             Some("IF5") => Some(LatencyPersonality::UcxIf5),
-            _ => Some(LatencyPersonality::UcxIso),
+            _ => Some(LatencyPersonality::UcxIf0),
         }
     } else {
         None
@@ -17339,22 +17402,22 @@ fn latency_personality(device: &DeviceHandle) -> Option<LatencyPersonality> {
 }
 
 /// Measured ring-to-ring round trip D = C - P after the capture
-/// start-alignment correction, per personality and rate. The UCX ISO and UC
-/// entries are the probe's raw round trip; the UCX ISO device split is in
-/// `latency_ucx_iso_ab`. UCX IF5 uses `latency_ucx_if5_ab`; its short-URB
+/// start-alignment correction, per personality and rate. The UCX IF0 and UC
+/// entries are the probe's raw round trip; the UCX IF0 device split is in
+/// `latency_ucx_if0_ab`. UCX IF5 uses `latency_ucx_if5_ab`; its short-URB
 /// queue is counted live.
 fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     use LatencyPersonality::*;
     match (personality, rate) {
-        (UcxIso, 32_000) => Some(98),
-        (UcxIso, 44_100) => Some(117),
-        (UcxIso, 48_000) => Some(124),
-        (UcxIso, 64_000) => Some(160),
-        (UcxIso, 88_200) => Some(199),
-        (UcxIso, 96_000) => Some(212),
-        (UcxIso, 128_000) => Some(287),
-        (UcxIso, 176_400) => Some(347),
-        (UcxIso, 192_000) => Some(391),
+        (UcxIf0, 32_000) => Some(98),
+        (UcxIf0, 44_100) => Some(117),
+        (UcxIf0, 48_000) => Some(124),
+        (UcxIf0, 64_000) => Some(160),
+        (UcxIf0, 88_200) => Some(199),
+        (UcxIf0, 96_000) => Some(212),
+        (UcxIf0, 128_000) => Some(287),
+        (UcxIf0, 176_400) => Some(347),
+        (UcxIf0, 192_000) => Some(391),
         (UcPc, 32_000 | 44_100 | 48_000) => Some(151),
         (UcPc, 64_000 | 88_200 | 96_000) => Some(223),
         (UcPc, 128_000 | 176_400 | 192_000) => Some(361),
@@ -17370,17 +17433,17 @@ fn latency_d(personality: LatencyPersonality, rate: u32) -> Option<u32> {
 }
 
 /// A: the playback horizon (12.5 microframes of bus delivery) plus the
-/// output converter half. This remains the UC split; the UCX ISO split uses
+/// output converter half. This remains the UC split; the UCX IF0 split uses
 /// the measured device span and the vendor converter delays.
 fn latency_a(rate: u32) -> u32 {
     let bus = ((25u64 * rate as u64) + 8_000) / 16_000;
     bus as u32 + converter_frames(rate)
 }
 
-/// UCX ISO device span after the live two-URB queue, in frames. Measured by
+/// UCX IF0 device span after the live two-URB queue, in frames. Measured by
 /// the output-5 to input-5 analog loopback at the nine ISO rates with the
 /// default four-packet URB.
-fn latency_ucx_iso_d(rate: u32) -> Option<u32> {
+fn latency_ucx_if0_d(rate: u32) -> Option<u32> {
     match rate {
         32_000 => Some(66),
         44_100 => Some(73),
@@ -17406,9 +17469,9 @@ fn latency_split(d_span: u32, rate: u32) -> (u32, u32) {
     (a, d_span - a)
 }
 
-/// The UCX ISO output and input halves.
-fn latency_ucx_iso_ab(rate: u32) -> Option<(u32, u32)> {
-    latency_ucx_iso_d(rate).map(|d| latency_split(d, rate))
+/// The UCX IF0 output and input halves.
+fn latency_ucx_if0_ab(rate: u32) -> Option<(u32, u32)> {
+    latency_ucx_if0_d(rate).map(|d| latency_split(d, rate))
 }
 
 /// UCX IF5 unit span: the unit's converters and FIFOs at the rate family.
@@ -17460,11 +17523,11 @@ fn latency_uc_ab(personality: LatencyPersonality, rate: u32) -> Option<(u32, u32
 }
 
 /// The device output term A for a personality: the measured converter-aware
-/// split on UCX ISO, UCX IF5 and UC; the horizon split is the fallback for a
+/// split on UCX IF0, UCX IF5 and UC; the horizon split is the fallback for a
 /// rate without a measured span.
 fn latency_device_a(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     match personality {
-        LatencyPersonality::UcxIso => latency_ucx_iso_ab(rate).map(|(a, _)| a),
+        LatencyPersonality::UcxIf0 => latency_ucx_if0_ab(rate).map(|(a, _)| a),
         LatencyPersonality::UcxIf5 => latency_ucx_if5_ab(rate).map(|(a, _)| a),
         LatencyPersonality::UcPc | LatencyPersonality::UcAp => {
             latency_uc_ab(personality, rate).map(|(a, _)| a)
@@ -17476,7 +17539,7 @@ fn latency_device_a(personality: LatencyPersonality, rate: u32) -> Option<u32> {
 /// aware split; an unmeasured rate returns `None`.
 fn latency_b(personality: LatencyPersonality, rate: u32) -> Option<u32> {
     match personality {
-        LatencyPersonality::UcxIso => latency_ucx_iso_ab(rate).map(|(_, b)| b),
+        LatencyPersonality::UcxIf0 => latency_ucx_if0_ab(rate).map(|(_, b)| b),
         LatencyPersonality::UcxIf5 => latency_ucx_if5_ab(rate).map(|(_, b)| b),
         LatencyPersonality::UcPc | LatencyPersonality::UcAp => {
             latency_uc_ab(personality, rate).map(|(_, b)| b)
@@ -17541,7 +17604,7 @@ fn converter_frames(rate: u32) -> u32 {
 }
 
 /// The vendor DA converter delay: 7 samples at every rate (RME UCX manual
-/// §39.2). The measured UCX ISO/IF5 split uses this value.
+/// §39.2). The measured UCX IF0/IF5 split uses this value.
 fn dac_frames(_rate: u32) -> u32 {
     7
 }
@@ -23318,7 +23381,7 @@ mod tests {
         DeviceKind, DeviceTarget, EditField, EngineRateMode, Message, MeterAnim, OptionsMenu,
         LatencyIn, LatencyOut, LatencyPersonality, latency_a, latency_b, latency_d,
         latency_device_a, latency_if5_unit, latency_uc_ab, latency_ucx_if5_ab,
-        latency_ucx_iso_ab, dac_frames, uc_dac_frames,
+        latency_ucx_if0_ab, dac_frames, uc_dac_frames,
         PwClock, ResetMix, RoutingMode, RowMode, StartupMismatch,
         TotalControl, View, WorkspaceMenu, CONTROL_ROOM_W, CUE_DEST, FX_ECHO_CONTROLS_H,
         FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H, FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H,
@@ -23941,7 +24004,7 @@ mod tests {
         assert_eq!(converter_frames(48_000), 13);
         assert_eq!(converter_frames(96_000), 13);
         assert_eq!(converter_frames(192_000), 12);
-        // The measured UCX ISO/IF5 split uses the vendor DA delay.
+        // The measured UCX IF0/IF5 split uses the vendor DA delay.
         assert_eq!(dac_frames(44_100), 7);
         assert_eq!(dac_frames(192_000), 7);
     }
@@ -23956,23 +24019,23 @@ mod tests {
         assert_eq!(latency_a(96_000), 163);
         assert_eq!(latency_a(176_400), 288);
         assert_eq!(latency_a(192_000), 312);
-        // UCX ISO uses the measured device span and the vendor converters:
+        // UCX IF0 uses the measured device span and the vendor converters:
         // DA 7, AD 14 at 1x/2x, 11 at 4x; the digital remainder is symmetric.
-        assert_eq!(latency_ucx_iso_ab(44_100), Some((33, 40)));
-        assert_eq!(latency_ucx_iso_ab(48_000), Some((34, 42)));
-        assert_eq!(latency_ucx_iso_ab(64_000), Some((44, 52)));
-        assert_eq!(latency_ucx_iso_ab(88_200), Some((52, 59)));
-        assert_eq!(latency_ucx_iso_ab(96_000), Some((54, 62)));
-        assert_eq!(latency_ucx_iso_ab(128_000), Some((77, 82)));
-        assert_eq!(latency_ucx_iso_ab(176_400), Some((83, 88)));
-        assert_eq!(latency_ucx_iso_ab(192_000), Some((97, 102)));
-        assert_eq!(latency_d(LatencyPersonality::UcxIso, 48_000), Some(124));
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 48_000), Some(42));
-        assert_eq!(latency_device_a(LatencyPersonality::UcxIso, 48_000), Some(34));
+        assert_eq!(latency_ucx_if0_ab(44_100), Some((33, 40)));
+        assert_eq!(latency_ucx_if0_ab(48_000), Some((34, 42)));
+        assert_eq!(latency_ucx_if0_ab(64_000), Some((44, 52)));
+        assert_eq!(latency_ucx_if0_ab(88_200), Some((52, 59)));
+        assert_eq!(latency_ucx_if0_ab(96_000), Some((54, 62)));
+        assert_eq!(latency_ucx_if0_ab(128_000), Some((77, 82)));
+        assert_eq!(latency_ucx_if0_ab(176_400), Some((83, 88)));
+        assert_eq!(latency_ucx_if0_ab(192_000), Some((97, 102)));
+        assert_eq!(latency_d(LatencyPersonality::UcxIf0, 48_000), Some(124));
+        assert_eq!(latency_b(LatencyPersonality::UcxIf0, 48_000), Some(42));
+        assert_eq!(latency_device_a(LatencyPersonality::UcxIf0, 48_000), Some(34));
         assert_eq!(latency_b(LatencyPersonality::UcPc, 48_000), Some(67));
         assert_eq!(latency_b(LatencyPersonality::UcAp, 48_000), Some(68));
-        assert_eq!(latency_d(LatencyPersonality::UcxIso, 64_000), Some(160));
-        assert_eq!(latency_b(LatencyPersonality::UcxIso, 64_000), Some(52));
+        assert_eq!(latency_d(LatencyPersonality::UcxIf0, 64_000), Some(160));
+        assert_eq!(latency_b(LatencyPersonality::UcxIf0, 64_000), Some(52));
         // IF5 uses the same converter split on its unit span.
         assert_eq!(latency_if5_unit(48_000), Some(74));
         assert_eq!(latency_if5_unit(64_000), Some(112));
@@ -26951,22 +27014,18 @@ mod tests {
     }
 
     #[test]
-    fn a_simulated_session_never_changes_the_remembered_engine_choice() {
+    fn a_simulated_session_does_not_persist_a_host_quantum() {
         // A choice made with `--mock` once landed in the preferences and
-        // was forced on the real PipeWire at the next real launch.
+        // was forced on the real PipeWire at the next real launch.  The
+        // quantum is workspace state now, not a host setting.
         let mut state = new(true, None, None);
-        apply_host_settings(
-            &mut state,
-            crate::host_settings::HostSettings {
-                engine_force_quantum: Some(0),
-                ..Default::default()
-            },
-        );
+        apply_host_settings(&mut state, crate::host_settings::HostSettings::default());
         super::restore_engine(&mut state);
         let _ = update(&mut state, Message::EngineQuantum(128));
         assert_eq!(state.engine.unwrap().effective_quantum(), 128, "simulated");
-        assert_eq!(state.engine_force_quantum, 0, "remembered choice untouched");
-        assert_eq!(host_settings_of(&state).engine_force_quantum, Some(0));
+        assert_eq!(state.engine_force_quantum, 0, "runtime choice untouched");
+        let json = serde_json::to_string(&host_settings_of(&state)).unwrap();
+        assert!(!json.contains("engine_force_quantum"));
     }
 
     #[test]
@@ -28167,7 +28226,6 @@ mod tests {
         state.talkback_on = true;
 
         let workspace = capture_workspace(&state);
-        assert_eq!(workspace.scene.settings.sample_rate, 44_100);
         assert_eq!(workspace.scene.settings.pitch_percent, 1.5);
         assert!(workspace.scene.settings.dim);
         assert_eq!(workspace.scene.settings.dim_amount_db, -12.0);
@@ -28189,7 +28247,6 @@ mod tests {
             force_quantum: 0,
         });
         let workspace = capture_workspace(&state);
-        assert_eq!(workspace.scene.settings.sample_rate, 48_000);
         assert_eq!(state.engine_force_rate, 96_000, "the fixed choice is kept");
         assert_eq!(
             host_settings_of(&state).engine_rate_mode,
@@ -28863,6 +28920,7 @@ mod tests {
         source.device.settings_mut().sample_rate = 44_100;
         source.device.settings_mut().pitch_percent = 1.5;
         source.pro_pitch = 1.5;
+        source.engine_force_quantum = 128;
         let workspace = capture_workspace(&source);
 
         let mut target = new(true, None, None);
@@ -28877,11 +28935,13 @@ mod tests {
         assert_eq!(target.snapshot_names[2], "Stereo");
         assert!(target.snapshots[2].is_some());
         assert!(!target.talkback_on);
-        assert_eq!(target.device.settings().sample_rate, 44_100);
-        // Clean slate: a workspace load resets pitch to nominal; the saved
-        // scene pitch (1.5) is not restored to the clock.
-        assert_eq!(target.device.settings().pitch_percent, 0.0);
-        assert_eq!(target.pro_pitch, 0.0);
+        // The device rate is read from the device, not restored from the
+        // workspace; the target keeps its current value.
+        assert_eq!(target.device.settings().sample_rate, 48_000);
+        // Pitch is host intent and is restored from the workspace.
+        assert_eq!(target.device.settings().pitch_percent, 1.5);
+        assert_eq!(target.pro_pitch, 1.5);
+        assert_eq!(target.engine_force_quantum, 128);
         assert_eq!(target.workspace_path, Some(PathBuf::from("/tmp/test.tcws")));
         assert!(!target.workspace_dirty);
     }

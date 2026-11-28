@@ -14,7 +14,7 @@ use crate::profile::{DeviceProfile, ProfileId};
 pub const ALL: [&DeviceProfile; 5] = [
     &uc::PC,
     &uc::AP,
-    &ucx::ISO,
+    &ucx::IF0,
     &ucx::IF5,
     &babyface_classic::PROFILE,
 ];
@@ -23,7 +23,7 @@ pub fn profile(id: ProfileId) -> &'static DeviceProfile {
     match id {
         ProfileId::UcPc => &uc::PC,
         ProfileId::UcAp => &uc::AP,
-        ProfileId::UcxIso => &ucx::ISO,
+        ProfileId::UcxIf0 => &ucx::IF0,
         ProfileId::UcxIf5 => &ucx::IF5,
         ProfileId::BabyfaceClassic => &babyface_classic::PROFILE,
     }
@@ -63,7 +63,7 @@ mod tests {
     #[test]
     fn uc_and_ucx_share_topology_but_not_dsp() {
         let uc = profile(ProfileId::UcPc);
-        let ucx = profile(ProfileId::UcxIso);
+        let ucx = profile(ProfileId::UcxIf0);
         assert_eq!(uc.input_count(), ucx.input_count());
         assert_eq!(uc.output_pair_count(), ucx.output_pair_count());
         assert!(!uc.dsp);
@@ -76,7 +76,7 @@ mod tests {
     fn output_volume_is_a_device_readback() {
         for id in [
             ProfileId::UcPc,
-            ProfileId::UcxIso,
+            ProfileId::UcxIf0,
             ProfileId::BabyfaceClassic,
         ] {
             let p = profile(id);

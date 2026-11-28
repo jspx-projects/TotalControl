@@ -60,17 +60,21 @@ pub(crate) fn output_balance_to_volumes(volume: f32, balance: i8) -> (f32, f32) 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DeviceSettings {
     /// Current clock source (e.g. "Internal", "AutoSync").
+    /// Device-owned: read from the unit's state mirrors and not serialized in
+    /// a workspace or scene.
+    #[serde(default, skip_serializing)]
     pub clock_source: String,
     /// Every valid value for `clock_source`, as reported by the
     /// hardware's own enum control (not hardcoded — a different model
     /// could expose a different set). Empty until a real device has
     /// been attached; `#[serde(default)]` for old Scene JSON.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub clock_sources: Vec<String>,
     /// SPDIF optical mode (true = optical, false = coaxial). No
     /// matching ALSA control was found on the Babyface Pro FS (its
     /// SPDIF I/O appears to be optical-only, with no toggle) — this
     /// field is currently unmapped and always `false`.
+    #[serde(default, skip_serializing)]
     pub spdif_optical: bool,
     /// SPDIF emphasis (`IEC958 Emphasis`).
     ///
@@ -83,9 +87,11 @@ pub struct DeviceSettings {
     /// note next to `set_optical_out_format`). Kept as fields so scenes
     /// written before that date keep round-tripping unchanged; the
     /// card's real optical/SPDIF state is `optical_out_spdif`.
+    #[serde(default, skip_serializing)]
     pub spdif_emphasis: bool,
     /// SPDIF professional/consumer format flag (`IEC958 Pro Mask`).
     /// Vestigial — see [`DeviceSettings::spdif_emphasis`].
+    #[serde(default, skip_serializing)]
     pub spdif_professional: bool,
     /// Whether the SPDIF output is actively transmitting (`IEC958
     /// Switch`, shown as `"IEC958"` in the simple-mixer view — the
@@ -93,7 +99,7 @@ pub struct DeviceSettings {
     /// Vestigial — see [`DeviceSettings::spdif_emphasis`].
     /// `#[serde(default)]` so scenes saved before this field existed
     /// still deserialize (same pattern as `Scene::model`).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub spdif_enabled: bool,
     /// Pitch/varispeed in percent (-5..+5). 0 = nominal.
     #[serde(default)]
@@ -104,12 +110,13 @@ pub struct DeviceSettings {
     /// AN 1>2 engaged (0x17 wIdx=0x1000 flag).
     #[serde(default)]
     pub an12: bool,
-    /// EQ for Record: whether the hardware DSP EQ is applied to the
-    /// recorded signal too, not just the monitor mix. Settings
-    /// keepalive bit 6 (`PROTOCOL.md`'s `cap_eqr.pcap`, hardware-
-    /// verified) — an RME-specific setting, distinct from the generic
-    /// `spdif_*` fields above.
-    #[serde(default)]
+    /// EQ + D for record: whether the hardware DSP EQ is applied to the
+    /// recorded signal too, not just the monitor mix. Options-word bit 8
+    /// (`PROTOCOL.md`'s `cap_eqr.pcap`, hardware-verified) — an
+    /// RME-specific setting, distinct from the generic `spdif_*` fields
+    /// above. The UCX options word read form reports the bit, so the
+    /// field is device-owned and is not serialized.
+    #[serde(default, skip_serializing)]
     pub eq_for_record: bool,
     /// Optical Out format: `true` = SPDIF (2-channel), `false` = ADAT
     /// (8-channel, the device default). Settings keepalive bit 10
@@ -117,8 +124,8 @@ pub struct DeviceSettings {
     /// RME-specific setting for the single physical optical port,
     /// distinct from the generic `spdif_*` fields above (which target
     /// the standard ALSA S/PDIF control surface this device doesn't
-    /// expose).
-    #[serde(default)]
+    /// expose). Device-owned; read from the state mirror.
+    #[serde(default, skip_serializing)]
     pub optical_out_spdif: bool,
     /// Control-room Dim engaged.  The attenuation is applied to the
     /// assigned Main Out and Speaker B pairs; the Phones outputs are not
@@ -173,26 +180,27 @@ pub struct DeviceSettings {
     #[serde(default)]
     pub width: f32,
     /// Active sample rate in Hz (proprietary USB mode; the ALSA backend
-    /// leaves it to the kernel driver). `#[serde(default = …)]` so old
-    /// Scene JSON (and scenes from the ALSA backend) still deserialize.
-    #[serde(default = "default_sample_rate")]
+    /// leaves it to the kernel driver). Device-owned: read from the unit and
+    /// never serialized in a workspace. `#[serde(default)]` keeps old Scene
+    /// JSON loadable.
+    #[serde(default = "default_sample_rate", skip_serializing)]
     pub sample_rate: u32,
     /// UC Gain-tab reference codes.  These are device-owned: read from
     /// `0x17` and written only when the user changes them.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub line_in_ref: u16,
     /// UCX Line In reference for inputs 5-8 (one shared group).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub line_in_ref_58: u16,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub line_out_ref: u16,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub phones_ref: u16,
     /// Word-clock output single-speed option (UCX options bit 6).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub word_clock_single_speed: bool,
     /// Word-clock input termination (UCX options bit 3).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub word_clock_termination: bool,
     /// Input-strip stereo link mirror, kept in sync by
     /// [`RmeDevice::set_input_link`] so it's readable (the trait itself
@@ -247,6 +255,31 @@ fn ensure_balance_len(balance: &mut Vec<i8>, block: usize) {
     if balance.len() <= block {
         balance.resize(block + 1, 0);
     }
+}
+
+/// One digital input whose sync state the unit reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncInput {
+    /// S/PDIF coaxial input.
+    SpdifCoax,
+    /// Optical ADAT/S/PDIF input.
+    Optical,
+    /// Word-clock input.
+    WordClock,
+}
+
+/// Lock, sync and detected rate for one digital input, from the `0x11`
+/// state word.  A `None` rate means no rate is reported (the input carries
+/// no signal).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputSyncState {
+    pub input: SyncInput,
+    /// The receiver has locked to the input.
+    pub lock: bool,
+    /// The input is in sync with the active clock.
+    pub sync: bool,
+    /// The rate detected at the input, when reported.
+    pub rate: Option<u32>,
 }
 
 /// A generic RME audio interface.
@@ -977,11 +1010,11 @@ pub trait RmeDevice {
         ))
     }
 
-    /// EQ for Record toggle (settings keepalive bit 6).
+    /// EQ + D for record toggle (settings keepalive bit 6).
     fn set_eq_for_record(&mut self, on: bool) -> Result<(), Error> {
         let _ = on;
         Err(Error::InvalidChannel(
-            "EQ for Record is not supported on this backend".into(),
+            "EQ + D for record is not supported on this backend".into(),
         ))
     }
 

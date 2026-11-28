@@ -97,7 +97,7 @@ written to the device on connect and on each change.
 
 ### 1.2 Interface map
 
-| Interface | Purpose | PC endpoints | AP endpoints |
+| Interface | Purpose | PC endpoints | IF0 endpoints |
 |---|---|---|---|
 | 0 | audio | `0x01` OUT, `0x82` IN, `0x03` OUT, `0x84` IN | `0x01` OUT, `0x82` IN |
 | 1 | meter | `0x85` IN bulk | `0x85` IN bulk |
@@ -137,7 +137,7 @@ The interface map is:
 | 4 | 0 | page stream | `0x8a` IN bulk, 512 |
 | 5 | 0 | status | `0x8b` IN interrupt, 4 |
 
-### 1.4 AP interface map
+### 1.4 IF0 interface map
 
 The AP personality uses isochronous interface 0 and the same meter
 interface.  It uses playback endpoint 0 and capture endpoint 0 at every rate
@@ -151,8 +151,8 @@ class.  These rows are the mapping the driver uses.
 | 1 | 0 | meter | `0x85` IN bulk |
 | 4 | 0 | status | `0x8b` IN bulk |
 
-The AP interface table has no MIDI row: the AP MIDI interface is not
-captured, and the driver exposes no MIDI on AP.  RME documents the AP MIDI
+The IF0 interface table has no MIDI row: the IF0 MIDI interface is not
+captured, and the driver exposes no MIDI on AP.  RME documents the IF0 MIDI
 ports as class compliant; the descriptor capture is an open item in the
 MIDI spec.
 
@@ -853,9 +853,9 @@ One URB carries 48 sample frames at 1x, 96 at 2x and 192 at 4x.  That is six
 maximum-size packets.  Two URBs are in flight per endpoint.  The IN URBs are
 submitted at stream start.  The OUT URBs are filled from the PCM ring and
 resubmitted at completion.  An interrupt packet starts with the first sample
-word.  The four-byte header and the lead word belong to the AP packets.
+word.  The four-byte header and the lead word belong to the IF0 packets.
 
-### 11.6 AP audio packets
+### 11.6 IF0 audio packets
 
 | Alt | Rate class | Sample words per frame | Maximum frames per packet | IN maximum packet | OUT maximum packet |
 |---|---|---|---|---|---|
@@ -948,7 +948,7 @@ init sequence does not set it.
 
 ### 11.10 Open transport items
 
-1. The AP descriptor.  The AP interface and packet rows are the implemented
+1. The IF0 descriptor.  The IF0 interface and packet rows are the implemented
    mapping; the descriptor has not been captured.
 2. Interfaces 3 and 4 on the PC personality.  Interface 3 is the firmware
    programming channel and interface 4 carries the page stream.  The field
@@ -956,8 +956,8 @@ init sequence does not set it.
 3. MIDI port 2 on the wired outputs.  Packets carry port 1 and port 2, and
    the front panel shows activity for both.  The physical output that port 2
    drives is not identified; a loopback on that output decides it.
-4. MIDI on the AP personality.  The AP interface table has no MIDI row; the
-   AP descriptor has not been captured.
+4. MIDI on the AP personality.  The IF0 interface table has no MIDI row; the
+   IF0 descriptor has not been captured.
 5. The read form of `0x10` outside the options bits and the rate family.
    §9 decodes the bits under `0x05cf` and bits 4–5; the other bits are not
    decoded.
@@ -965,7 +965,7 @@ init sequence does not set it.
    (`uc_pc_frames`, default 16, two 8-frame blocks); the device contract is
    the packet size and the rate class. The transport carries 16/32/64 frames
    at 1x/2x/4x and two URBs are queued.
-7. AP header rate-band scaling.  The position width and modulus at 2x/4x
+7. IF0 header rate-band scaling.  The position width and modulus at 2x/4x
    (16384/32768).  The 1x layout (13-bit position / 8192 wrap, 14-bit phase
    counting 480 MHz ticks) is capture-verified; a 2x/4x ISO capture confirms
    the wider bands.  Isolated add/drop events away from the wrap are

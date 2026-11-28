@@ -19,7 +19,7 @@ use crate::device::{DeviceSettings, RmeDevice};
 use crate::error::Error;
 use crate::profiles::babyface_classic::PROFILE as CLASSIC_PROFILE;
 use crate::profiles::uc::PC as UC_PROFILE;
-use crate::profiles::ucx::ISO as UCX_PROFILE;
+use crate::profiles::ucx::IF0 as UCX_PROFILE;
 use crate::scene::Scene;
 
 // ── Main struct ─────────────────────────────────────────────────

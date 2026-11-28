@@ -425,16 +425,17 @@ value.
 | `0x3c25` | Echo volume | 0.1 dB, signed |
 | `0x3c26` | Echo width | 0..100 |
 | `NN02` | output mode word | bit 0 mute; bit 1 monitor-muted (the inactive Main/Speaker B pair) |
-| `0x3d00` | Speaker B active | 0/1 |
-| `0x3d01` | Mute Enable flag | 0/1; writable, audio effect not measured |
+| `0x3d00` | Speaker B pair index | DSP output pair 0–8 while Speaker B is active; 0 while off |
+| `0x3d01` | Output mute enable | 0 = the unit ignores every output mute; 1 = output mutes act |
 | `0x3d02` | Main Dim amount | 0.1 dB, signed |
 | `0x3d03` | Dim active | 0/1 |
 | `0x3d04` | Main Recall level | 0.1 dB, signed |
-| `0x3d20` | control-room Main pair | read-only; 0 = AN1/2 in the tested state |
-| `0x3d21` | control-room Speaker B pair | read-only; 2 = AN3/4 in the normal state |
-| `0x3d22` | unknown | 0 in the tested states |
-| `0x3d40` | host-session/runtime flag | read-only; 0 in a Linux-only session, 1 after a host-application session |
-| `0x3d41`, `0x3d42` | unknown | read-only, 0 in the tested states |
+| `0x3d20` | clock-source mirror, not used on the USB path | reads `0`; a TotalMix clock change writes only the options word |
+| `0x3d21` | rate index | 0–8 for 32k … 192k |
+| `0x3d22` | word-clock output single speed | 0/1 |
+| `0x3d40` | word-clock input termination | 0/1 |
+| `0x3d41` | optical output format | 0 S/PDIF, 1 ADAT |
+| `0x3d42` | S/PDIF professional | 0 consumer, 1 professional |
 | `0x3d43` | unknown boolean | writable 0/1 |
 | `0x3d44` | unknown index/sentinel | writable; −1, 0 and 2 accepted |
 | `0x3d45`, `0x3d46` | unknown | writable words |
@@ -449,6 +450,10 @@ backend.
 
 Echo BPM is a host-side field: changing it rewrites `0x3c22`.
 
+The global Mute master writes `0x3d01`: `1` lets every output mute act, `0`
+makes the unit ignore all output mutes. The reference names the word
+`Output Mute Enable Switch`.
+
 Mono Main Out writes `0x3f9e` bit 1 and `0x3f98 = 0x83ff`; switching it off
 writes `0x3f9e` bit 1 clear and `0x3f98 = 0xffff`. It mixes the assigned
 Main Out and Speaker B pairs; the Phones pairs keep their stereo signal.
@@ -458,29 +463,36 @@ Speaker B follows only while Link to Main is enabled. The Phones output fader
 values are not changed. Releasing Dim restores the saved fader values and
 writes `0x3d03 = 0`.
 
+Recall writes the Main output fader values (`0x1200`/`0x1300`) to the Main
+Recall level in `0x3d04`; it has no trigger register. Speaker B follows only
+while Link to Main is enabled.
+
 Main Out and Speaker B assignment are host-side monitor bookkeeping. They
-write no `NN02` mode word. `0x3d20` reports the Main pair and `0x3d21` the
-Speaker B pair; neither assignment changes the physical output's normal
-submix.
+write no assignment word. A change writes the monitor-mute bit 1 of the
+affected `NN02` mode words. `0x3d00` carries the Speaker B pair index while
+Speaker B is active; it is zero while Speaker B is off.
 
 Switching Speaker B on writes `NN02` bit 1 on the Main pair and clears it on
-the Speaker B pair, then writes `0x3d00 = 1`. Switching it off clears bit 1 on
-the Main pair and sets it on the Speaker B pair, then writes `0x3d00 = 0`.
-Assigning Speaker B while inactive sets bit 1 on the new pair. Clearing or
-moving the assignment clears bit 1 on the old pair. Bit 0 is the output mute
-and is preserved in every mode-word write.
+the Speaker B pair, then writes `0x3d00` with the Speaker B pair index.
+Switching it off clears bit 1 on the Main pair and sets it on the Speaker B
+pair, then writes `0x3d00 = 0`. Assigning Speaker B while inactive sets bit 1
+on the new pair. Clearing or moving the assignment clears bit 1 on the old
+pair. Bit 0 is the output mute and is preserved in every mode-word write.
 
 Mute FX is host-driven. It saves the FX-return levels (`NN03`) of both sides
-of the assigned Main Out pair, writes `0xFD76` (−65 dB) to them, and restores
-the saved levels when released. Speaker B and Phones keep their FX returns.
+of the assigned Main Out pair and the assigned Speaker B pair, writes
+`0xFD76` (−65 dB) to them, and restores the saved levels when released. Both
+monitor pairs are muted so the action stays in effect when Main and Speaker B
+switch. Phones and the other outputs keep their FX returns.
 
-External Input replaces the Main Out submix with a hardware input pair. It
-zeroes every Main input and playback crosspoint, routes the selected input
-pair's left and right sources at the configured gain, writes `0xFD76` to both
-Main FX returns, and sets `0x3f9e` bit 5. Releasing restores the Main submix
-from the channel model, restores the saved FX-return levels and clears bit 5.
-Speaker B and Phones keep their own mixes. The source is a stereo
-hardware-input pair; playback sources are not eligible.
+External Input replaces both monitor submixes, Main Out and Speaker B, with a
+hardware input pair. It zeroes every input and playback crosspoint of both
+pairs, routes the selected input pair's left and right sources at the
+configured gain, writes `0xFD76` to both FX returns of both pairs, and sets
+`0x3f9e` bit 5. Releasing restores the monitor submixes from the channel
+model, restores the saved FX-return levels and clears bit 5. Phones and the
+other outputs keep their own mixes. The source is a stereo hardware-input
+pair; playback sources are not eligible.
 
 PFL is a host-driven alternative to Solo for input channels. The selected
 Cue/PFL output pair is rewritten to contain only the active PFL inputs at
@@ -488,6 +500,12 @@ unity; every other input and playback crosspoint in that pair is zeroed and
 both FX returns are set to `0xFD76`. Releasing the last PFL input restores the
 pair from the channel model and restores its FX returns. PFL has no device
 flag; the monitor mask and other monitor flags are not changed.
+
+Open items:
+
+- Dim active `0x3d03` and the Recall trigger: the device holds the words,
+  but the TotalMix OSC paths in the 2026-11-28 round did not write them.
+  A TotalMix GUI capture of the Dim and Recall buttons decides the writes.
 
 ### 4.5 Setup store
 
@@ -1023,7 +1041,7 @@ Request `0x10`, index 1487, carries the unit's options as one full word:
 | 3 | `0x0008` | word-clock input termination |
 | 6 | `0x0040` | word-clock output single speed |
 | 7 | `0x0080` | SPDIF professional |
-| 8 | `0x0100` | EQ+D for Record disabled (active low) |
+| 8 | `0x0100` | EQ + D for record disabled (active low) |
 | 10 | `0x0400` | optical output ADAT (0 = SPDIF) |
 
 Every option change writes the word under mask `0x05cf` (index 1487),
@@ -1123,10 +1141,38 @@ full nine-rate index sweep is verified on the UC (UC spec §9.1). The rate
 status word (§11.6) carries the same family and band state with the
 readiness bits.
 
+### 11.8 Input sync state
+
+The state word also reports each digital input's lock and sync state, the
+active clock source and the rate most recently seen on each input.
+
+| Bits | Field | Encoding |
+|---|---|---|
+| 0 | S/PDIF coaxial lock | 1 = locked |
+| 1 | optical lock | 1 = locked |
+| 2 | word-clock lock | 1 = locked |
+| 4 | S/PDIF coaxial sync | 1 = in sync |
+| 5 | optical sync | 1 = in sync |
+| 6 | word-clock sync | 1 = in sync |
+| 9–11 | active clock source | 7 internal, 1 S/PDIF coaxial, 2 optical, 3 word clock |
+| 12–15 | S/PDIF coaxial rate index | §11.7 table |
+| 16–19 | optical rate index | §11.7 table |
+| 20–23 | word-clock rate index | §11.7 table |
+| 24–27 | active rate index | §11.7 table |
+
+Measured on the desk at 48 kHz. On the internal clock the word was
+`0x02f02f11`: active clock 7, coaxial lock and sync set, coaxial rate
+index 2. Selecting the coaxial source changed the active clock field to 1
+while the lock, sync and coaxial rate fields remained set.
+
+The input status shows a source only when its lock bit is set or its rate
+index is neither `0` nor `15`. The optical field reads `0` with no signal;
+the word-clock field reads `15`. A locked index `0` is a 32 kHz input.
+
 Open items:
 
-- External-clock rate decode. The per-source index fields need a physical
-  clock source at each digital input; deferred (UC spec §9.1).
+- Optical and word-clock lock, sync and rate fields have no external
+  source measurement yet.
 
 ## 12. Streaming
 
@@ -1312,7 +1358,7 @@ music.
 
 ## 14. State and scenes
 
-The host scene is authoritative.
+The host scene is authoritative for the mixer state.
 
 A scene stores:
 
@@ -1326,9 +1372,11 @@ A scene stores:
 
 The backend writes the mixer scene at connect and after relevant rate or
 stream changes.  The preamp group (input gain and right gain, 48 V, Inst,
-Level and AutoSet), the reference levels and the options word (clock source,
-optical format, SPDIF professional, word-clock rate and termination, EQ+D for
-Record) are also written from the saved scene at connect.
+Level and AutoSet) and the reference levels are also written from the saved
+scene at connect. The options word (clock source, optical format, SPDIF
+professional, word-clock rate and termination, EQ + D for Record) is
+device-owned: the backend reads it from the unit at connect and keeps the live
+value. A connect write of the options word carries the live value.
 
 The unit retains input gain and the main output fader across a power cycle.
 The user guide also states that the unit permanently stores its configuration
@@ -1379,7 +1427,7 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | MS processing | yes, `NN05` and matrix |
 | AN 1>2 | no |
 | Input Link | host setting |
-| EQ for Record | yes |
+| EQ + D for record | yes |
 | Optical output format | yes |
 | SPDIF professional | yes |
 | Word clock output single speed | yes |
@@ -1520,14 +1568,17 @@ state is not in this snapshot.
 | `0x3c01`..`0x3c0d` | Reverb parameters |
 | `0x3c20` | Echo enable |
 | `0x3c21`..`0x3c26` | Echo parameters |
-| `0x3d00` | Speaker B active |
-| `0x3d01` | Mute Enable flag |
+| `0x3d00` | Speaker B pair index while active; 0 while off |
+| `0x3d01` | Output mute enable (0 = all output mutes ignored) |
 | `0x3d02` | Main Dim amount |
 | `0x3d03` | Dim active |
 | `0x3d04` | Main Recall level |
-| `0x3d20` | control-room Main pair |
-| `0x3d21` | control-room Speaker B pair |
-| `0x3d22` | unknown |
+| `0x3d20` | clock-source mirror; not written on the USB path |
+| `0x3d21` | rate index |
+| `0x3d22` | word-clock output single speed |
+| `0x3d40` | word-clock input termination |
+| `0x3d41` | optical output format |
+| `0x3d42` | S/PDIF professional |
 | `0x3d40` | host-session/runtime flag |
 | `0x3d41`–`0x3d42` | unknown/read-only |
 | `0x3d43`–`0x3d46` | unknown/writable |

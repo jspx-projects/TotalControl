@@ -266,7 +266,7 @@ pub struct Requirements {
 pub enum ProfileId {
     UcPc,
     UcAp,
-    UcxIso,
+    UcxIf0,
     UcxIf5,
     BabyfaceClassic,
 }
@@ -275,7 +275,7 @@ impl ProfileId {
     pub const ALL: [ProfileId; 5] = [
         ProfileId::UcPc,
         ProfileId::UcAp,
-        ProfileId::UcxIso,
+        ProfileId::UcxIf0,
         ProfileId::UcxIf5,
         ProfileId::BabyfaceClassic,
     ];
@@ -284,7 +284,7 @@ impl ProfileId {
         match self {
             ProfileId::UcPc => "uc_pc",
             ProfileId::UcAp => "uc_ap",
-            ProfileId::UcxIso => "ucx_iso",
+            ProfileId::UcxIf0 => "ucx_if0",
             ProfileId::UcxIf5 => "ucx_if5",
             ProfileId::BabyfaceClassic => "babyface_classic",
         }

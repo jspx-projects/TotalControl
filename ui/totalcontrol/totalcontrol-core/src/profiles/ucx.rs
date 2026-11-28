@@ -327,8 +327,8 @@ const REQUIRES: Requirements = Requirements {
     meter_len: Some(244),
 };
 
-pub const ISO: DeviceProfile = DeviceProfile {
-    id: ProfileId::UcxIso,
+pub const IF0: DeviceProfile = DeviceProfile {
+    id: ProfileId::UcxIf0,
     model_name: "Fireface UCX",
     channels: &CHANNELS,
     routing: RoutingMode::Cell,
@@ -348,7 +348,7 @@ pub const ISO: DeviceProfile = DeviceProfile {
 
 pub const IF5: DeviceProfile = DeviceProfile {
     id: ProfileId::UcxIf5,
-    ..ISO
+    ..IF0
 };
 
 #[cfg(test)]
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn ucx_capabilities_match_the_shared_width_ms_and_pitch_paths() {
-        let caps = super::ISO.capabilities();
+        let caps = super::IF0.capabilities();
         assert!(caps.channel_width);
         assert!(caps.ms_proc);
         assert!(caps.pitch);

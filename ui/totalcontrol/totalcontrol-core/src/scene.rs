@@ -461,9 +461,6 @@ impl Scene {
         if a.an12 != b.an12 {
             h.an12 = a.an12;
         }
-        if a.eq_for_record != b.eq_for_record {
-            h.eq_for_record = a.eq_for_record;
-        }
         if a.pitch_percent != b.pitch_percent {
             h.pitch_percent = a.pitch_percent;
         }
@@ -674,6 +671,25 @@ mod tests {
         assert_eq!(host.settings.sample_rate, 44_100);
         assert_eq!(host.settings.clock_source, "Internal");
         assert!(!host.settings.optical_out_spdif);
+    }
+
+    #[test]
+    fn device_owned_record_dry_is_not_serialized() {
+        let mut scene = Scene::new("auto");
+        scene.settings.eq_for_record = true;
+        let json = scene.to_json().unwrap();
+        assert!(
+            !json.contains("eq_for_record"),
+            "the unit reports the option; the workspace does not store it"
+        );
+        // A workspace written while the field was still a host cache loads.
+        let legacy = json.replacen(
+            "\"pitch_percent\": 0.0",
+            "\"eq_for_record\": true,\n    \"pitch_percent\": 0.0",
+            1,
+        );
+        let loaded = Scene::from_json(&legacy).unwrap();
+        assert!(loaded.settings.eq_for_record);
     }
 
     /// Point the shared auto file at a temp path so tests never touch

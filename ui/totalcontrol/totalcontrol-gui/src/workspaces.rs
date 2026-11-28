@@ -145,6 +145,10 @@ pub struct Workspace {
     pub assign: [Option<usize>; 7],
     pub surround_51: bool,
     pub surround_71: bool,
+    /// The host graph quantum this workspace wants, when one is stored.
+    /// Zero keeps the host/engine default. The unit does not store it.
+    #[serde(default)]
+    pub quantum: u32,
     /// User override of the RMS bar release ("VU fallback"), in dB/s.
     /// `None` keeps each device's measured bar release.  GUI display state,
     /// saved with the workspace; only `VU_RELEASE_CHOICES` are accepted.
@@ -181,6 +185,7 @@ impl Default for Workspace {
             assign: [None; 7],
             surround_51: false,
             surround_71: false,
+            quantum: 0,
             vu_release_db_s: None,
             window_size: None,
         }

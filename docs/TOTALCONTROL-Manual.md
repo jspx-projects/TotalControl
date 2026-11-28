@@ -324,13 +324,14 @@ opens the Audio Configuration panel immediately left of the CONTROLS sidebar,
 which carries clock source, sample rate, pitch, the digital input formats, the
 word clock options and firmware and serial information.
 
-`Word clock in` switches the word-clock input termination. The option appears
-only on devices that support software termination. If it is not shown, your
-unit sets termination with a switch on the back panel. The UC exists in two
-hardware revisions: the earlier has a recessed mechanical switch (with a 75 Ω
-LED) and no software control; the later revision supports the software setting.
-On the UCX, termination is always software-controlled. TotalControl reads the
-setting from the unit when it connects.
+`Word clock in 75 Ohm termination` switches the internal 75 Ohm resistor that
+terminates the word-clock input. The option appears only on devices that
+support software termination. If it is not shown, your unit sets termination
+with a switch on the back panel. The UC exists in two hardware revisions: the
+earlier has a recessed mechanical switch (with a 75 Ω LED) and no software
+control; the later revision supports the software setting. On the UCX,
+termination is always software-controlled. TotalControl reads the setting from
+the unit when it connects.
 
 The panel separates what the device owns from what the host engine drives. In
 the device group, `Clock source` picks one of the unit's own clock options
@@ -351,6 +352,13 @@ clocking, shown in hertz (for example `47,952 Hz`). When pitch is active it is
 the nominal rate with your pitch applied; otherwise it is the rate the unit
 reports. The picker always shows the nominal rate in use, and `Current rate`
 always shows the truth, so a pitched clock is displayed correctly.
+
+`Input status` lists the digital inputs that carry a signal, in the order
+S/PDIF coax, Optical, Word clock. Each row shows `Lock` or `No lock` and the
+detected rate. The rate is an em dash when the input is not locked. The section
+is absent when no digital input carries a signal. A row appears when a source
+becomes active, so the panel below it moves down; the row disappears when the
+signal goes away.
 
 TotalControl has one playback policy: interrupt scheduling with a period-aligned
 safety cushion. There is no scheduling mode to choose. The quantum is the buffer
@@ -526,8 +534,8 @@ jackd at the new rate. Pitch is held at 0 % under an external clock.
 
 The `Graph` line always shows the rate the card is running at, in every state.
 A rate change while no stream runs is a runtime change, so it does not add an undo
-step or mark the workspace dirty. The quantum is remembered in the application
-preferences, not in a workspace.
+step or mark the workspace dirty. The quantum is stored in the workspace and
+restored when no stream or conducting node owns the graph.
 
 The `Pitch` slider changes the speed and pitch of the whole interface from
 -5.0 % to +5.0 %. Drag or scroll in 0.1 % steps. Double-click the slider to
@@ -549,10 +557,11 @@ TotalControl re-applies it after a client rate change, clamped to the new
 rate's ceiling. TotalControl re-applies the current pitch after a stream
 restart.
 
-Pitch always starts from a clean slate (0 %). Changing the clock source,
-starting TotalControl, or loading a workspace resets pitch to 0 %. A saved
-pitch is not restored automatically; set it again from the slider after the
-change.
+Pitch is restored from a workspace or the startup scene when the clock and
+scheduling preconditions allow it. Changing the clock source or the
+rate-follow mode resets it to 0 %. Set it again from the slider after such a
+change. The device loses the DDS word at power-off, so TotalControl keeps the
+value in the workspace rather than reading it back.
 
 ### About dialog
 
@@ -1015,8 +1024,8 @@ The monitor actions apply as follows:
 | Speaker B | Switches to Speaker B | Switches to Main | No |
 | Mono | Active monitor output | Active monitor output | No |
 | Talkback | Listenback path | Talkback receiver only | Talkback path |
-| External Input | Yes | No | No |
-| Mute FX | Yes | No | No |
+| External Input | Yes | Yes (monitor path) | No |
+| Mute FX | Yes | Yes (monitor path) | No |
 | Cue/PFL | Target only | Target only | Target only |
 
 Speaker B is a second monitor path. Exactly one of the two monitor outputs
@@ -1202,20 +1211,22 @@ the Talkback button and the receive switches.
 ### Mute FX
 
 **Mute FX** is a latching control. It silences the Reverb and Echo returns on
-Main Out without switching either effect off. Releasing it restores the
-previous return levels.
+both monitor paths, Main Out and Speaker B, without switching either effect
+off. Releasing it restores the previous return levels.
 
-Mute FX saves the Main Out FX-return levels, writes −65 dB, and restores the
-exact saved levels when the button is released. Speaker B and Phones are not
-part of this path. Mute FX is part of the mixer scene and a snapshot.
+Mute FX saves the Main Out and Speaker B FX-return levels, writes −65 dB, and
+restores the exact saved levels when the button is released. Both monitor
+pairs are muted so the action stays in effect when you switch between Main
+and Speaker B. Phones is not part of this path. Mute FX is part of the mixer
+scene and a snapshot.
 
 ### External input
 
-**Ext. input** replaces the Main Out mix with the stereo hardware-input pair
-selected in Control Room Settings. It applies the configured gain and
-latches the button. Releasing it restores the normal Main Out mix. Speaker B
-and the Phones outputs keep their own mixes. The source list contains
-hardware inputs only.
+**Ext. input** replaces both monitor mixes, Main Out and Speaker B, with the
+stereo hardware-input pair selected in Control Room Settings. It applies the
+configured gain, mutes their FX returns, and latches the button. Releasing it
+restores the normal monitor mixes. The Phones outputs keep their own mixes.
+The source list contains hardware inputs only.
 
 The button is available when a source pair is configured and a Main Out is
 assigned. Changing the source or gain while External Input is active
@@ -1390,7 +1401,7 @@ term for a mixer state; the interface uses the terms below.
 
 | Layer | Contains | Stored |
 |---|---|---|
-| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the global fader group), layouts, view state, Control Room assignments and complete GUI state | A `.tcws` file chosen by you, or the current workspace file |
+| **Workspace** | The portable host-side configuration: current mix, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the global fader group), layouts, view state, Control Room assignments and complete GUI state | A `.tcws` file chosen by you, or the current workspace file |
 | **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace and explicit workspaces |
 | **Current workspace** | The live workspace for the connected unit, saved every minute while it changes and on close, hide, disconnect and unit switch | The current workspace file |
 | **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
@@ -1461,7 +1472,7 @@ submix.
 
 A workspace contains:
 
-- the current mix, including sample rate, pitch/varispeed and Dim/Speaker B state;
+- the current mix, including pitch/varispeed and Dim/Speaker B state;
 - all eight snapshots and their names;
 - user channel labels;
 - the four mute/solo/fader groups, the global fader group and the mute/solo masters with their held state;
@@ -1577,20 +1588,20 @@ direct ALSA.
 
 A and B are the two halves of the measured device span D: `D = A + B`.
 D is measured by the output-5 to input-5 loopback after the capture
-start-alignment correction. On UCX ISO and IF5 the split uses the UCX
+start-alignment correction. On UCX IF0 and IF5 the split uses the UCX
 converters: DA is 7 samples; AD is 14 at 1x/2x and 11 at 4x. On UC the split
 uses the UC converters: DA is 28 samples; AD is 43.2 at 1x/2x and 38.2 at
 4x. The digital remainder is split symmetrically. The live host queue is
 already in `snd_pcm_delay`.
 
-On UCX ISO at 48 kHz with a 128-frame live host term:
+On UCX IF0 at 48 kHz with a 128-frame live host term:
 
 ```text
 Latency out = 128 + 34 = 162 frames = 3.4 ms
 Latency in  =  96 + 42 = 138 frames = 2.9 ms
 ```
 
-UCX ISO device values (frames):
+UCX IF0 device values (frames):
 
 | Rate | A | B | D |
 |---|---:|---:|---:|
@@ -1647,7 +1658,7 @@ The UCX IF5 interrupt transport has its own values (frames):
 `Latency out` uses A at every rate. `Latency in` needs a measured D for the
 rate; where there is none it shows `—`. The UCX **IF5** interrupt transport has
 its own values; the ISO table does not apply to it. The UC split uses the UC
-converter delays; the UCX ISO/IF5 split uses the UCX converter delays; both
+converter delays; the UCX IF0/IF5 split uses the UCX converter delays; both
 use a symmetric digital remainder. A firmware or device-path change needs a
 new measurement.
 
@@ -1870,17 +1881,20 @@ lets you choose, with a dialog:
 
 On the UCX the window appears first. TotalControl then requests the pre-connect
 state dump and compares input and output levels, mute, EQ, dynamics, FX
-returns and matrix sends. The dialog appears when the comparison is ready, so
-the startup is not held back by the dump.
+returns, matrix sends and the device-backed Control Room effects: the active
+Speaker B pair, the monitor mutes, Mono and Dim. The dialog appears when the
+comparison is ready, so the startup is not held back by the dump.
 
 The dialog lists every decoded difference. When more than six are shown, the
 list gets its own scrollbar and a fixed height so the dialog does not grow
 beyond the window.
 
 The dump does not include the options word (clock source, optical format,
-SPDIF professional, word-clock rate and termination, EQ+D for Record), channel
-names, trims or loopback. Those stay with the saved mix. On the UCX the
-`48 V`, Inst, Level and reference settings are in the dump and are compared.
+SPDIF professional, word-clock rate and termination, EQ + D for record),
+channel names, trims or loopback. TotalControl reads the options word from the
+unit with a separate request and keeps the live value; channel names, trims
+and loopback stay with the saved mix. On the UCX the `48 V`, Inst, Level and
+reference settings are in the dump and are compared.
 
 ## 18. The UCX front knob
 

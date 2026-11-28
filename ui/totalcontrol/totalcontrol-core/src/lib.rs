@@ -38,7 +38,7 @@ pub use channel::{
     ChannelId, ChannelType, Dynamics, Echo, InputChannel, InputLevel, OutputChannel,
     PlaybackChannel, Reverb, Sensitivity,
 };
-pub use device::{DeviceSettings, RmeDevice, TalkbackConfig};
+pub use device::{DeviceSettings, InputSyncState, RmeDevice, SyncInput, TalkbackConfig};
 pub use error::Error;
 #[cfg(feature = "alsa")]
 pub use fireface::{

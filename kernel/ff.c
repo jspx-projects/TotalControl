@@ -199,7 +199,7 @@ static unsigned int ff_iso_fb_delay(const struct ff *chip)
 /* AP-mode ISO header layout per rate band (1x/2x/4x).  The position field
  * widens with the band (bits 5..17/18/19); the phase field is FIXED at
  * bits 21..31 (11-bit) at every band, above the widened position.  The
- * layout is generic across AP models (UC, UCX, Babyface-classic share it);
+ * layout is generic across the IF0 models (UC, UCX, Babyface-classic share it);
  * only the rate band selects the position width.  The phase VALUE wraps at
  * tps = 60000000/rate (a 60 MHz tick), so the fractional-position law
  * phase/tps is band-independent. */

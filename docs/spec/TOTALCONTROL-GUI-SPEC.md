@@ -159,6 +159,11 @@ transitory state is marked (orange). A state that is known not to be
 transitory is never shown as pending: the actual value is displayed and a
 notice states the change.
 
+**Label capitalization.** Multi-word labels and values use sentence case:
+the first word is capitalized and the remaining words are lower case,
+except acronyms and proper names. Examples: `Sample rate`, `Clock source`,
+`No lock`, `Word clock in`. Section headings keep their upper-case style.
+
 **Settings-dialog behaviour.** Every settings dialog follows one rule:
 changes apply as they are made, the dialog stays open so the effect can be
 tried live, and a single `Close` dismisses it. There is no `OK`, `Cancel`
@@ -1229,15 +1234,15 @@ sheet shows that value. A value is written when it changes there.
 | Clock source | yes | yes |
 | Sample rate | yes | yes, when the device owns the rate |
 | Current rate | yes | yes |
-| Pitch | yes | yes |
 | Line In reference | yes | — |
 | Line Out reference | yes | — |
 | Phones reference | yes | — |
 | Optical | yes | yes |
 | SPDIF | yes | yes |
 | Single speed:<br>word clock | yes | yes |
-| Word clock in | — | yes |
-| EQ for Record | — | yes |
+| Word clock in<br>75 Ohm termination | — | yes |
+| EQ + D for record | — | yes |
+| Pitch | yes | yes |
 | Firmware | yes | yes |
 | Serial | yes | yes |
 
@@ -1256,10 +1261,19 @@ and Word.
 The `Clock source` row is a picker of the unit's own clock options only; it
 never lists host engine modes. It is shown on every path. The picker is active
 only while audio is stopped (no PCM owner and no host stream); while audio
-runs it is a read-only report of the actual source. The `Single speed word
-clock` and `Word clock in` (termination) rows are clock-sync controls shown on
-every path. The signal-path settings (Optical and SPDIF format, the UC
-reference levels, EQ for Record) and the Firmware/Serial readouts stay. The `Sample rate` row is the nominal-rate picker
+runs it is a read-only report of the actual source.
+
+The `Input status` section lists only the digital inputs that carry a signal,
+in the order S/PDIF coax, Optical and Word clock. Each row shows `Lock` or
+`No lock` and the detected rate in kHz; the rate is an em dash when the input
+is not locked. The section is absent when no input carries a signal. Rows
+appear and disappear as signals arrive, so the controls below them move.
+
+The `Single speed word clock` row and the `Word clock in` row with its
+`75 Ohm termination` label are clock-sync controls shown on every path. The
+label names the internal 75 Ohm resistor that terminates the word-clock
+input. The signal-path settings (Optical and SPDIF format, the UC
+reference levels, EQ + D for record) and the Firmware/Serial readouts stay. The `Sample rate` row is the nominal-rate picker
 with three states, derived from the detected audio path and the host stream:
 
 | State | Condition | Presentation |
@@ -1287,7 +1301,8 @@ Read-only reports (the current rate, Graph and the latency readout) use the
 secondary text colour; editable controls use the primary colour; a grayed
 owner-controlled value uses the disabled text colour.
 
-Pitch is a -5.0 % … +5.0 % slider directly below Sample rate. Drag and wheel
+Pitch is a -5.0 % … +5.0 % slider at the end of the device controls, directly
+above the Firmware readout. Drag and wheel
 move in 0.1 % steps. The pitch slider has no Shift fine mode (0.1 % is already
 fine enough). Double-click resets to 0.0 %. Every change is stored immediately
 and written to the device clock at once. While the IRQ policy is still being
@@ -2030,15 +2045,18 @@ left and right sides by 6 dB, sums them and feeds the result to both sides of
 that pair. It does not raise a centred signal. It does not mix the Phones
 outputs. Mono is stored in the device scene.
 
-Mute FX is a latching scene control. It saves the FX-return levels of Main
-Out, writes `-65 dB`, and restores the exact saved levels; it does not switch
-the Reverb or Echo processors off. Speaker B and Phones are not modified.
+Mute FX is a latching scene control. It saves the FX-return levels of the
+Main Out and Speaker B pairs, writes `-65 dB`, and restores the exact saved
+levels; it does not switch the Reverb or Echo processors off. Phones is not
+modified. Both monitor pairs are muted so the action stays in effect when
+Main and Speaker B switch.
 
-Ext. input is a latching runtime control. It replaces the Main Out submix
-with the stereo hardware-input pair selected in Control Room Settings at the
-configured gain. Releasing restores the normal Main Out submix. Speaker B
-and Phones keep their own mixes. The button is disabled until a source pair
-is configured. Changing the source or gain while active re-engages the path.
+Ext. input is a latching runtime control. It replaces the Main Out and
+Speaker B submixes with the stereo hardware-input pair selected in Control
+Room Settings at the configured gain, and mutes their FX returns. Releasing
+restores the normal monitor submixes. Phones keeps its own mix. The button is
+disabled until a source pair is configured. Changing the source or gain while
+active re-engages the path.
 
 With `PFL replaces Solo`, each input strip's Solo button is labelled `PFL`
 and routes the input pre-fader at unity to the Cue/PFL target, with the
@@ -2059,7 +2077,7 @@ destinations in this order, using the same names as the Control Room channels:
 | Destination | Device |
 |---|---|
 | Main | output mode word `0xNN02` bit 1 on the chosen pair |
-| Speaker B | the same bit, plus control-room state word `0x3d00 = 1` while active |
+| Speaker B | the same bit, plus control-room state word `0x3d00` = the Speaker B pair index while active, 0 while off |
 | Phones 1..4 | host-side; the unit receives nothing |
 | Cue/PFL to | host-side; selects the Cue/PFL monitoring target |
 
@@ -2247,7 +2265,7 @@ Latency out = snd_pcm_delay + A(rate)
 ```
 
 `snd_pcm_delay` is the live playback ring plus the in-flight URBs; A is the
-device output path. On UCX ISO and IF5 it is the vendor DA delay (7 samples)
+device output path. On UCX IF0 and IF5 it is the vendor DA delay (7 samples)
 plus half of the measured digital remainder. On UC it is the horizon model:
 bus delivery plus output converter. The live host term is split into ring fill
 and in-flight queue, so the queue is counted once. The host term's label
@@ -2265,7 +2283,7 @@ B(rate)    = D(rate) - A(rate)
 D is the device span measured by the output-5 to input-5 loopback, after the
 capture start-alignment correction. On every measured personality, D is
 stored after the live host queue is removed, because the queue is already in
-the live playback and capture delays. The UCX ISO and IF5 split uses the UCX
+the live playback and capture delays. The UCX IF0 and IF5 split uses the UCX
 converters: DA is 7 samples; AD is 14 at 1x/2x and 11 at 4x. The UC split uses
 the UC converters: DA is 28 samples; AD is 43.2 at 1x/2x and 38.2 at 4x. The
 digital remainder is split symmetrically. Only D is directly measured; the
@@ -2273,7 +2291,7 @@ converter half is vendor data and the digital remainder is the model. A rate
 without a D measurement shows `—` for `Latency in`; `Latency out` falls back
 to the horizon A.
 
-| Rate | UCX ISO A | UCX ISO B | UCX ISO D |
+| Rate | UCX IF0 A | UCX IF0 B | UCX IF0 D |
 |---|---:|---:|---:|
 | 32 kHz | 29 | 37 | 66 |
 | 44.1 kHz | 33 | 40 | 73 |
@@ -2331,9 +2349,9 @@ unit span alone; A and B use the same vendor converter split.
 
 The calibration is per personality and rate. A firmware or device-path change
 needs a repeat measurement. The UC PC values cover 32–192 kHz; the UC AP
-values cover 32/44.1/48/88.2/96/176.4/192. The UCX ISO values cover
+values cover 32/44.1/48/88.2/96/176.4/192. The UCX IF0 values cover
 32/44.1/48/88.2/96/176.4/192. The UC split uses the UC converter delays; the
-UCX ISO/IF5 split uses the UCX converter delays. Both use a symmetric digital
+UCX IF0/IF5 split uses the UCX converter delays. Both use a symmetric digital
 remainder. The loopback is an electrical output-5 to
 input-5 connection, not an acoustic one.
 
@@ -2373,9 +2391,13 @@ configuration, and **device setup** for the unit’s six slots.
 
 The startup mismatch dialog lists the decoded differences as a bullet list.
 On the UCX it appears after the asynchronous pre-connect dump has been
-compared; the window itself is shown first. More than six differences are
-shown in a fixed-height scrollable list box instead of letting the dialog grow
-beyond the window.
+compared; the window itself is shown first. The comparison covers the mixer,
+preamp, references and the device-backed Control Room effects: the active
+Speaker B pair, the monitor mutes, Mono and Dim. The Main Out and Speaker B
+assignments, the External Input and Talkback/Listenback sources, and the Mute
+FX flag are host-side and are not device differences. More than six
+differences are shown in a fixed-height scrollable list box instead of letting
+the dialog grow beyond the window.
 
 ## 15. Control invariants
 

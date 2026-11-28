@@ -49,7 +49,7 @@ The file uses the `.tcws` workspace schema. It contains:
 
 | Field group | Contents |
 |---|---|
-| Scene | The current mixer model and device settings |
+| Scene | The current mixer model. Device-owned Audio Config settings are read from the unit and are not serialized. |
 | Snapshots | The eight Mix slots and their names |
 | Groups | The four mute/solo/fader groups |
 | Layout slots | The six layout presets and the active slot |
@@ -57,12 +57,16 @@ The file uses the `.tcws` workspace schema. It contains:
 | Masters | The mute and solo master sets, including suspended state |
 | Temporary group | The `F` membership and its ganged flag |
 | View | View, row mode, sidebar, panels, FX panel, zoom, quick channel, matrix mode |
+| Engine | The host graph quantum. Zero keeps the host/engine default; a running stream or conducting node wins. |
 | Window | Size, position, fullscreen/maximised state and scroll positions |
 | Panels | Open channel panels/flyouts and collapsed strips |
 | Selection | Selected output and split side, focused strip and temporary selection |
 | Monitoring | Control Room settings and assignments |
 | Surround | Virtual-surround state |
 | Name | The workspace display name |
+
+The sample rate is read from the device and is not part of the workspace.
+The host graph quantum is workspace state.
 
 The file does not store the source workspace path. After a recovered start,
 Save uses Save As until the user chooses a file.
@@ -212,7 +216,7 @@ mixer scene, labels, groups, snapshots, layouts or window layout.
 | Active unit | Last selected unit key |
 | OSC | Enabled, dialect, ports and feedback destination address |
 | MIDI controllers | Enabled, debug log, per-device input/output enable and protocol, option values per protocol, key assignments per protocol |
-| Engine | Current rate and quantum. The quantum is the buffer setting and is pinned as the ALSA period on both directions; there is no playback mode. The current values are the last values a host stream ran at; a later launch reuses them and does not restore an older value. While a host stream runs, its running graph quantum wins and is used for the period pin and the cushion. The legacy playback-mode key is read, ignored and written back unchanged. |
+| Engine | Current rate, rate mode and audio-performance preference. These are installation settings for the host engine. The host graph quantum is workspace state (§3). While a host stream runs, its running graph rate and quantum win and are used for the period pin and the cushion. The legacy playback-mode key is read, ignored and written back unchanged. |
 | Meters | OVR full-scale sample count (global, 1–15, default 3) |
 | Startup | Session autostart (starts hidden in the tray) and keep in tray |
 | Files | Last workspace folder |
