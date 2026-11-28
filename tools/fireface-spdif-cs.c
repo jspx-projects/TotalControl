@@ -97,6 +97,18 @@ int main(int argc, char **argv)
 	for (i = 0; i < 24; i++)
 		printf(" %02x", cs[i]);
 	printf("\n");
+	{
+		int any = 0;
+
+		for (i = 0; i < 24; i++)
+			any |= cs[i];
+		if (!any) {
+			printf("no block (open a capture stream and lock the S/PDIF input)\n");
+			free(value);
+			close(fd);
+			return 0;
+		}
+	}
 	describe(cs);
 
 	free(value);
