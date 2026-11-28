@@ -911,7 +911,9 @@ The hwdep ABI is versioned (`FF_ABI_VERSION`, currently 9). The host checks
 it at open. The `DIAGNOSTICS` reply carries accumulated history: cumulative
 counters (zeroed on reattach), per-run counters (reset on every engine start),
 and watermarks (`ring_min_filled`, `ring_max_stall_ns`, `out_lag`) with their
-reset class. `run_seq` is the re-base epoch; it increments on every engine
+reset class. `ring_max_stall_ns` is measured after the startup prefill gate
+clears, so the muted startup transient is not the reported worst stall.
+`run_seq` is the re-base epoch; it increments on every engine
 start and on a confirmed idle device-rate write (`SET_RATE`). `urb_errors` is
 a consecutive-error gauge rather than a total.
 

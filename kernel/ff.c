@@ -1208,7 +1208,8 @@ static void ff_ring_event(struct ff *chip, struct snd_pcm_substream *subs,
  * clamps the fill to zero and sets FF_RING_F_BEHIND. */
 static void ff_ring_trace(struct ff *chip, struct snd_pcm_substream *subs,
 			    unsigned long read_pos, unsigned long appl,
-			    unsigned long status_hw, unsigned int total)
+			    unsigned long status_hw, unsigned int total,
+			    bool measure_stall)
 {
 	struct snd_pcm_runtime *rt = subs->runtime;
 	unsigned long span = (appl + rt->boundary - read_pos) % rt->boundary;
@@ -1250,7 +1251,7 @@ static void ff_ring_trace(struct ff *chip, struct snd_pcm_substream *subs,
 		} else {
 			u64 gap = now - chip->ring_last_appl_ts;
 
-			if (gap > chip->ring_max_stall_ns)
+			if (measure_stall && gap > chip->ring_max_stall_ns)
 				chip->ring_max_stall_ns = gap;
 		}
 	}
@@ -1630,6 +1631,7 @@ static bool ff_prefill_gate(struct ff *chip, struct ff_stream *s,
 		return false;
 	if (!prefill) {
 		s->out_prefill_pending = false;
+		chip->ring_max_stall_ns = 0;
 		return true;
 	}
 	if (!starved && anchored)
@@ -1641,11 +1643,13 @@ static bool ff_prefill_gate(struct ff *chip, struct ff_stream *s,
 	if (age >= s->out_prefill_min &&
 	    s->out_prefill_stable >= s->out_prefill_need) {
 		s->out_prefill_pending = false;
+		chip->ring_max_stall_ns = 0;
 		atomic_inc(&chip->out_prefills);
 		return true;
 	}
 	if (s->out_prefill_bound == 0) {
 		s->out_prefill_pending = false;
+		chip->ring_max_stall_ns = 0;
 		atomic_inc(&chip->out_prefill_timeouts);
 		return true;
 	}
@@ -1716,12 +1720,14 @@ static void ff_playback_urb(struct ff_ep *ep, struct urb *urb)
 		} else {
 			s->out_starve_streak = 0;
 		}
+		bool measure_stall = !s->out_prefill_pending;
+
 		if (ff_prefill_gate(chip, s, starved, true))
 			unmute = true;
 		if (s->out_start_urbs)
 			s->out_start_urbs--;
 		ff_ring_trace(chip, subs, s->pos[ep->index], appl, own,
-				frames);
+				frames, measure_stall);
 		if (starved) {
 			memset(urb->transfer_buffer, 0,
 			       urb->transfer_buffer_length);
@@ -2278,11 +2284,14 @@ static void ff_iso_playback_fill(struct ff_ep *ep, struct urb *urb)
 		} else {
 			s->out_starve_streak = 0;
 		}
+		bool measure_stall = !s->out_prefill_pending;
+
 		if (ff_prefill_gate(chip, s, starved, s->out_counter_valid))
 			unmute = true;
 		if (s->out_start_urbs)
 			s->out_start_urbs--;
-		ff_ring_trace(chip, subs, s->hw_ptr, appl, own, total);
+		ff_ring_trace(chip, subs, s->hw_ptr, appl, own, total,
+				measure_stall);
 	}
 	/* The seed needs a real device timestamp: ts_pos_valid means at
 	 * least one capture header arrived.  Priming frames are nominal, so
