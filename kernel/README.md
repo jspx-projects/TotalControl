@@ -21,8 +21,8 @@ notes are in the archive (`docs/archive/`).
 |---|---|---|---|
 | Fireface UC PC | `0424:3fc5` / `2a39:3fc5` / `2a39:3fce` | interrupt IF0 | 0 |
 | Fireface UC AP | `0424:3fc6` / `2a39:3fc6` | isochronous IF0 | 0 |
-| Fireface UCX | `0424:3fc9` / `2a39:3fc9` | isochronous IF0 (default) | 0 |
-| Fireface UCX | `0424:3fc9` / `2a39:3fc9` | interrupt IF5 (`ucx_if5=1`) | 5 |
+| Fireface UCX | `0424:3fc9` / `2a39:3fc9` | isochronous IF0 | 0 |
+| Fireface UCX | `0424:3fc9` / `2a39:3fc9` | interrupt IF5 (default) | 5 |
 | Babyface-classic | `0424:3fc7` / `2a39:3fc7` | isochronous IF0 | 0 |
 
 One module instance handles several physical devices; each gets its own card,
@@ -63,7 +63,7 @@ Module parameters:
 | `urb_frames` | 48 | frames per URB at 1× on the ISO path |
 | `nurbs` | 2 | URBs in flight per endpoint (`nurbs × urb_frames` queued at 1×) |
 | `uc_pc_frames` | 16 | frames per URB at 1× on the UC PC interrupt path; doubled at 2× and quadrupled at 4× (16/32/64) |
-| `ucx_if5` | 0 | UCX audio interface: 0 = isochronous IF0, 1 = interrupt IF5 |
+| `ucx_if5` | 1 | UCX audio interface: 1 = interrupt IF5 (default), 0 = isochronous IF0 |
 | `ucx_if5_frames` | 16 | frames per URB at 1× on the UCX interrupt path; doubled at 2× and quadrupled at 4× (16/32/64) |
 | `fixed_rate` | 0 | restrict the PCM rate |
 

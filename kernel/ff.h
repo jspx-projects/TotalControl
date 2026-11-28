@@ -34,7 +34,7 @@
  * Fireface UCX (0424:3fc9 / 2a39:3fc9):
  *   interface 0 has the ISO endpoints 0x0e OUT / 0x8f IN; interface 5 has
  *   the Windows interrupt endpoints 0x01/0x82.  The module parameter
- *   ucx_if5 chooses which personality binds (default ISO IF0).
+ *   ucx_if5 chooses which personality binds (default IF5).
  *
  * Babyface-classic (0424:3fc7 / 2a39:3fc7):
  *   UCX-family layout.  Interface 0 has the ISO endpoints 0x03 OUT /
@@ -76,6 +76,12 @@
 #define FF_STATUS_LEN		4
 #define FF_STATUS_OUT_LATCHED	0x80
 #define FF_STATUS_GRACE_MS	20
+/* S/PDIF input channel status, in the low byte of capture channel 8. */
+#define FF_SPDIF_CS_CHANNEL	8
+#define FF_SPDIF_CS_BIT		0x04
+#define FF_SPDIF_CS_BLOCK	0x10
+#define FF_SPDIF_CS_SHIFT	2
+#define FF_SPDIF_CS_BITS	192
 /* UCX IF5 settings-group settle, measured in the E2b connect capture. */
 #define FF_UCX_IF5_SETTLE_MS	100
 #define FF_RESTART_SETTLE_MS	250	/* UC: minimum engine stop -> start gap */
@@ -204,6 +210,7 @@ unsigned int ff_rate_family(unsigned int rate);
 #define FF_TCAP_IF5_SELECT		BIT(10)	/* IF5 vs IF0 bind selection */
 #define FF_TCAP_METER_PAIR		BIT(11)	/* UC paired RMS/peak meter pages */
 #define FF_TCAP_FLASH_GUARD		BIT(12)	/* refuse flash vendor requests/words */
+#define FF_TCAP_SPDIF_CS		BIT(13)	/* collect S/PDIF input channel status */
 
 struct ff;
 
@@ -512,6 +519,15 @@ struct ff {
 	u32 run_seq;
 	u8 last_status[FF_STATUS_LEN];
 	bool out_latched;
+
+	/* S/PDIF input channel status: one C bit per frame, a 192-bit
+	 * block assembled across 192 frames.  The low byte of the S/PDIF
+	 * input sample carries C (0x04) and the block marker (0x10). */
+	spinlock_t cs_lock;
+	u8 cs[24];
+	u8 cs_work[24];
+	unsigned int cs_pos;		/* frames since the block marker */
+	unsigned long cs_jiffies;	/* when the last block completed */
 
 	/* IF1 raw state/meter transports (owned by ff-hwdep.c) */
 	struct usb_interface *state_intf;

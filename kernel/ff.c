@@ -16,6 +16,7 @@
 #include <linux/string.h>
 #include <linux/usb.h>
 #include <sound/core.h>
+#include <sound/control.h>
 #include <sound/initval.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -29,7 +30,7 @@ static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 static unsigned int urb_frames = 48;
 static unsigned int iso_packets = 4;
 static unsigned int nurbs = 2;
-static bool ucx_if5;
+static bool ucx_if5 = true;
 static unsigned int ucx_if5_frames = 16;
 static unsigned int uc_pc_frames = 16;
 static unsigned int fixed_rate;
@@ -72,7 +73,7 @@ MODULE_PARM_DESC(iso_packets, "ISO transport: microframes (USB packets) per URB 
 module_param(nurbs, uint, 0444);
 MODULE_PARM_DESC(nurbs, "URBs in flight per endpoint (2..32, default 2); raised so at least 64 frames stay queued, except on the ISO and UCX IF5 short-URB geometries.");
 module_param(ucx_if5, bool, 0444);
-MODULE_PARM_DESC(ucx_if5, "Fireface UCX: bind the Windows-style interrupt interface 5 (default false). The default binds the Mac-style ISO interface 0; set Y only for the Windows transport.");
+MODULE_PARM_DESC(ucx_if5, "Fireface UCX: bind the interrupt interface 5 (default true). Set N to bind the isochronous interface 0 instead.");
 module_param(ucx_if5_frames, uint, 0444);
 MODULE_PARM_DESC(ucx_if5_frames, "Fireface UCX interrupt transport: frames per URB at 1x rates, doubled at 2x and quadrupled at 4x (8..1024, default 16 = 2 blocks of 8).");
 module_param(uc_pc_frames, uint, 0444);
@@ -821,7 +822,10 @@ static const struct ff_ops ff_ucx_if5_ops = {
  * reference pairing) and the ISO personalities carry float32 (the macOS
  * reference pairing).  The device accepts either format when the 0x16
  * channel-init value matches; ff_uc_chan_init_write derives that value
- * from this decision so the two can never mismatch. */
+ * from this decision so the two can never mismatch.  The S/PDIF channel
+ * status is present in the interrupt stream only; the ISO stream's low
+ * byte is zero in the desk capture, so it keeps the verified float32
+ * format. */
 static bool ff_wire_s32(const struct ff *chip)
 {
 	return !chip->iso;
@@ -1545,6 +1549,44 @@ static void ff_period_elapsed(struct ff *chip, int dir)
 	spin_unlock_irqrestore(&chip->gate_lock, flags);
 }
 
+/*
+ * Collect the S/PDIF input channel status from the low byte of capture
+ * channel 8.  One C bit per frame; the block marker starts a new 192-bit
+ * block.  The marker is delayed by two frames, so the bit position is
+ * (pos + 2) % 192, as in the RME reference driver.
+ */
+static void ff_spdif_cs_frames(struct ff *chip, const u8 *data,
+			       unsigned int frames, unsigned int stride,
+			       unsigned int word)
+{
+	unsigned long flags;
+	unsigned int i;
+
+	spin_lock_irqsave(&chip->cs_lock, flags);
+	for (i = 0; i < frames; i++) {
+		const u8 *p = data + i * stride + word * FF_SAMPLE_BYTES;
+		u8 status = *p;
+		unsigned int pos = chip->cs_pos;
+
+		if (status & FF_SPDIF_CS_BLOCK) {
+			if (pos == FF_SPDIF_CS_BITS) {
+				memcpy(chip->cs, chip->cs_work, sizeof(chip->cs));
+				chip->cs_jiffies = jiffies;
+			}
+			memset(chip->cs_work, 0, sizeof(chip->cs_work));
+			pos = 0;
+		}
+		if ((status & FF_SPDIF_CS_BIT) && pos < FF_SPDIF_CS_BITS) {
+			unsigned int bit = (pos + FF_SPDIF_CS_SHIFT) %
+					   FF_SPDIF_CS_BITS;
+			chip->cs_work[bit / 8] |= 1 << (bit % 8);
+		}
+		pos++;
+		chip->cs_pos = min(pos, FF_SPDIF_CS_BITS + 1);
+	}
+	spin_unlock_irqrestore(&chip->cs_lock, flags);
+}
+
 /* Interrupt transport: one URB of interleaved frames. */
 static void ff_capture_urb(struct ff_ep *ep, struct urb *urb)
 {
@@ -1576,6 +1618,15 @@ static void ff_capture_urb(struct ff_ep *ep, struct urb *urb)
 
 	if (!frames)
 		return;
+
+	if (chip->caps & FF_TCAP_SPDIF_CS) {
+		unsigned int cs_ep = FF_SPDIF_CS_CHANNEL / words;
+		unsigned int cs_word = FF_SPDIF_CS_CHANNEL % words;
+
+		if (ep->index == cs_ep)
+			ff_spdif_cs_frames(chip, urb->transfer_buffer, frames,
+					   words * FF_SAMPLE_BYTES, cs_word);
+	}
 
 	snd_pcm_stream_lock_irqsave(subs, flags);
 	if (s->running) {
@@ -1978,6 +2029,11 @@ static void ff_iso_capture_urb(struct ff_ep *ep, struct urb *urb)
 				(nch * FF_SAMPLE_BYTES), m->max_frames);
 		if (!frames[i])
 			atomic_inc(&chip->in_hdr_only);
+		if (chip->caps & FF_TCAP_SPDIF_CS &&
+		    ep->index == FF_SPDIF_CS_CHANNEL / nch)
+			ff_spdif_cs_frames(chip, pkt + FF_ISO_IN_HEADER,
+					   frames[i], nch * FF_SAMPLE_BYTES,
+					   FF_SPDIF_CS_CHANNEL % nch);
 		if (frames[i] < ARRAY_SIZE(chip->iso_frames_hist)) {
 			chip->iso_frames_hist[frames[i]]++;
 		} else {
@@ -4010,6 +4066,37 @@ static const struct snd_pcm_ops ff_pcm_ops = {
 	.sync_stop = ff_pcm_sync_stop,
 };
 
+static int ff_iec958_info(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_info *info)
+{
+	info->type = SNDRV_CTL_ELEM_TYPE_IEC958;
+	info->count = 1;
+	return 0;
+}
+
+static int ff_iec958_get(struct snd_kcontrol *kctl,
+			 struct snd_ctl_elem_value *value)
+{
+	struct ff *chip = snd_kcontrol_chip(kctl);
+	unsigned long flags;
+
+	spin_lock_irqsave(&chip->cs_lock, flags);
+	memcpy(value->value.iec958.status, chip->cs, sizeof(chip->cs));
+	spin_unlock_irqrestore(&chip->cs_lock, flags);
+	return 0;
+}
+
+/* Read-only: the channel status the S/PDIF input receives.  The driver
+ * collects it from the capture stream; it is independent of any Windows
+ * "TMS" setting, which is never sent to the unit. */
+static const struct snd_kcontrol_new ff_iec958_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_PCM,
+	.name = "IEC958 Capture Default",
+	.access = SNDRV_CTL_ELEM_ACCESS_READ,
+	.info = ff_iec958_info,
+	.get = ff_iec958_get,
+};
+
 static int ff_create_pcm(struct ff *chip)
 {
 	struct snd_pcm *pcm;
@@ -4187,8 +4274,13 @@ static u32 ff_caps_for_desc(const struct ff_device_desc *d)
 			FF_TCAP_LEAD_HORIZON |
 			FF_TCAP_KILL_BOTH |
 			FF_TCAP_IF5_SELECT;
-		if (d->transport == FF_XPORT_INTERRUPT)
+		if (d->transport == FF_XPORT_INTERRUPT) {
 			caps |= FF_TCAP_FIXED_URB;
+			/* The S/PDIF input channel status is present in the
+			 * IF5 interrupt capture stream.  The ISO stream's low
+			 * byte is zero in the same desk capture. */
+			caps |= FF_TCAP_SPDIF_CS;
+		}
 		break;
 	case FF_PRODUCT_ID_E:
 		caps |= FF_TCAP_FLASH_GUARD |
@@ -4278,6 +4370,8 @@ static int ff_probe(struct usb_interface *intf,
 	mutex_init(&chip->ctl_lock);
 	spin_lock_init(&chip->fb_lock);
 	spin_lock_init(&chip->gate_lock);
+	spin_lock_init(&chip->cs_lock);
+	chip->cs_pos = FF_SPDIF_CS_BITS + 1;
 	INIT_WORK(&chip->recover_work, ff_recover_work);
 	INIT_WORK(&chip->prefill_work, ff_prefill_work);
 	init_waitqueue_head(&chip->event_wait);
@@ -4423,6 +4517,17 @@ static int ff_probe(struct usb_interface *intf,
 	ret = ff_hwdep_create(chip);
 	if (ret < 0)
 		goto free_card;
+	if (caps & FF_TCAP_SPDIF_CS) {
+		struct snd_kcontrol *kctl = snd_ctl_new1(&ff_iec958_ctl, chip);
+
+		if (!kctl) {
+			ret = -ENOMEM;
+			goto free_card;
+		}
+		ret = snd_ctl_add(card, kctl);
+		if (ret < 0)
+			goto free_card;
+	}
 	ret = ff_midi_create(chip);
 	if (ret < 0)
 		dev_warn(&intf->dev, "no MIDI port: %d\n", ret);

@@ -236,8 +236,8 @@ callback; the shared PCM/URB path stays model-independent.
 |---|---|---|---|
 | UC PC | interrupt IF0 | S32 | status ticker IF5; session words after a live rate change |
 | UC AP | ISO IF0 | float32 | IN header + planar frames; OUT per-frame lead word |
-| UCX IF0 | ISO IF0 | float32 | default UCX path |
-| UCX IF5 | interrupt IF5 | S32 | opt-in `ucx_if5=1`; Windows mode-setup block; alt 1/2/3 for 1x/2x/4x |
+| UCX IF0 | ISO IF0 | float32 | fallback; select with `ucx_if5=0` |
+| UCX IF5 | interrupt IF5 | S32 | default; `ucx_if5=0` selects ISO; Windows mode-setup block; alt 1/2/3 for 1x/2x/4x |
 | Babyface-classic | ISO IF0 | float32 | UCX-family packet format; 12 capture / 14 playback words at 1x |
 
 The wire format is keyed to the transport: interrupt personalities carry
@@ -247,6 +247,25 @@ channel-init value matches. The driver resolves the format at probe
 (`ff_wire_s32`) and writes the matching `0x16` value, so wire and init
 always agree. The kernel converts between the wire format and the ALSA
 format.
+
+### 3.1 S/PDIF input channel status
+
+The UCX IF5 interrupt capture stream carries the S/PDIF input's 192-bit
+channel status in the low byte of stream channel 8. Bit `0x04` is one C
+bit; bit `0x10` marks the block start. The status is always present in the
+stream; the Windows “TMS” setting is a driver option and is never sent to
+the unit.
+
+The driver assembles 192 consecutive C bits, compensates the two-frame
+block-start delay, and exposes the last complete block as the standard
+read-only ALSA `IEC958 Capture Default` control (24 bytes). It is zero
+until a capture stream has produced a complete block. `tools/fireface-spdif-cs`
+decodes it.
+
+The ISO stream's low byte is zero in the same desk capture, so the control
+is exposed on the UCX IF5 personality only. The other low-byte bits are
+not decoded; `0x08` was observed set in the IF5 capture and needs a source
+that carries a known P/U/V value.
 
 The transport operation of each personality is defined in §4.3 (ISO implicit feedback),
 §4.4 (PC mode) and the comparison in §4.5.

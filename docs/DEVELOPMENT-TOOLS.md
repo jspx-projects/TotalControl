@@ -81,6 +81,7 @@ All development switches use the `TOTALCONTROL_` prefix:
 | `uc-loopback` example | Write the UC loopback bank (`uc-loopback <card> <index> [more]`) |
 | `ucx-dump-compare` example | Request the full dump and compare it with a saved scene |
 | `tools/fireface-hwdep.c` | Unified hwdep access: counters, words, `dump`, `loopback`, `loopback-setup` |
+| `tools/fireface-spdif-cs.c` | Read and decode the UCX IF5 S/PDIF input channel status (`fireface-spdif-cs <card>`; needs an open capture stream and a locked input) |
 | `tools/alsa-latency-probe.c` | PCM loopback measurement: impulse latency + `pattern` sample-exact mode |
 | `tools/alsa-cushion-probe.c` | Direct duplex ring-fill/stall probe; separate periods exercise the duplex gate |
 | `scripts/rate-sequence-verify.sh` | ISO start/rate verifier: one DDS + family per start, no options, actual `rate_meas`; `FIREFFACE_HWDEP`/`ALSA_PROBE` select the binaries |
